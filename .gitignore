@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Tauri
+src-tauri/target/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# WASM (copied from node_modules by postinstall)
+public/*.wasm
+
+# Environment
+.env
+.env.local
+
+# Test
+coverage/
+
+# Claude
+.claude

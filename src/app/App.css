@@ -1,0 +1,357 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  --font-main: "Segoe UI", "Meiryo", sans-serif;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-main);
+  background: var(--bg-base);
+  color: var(--text);
+}
+
+/* App layout */
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Body (sidebar + workspace) */
+.app__body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* Sidebar */
+.app__sidebar {
+  flex-shrink: 0;
+  overflow: hidden;
+  display: flex;
+}
+
+.app__sidebar-splitter {
+  width: 4px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.15s;
+  border-right: 1px solid var(--border);
+}
+
+.app__sidebar-splitter:hover,
+.app__sidebar-splitter--dragging {
+  background: var(--primary);
+}
+
+/* Workspace */
+.app__workspace {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Editor area (editor + preview split) */
+.app__editor-area {
+  flex: 1;
+  display: flex;
+  position: relative;
+  overflow: hidden;
+}
+
+.app__image-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+.app__editor-pane {
+  display: flex;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.app__divider {
+  width: 5px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: var(--border);
+  transition: background 0.15s;
+}
+
+.app__divider:hover,
+.app__divider:active {
+  background: var(--accent, #4a9eff);
+}
+
+.app__preview-pane {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  min-width: 0;
+}
+
+/* Welcome screen */
+.app__welcome {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.app__welcome-icon {
+  width: 127px;
+  height: 127px;
+}
+
+.app__welcome-title {
+  font-size: 36px;
+  font-weight: 700;
+  color: var(--primary);
+  letter-spacing: 1px;
+}
+
+.app__welcome-sub {
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.app__welcome-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.app__welcome-btn {
+  padding: 8px 24px;
+  border: 1px solid var(--primary);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--primary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.app__welcome-btn:hover {
+  background: var(--primary);
+  color: #fff;
+}
+
+/* Bottom terminal panel */
+.app__bottom-terminal-divider {
+  height: 4px;
+  flex-shrink: 0;
+  background: var(--border);
+  cursor: row-resize;
+  transition: background 0.15s;
+}
+
+.app__bottom-terminal-divider:hover {
+  background: var(--primary);
+}
+
+.app__bottom-terminal {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 80px;
+}
+
+.app__bottom-terminal-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg-overlay);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  height: 32px;
+}
+
+.app__bottom-terminal-tabs {
+  display: flex;
+  gap: 0;
+  overflow-x: auto;
+  flex: 1;
+  min-width: 0;
+}
+
+.app__bottom-terminal-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+  height: 100%;
+}
+
+.app__bottom-terminal-tab:hover {
+  color: var(--text);
+}
+
+.app__bottom-terminal-tab.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+}
+
+.app__bottom-terminal-tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.app__bottom-terminal-tab-close:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+.app__bottom-terminal-actions {
+  display: flex;
+  gap: 4px;
+  padding: 0 8px;
+  flex-shrink: 0;
+}
+
+.app__bottom-terminal-action-btn {
+  padding: 2px 10px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.app__bottom-terminal-action-btn:hover {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.app__bottom-terminal-body {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+.app__bottom-terminal-pane {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+/* Folder panel (RAG / Terminal) */
+.app__folder-divider {
+  width: 1px;
+  flex-shrink: 0;
+  background: var(--border);
+  cursor: col-resize;
+}
+
+.app__folder-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  overflow: hidden;
+  border-left: 1px solid var(--border);
+  background: var(--bg-base);
+}
+
+.app__folder-panel-tabs {
+  display: flex;
+  gap: 0;
+  background: var(--bg-overlay);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.app__folder-panel-tab {
+  padding: 6px 16px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.app__folder-panel-tab:hover {
+  color: var(--text);
+}
+
+.app__folder-panel-tab.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+}
+
+.app__folder-panel-tab-model {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-muted);
+  margin-left: 6px;
+  opacity: 0.8;
+}
+
+.app__folder-panel-body {
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-surface);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}

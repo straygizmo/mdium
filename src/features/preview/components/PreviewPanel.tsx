@@ -1,0 +1,952 @@
+import { useRef, useEffect, useState, useCallback } from "react";
+import { useTranslation } from "react-i18next";
+import { useTabStore } from "@/stores/tab-store";
+import { useUiStore } from "@/stores/ui-store";
+import { useSettingsStore } from "@/stores/settings-store";
+import { getThemeById } from "@/shared/themes";
+import { makeHeadingId } from "@/shared/lib/markdown/heading-id";
+import { preprocessMath } from "@/shared/lib/markdown/math-preprocess";
+
+import { usePreviewTableEdit } from "../hooks/usePreviewTableEdit";
+import { OfficePreview } from "./OfficePreview";
+import { PdfPreviewPanel } from "./PdfPreviewPanel";
+import { DocxPreviewPanel } from "./DocxPreviewPanel";
+import { HtmlPreviewPanel } from "./HtmlPreviewPanel";
+import { docxToMarkdown } from "@/features/export/lib/docxToMarkdown";
+import { marked } from "marked";
+import { readFile } from "@tauri-apps/plugin-fs";
+import hljs from "highlight.js";
+import "highlight.js/styles/atom-one-dark.css";
+import mermaid from "mermaid";
+import katex from "katex";
+import "katex/dist/katex.min.css";
+import "./PreviewPanel.css";
+
+// mermaid 初期化
+mermaid.initialize({
+  startOnLoad: false,
+  theme: "default",
+  flowchart: { htmlLabels: false },
+  sequence: { useMaxWidth: false },
+});
+
+let mermaidCounter = 0;
+
+// marked 設定
+marked.use({
+  async: false,
+  gfm: true,
+  breaks: true,
+  renderer: {
+    code({ text, lang }: { text: string; lang?: string | null }) {
+      if (lang === "mermaid") {
+        const id = `mermaid-placeholder-${mermaidCounter++}`;
+        const escaped = text
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+        return `<div class="mermaid-placeholder" data-mermaid-id="${id}" data-mermaid-source="${encodeURIComponent(text)}"><pre class="mermaid-source-fallback"><code>${escaped}</code></pre></div>`;
+      }
+      if (lang === "math") {
+        try {
+          return `<div class="math-block-display">${katex.renderToString(text, { displayMode: true, throwOnError: false })}</div>`;
+        } catch {
+          return `<pre><code>${text}</code></pre>`;
+        }
+      }
+      const language = lang || "plaintext";
+      try {
+        const highlighted = hljs.highlight(text, {
+          language,
+          ignoreIllegals: true,
+        });
+        return `<pre><code class="hljs language-${language}">${highlighted.value}</code></pre>`;
+      } catch {
+        const escaped = text
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+        return `<pre><code>${escaped}</code></pre>`;
+      }
+    },
+    heading({ text, depth }: { text: string; depth: number }) {
+      const id = makeHeadingId(text);
+      return `<h${depth} id="${id}">${text}</h${depth}>`;
+    },
+    image({ href, title, text }: { href: string; title?: string | null; text: string }) {
+      // Zenn: ![alt](url =250x) → width指定
+      const sizeMatch = href.match(/^(.+?)\s+=(\d*)x(\d*)$/);
+      if (sizeMatch) {
+        const [, url, w, h] = sizeMatch;
+        const attrs = [
+          `src="${url}"`,
+          `alt="${text}"`,
+          w ? `width="${w}"` : "",
+          h ? `height="${h}"` : "",
+          title ? `title="${title}"` : "",
+        ].filter(Boolean).join(" ");
+        return `<img ${attrs} />`;
+      }
+      return `<img src="${href}" alt="${text}"${title ? ` title="${title}"` : ""} />`;
+    },
+  },
+});
+
+/**
+ * Zenn 固有記法を HTML に前処理する
+ */
+function preprocessZenn(content: string): string {
+  const lines = content.split("\n");
+  const result: string[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // :::message / :::message alert / :::message success / :::message warning
+    const msgMatch = line.match(/^:{3,}message\s*(\w*)$/);
+    if (msgMatch) {
+      const type = msgMatch[1];
+      const cls = type ? `zenn-message zenn-message-${type}` : "zenn-message";
+      const inner: string[] = [];
+      i++;
+      while (i < lines.length && !lines[i].match(/^:{3,}$/)) {
+        inner.push(lines[i]);
+        i++;
+      }
+      i++; // skip closing :::
+      result.push(`<div class="${cls}">\n\n${inner.join("\n")}\n\n</div>`);
+      continue;
+    }
+
+    // :::details タイトル
+    const detailsMatch = line.match(/^:{3,}details\s+(.+)$/);
+    if (detailsMatch) {
+      const summary = detailsMatch[1];
+      const inner: string[] = [];
+      i++;
+      while (i < lines.length && !lines[i].match(/^:{3,}$/)) {
+        inner.push(lines[i]);
+        i++;
+      }
+      i++; // skip closing :::
+      result.push(`<details><summary>${summary}</summary>\n\n${inner.join("\n")}\n\n</details>`);
+      continue;
+    }
+
+    // Code block with filename: ```lang:filename
+    const codeMatch = line.match(/^```(\w+):(.+)$/);
+    if (codeMatch) {
+      const [, lang, filename] = codeMatch;
+      const codeLines: string[] = [];
+      i++;
+      while (i < lines.length && !lines[i].startsWith("```")) {
+        codeLines.push(lines[i]);
+        i++;
+      }
+      i++; // skip closing ```
+      const escaped = codeLines.join("\n")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+      try {
+        const highlighted = hljs.highlight(codeLines.join("\n"), {
+          language: lang,
+          ignoreIllegals: true,
+        });
+        result.push(
+          `<div class="zenn-code-block"><div class="zenn-code-filename">${filename}</div><pre><code class="hljs language-${lang}">${highlighted.value}</code></pre></div>`
+        );
+      } catch {
+        result.push(
+          `<div class="zenn-code-block"><div class="zenn-code-filename">${filename}</div><pre><code>${escaped}</code></pre></div>`
+        );
+      }
+      continue;
+    }
+
+    // Zenn 画像サイズ構文: ![alt](url =WxH) → <img> タグに変換
+    const imgLine = line.replace(
+      /!\[([^\]]*)\]\((.+?)\s+=(\d*)x(\d*)\)/g,
+      (_match, alt: string, url: string, w: string, h: string) => {
+        const attrs = [
+          `src="${url}"`,
+          `alt="${alt}"`,
+          w ? `width="${w}"` : "",
+          h ? `height="${h}"` : "",
+        ].filter(Boolean).join(" ");
+        return `<p><img ${attrs} /></p>`;
+      }
+    );
+    result.push(imgLine);
+    i++;
+  }
+
+  return result.join("\n");
+}
+
+/**
+ * <!-- pagebreak --> コメントを改ページマーカーに変換する
+ */
+function preprocessPageBreaks(content: string): string {
+  return content.replace(
+    /<!--\s*pagebreak\s*-->/gi,
+    '<div class="pagebreak-marker"></div>'
+  );
+}
+
+/**
+ * テーブル行間の余分な空行を除去する（GFM テーブル認識のため）
+ */
+function normalizeTableLines(content: string): string {
+  const lines = content.split("\n");
+  const result: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    result.push(lines[i]);
+    if (lines[i].trim().startsWith("|")) {
+      let j = i + 1;
+      while (j < lines.length && lines[j].trim() === "") j++;
+      if (j < lines.length && lines[j].trim().startsWith("|") && j > i + 1) {
+        i = j;
+        continue;
+      }
+    }
+    i++;
+  }
+  return result.join("\n");
+}
+
+/**
+ * YAML フロントマターを抽出して本文と分離する
+ */
+function extractFrontMatter(content: string): {
+  meta: Record<string, string> | null;
+  body: string;
+} {
+  if (!content.startsWith("---\n") && !content.startsWith("---\r\n")) {
+    return { meta: null, body: content };
+  }
+  const end = content.indexOf("\n---", 4);
+  if (end === -1) return { meta: null, body: content };
+
+  const yaml = content.slice(4, end).trim();
+  const body = content.slice(end + 4).replace(/^\r?\n/, "");
+  const meta: Record<string, string> = {};
+
+  for (const line of yaml.split("\n")) {
+    const colon = line.indexOf(":");
+    if (colon > 0) {
+      const key = line.slice(0, colon).trim();
+      const value = line
+        .slice(colon + 1)
+        .trim()
+        .replace(/^["']|["']$/g, "");
+      if (key) meta[key] = value;
+    }
+  }
+  return { meta: Object.keys(meta).length > 0 ? meta : null, body };
+}
+
+interface PreviewPanelProps {
+  previewRef: React.RefObject<HTMLDivElement | null>;
+  onOpenFile?: (path: string) => void;
+  onRefreshFileTree?: () => void;
+}
+
+export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: PreviewPanelProps) {
+  const { t } = useTranslation("editor");
+  const activeTab = useTabStore((s) => s.getActiveTab());
+  const themeId = useSettingsStore((s) => s.themeId);
+  const themeType = getThemeById(themeId).type;
+  const activeViewTab = useUiStore((s) => s.activeViewTab);
+  const setActiveViewTab = useUiStore((s) => s.setActiveViewTab);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [converting, setConverting] = useState(false);
+  const [convertError, setConvertError] = useState<string | null>(null);
+
+  const content = activeTab?.content ?? "";
+  const filePath = activeTab?.filePath ?? null;
+
+  // Markdown rendered HTML
+  const [html, setHtml] = useState("");
+  const [frontMatter, setFrontMatter] = useState<Record<string, string> | null>(null);
+
+  // プレビュー内テーブル編集
+  const {
+    contextMenu,
+    setContextMenu,
+    addRow,
+    deleteRow,
+    addColumn,
+    deleteColumn,
+  } = usePreviewTableEdit(contentRef, content, html);
+
+  // Markdown レンダリング（YAML front matter → Zenn前処理 → 数式前処理 → テーブル正規化 → marked）
+  useEffect(() => {
+    try {
+      const { meta, body } = extractFrontMatter(content);
+      setFrontMatter(meta);
+      const zennProcessed = preprocessZenn(body);
+      const pageBreakProcessed = preprocessPageBreaks(zennProcessed);
+      const preprocessed = preprocessMath(pageBreakProcessed);
+      const normalized = normalizeTableLines(preprocessed);
+      mermaidCounter = 0;
+      const result = marked(normalized) as string;
+      setHtml(result);
+    } catch (error) {
+      console.error("Markdown rendering error:", error);
+      setHtml("<p>Markdownのレンダリングに失敗しました</p>");
+    }
+  }, [content]);
+
+  // HTML を contentRef に手動で書き込み、相対画像パスをblob URLに変換
+  const blobUrlsRef = useRef<string[]>([]);
+  useEffect(() => {
+    // 前回の blob URL を解放
+    for (const url of blobUrlsRef.current) URL.revokeObjectURL(url);
+    blobUrlsRef.current = [];
+
+    const div = contentRef.current;
+    if (!div) return;
+
+    const scrollContainer = previewRef.current;
+    if (scrollContainer) scrollContainer.dataset.contentUpdating = "1";
+    div.innerHTML = html;
+    requestAnimationFrame(() => {
+      if (scrollContainer) delete scrollContainer.dataset.contentUpdating;
+    });
+
+    if (!filePath) return;
+    const dir = filePath.replace(/[\\/][^\\/]+$/, "");
+    const imgs = Array.from(div.querySelectorAll<HTMLImageElement>("img"));
+    const blobUrls = blobUrlsRef.current;
+
+    (async () => {
+      for (const img of imgs) {
+        const rawSrc = img.getAttribute("src");
+        if (!rawSrc) continue;
+        if (/^(https?:|data:|blob:)/i.test(rawSrc)) continue;
+
+        // marked が URL エンコードした日本語パスをデコードしてファイルシステムパスに戻す
+        const src = decodeURIComponent(rawSrc);
+
+        // 相対パスを絶対パスに解決
+        const combined = dir.replace(/\\/g, "/") + "/" + src;
+        const parts = combined.split("/");
+        const resolved: string[] = [];
+        for (const p of parts) {
+          if (p === "..") resolved.pop();
+          else if (p !== ".") resolved.push(p);
+        }
+        const absolutePath = resolved.join("/");
+
+        try {
+          const data = await readFile(absolutePath);
+          const ext = src.split(".").pop()?.toLowerCase() ?? "";
+          const mime =
+            ext === "svg" ? "image/svg+xml" :
+            ext === "png" ? "image/png" :
+            ext === "gif" ? "image/gif" :
+            ext === "webp" ? "image/webp" :
+            ext === "bmp" ? "image/bmp" :
+            "image/jpeg";
+          const blob = new Blob([data], { type: mime });
+          const url = URL.createObjectURL(blob);
+          blobUrls.push(url);
+          img.src = url;
+          img.dataset.filepath = absolutePath;
+        } catch {
+          // ファイルが見つからない場合はスキップ
+        }
+      }
+    })();
+  }, [html, filePath]);
+
+  // コードブロックにコピーボタンを追加
+  useEffect(() => {
+    const div = contentRef.current;
+    if (!div) return;
+
+    const pres = div.querySelectorAll<HTMLPreElement>("pre");
+    const controllers: AbortController[] = [];
+
+    for (const pre of Array.from(pres)) {
+      // 既にボタンがある場合はスキップ
+      if (pre.querySelector(".code-copy-btn")) continue;
+      // Mermaid プレースホルダー内の pre はスキップ
+      if (pre.closest(".mermaid-placeholder")) continue;
+
+      pre.style.position = "relative";
+
+      const btn = document.createElement("button");
+      btn.className = "code-copy-btn";
+      btn.title = "Copy";
+      btn.innerHTML =
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+        '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>' +
+        '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>' +
+        '</svg>';
+
+      const ac = new AbortController();
+      controllers.push(ac);
+
+      btn.addEventListener("click", () => {
+        const code = pre.querySelector("code");
+        const text = code?.textContent ?? pre.textContent ?? "";
+        navigator.clipboard.writeText(text);
+        btn.classList.add("code-copy-btn--copied");
+        btn.innerHTML =
+          '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+          '<polyline points="20 6 9 17 4 12"/>' +
+          '</svg>';
+        setTimeout(() => {
+          btn.classList.remove("code-copy-btn--copied");
+          btn.innerHTML =
+            '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+            '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>' +
+            '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>' +
+            '</svg>';
+        }, 1500);
+      }, { signal: ac.signal });
+
+      pre.appendChild(btn);
+    }
+
+    return () => {
+      for (const ac of controllers) ac.abort();
+    };
+  }, [html]);
+
+  // プレビュー内の画像をダブルクリックでタブとして開く
+  useEffect(() => {
+    const div = contentRef.current;
+    if (!div || !onOpenFile) return;
+    const handler = (e: MouseEvent) => {
+      const img = (e.target as HTMLElement).closest<HTMLImageElement>("img[data-filepath]");
+      if (img) onOpenFile(img.dataset.filepath!);
+    };
+    div.addEventListener("dblclick", handler);
+    return () => div.removeEventListener("dblclick", handler);
+  }, [onOpenFile]);
+
+  // 検索ハイライト
+  const showSearch = useUiStore((s) => s.showSearch);
+  const searchText = useUiStore((s) => s.searchText);
+  const currentMatchIndex = useUiStore((s) => s.currentMatchIndex);
+
+  useEffect(() => {
+    const div = contentRef.current;
+    if (!div) return;
+
+    // 既存のハイライトをクリア
+    const existing = div.querySelectorAll("mark.search-highlight");
+    for (const el of Array.from(existing)) {
+      const parent = el.parentNode;
+      if (parent) {
+        parent.replaceChild(document.createTextNode(el.textContent || ""), el);
+        parent.normalize();
+      }
+    }
+
+    if (!showSearch || !searchText) return;
+
+    const escaped = searchText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    let regex: RegExp;
+    try {
+      regex = new RegExp(escaped, "gi");
+    } catch {
+      return;
+    }
+
+    const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        // pre/code 内はスキップ
+        let parent = node.parentElement;
+        while (parent && parent !== div) {
+          const tag = parent.tagName.toLowerCase();
+          if (tag === "pre" || tag === "code") return NodeFilter.FILTER_REJECT;
+          parent = parent.parentElement;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    });
+
+    const textNodes: Text[] = [];
+    let node: Node | null;
+    while ((node = walker.nextNode())) {
+      textNodes.push(node as Text);
+    }
+
+    for (const textNode of textNodes) {
+      const text = textNode.textContent || "";
+      regex.lastIndex = 0;
+      const matches: { start: number; end: number }[] = [];
+      let m: RegExpExecArray | null;
+      while ((m = regex.exec(text))) {
+        matches.push({ start: m.index, end: m.index + m[0].length });
+        if (m[0].length === 0) break;
+      }
+      if (matches.length === 0) continue;
+
+      const frag = document.createDocumentFragment();
+      let lastIdx = 0;
+      for (const { start, end } of matches) {
+        if (start > lastIdx) {
+          frag.appendChild(document.createTextNode(text.slice(lastIdx, start)));
+        }
+        const mark = document.createElement("mark");
+        mark.className = "search-highlight";
+        mark.textContent = text.slice(start, end);
+        frag.appendChild(mark);
+        lastIdx = end;
+      }
+      if (lastIdx < text.length) {
+        frag.appendChild(document.createTextNode(text.slice(lastIdx)));
+      }
+      textNode.parentNode?.replaceChild(frag, textNode);
+    }
+  }, [html, showSearch, searchText]);
+
+  // アクティブなハイライトをスクロール表示
+  useEffect(() => {
+    const div = contentRef.current;
+    if (!div || currentMatchIndex < 0) return;
+
+    const marks = div.querySelectorAll("mark.search-highlight");
+    // 既存の active クラスをクリア
+    for (const m of Array.from(marks)) {
+      m.classList.remove("search-highlight--active");
+    }
+    if (marks.length === 0) return;
+
+    const idx = currentMatchIndex % marks.length;
+    const active = marks[idx];
+    active.classList.add("search-highlight--active");
+    active.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [currentMatchIndex]);
+
+  // Mermaid + KaTeX レンダリング
+  useEffect(() => {
+    const container = previewRef.current;
+    if (!container) return;
+
+    let cancelled = false;
+
+    const timerId = setTimeout(async () => {
+      if (cancelled) return;
+
+      // --- Mermaid ---
+      const placeholders = container.querySelectorAll<HTMLElement>(
+        ".mermaid-placeholder:not([data-rendered='done'])"
+      );
+      for (const placeholder of Array.from(placeholders)) {
+        if (cancelled) return;
+        if (placeholder.getAttribute("data-rendered") === "pending") continue;
+
+        const source = decodeURIComponent(
+          placeholder.getAttribute("data-mermaid-source") || ""
+        );
+        if (!source) continue;
+
+        placeholder.setAttribute("data-rendered", "pending");
+
+        try {
+          const renderId = `mmrd-${Date.now().toString(36)}-${((Math.random() * 0xffffff) | 0).toString(36)}`;
+          const { svg } = await mermaid.render(renderId, source);
+
+          if (cancelled) {
+            placeholder.removeAttribute("data-rendered");
+            return;
+          }
+
+          const tempDiv = document.createElement("div");
+          tempDiv.innerHTML = svg;
+          const svgNode = tempDiv.querySelector("svg");
+          if (!svgNode) throw new Error("No SVG element in mermaid output");
+
+          const rendered = document.createElement("div");
+          rendered.className = "mermaid-rendered";
+          rendered.appendChild(svgNode);
+
+          const wrapper = document.createElement("div");
+          wrapper.className = "mermaid-container";
+          wrapper.appendChild(rendered);
+
+          placeholder.innerHTML = "";
+          placeholder.appendChild(wrapper);
+          placeholder.setAttribute("data-rendered", "done");
+        } catch (err) {
+          console.error("Mermaid render error:", err);
+          placeholder.removeAttribute("data-rendered");
+          const errDiv = document.createElement("div");
+          errDiv.className = "mermaid-error";
+          errDiv.textContent = `Mermaid: ${err instanceof Error ? err.message : String(err)}`;
+          placeholder.innerHTML = "";
+          placeholder.appendChild(errDiv);
+        }
+      }
+
+      // --- KaTeX (インライン/ブロック) ---
+      if (cancelled) return;
+      const mathBlocks = container.querySelectorAll<HTMLElement>(".math-block[data-math]");
+      for (const el of Array.from(mathBlocks)) {
+        const encoded = el.getAttribute("data-math") || "";
+        try {
+          const math = decodeURIComponent(escape(atob(encoded)));
+          katex.render(math, el, { displayMode: true, throwOnError: false });
+        } catch { /* skip */ }
+      }
+      const mathInlines = container.querySelectorAll<HTMLElement>(".math-inline[data-math]");
+      for (const el of Array.from(mathInlines)) {
+        const encoded = el.getAttribute("data-math") || "";
+        try {
+          const math = decodeURIComponent(escape(atob(encoded)));
+          katex.render(math, el, { displayMode: false, throwOnError: false });
+        } catch { /* skip */ }
+      }
+    }, 0);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timerId);
+    };
+  }, [html]);
+
+  const isOfficeFile = !!(activeTab?.binaryData && activeTab?.officeFileType);
+  const isDocx = activeTab?.filePath?.toLowerCase().endsWith(".docx");
+  const isPdf = activeTab?.filePath?.toLowerCase().endsWith(".pdf");
+
+  const handleConvertToMarkdown = useCallback(async () => {
+    if (!activeTab?.binaryData || !activeTab?.filePath) return;
+    setConverting(true);
+    setConvertError(null);
+    try {
+      let mdPath: string;
+      if (activeTab.filePath.toLowerCase().endsWith(".pdf")) {
+        const { pdfToMarkdown } = await import("@/features/export/lib/pdfToMarkdown");
+        ({ mdPath } = await pdfToMarkdown(activeTab.binaryData, activeTab.filePath));
+      } else {
+        ({ mdPath } = await docxToMarkdown(activeTab.binaryData, activeTab.filePath));
+      }
+      onRefreshFileTree?.();
+      onOpenFile?.(mdPath);
+    } catch (e) {
+      setConvertError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setConverting(false);
+    }
+  }, [activeTab?.binaryData, activeTab?.filePath, onOpenFile, onRefreshFileTree]);
+
+  // Office ファイルの場合は OfficePreview を表示
+  if (isOfficeFile) {
+    return (
+      <div className="preview-panel">
+        {(isDocx || isPdf) && (
+          <div className="preview-panel__convert-bar">
+            <button
+              onClick={handleConvertToMarkdown}
+              disabled={converting}
+            >
+              {converting ? t("converting") : t("convertToMarkdown")}
+            </button>
+            {convertError && (
+              <span className="preview-panel__convert-error">{convertError}</span>
+            )}
+          </div>
+        )}
+        <div className="preview-panel__office-wrap" ref={previewRef}>
+          <OfficePreview
+            fileData={activeTab!.binaryData!}
+            fileType={activeTab!.officeFileType!}
+            themeType={themeType}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="preview-panel">
+      <div className="preview-panel__tabs">
+        <button
+          className={`preview-panel__tab ${activeViewTab === "preview" ? "preview-panel__tab--active" : ""}`}
+          onClick={() => setActiveViewTab("preview")}
+        >
+          {t("preview")}
+        </button>
+        <button
+          className={`preview-panel__tab preview-panel__tab--icon ${activeViewTab === "pdf-preview" ? "preview-panel__tab--active" : ""}`}
+          onClick={() => setActiveViewTab("pdf-preview")}
+          title={t("pdfPreview")}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+            <text x="12" y="16" textAnchor="middle" fill="currentColor" stroke="none" fontSize="6" fontWeight="bold" fontFamily="sans-serif">PDF</text>
+          </svg>
+        </button>
+        <button
+          className={`preview-panel__tab preview-panel__tab--icon ${activeViewTab === "docx-preview" ? "preview-panel__tab--active" : ""}`}
+          onClick={() => setActiveViewTab("docx-preview")}
+          title={t("docxPreview")}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+            <text x="12" y="16" textAnchor="middle" fill="currentColor" stroke="none" fontSize="8" fontWeight="bold" fontFamily="sans-serif">W</text>
+          </svg>
+        </button>
+        <button
+          className={`preview-panel__tab preview-panel__tab--icon ${activeViewTab === "html-preview" ? "preview-panel__tab--active" : ""}`}
+          onClick={() => setActiveViewTab("html-preview")}
+          title={t("htmlPreview")}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="16 18 22 12 16 6" />
+            <polyline points="8 6 2 12 8 18" />
+            <line x1="14" y1="4" x2="10" y2="20" />
+          </svg>
+        </button>
+      </div>
+
+      <div className="preview-panel__body">
+        <div
+          className="preview-panel__content md-preview"
+          ref={previewRef}
+          onClick={() => setContextMenu(null)}
+        >
+          {frontMatter && (
+            <div className="yaml-front-matter">
+              {Object.entries(frontMatter).map(([k, v]) => (
+                <div key={k} className="yaml-entry">
+                  <span className="yaml-key">{k}</span>
+                  <span className="yaml-value">{v}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <div ref={contentRef} />
+        </div>
+
+        {activeViewTab === "pdf-preview" && (
+          <div className="preview-panel__pdf-overlay">
+            <PdfPreviewPanel
+              previewRef={previewRef}
+              filePath={filePath}
+            />
+          </div>
+        )}
+
+        {activeViewTab === "docx-preview" && (
+          <div className="preview-panel__pdf-overlay">
+            <DocxPreviewPanel
+              previewRef={previewRef}
+              content={content}
+              filePath={filePath}
+            />
+          </div>
+        )}
+
+        {activeViewTab === "html-preview" && (
+          <div className="preview-panel__pdf-overlay">
+            <HtmlPreviewPanel
+              previewRef={previewRef}
+              filePath={filePath}
+            />
+          </div>
+        )}
+      </div>
+
+      {activeViewTab === "preview" && contextMenu && (
+        <div
+          className="preview-table-context-menu"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onClick={() => setContextMenu(null)}
+        >
+          <div className="preview-table-ctx-group">
+            <button
+              onClick={() =>
+                addRow(
+                  contextMenu.tableIndex,
+                  "above",
+                  Math.max(contextMenu.row, 0),
+                )
+              }
+            >
+              {t("insertRowAbove", { defaultValue: "Insert row above" })}
+            </button>
+            <button
+              onClick={() =>
+                addRow(
+                  contextMenu.tableIndex,
+                  "below",
+                  Math.max(contextMenu.row, 0),
+                )
+              }
+            >
+              {t("insertRowBelow", { defaultValue: "Insert row below" })}
+            </button>
+            {contextMenu.row >= 0 && (
+              <button
+                onClick={() =>
+                  deleteRow(contextMenu.tableIndex, contextMenu.row)
+                }
+              >
+                {t("deleteRow", { defaultValue: "Delete row" })}
+              </button>
+            )}
+          </div>
+          <div className="preview-table-ctx-divider" />
+          <div className="preview-table-ctx-group">
+            <button
+              onClick={() =>
+                addColumn(contextMenu.tableIndex, "left", contextMenu.col)
+              }
+            >
+              {t("insertColLeft", { defaultValue: "Insert column left" })}
+            </button>
+            <button
+              onClick={() =>
+                addColumn(contextMenu.tableIndex, "right", contextMenu.col)
+              }
+            >
+              {t("insertColRight", { defaultValue: "Insert column right" })}
+            </button>
+            <button
+              onClick={() =>
+                deleteColumn(contextMenu.tableIndex, contextMenu.col)
+              }
+            >
+              {t("deleteCol", { defaultValue: "Delete column" })}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** "rgb(r,g,b)" / "rgba(r,g,b,a)" → "#rrggbb" に変換する */
+function rgbToHex(val: string): string {
+  const m = val.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+  if (!m) return val;
+  return (
+    "#" +
+    [m[1], m[2], m[3]]
+      .map((n) => parseInt(n).toString(16).padStart(2, "0"))
+      .join("")
+  );
+}
+
+/**
+ * ライブ DOM 上の Mermaid SVG をスタンドアロンで使える SVG 文字列に変換する。
+ * - viewBox から絶対ピクセル寸法を設定（width="100%" を上書き）
+ * - computed style を属性にインライン化
+ * - <style> タグを除去
+ * - <foreignObject> を SVG <text> に変換
+ * - フォントファミリーを安全なフォントに統一
+ */
+export function processSvgForStandaloneUse(liveSvgEl: SVGSVGElement): string {
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  const SAFE_FONT = "Meiryo, Yu Gothic, Segoe UI, Arial, sans-serif";
+
+  const clone = liveSvgEl.cloneNode(true) as SVGSVGElement;
+  clone.setAttribute("xmlns", SVG_NS);
+  clone.setAttribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
+
+  // viewBox からサイズを確定（width="100%" のような相対指定を上書き）
+  const viewBox = clone.getAttribute("viewBox");
+  if (viewBox) {
+    const parts = viewBox.split(/\s+/).map(Number);
+    if (parts.length === 4 && parts[2] > 0 && parts[3] > 0) {
+      clone.setAttribute("width", `${parts[2]}px`);
+      clone.setAttribute("height", `${parts[3]}px`);
+    }
+  }
+
+  // ライブ要素とクローン要素を 1:1 で対応付けし、computed style を属性にインライン化。
+  // foreignObject の内側は HTML 要素（SVGElement ではない）なのでスキップする。
+  const liveEls = Array.from(liveSvgEl.querySelectorAll("*"));
+  const cloneEls = Array.from(clone.querySelectorAll("*"));
+
+  const PROPS = [
+    "fill", "fill-opacity",
+    "stroke", "stroke-width", "stroke-opacity",
+    "font-size", "font-weight", "font-style",
+    "opacity",
+  ];
+
+  for (let i = 0; i < liveEls.length && i < cloneEls.length; i++) {
+    const liveEl = liveEls[i];
+    const cloneEl = cloneEls[i];
+    if (!(liveEl instanceof SVGElement)) continue;
+    try {
+      const computed = getComputedStyle(liveEl);
+      for (const prop of PROPS) {
+        const val = computed.getPropertyValue(prop);
+        if (!val || val === "initial" || val === "inherit") continue;
+        cloneEl.setAttribute(prop, val.startsWith("url(") ? val : rgbToHex(val));
+      }
+    } catch {
+      // getComputedStyle が失敗した場合はスキップ（foreignObject 近傍で発生しうる）
+    }
+  }
+
+  // <style> はすでに属性にインライン化済みなので削除
+  for (const el of Array.from(clone.querySelectorAll("style"))) {
+    el.remove();
+  }
+
+  // <foreignObject> → SVG <text> 変換
+  for (const fo of Array.from(clone.querySelectorAll("foreignObject"))) {
+    const rawText = fo.textContent?.trim() ?? "";
+    if (!rawText) {
+      fo.remove();
+      continue;
+    }
+
+    const x = parseFloat(fo.getAttribute("x") || "0");
+    const y = parseFloat(fo.getAttribute("y") || "0");
+    const w = parseFloat(fo.getAttribute("width") || "0");
+    const h = parseFloat(fo.getAttribute("height") || "0");
+
+    const lines = rawText.split(/\n/).map((l) => l.trim()).filter(Boolean);
+    const fontSize = 14;
+    const lineHeight = fontSize * 1.4;
+
+    const textEl = document.createElementNS(SVG_NS, "text");
+    textEl.setAttribute("font-family", SAFE_FONT);
+    textEl.setAttribute("font-size", String(fontSize));
+    textEl.setAttribute("fill", "#333333");
+    textEl.setAttribute("text-anchor", "middle");
+
+    if (lines.length === 1) {
+      textEl.setAttribute("x", String(x + w / 2));
+      textEl.setAttribute("y", String(y + h / 2));
+      textEl.setAttribute("dominant-baseline", "middle");
+      textEl.textContent = lines[0];
+    } else {
+      const totalH = (lines.length - 1) * lineHeight;
+      const startY = y + h / 2 - totalH / 2;
+      textEl.setAttribute("x", String(x + w / 2));
+      textEl.setAttribute("y", String(startY));
+      for (let li = 0; li < lines.length; li++) {
+        const tspan = document.createElementNS(SVG_NS, "tspan");
+        tspan.setAttribute("x", String(x + w / 2));
+        if (li > 0) tspan.setAttribute("dy", String(lineHeight));
+        tspan.textContent = lines[li];
+        textEl.appendChild(tspan);
+      }
+    }
+
+    fo.parentNode?.replaceChild(textEl, fo);
+  }
+
+  // font-family を全 text/tspan 要素に設定
+  for (const el of Array.from(clone.querySelectorAll("text, tspan"))) {
+    el.setAttribute("font-family", SAFE_FONT);
+  }
+
+  return new XMLSerializer().serializeToString(clone);
+}

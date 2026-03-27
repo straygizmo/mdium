@@ -1,0 +1,116 @@
+.skills-tab__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.skills-tab__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.skills-tab__scope {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.skills-tab__empty {
+  font-size: 13px;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 20px 0;
+}
+
+.skills-tab__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.skills-tab__item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 10px;
+  background: var(--bg-surface, var(--bg-base));
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  gap: 8px;
+}
+
+.skills-tab__item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.skills-tab__item-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.skills-tab__item-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skills-tab__item-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.skills-tab__edit-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.skills-tab__edit-btn:hover {
+  border-color: var(--accent);
+}
+
+.skills-tab__delete-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.skills-tab__delete-btn:hover {
+  color: #ef4444;
+}
+
+.skills-tab__add-btn {
+  margin-top: 12px;
+  background: none;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  padding: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+  cursor: pointer;
+  width: 100%;
+  text-align: center;
+}
+
+.skills-tab__add-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}

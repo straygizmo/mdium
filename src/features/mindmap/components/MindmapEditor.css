@@ -1,0 +1,541 @@
+.mindmap-editor {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.mindmap-container {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-base);
+}
+
+.mindmap-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: var(--accent-red);
+  font-size: 14px;
+  padding: 20px;
+}
+
+/* --- React Flow overrides --- */
+
+.mindmap-container .react-flow__renderer {
+  background: transparent !important;
+}
+
+.mindmap-container .react-flow__background {
+  background: var(--bg-base) !important;
+}
+
+/* Hide handles visually */
+.mindmap-container .react-flow__handle {
+  opacity: 0;
+  width: 6px;
+  height: 6px;
+  min-width: 6px;
+  min-height: 6px;
+  pointer-events: none;
+}
+
+/* --- Node styles --- */
+
+.mm-node {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  border: 2px solid;
+  border-radius: 8px;
+  font-family: sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: box-shadow 0.15s, border-color 0.15s;
+  user-select: none;
+  position: relative;
+  flex-wrap: wrap;
+}
+
+.mm-node.mm-d0 {
+  padding: 10px 24px;
+  font-size: 16px;
+  font-weight: 700;
+  border-radius: 12px;
+  border-width: 3px;
+}
+
+.mm-node.mm-d1 {
+  padding: 7px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: 8px;
+}
+
+.mm-node.mm-d2 {
+  padding: 4px 12px;
+  font-size: 13px;
+  font-weight: 400;
+  border-radius: 6px;
+}
+
+.mm-node.mm-selected {
+  box-shadow: 0 0 0 3px rgba(25, 118, 210, 0.4);
+  z-index: 10;
+}
+
+.mm-node:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+/* Drop target highlight during drag */
+.mm-node.mm-drop-target {
+  box-shadow: 0 0 0 3px rgba(25, 118, 210, 0.6), 0 0 12px rgba(25, 118, 210, 0.3);
+  border-color: #1976d2 !important;
+}
+
+/* Dragging node */
+.mindmap-container .react-flow__node.dragging .mm-node {
+  opacity: 0.7;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  cursor: grabbing;
+}
+
+/* Text */
+.mm-text {
+  flex: 1;
+  min-width: 20px;
+}
+
+/* Badges */
+.mm-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  line-height: 1.3;
+  flex-shrink: 0;
+}
+
+.mm-priority {
+  background: #ef5350;
+  color: #fff;
+}
+
+.mm-priority[data-priority="1"] { background: #e53935; }
+.mm-priority[data-priority="2"] { background: #ef5350; }
+.mm-priority[data-priority="3"] { background: #ff7043; }
+.mm-priority[data-priority="4"] { background: #ffa726; }
+.mm-priority[data-priority="5"] { background: #ffca28; color: #333; }
+
+.mm-progress {
+  background: #66bb6a;
+  color: #fff;
+}
+
+/* Icons */
+.mm-icon {
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.mm-link-icon:hover {
+  transform: scale(1.2);
+}
+
+/* Node image */
+.mm-node-image {
+  display: block;
+  margin-top: 4px;
+  border-radius: 4px;
+}
+
+/* Collapse dot */
+.mm-collapse-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.3);
+  margin-left: 4px;
+  flex-shrink: 0;
+}
+
+/* --- Inline text editor --- */
+.km-edit-textarea {
+  position: absolute;
+  z-index: 200;
+  min-width: 60px;
+  min-height: 24px;
+  padding: 4px 8px;
+  font-size: 14px;
+  font-family: inherit;
+  line-height: 1.4;
+  outline: 2px solid #4fc3f7;
+  border: none;
+  border-radius: 3px;
+  background: #fff;
+  color: #222;
+  box-sizing: border-box;
+  resize: none;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* --- Context menu --- */
+.km-context-menu {
+  position: fixed;
+  z-index: 300;
+  min-width: 140px;
+  background: var(--bg-surface, #fff);
+  border: 1px solid var(--border-color, #ccc);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  padding: 4px 0;
+  font-size: 12px;
+  color: var(--text-primary, #222);
+  user-select: none;
+}
+
+.km-context-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 16px;
+  cursor: pointer;
+  position: relative;
+  white-space: nowrap;
+}
+
+.km-context-menu-item:hover {
+  background: var(--accent-blue, #e3f2fd);
+}
+
+.km-context-menu-danger {
+  color: var(--accent-red, #e53935);
+}
+
+.km-context-menu-danger:hover {
+  background: #ffebee;
+}
+
+.km-context-menu-disabled {
+  color: #aaa;
+  cursor: default;
+}
+
+.km-context-menu-disabled:hover {
+  background: transparent;
+}
+
+.km-submenu-arrow {
+  font-size: 9px;
+  margin-left: 12px;
+  opacity: 0.6;
+}
+
+.km-context-submenu {
+  display: none;
+  position: absolute;
+  left: 100%;
+  top: -4px;
+  min-width: 120px;
+  background: var(--bg-surface, #fff);
+  border: 1px solid var(--border-color, #ccc);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  padding: 4px 0;
+}
+
+.km-has-submenu:hover > .km-context-submenu {
+  display: block;
+}
+
+.km-context-menu-separator {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border-color, #ccc);
+}
+
+/* --- Modal overlay (hyperlink / image dialogs) --- */
+.km-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.km-modal-dialog {
+  background: var(--bg-surface, #fff);
+  color: var(--text-primary, #222);
+  border: 1px solid var(--border-color, #ccc);
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+  min-width: 400px;
+  max-width: 500px;
+  padding: 0;
+  font-size: 13px;
+}
+
+.km-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-color, #ccc);
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.km-modal-header .km-modal-close {
+  cursor: pointer;
+  font-size: 18px;
+  opacity: 0.6;
+  background: none;
+  border: none;
+  color: inherit;
+  padding: 0 4px;
+}
+
+.km-modal-header .km-modal-close:hover {
+  opacity: 1;
+}
+
+.km-modal-body {
+  padding: 16px;
+}
+
+.km-modal-body label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary, #666);
+}
+
+.km-modal-body input[type="text"] {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border-color, #ccc);
+  border-radius: 4px;
+  font-size: 13px;
+  background: var(--bg-base, #fff);
+  color: var(--text-primary, #222);
+  box-sizing: border-box;
+  margin-bottom: 12px;
+}
+
+.km-modal-body input[type="text"]:focus {
+  outline: 2px solid var(--accent-blue, #4fc3f7);
+  border-color: transparent;
+}
+
+.km-modal-body .km-error-text {
+  color: var(--accent-red, #e53935);
+  font-size: 12px;
+  margin-top: -8px;
+  margin-bottom: 8px;
+}
+
+.km-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border-color, #ccc);
+}
+
+.km-modal-footer button {
+  padding: 6px 16px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color, #ccc);
+  font-size: 13px;
+  cursor: pointer;
+  background: var(--bg-surface, #fff);
+  color: var(--text-primary, #222);
+}
+
+.km-modal-footer button.km-btn-primary {
+  background: var(--accent-blue, #1976d2);
+  color: #fff;
+  border-color: var(--accent-blue, #1976d2);
+}
+
+.km-modal-footer button.km-btn-primary:hover {
+  opacity: 0.9;
+}
+
+.km-modal-footer button.km-btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Image dialog tabs */
+.km-tab-bar {
+  display: flex;
+  border-bottom: 1px solid var(--border-color, #ccc);
+  margin-bottom: 12px;
+}
+
+.km-tab-bar button {
+  padding: 8px 16px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--text-secondary, #666);
+}
+
+.km-tab-bar button.km-tab-active {
+  color: var(--accent-blue, #1976d2);
+  border-bottom-color: var(--accent-blue, #1976d2);
+  font-weight: 500;
+}
+
+.km-image-preview {
+  max-width: 100%;
+  max-height: 200px;
+  border: 1px solid var(--border-color, #ccc);
+  border-radius: 4px;
+  margin-top: 8px;
+  object-fit: contain;
+  display: block;
+}
+
+.km-file-input-wrapper {
+  margin-bottom: 12px;
+}
+
+.km-file-input-wrapper input[type="file"] {
+  font-size: 13px;
+}
+
+/* --- Floating note panel --- */
+.km-note-panel-float {
+  position: absolute;
+  width: 320px;
+  height: 220px;
+  background: var(--bg-surface, #fff);
+  border: 1px solid var(--border-color, #ccc);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  z-index: 150;
+  display: flex;
+  flex-direction: column;
+  resize: both;
+  overflow: hidden;
+  min-width: 200px;
+  min-height: 120px;
+}
+
+.km-note-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-color, #ccc);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary, #666);
+  cursor: grab;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.km-note-panel-header:active {
+  cursor: grabbing;
+}
+
+.km-note-panel-header button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  color: var(--text-secondary, #666);
+  padding: 0 4px;
+}
+
+.km-note-panel-header button:hover {
+  color: var(--text-primary, #222);
+}
+
+.km-note-panel-float textarea {
+  flex: 1;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  resize: none;
+  font-family: monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  background: var(--bg-base, #fff);
+  color: var(--text-primary, #222);
+  box-sizing: border-box;
+}
+
+.km-note-panel-float textarea:focus {
+  outline: none;
+}
+
+/* --- Note tooltip --- */
+.react-flow__node:has(.km-note-tooltip) {
+  z-index: 1000 !important;
+}
+
+.km-note-tooltip {
+  position: absolute;
+  z-index: 200;
+  min-width: 150px;
+  max-width: 320px;
+  max-height: 200px;
+  overflow: auto;
+  padding: 8px 12px;
+  background: #fefde8;
+  border: 1px solid #e0d8a0;
+  border-radius: 6px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+  font-size: 13px;
+  line-height: 1.6;
+  color: #333;
+  white-space: pre-wrap;
+  word-break: break-word;
+  pointer-events: auto;
+  left: 50%;
+  top: calc(100% + 8px);
+  transform: translateX(-50%);
+}
+
+/* --- Dark mode adjustments --- */
+[data-theme="dark"] .mm-node {
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="dark"] .km-note-tooltip {
+  background: #3a3a20;
+  border-color: #555530;
+  color: #ddd;
+}
+
+[data-theme="dark"] .km-edit-textarea {
+  background: #2a2a2a;
+  color: #eee;
+}
+
+[data-theme="dark"] .mm-collapse-dot {
+  background: rgba(255, 255, 255, 0.4);
+}

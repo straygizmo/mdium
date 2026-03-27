@@ -1,0 +1,133 @@
+.search-replace {
+  position: absolute;
+  top: 0;
+  right: 16px;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  padding: 8px 28px 8px 4px;
+  background: var(--bg-overlay);
+  border: 1px solid var(--border);
+  border-radius: 0 0 6px 6px;
+  box-shadow: 0 4px 12px var(--shadow);
+}
+
+.search-replace__body {
+  display: flex;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.search-replace__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-top: 2px;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.search-replace__toggle:hover {
+  background: var(--bg-surface);
+  color: var(--text);
+}
+
+.search-replace__fields {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.search-replace__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.search-replace__input {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-input);
+  color: var(--text);
+  font-size: 13px;
+  width: 200px;
+  outline: none;
+}
+
+.search-replace__input:focus {
+  border-color: var(--primary);
+}
+
+.search-replace__count {
+  font-size: 11px;
+  color: var(--text-muted);
+  min-width: 40px;
+}
+
+.search-replace__btn {
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-surface);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.search-replace__btn:hover:not(:disabled) {
+  background: var(--bg-overlay);
+}
+
+.search-replace__btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.search-replace__nav-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-surface);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.search-replace__nav-btn:hover:not(:disabled) {
+  background: var(--bg-overlay);
+}
+
+.search-replace__nav-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.search-replace__close {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.search-replace__close:hover {
+  color: var(--text);
+}

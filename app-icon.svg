@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- 紫系メイングラデーション -->
+    <linearGradient id="diag" gradientUnits="userSpaceOnUse"
+                    x1="56" y1="46" x2="456" y2="466">
+      <stop offset="0%"   stop-color="#c084fc"/>
+      <stop offset="50%"  stop-color="#7c3aed"/>
+      <stop offset="100%" stop-color="#2e1065"/>
+    </linearGradient>
+
+    <!-- 外枠の紫グラデーション -->
+    <linearGradient id="border-grad" gradientUnits="userSpaceOnUse"
+                    x1="0" y1="0" x2="512" y2="512">
+      <stop offset="0%"   stop-color="#a855f7"/>
+      <stop offset="100%" stop-color="#4c1d95"/>
+    </linearGradient>
+
+    <!-- 光沢オーバーレイ -->
+    <linearGradient id="gloss" gradientUnits="userSpaceOnUse"
+                    x1="200" y1="0" x2="300" y2="420">
+      <stop offset="0%"   stop-color="#ffffff" stop-opacity="0.45"/>
+      <stop offset="40%"  stop-color="#ffffff" stop-opacity="0.12"/>
+      <stop offset="60%"  stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 角丸の外枠（紫グラデーション） -->
+  <rect x="4" y="4" width="504" height="504" rx="64" ry="64"
+        fill="none" stroke="url(#border-grad)" stroke-width="24"/>
+
+  <!--
+    fill-rule="evenodd" で中央の穴を開ける
+    中央穴: LV_right〜RV_left × TH_bottom〜BH_top
+      y=178: LV_right=163.8, RV_left=235.8
+      y=242: LV_right=160.2, RV_left=232.2
+  -->
+  <g transform="translate(56, 46)">
+    <!-- メインのシャープ記号 -->
+    <path
+      fill="url(#diag)"
+      fill-rule="evenodd"
+      stroke="#1e0a3c"
+      stroke-width="5"
+      stroke-linejoin="round"
+      stroke-linecap="round"
+      d="
+        M 111,18
+        L 173,18
+        L 166.6,130
+        L 238.6,130
+        L 245,18
+        L 307,18
+        L 300.6,130
+        L 372,130
+        L 372,178
+        L 297.8,178
+        L 294.2,242
+        L 372,242
+        L 372,290
+        L 291.4,290
+        L 285,402
+        L 223,402
+        L 229.4,290
+        L 157.4,290
+        L 151,402
+        L 89,402
+        L 95.4,290
+        L 28,290
+        L 28,242
+        L 98.2,242
+        L 101.8,178
+        L 28,178
+        L 28,130
+        L 104.6,130
+        Z
+
+        M 163.8,178
+        L 235.8,178
+        L 232.2,242
+        L 160.2,242
+        Z
+      "
+    />
+
+    <!-- 光沢レイヤー -->
+    <path
+      fill="url(#gloss)"
+      fill-rule="evenodd"
+      d="
+        M 111,18
+        L 173,18
+        L 166.6,130
+        L 238.6,130
+        L 245,18
+        L 307,18
+        L 300.6,130
+        L 372,130
+        L 372,178
+        L 297.8,178
+        L 294.2,242
+        L 372,242
+        L 372,290
+        L 291.4,290
+        L 285,402
+        L 223,402
+        L 229.4,290
+        L 157.4,290
+        L 151,402
+        L 89,402
+        L 95.4,290
+        L 28,290
+        L 28,242
+        L 98.2,242
+        L 101.8,178
+        L 28,178
+        L 28,130
+        L 104.6,130
+        Z
+
+        M 163.8,178
+        L 235.8,178
+        L 232.2,242
+        L 160.2,242
+        Z
+      "
+    />
+  </g>
+</svg>

@@ -1,0 +1,18 @@
+{
+  "save": "Save",
+  "saveAs": "Save As",
+  "newFile": "New File",
+  "openFolder": "Open Folder",
+  "exportPdf": "Export PDF",
+  "exportHtml": "Export HTML",
+  "exportDocx": "Export DOCX",
+  "togglePreview": "Toggle Preview",
+  "toggleEditor": "Toggle Editor",
+  "outline": "Outline",
+  "files": "Files",
+  "explorer": "Explorer",
+  "terminal": "Terminal",
+  "openInExplorer": "Open in Explorer",
+  "openInVSCode": "Open in VSCode",
+  "settings": "Settings"
+}

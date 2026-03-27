@@ -1,0 +1,321 @@
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.settings-dialog {
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px var(--shadow-strong);
+  width: 580px;
+  height: min(620px, 85vh);
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-dialog__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-dialog__title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.settings-dialog__close {
+  background: none;
+  border: none;
+  font-size: 20px;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.settings-dialog__close:hover {
+  color: var(--text);
+}
+
+.settings-dialog__tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  padding: 0 20px;
+}
+
+.settings-dialog__tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.settings-dialog__tab:hover {
+  color: var(--text);
+}
+
+.settings-dialog__tab--active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.settings-dialog__body {
+  padding: 20px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+}
+
+.settings-dialog__section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.settings-dialog__divider {
+  height: 1px;
+  background: var(--border);
+}
+
+.settings-dialog__toggle-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-dialog__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.settings-dialog__toggle input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 36px;
+  height: 20px;
+  background: var(--text-muted);
+  border-radius: 10px;
+  position: relative;
+  cursor: pointer;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+
+.settings-dialog__toggle input[type="checkbox"]::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  background: white;
+  border-radius: 50%;
+  transition: transform 0.2s;
+}
+
+.settings-dialog__toggle input[type="checkbox"]:checked {
+  background: var(--accent, #4f8ff7);
+}
+
+.settings-dialog__toggle input[type="checkbox"]:checked::after {
+  transform: translateX(16px);
+}
+
+.settings-dialog__description {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.settings-dialog__sync-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* AI settings tab */
+.settings-dialog__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-dialog__label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.settings-dialog__input {
+  background: var(--bg-surface, var(--bg-base));
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 13px;
+  padding: 6px 10px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.settings-dialog__input:focus {
+  border-color: var(--accent);
+}
+
+.settings-dialog__select {
+  background: var(--bg-surface, var(--bg-base));
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 13px;
+  padding: 6px 10px;
+  outline: none;
+  cursor: pointer;
+}
+
+.settings-dialog__select:focus {
+  border-color: var(--accent);
+}
+
+.settings-dialog__format-badge {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--bg-overlay, rgba(0,0,0,0.05));
+  border-radius: 4px;
+  padding: 3px 8px;
+  align-self: flex-start;
+}
+
+.settings-dialog__test-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-dialog__test-btn {
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  align-self: flex-start;
+}
+
+.settings-dialog__test-btn:hover {
+  opacity: 0.9;
+}
+
+.settings-dialog__test-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.settings-dialog__test-msg {
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.settings-dialog__test-msg--ok {
+  color: #22c55e;
+}
+
+.settings-dialog__test-msg--err {
+  color: #ef4444;
+}
+
+.settings-dialog__speech-status {
+  padding: 0 4px;
+}
+
+.settings-dialog__speech-ready {
+  font-size: 12px;
+  color: var(--accent-green, #22c55e);
+  font-weight: 600;
+}
+
+.settings-dialog__speech-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.settings-dialog__progress-bar {
+  height: 4px;
+  background: var(--bg-overlay);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.settings-dialog__progress-fill {
+  height: 100%;
+  background: var(--accent-blue, #3b82f6);
+  border-radius: 2px;
+  transition: width 0.2s ease;
+}
+
+.settings-dialog__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+}
+
+.settings-dialog__save-btn {
+  padding: 6px 20px;
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.settings-dialog__save-btn:hover {
+  opacity: 0.9;
+}
+
+.settings-dialog__cancel-btn {
+  padding: 6px 20px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.settings-dialog__cancel-btn:hover {
+  border-color: var(--text-muted);
+}

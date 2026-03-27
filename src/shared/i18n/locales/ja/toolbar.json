@@ -1,0 +1,18 @@
+{
+  "save": "保存",
+  "saveAs": "名前を付けて保存",
+  "newFile": "新規ファイル",
+  "openFolder": "フォルダを開く",
+  "exportPdf": "PDF出力",
+  "exportHtml": "HTML出力",
+  "exportDocx": "DOCX出力",
+  "togglePreview": "プレビュー切替",
+  "toggleEditor": "エディタ切替",
+  "outline": "アウトライン",
+  "files": "ファイル",
+  "explorer": "エクスプローラー",
+  "terminal": "ターミナル",
+  "openInExplorer": "エクスプローラーで開く",
+  "openInVSCode": "VSCodeで開く",
+  "settings": "設定"
+}

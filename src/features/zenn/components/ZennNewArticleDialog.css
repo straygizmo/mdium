@@ -1,0 +1,118 @@
+.zenn-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 900;
+}
+
+.zenn-dialog {
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+  width: 400px;
+  box-shadow: 0 8px 32px var(--shadow-strong);
+}
+
+.zenn-dialog__title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 16px;
+}
+
+.zenn-dialog__label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: 10px 0 4px;
+}
+
+.zenn-dialog__input,
+.zenn-dialog__select {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+}
+
+.zenn-dialog__input--emoji {
+  width: 60px;
+  font-size: 20px;
+  text-align: center;
+}
+
+.zenn-dialog__topics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.zenn-dialog__topic-tag {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: var(--bg-overlay);
+  border-radius: 12px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.zenn-dialog__topic-tag button {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0;
+}
+
+.zenn-dialog__topic-input {
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text);
+  font-size: 12px;
+  width: 80px;
+  outline: none;
+}
+
+.zenn-dialog__error {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--accent-red);
+}
+
+.zenn-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.zenn-dialog__btn {
+  padding: 6px 16px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.zenn-dialog__btn--primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}

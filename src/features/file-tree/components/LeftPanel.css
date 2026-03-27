@@ -1,0 +1,126 @@
+.left-panel {
+  display: flex;
+  flex-direction: row;
+  width: 100%;
+  height: 100%;
+  background: var(--bg-surface);
+}
+
+.left-panel__activity-bar {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  width: 40px;
+  flex-shrink: 0;
+  background: var(--bg-base);
+  border-right: 1px solid var(--border);
+}
+
+.left-panel__activity-bar-top {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding-top: 4px;
+}
+
+.left-panel__activity-bar-bottom {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-bottom: 4px;
+}
+
+.left-panel__activity-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  border-left: 2px solid transparent;
+  transition: all 0.15s;
+}
+
+.left-panel__activity-btn:hover {
+  color: var(--text);
+  background: var(--bg-overlay);
+}
+
+.left-panel__activity-btn--active {
+  color: var(--primary);
+  border-left-color: var(--primary);
+}
+
+.left-panel__content {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.left-panel__section-header {
+  display: flex;
+  align-items: center;
+  height: 31px;
+  min-height: 31px;
+  padding: 0 12px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface);
+  user-select: none;
+  gap: 6px;
+}
+
+.left-panel__section-header-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.left-panel__section-header-actions {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.left-panel__header-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 3px;
+  padding: 0;
+}
+
+.left-panel__header-action:hover {
+  background: var(--bg-overlay);
+  color: var(--text);
+}
+
+.left-panel__section-header-model {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-muted);
+  opacity: 0.8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

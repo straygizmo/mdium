@@ -1,0 +1,9 @@
+pub mod ai;
+pub mod claude_config;
+pub mod env;
+pub mod file;
+pub mod git;
+pub mod mcp;
+pub mod pty;
+pub mod rag;
+pub mod speech;

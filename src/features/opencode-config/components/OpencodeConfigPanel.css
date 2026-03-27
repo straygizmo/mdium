@@ -1,0 +1,89 @@
+.oc-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Top-level tabs (Chat / Settings) */
+.oc-panel__top-tabs {
+  display: flex;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.oc-panel__top-tab {
+  flex: 1;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  text-align: center;
+}
+
+.oc-panel__top-tab:hover {
+  color: var(--text);
+  background: var(--bg-surface);
+}
+
+.oc-panel__top-tab--active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+}
+
+.oc-panel__tabs {
+  display: flex;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+  padding: 0 8px;
+  gap: 0;
+  flex-shrink: 0;
+}
+
+.oc-panel__tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 6px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.oc-panel__tab:hover {
+  color: var(--text);
+}
+
+.oc-panel__tab--active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+}
+
+.oc-panel__body {
+  padding: 12px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Disabled state (no folder) */
+.oc-panel--disabled {
+}
+
+.oc-panel__no-folder {
+  padding: 16px;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+  margin-top: 40px;
+}

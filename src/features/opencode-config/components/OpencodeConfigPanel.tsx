@@ -1,0 +1,116 @@
+import { useEffect, useMemo } from "react";
+import { useTranslation } from "react-i18next";
+import { useUiStore } from "@/stores/ui-store";
+import { useTabStore } from "@/stores/tab-store";
+import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
+import type { OpencodeConfigTab } from "@/shared/types";
+import { OpencodeConfigProvider } from "./OpencodeConfigContext";
+import { RulesSection } from "./sections/RulesSection";
+import { ToolsSection } from "./sections/ToolsSection";
+import { AgentsSection } from "./sections/AgentsSection";
+import { CommandsSection } from "./sections/CommandsSection";
+import { McpServersSection } from "./sections/McpServersSection";
+import { SkillsSection } from "./sections/SkillsSection";
+import { CustomToolsSection } from "./sections/CustomToolsSection";
+import { WebUiSection } from "./sections/WebUiSection";
+import { OpencodeChat } from "./OpencodeChat";
+import "./OpencodeConfigPanel.css";
+import "./OpencodeConfigDialog.css";
+
+const TABS: { key: OpencodeConfigTab; labelKey: string }[] = [
+  { key: "rules", labelKey: "tabRules" },
+  // { key: "tools", labelKey: "tabTools" },  // planエージェント強制のため非表示
+  { key: "agents", labelKey: "tabAgents" },
+  { key: "commands", labelKey: "tabCommands" },
+  { key: "mcp", labelKey: "tabMcp" },
+  { key: "skills", labelKey: "tabSkills" },
+  { key: "custom-tools", labelKey: "tabCustomTools" },
+  // { key: "webui", labelKey: "tabWebUi" }, // 将来的に使うかもしれないが今は非表示
+];
+
+export function OpencodeConfigPanel() {
+  const { t } = useTranslation("opencode-config");
+  const activeFolderPath = useTabStore((s) => s.activeFolderPath);
+  const topTab = useUiStore((s) => s.opencodeTopTab);
+  const setTopTab = useUiStore((s) => s.setOpencodeTopTab);
+  const activeTab = useUiStore((s) => s.opencodeConfigTab);
+  const setTab = useUiStore((s) => s.setOpencodeConfigTab);
+  const loadConfig = useOpencodeConfigStore((s) => s.loadConfig);
+  const loadProjectCommands = useOpencodeConfigStore((s) => s.loadProjectCommands);
+  const loadProjectMcpServers = useOpencodeConfigStore((s) => s.loadProjectMcpServers);
+  const loadProjectSkills = useOpencodeConfigStore((s) => s.loadProjectSkills);
+
+  useEffect(() => {
+    loadConfig();
+    if (activeFolderPath) {
+      loadProjectCommands(activeFolderPath);
+      loadProjectMcpServers(activeFolderPath);
+      loadProjectSkills(activeFolderPath);
+    }
+  }, [loadConfig, loadProjectCommands, loadProjectMcpServers, loadProjectSkills, activeFolderPath]);
+
+  const contextValue = useMemo(() => ({ useRelativePaths: true }), []);
+
+  const renderSection = () => {
+    switch (activeTab) {
+      case "rules": return <RulesSection />;
+      case "tools": return <ToolsSection />;
+      case "agents": return <AgentsSection />;
+      case "commands": return <CommandsSection />;
+      case "mcp": return <McpServersSection />;
+      case "skills": return <SkillsSection />;
+      case "custom-tools": return <CustomToolsSection />;
+      case "webui": return <WebUiSection />;
+    }
+  };
+
+  if (!activeFolderPath) {
+    return (
+      <div className="oc-panel oc-panel--disabled">
+        <div className="oc-panel__no-folder">
+          {t("noFolderOpen")}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="oc-panel">
+      <div className="oc-panel__top-tabs">
+        <button
+          className={`oc-panel__top-tab${topTab === "chat" ? " oc-panel__top-tab--active" : ""}`}
+          onClick={() => setTopTab("chat")}
+        >
+          {t("tabChat")}
+        </button>
+        <button
+          className={`oc-panel__top-tab${topTab === "settings" ? " oc-panel__top-tab--active" : ""}`}
+          onClick={() => setTopTab("settings")}
+        >
+          {t("tabSettings")}
+        </button>
+      </div>
+
+      {topTab === "chat" ? (
+        <OpencodeChat />
+      ) : (
+        <OpencodeConfigProvider value={contextValue}>
+          <div className="oc-panel__tabs">
+            {TABS.map(({ key, labelKey }) => (
+              <button
+                key={key}
+                className={`oc-panel__tab${activeTab === key ? " oc-panel__tab--active" : ""}`}
+                onClick={() => setTab(key)}
+              >
+                {t(labelKey)}
+              </button>
+            ))}
+          </div>
+          <div className="oc-panel__body">
+            {renderSection()}
+          </div>
+        </OpencodeConfigProvider>
+      )}
+    </div>
+  );
+}

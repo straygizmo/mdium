@@ -1,0 +1,86 @@
+.zenn-publish {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+}
+
+.zenn-publish__status {
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.zenn-publish__status-text {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  font-family: "Consolas", monospace;
+  margin: 0;
+}
+
+.zenn-publish__remote {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+
+.zenn-publish__remote-display,
+.zenn-publish__remote-edit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.zenn-publish__remote-url {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.zenn-publish__commit {
+  display: flex;
+  gap: 6px;
+}
+
+.zenn-publish__input {
+  flex: 1;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+}
+
+.zenn-publish__input:focus {
+  border-color: var(--primary);
+}
+
+.zenn-publish__btn {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.zenn-publish__btn:hover {
+  background: var(--bg-overlay);
+}
+
+.zenn-publish__btn--primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.zenn-publish__btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

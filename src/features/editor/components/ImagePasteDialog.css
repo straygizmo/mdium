@@ -1,0 +1,132 @@
+.image-paste-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 900;
+}
+
+.image-paste-dialog {
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+  width: 420px;
+  box-shadow: 0 8px 32px var(--shadow-strong);
+}
+
+.image-paste-dialog__title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 12px;
+}
+
+.image-paste-dialog__preview {
+  width: 100%;
+  max-height: 200px;
+  object-fit: contain;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  margin-bottom: 12px;
+  background: var(--bg-surface);
+}
+
+.image-paste-dialog__label {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.image-paste-dialog__input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input);
+}
+
+.image-paste-dialog__input-wrap:focus-within {
+  border-color: var(--primary);
+}
+
+.image-paste-dialog__input {
+  flex: 1;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+}
+
+.image-paste-dialog__ai-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.image-paste-dialog__ai-btn:hover:not(:disabled) {
+  color: var(--primary);
+}
+
+.image-paste-dialog__ai-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.image-paste-dialog__ai-btn--generating {
+  animation: image-paste-spin 1s linear infinite;
+}
+
+@keyframes image-paste-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.image-paste-dialog__error {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--accent-red);
+}
+
+.image-paste-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.image-paste-dialog__btn {
+  padding: 6px 16px;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.image-paste-dialog__btn--cancel {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.image-paste-dialog__btn--primary {
+  background: var(--primary);
+  border: none;
+  color: #fff;
+}
+
+.image-paste-dialog__btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

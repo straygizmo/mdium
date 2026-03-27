@@ -1,0 +1,215 @@
+/* ── Table Editor Container ── */
+.table-editor {
+  outline: none;
+  overflow: auto;
+  height: 100%;
+  padding: 8px;
+  background: var(--bg-base, #ffffff);
+}
+
+/* ── Format Bar ── */
+.table-editor__format-bar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: var(--bg-surface, #f5f5f5);
+  border: 1px solid var(--border, #e0e0e0);
+  border-radius: 4px;
+  margin-bottom: 8px;
+}
+
+.fmt-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 2px 6px;
+  border: 1px solid var(--border, #e0e0e0);
+  border-radius: 4px;
+  background: var(--bg-base, #ffffff);
+  color: var(--text-primary, #333333);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.fmt-btn:hover {
+  background: var(--bg-hover, #e8e8e8);
+  border-color: var(--border-hover, #cccccc);
+}
+
+.fmt-btn:active {
+  background: var(--bg-active, #d8d8d8);
+}
+
+.fmt-sep {
+  display: inline-block;
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: var(--border, #e0e0e0);
+}
+
+/* ── Table Wrapper ── */
+.table-editor__wrapper {
+  margin-bottom: 24px;
+}
+
+.table-editor__heading {
+  margin: 0 0 8px 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary, #333333);
+}
+
+/* ── Table ── */
+.md-table {
+  border-collapse: collapse;
+  width: 100%;
+  table-layout: auto;
+  font-size: 13px;
+}
+
+.md-table thead {
+  background: var(--bg-surface, #f5f5f5);
+}
+
+/* ── Cells ── */
+.table-cell {
+  padding: 4px 8px;
+  border: 1px solid var(--border, #e0e0e0);
+  cursor: pointer;
+  position: relative;
+  min-width: 60px;
+  max-width: 300px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  transition: outline 0.1s;
+}
+
+.table-cell:hover {
+  background: var(--cell-hover, #f8f8f8);
+}
+
+.cell-selected {
+  outline: 2px solid var(--primary, #4a90d9);
+  outline-offset: -2px;
+  z-index: 1;
+}
+
+.cell-editing {
+  outline: 2px solid var(--cell-editing, #2d7ad6);
+  outline-offset: -2px;
+  z-index: 2;
+  padding: 0;
+}
+
+/* ── Cell Text Formatting ── */
+.cell-text {
+  display: block;
+  min-height: 1.4em;
+}
+
+.cell-text strong {
+  font-weight: 700;
+}
+
+.cell-text em {
+  font-style: italic;
+}
+
+.cell-text del {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+.cell-text code {
+  font-family: var(--font-mono, "Consolas", "Monaco", monospace);
+  font-size: 0.9em;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--bg-code, #f0f0f0);
+  color: var(--text-code, #d14);
+}
+
+/* ── Cell Input ── */
+.cell-input {
+  width: 100%;
+  height: 100%;
+  min-height: 28px;
+  padding: 4px 8px;
+  border: none;
+  outline: none;
+  background: var(--bg-base, #ffffff);
+  color: var(--text-primary, #333333);
+  font-family: inherit;
+  font-size: inherit;
+  box-sizing: border-box;
+}
+
+/* ── Context Menu ── */
+.context-menu {
+  position: fixed;
+  z-index: 500;
+  min-width: 180px;
+  background: var(--bg-overlay, #ffffff);
+  border: 1px solid var(--border, #e0e0e0);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  padding: 4px 0;
+  animation: ctx-fade-in 0.12s ease-out;
+}
+
+@keyframes ctx-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.ctx-group {
+  padding: 2px 0;
+}
+
+.ctx-group button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary, #333333);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.ctx-group button:hover {
+  background: var(--bg-hover, #e8e8e8);
+}
+
+.ctx-divider {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--border, #e0e0e0);
+}
+
+/* ── Empty State ── */
+.table-editor__empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 120px;
+  color: var(--text-muted, #999999);
+  font-size: 14px;
+}

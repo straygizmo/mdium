@@ -1,0 +1,27 @@
+.outline-panel {
+  padding: 4px 0;
+  overflow-y: auto;
+}
+
+.outline-panel__item {
+  padding: 4px 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.outline-panel__item:hover {
+  background: var(--bg-overlay);
+  color: var(--text);
+}
+
+.outline-panel__empty {
+  padding: 16px;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+  margin-top: 40px;
+}

@@ -1,0 +1,116 @@
+.editor-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+}
+
+.editor-panel__format-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface);
+  flex-shrink: 0;
+}
+
+.editor-panel__format-bar button {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+  padding: 3px 7px;
+  border-radius: 3px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.editor-panel__format-bar button:hover {
+  background: var(--bg-overlay);
+  color: var(--text);
+}
+
+.editor-panel__separator {
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+  margin: 0 4px;
+}
+
+.editor-panel__spacer {
+  flex: 1;
+}
+
+.editor-panel__btn--active {
+  background: var(--primary) !important;
+  color: #fff !important;
+  border-radius: 4px;
+}
+
+.editor-panel__textarea {
+  flex: 1;
+  border: none;
+  outline: none;
+  padding: 16px;
+  font-family: "Consolas", "Meiryo", monospace;
+  font-size: 14px;
+  line-height: 1.6;
+  background: var(--bg-base);
+  color: var(--text);
+  resize: none;
+  tab-size: 2;
+}
+
+.editor-panel__textarea::placeholder {
+  color: var(--text-muted);
+}
+
+/* Mic button */
+.editor-panel__mic-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+  padding: 3px 7px;
+  border-radius: 3px;
+  cursor: pointer;
+  line-height: 1;
+  transition: background 0.2s, color 0.2s;
+}
+
+.editor-panel__mic-btn:hover {
+  background: var(--bg-overlay);
+  color: var(--text);
+}
+
+.editor-panel__mic-btn--recording {
+  background: var(--accent-red, #e64553) !important;
+  color: #fff !important;
+  animation: editor-mic-pulse 1s infinite;
+}
+
+.editor-panel__mic-btn--loading,
+.editor-panel__mic-btn--transcribing {
+  color: var(--accent-yellow, #df8e1d) !important;
+  cursor: wait;
+}
+
+.editor-panel__mic-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+@keyframes editor-mic-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.editor-panel__mic-spinner {
+  animation: editor-mic-spin 1s linear infinite;
+}
+
+@keyframes editor-mic-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}

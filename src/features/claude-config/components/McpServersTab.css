@@ -1,0 +1,274 @@
+.mcp-servers-tab__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.mcp-servers-tab__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.mcp-servers-tab__scope {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.mcp-servers-tab__empty {
+  font-size: 13px;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 20px 0;
+}
+
+.mcp-servers-tab__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mcp-servers-tab__item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 10px;
+  background: var(--bg-surface, var(--bg-base));
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  gap: 8px;
+}
+
+.mcp-servers-tab__item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.mcp-servers-tab__item-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.mcp-servers-tab__item-cmd {
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-servers-tab__item-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.mcp-servers-tab__toggle-btn {
+  background: #22c55e;
+  color: #fff;
+  border: none;
+  border-radius: 3px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mcp-servers-tab__toggle-btn--off {
+  background: var(--text-muted);
+}
+
+.mcp-servers-tab__edit-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.mcp-servers-tab__edit-btn:hover {
+  border-color: var(--accent);
+}
+
+.mcp-servers-tab__delete-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.mcp-servers-tab__delete-btn:hover {
+  color: #ef4444;
+}
+
+.mcp-servers-tab__add-btn {
+  margin-top: 12px;
+  background: none;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  padding: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+  cursor: pointer;
+  width: 100%;
+  text-align: center;
+}
+
+.mcp-servers-tab__add-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Shared form styles */
+.claude-config-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.claude-config-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.claude-config-form__label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.claude-config-form__input {
+  background: var(--bg-surface, var(--bg-base));
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 13px;
+  padding: 6px 10px;
+  outline: none;
+}
+
+.claude-config-form__input:focus {
+  border-color: var(--accent);
+}
+
+.claude-config-form__input:disabled {
+  opacity: 0.6;
+}
+
+.claude-config-form__input--half {
+  flex: 1;
+  min-width: 0;
+}
+
+.claude-config-form__textarea {
+  background: var(--bg-surface, var(--bg-base));
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 13px;
+  font-family: monospace;
+  padding: 6px 10px;
+  outline: none;
+  resize: vertical;
+}
+
+.claude-config-form__textarea:focus {
+  border-color: var(--accent);
+}
+
+.claude-config-form__textarea--tall {
+  min-height: 120px;
+}
+
+.claude-config-form__env-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.claude-config-form__remove-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.claude-config-form__remove-btn:hover {
+  color: #ef4444;
+}
+
+.claude-config-form__add-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 4px 0;
+  text-align: left;
+}
+
+.claude-config-form__add-btn:hover {
+  color: var(--accent);
+}
+
+.claude-config-form__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.claude-config-form__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.claude-config-form__save-btn {
+  background: var(--accent);
+  color: var(--on-accent, #fff);
+  border: none;
+  border-radius: 4px;
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.claude-config-form__save-btn:hover {
+  opacity: 0.9;
+}
+
+.claude-config-form__cancel-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 16px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.claude-config-form__cancel-btn:hover {
+  border-color: var(--accent);
+}

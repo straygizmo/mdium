@@ -1,0 +1,170 @@
+.project-config-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.project-config-panel__title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 4px 8px 8px;
+}
+
+.project-config-panel__empty {
+  font-size: 13px;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 40px 20px;
+}
+
+.project-config-panel__section {
+  margin-bottom: 4px;
+}
+
+.project-config-panel__section-header {
+  background: none;
+  border: none;
+  width: 100%;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  padding: 6px 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.project-config-panel__section-header:hover {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.05));
+  border-radius: 3px;
+}
+
+.project-config-panel__chevron {
+  font-size: 8px;
+  transition: transform 0.15s;
+  display: inline-block;
+}
+
+.project-config-panel__chevron--open {
+  transform: rotate(90deg);
+}
+
+.project-config-panel__section-body {
+  padding: 4px 8px 8px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.project-config-panel__empty-section {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 8px 0;
+}
+
+.project-config-panel__item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 8px;
+  background: var(--bg-surface, var(--bg-base));
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  gap: 6px;
+}
+
+.project-config-panel__item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.project-config-panel__item-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.project-config-panel__item-detail {
+  font-size: 10px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-config-panel__item-actions {
+  display: flex;
+  gap: 3px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.project-config-panel__toggle-btn {
+  background: #22c55e;
+  color: #fff;
+  border: none;
+  border-radius: 3px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.project-config-panel__toggle-btn--off {
+  background: var(--text-muted);
+}
+
+.project-config-panel__edit-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 6px;
+  font-size: 10px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.project-config-panel__edit-btn:hover {
+  border-color: var(--accent);
+}
+
+.project-config-panel__delete-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 3px;
+  line-height: 1;
+}
+
+.project-config-panel__delete-btn:hover {
+  color: #ef4444;
+}
+
+.project-config-panel__add-btn {
+  background: none;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  padding: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+  width: 100%;
+  text-align: center;
+}
+
+.project-config-panel__add-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}

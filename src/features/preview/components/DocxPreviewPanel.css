@@ -1,0 +1,78 @@
+/* ========== DOCX Preview Panel ========== */
+.docx-preview-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+  min-width: 0;
+  background: var(--bg-base);
+}
+
+.docx-preview-panel__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-overlay);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.docx-preview-panel__label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  margin-right: auto;
+}
+
+.docx-preview-panel__toolbar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 6px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.docx-preview-panel__toolbar button:hover:not(:disabled) {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: white;
+}
+
+.docx-preview-panel__toolbar button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+@keyframes docx-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.docx-preview-panel__spin {
+  animation: docx-spin 1s linear infinite;
+}
+
+/* Loading */
+.docx-preview-panel__loading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+/* DOCX content viewer */
+.docx-preview-panel__content {
+  flex: 1;
+  overflow-y: auto;
+  background: #e8e8e8;
+}

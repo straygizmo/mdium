@@ -1,0 +1,38 @@
+.language-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.language-selector__label {
+  font-weight: 600;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.language-selector__options {
+  display: flex;
+  gap: 8px;
+}
+
+.language-selector__option {
+  padding: 6px 16px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.language-selector__option:hover {
+  border-color: var(--primary);
+  background: var(--bg-overlay);
+}
+
+.language-selector__option--active {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: #fff;
+}
