@@ -3,8 +3,8 @@ import { useSettingsStore, type Language } from "@/stores/settings-store";
 import "./LanguageSelector.css";
 
 const languages: { code: Language; label: string }[] = [
-  { code: "ja", label: "日本語" },
   { code: "en", label: "English" },
+  { code: "ja", label: "日本語" },
 ];
 
 export function LanguageSelector() {
