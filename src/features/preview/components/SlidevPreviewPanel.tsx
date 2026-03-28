@@ -118,7 +118,7 @@ export function SlidevPreviewPanel({ content, filePath }: SlidevPreviewPanelProp
 
   if (!filePath) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", background: "var(--bg-primary)" }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", background: "var(--bg-base)" }}>
         {slidevLogo}
         <p style={{ marginTop: 12, opacity: 0.5, fontSize: 13 }}>{t("slidevNoFile")}</p>
       </div>
@@ -127,7 +127,7 @@ export function SlidevPreviewPanel({ content, filePath }: SlidevPreviewPanelProp
 
   if (starting || (session && !session.ready && !session.error)) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", background: "var(--bg-primary)" }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", background: "var(--bg-base)" }}>
         {slidevLogo}
         <div style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 8 }}>
           <span className="slidev-spinner" />
@@ -139,7 +139,7 @@ export function SlidevPreviewPanel({ content, filePath }: SlidevPreviewPanelProp
 
   if (session?.error) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", background: "var(--bg-primary)" }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", background: "var(--bg-base)" }}>
         {slidevLogo}
         <p style={{ marginTop: 12, color: "var(--error)", fontSize: 13 }}>{t("slidevError")}: {session.error}</p>
         <button onClick={startServer} style={{ marginTop: 8, padding: "4px 16px", cursor: "pointer" }}>{t("slidevRetry")}</button>
