@@ -285,6 +285,13 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   const filePath = activeTab?.filePath ?? null;
   const isSlidev = useMemo(() => isSlidevMarkdown(content), [content]);
 
+  // Force switch away from slidev-preview when file is not Slidev markdown
+  useEffect(() => {
+    if (activeViewTab === "slidev-preview" && !isSlidev) {
+      setActiveViewTab("preview");
+    }
+  }, [isSlidev, activeViewTab, setActiveViewTab]);
+
   // Markdown rendered HTML
   const [html, setHtml] = useState("");
   const [frontMatter, setFrontMatter] = useState<Record<string, string> | null>(null);
