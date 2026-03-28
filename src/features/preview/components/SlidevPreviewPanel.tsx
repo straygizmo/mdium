@@ -130,22 +130,22 @@ export function SlidevPreviewPanel({ content, filePath }: SlidevPreviewPanelProp
   if (session?.ready) {
     return (
       <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-        <div style={{ display: "flex", gap: 4, padding: "4px 8px", borderBottom: "1px solid var(--border)", alignItems: "center" }}>
-          <span style={{ flex: 1, fontSize: 12, opacity: 0.7 }}>Slidev Preview</span>
-          <button
-            onClick={() => handleExport("pptx")}
-            disabled={exporting}
-            style={{ fontSize: 11, padding: "2px 8px", cursor: "pointer" }}
-          >
-            {exporting ? "..." : "PPTX"}
-          </button>
-          <button
-            onClick={() => handleExport("pdf")}
-            disabled={exporting}
-            style={{ fontSize: 11, padding: "2px 8px", cursor: "pointer" }}
-          >
-            {exporting ? "..." : "PDF"}
-          </button>
+        <div className="preview-panel__tabs">
+          <span className="preview-panel__tab preview-panel__tab--active">Slidev</span>
+          <div className="preview-panel__export-group">
+            <button
+              onClick={() => handleExport("pptx")}
+              disabled={exporting}
+            >
+              {exporting ? "..." : "PPTX"}
+            </button>
+            <button
+              onClick={() => handleExport("pdf")}
+              disabled={exporting}
+            >
+              {exporting ? "..." : "PDF"}
+            </button>
+          </div>
         </div>
         <iframe
           src={`http://localhost:${session.port}`}
