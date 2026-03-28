@@ -108,24 +108,41 @@ export function SlidevPreviewPanel({ content, filePath }: SlidevPreviewPanelProp
     }
   };
 
+  const slidevLogo = (
+    <svg width="64" height="64" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="10" y="20" width="70" height="70" rx="14" fill="#3B8A8A"/>
+      <circle cx="55" cy="35" r="30" fill="#6ECFCF" opacity="0.9"/>
+      <path d="M58 55 L78 67 L58 79Z" fill="#F5A623"/>
+    </svg>
+  );
+
   if (!filePath) {
-    return <div style={{ padding: 16, opacity: 0.5 }}>{t("slidevNoFile")}</div>;
+    return (
+      <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "var(--bg-primary)", zIndex: 5 }}>
+        {slidevLogo}
+        <p style={{ marginTop: 12, opacity: 0.5, fontSize: 13 }}>{t("slidevNoFile")}</p>
+      </div>
+    );
   }
 
   if (starting || (session && !session.ready && !session.error)) {
     return (
-      <div style={{ padding: 16, display: "flex", alignItems: "center", gap: 8 }}>
-        <span className="slidev-spinner" />
-        {t("slidevStarting")}
+      <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "var(--bg-primary)", zIndex: 5 }}>
+        {slidevLogo}
+        <div style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 8 }}>
+          <span className="slidev-spinner" />
+          <span style={{ fontSize: 13, opacity: 0.7 }}>{t("slidevStarting")}</span>
+        </div>
       </div>
     );
   }
 
   if (session?.error) {
     return (
-      <div style={{ padding: 16 }}>
-        <p style={{ color: "var(--error)" }}>{t("slidevError")}: {session.error}</p>
-        <button onClick={startServer} style={{ marginTop: 8 }}>{t("slidevRetry")}</button>
+      <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "var(--bg-primary)", zIndex: 5 }}>
+        {slidevLogo}
+        <p style={{ marginTop: 12, color: "var(--error)", fontSize: 13 }}>{t("slidevError")}: {session.error}</p>
+        <button onClick={startServer} style={{ marginTop: 8, padding: "4px 16px", cursor: "pointer" }}>{t("slidevRetry")}</button>
       </div>
     );
   }
