@@ -92,7 +92,9 @@ export function SlidevPreviewPanel({ content, filePath }: SlidevPreviewPanelProp
   const handleExport = async (format: "pptx" | "pdf") => {
     if (!filePath) return;
     const ext = format === "pptx" ? "pptx" : "pdf";
+    const baseName = filePath.replace(/[\\/]/g, "/").split("/").pop()?.replace(/\.[^.]+$/, "") ?? "slides";
     const outputPath = await save({
+      defaultPath: `${baseName}_slidev.${ext}`,
       filters: [{ name: format.toUpperCase(), extensions: [ext] }],
     });
     if (!outputPath) return;
