@@ -22,7 +22,7 @@ interface SkillEntry {
 
 const SKILL_NAME_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
-/** フロントマター + コンテンツ → SKILL.md 文字列 */
+/** Front matter + content → SKILL.md string */
 function buildSkillMd(name: string, description: string, body: string): string {
   const lines = ["---", `name: ${name}`];
   if (description) lines.push(`description: ${description}`);
@@ -31,7 +31,7 @@ function buildSkillMd(name: string, description: string, body: string): string {
   return lines.join("\n");
 }
 
-/** SKILL.md 文字列 → { name, description, body } */
+/** SKILL.md string → { name, description, body } */
 function parseSkillMd(raw: string): { name: string; description: string; body: string } {
   let name = "";
   let description = "";

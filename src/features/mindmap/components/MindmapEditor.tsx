@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useTranslation } from "react-i18next";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -46,6 +47,7 @@ const edgeTypes = { mindmap: MindmapEdgeComponent };
 // --- Pure DOM dialogs (hyperlink, image) reused from original ---
 
 function showHyperlinkDialog(
+  labels: { link: string; title: string; titlePlaceholder: string; urlError: string; cancel: string },
   existing: { url?: string; title?: string } | null,
   onOk: (url: string, title: string) => void,
 ): void {
@@ -57,22 +59,22 @@ function showHyperlinkDialog(
 
   const header = document.createElement("div");
   header.className = "km-modal-header";
-  header.innerHTML = `<span>リンク</span><button class="km-modal-close">&times;</button>`;
+  header.innerHTML = `<span>${labels.link}</span><button class="km-modal-close">&times;</button>`;
 
   const body = document.createElement("div");
   body.className = "km-modal-body";
   body.innerHTML = `
     <label>URL</label>
     <input type="text" id="km-link-url" placeholder="https://example.com" />
-    <div class="km-error-text" id="km-link-error" style="display:none">有効なURL (http/https/ftp) を入力してください</div>
-    <label>タイトル (任意)</label>
-    <input type="text" id="km-link-title" placeholder="リンクのタイトル" />
+    <div class="km-error-text" id="km-link-error" style="display:none">${labels.urlError}</div>
+    <label>${labels.title}</label>
+    <input type="text" id="km-link-title" placeholder="${labels.titlePlaceholder}" />
   `;
 
   const footer = document.createElement("div");
   footer.className = "km-modal-footer";
   footer.innerHTML = `
-    <button class="km-btn-cancel">キャンセル</button>
+    <button class="km-btn-cancel">${labels.cancel}</button>
     <button class="km-btn-primary" id="km-link-ok">OK</button>
   `;
 
@@ -114,6 +116,7 @@ function showHyperlinkDialog(
 }
 
 function showImageDialog(
+  labels: { image: string; imageUrl: string; title: string; titlePlaceholder: string; urlTab: string; fileTab: string; cancel: string },
   existing: { url?: string; title?: string } | null,
   onOk: (url: string, title: string) => void,
 ): void {
@@ -125,20 +128,20 @@ function showImageDialog(
 
   const header = document.createElement("div");
   header.className = "km-modal-header";
-  header.innerHTML = `<span>画像</span><button class="km-modal-close">&times;</button>`;
+  header.innerHTML = `<span>${labels.image}</span><button class="km-modal-close">&times;</button>`;
 
   const body = document.createElement("div");
   body.className = "km-modal-body";
   body.innerHTML = `
     <div class="km-tab-bar">
-      <button class="km-tab-active" data-tab="url">URL指定</button>
-      <button data-tab="file">ファイル選択</button>
+      <button class="km-tab-active" data-tab="url">${labels.urlTab}</button>
+      <button data-tab="file">${labels.fileTab}</button>
     </div>
     <div id="km-img-tab-url">
-      <label>画像URL</label>
+      <label>${labels.imageUrl}</label>
       <input type="text" id="km-img-url" placeholder="https://example.com/image.png" />
-      <label>タイトル (任意)</label>
-      <input type="text" id="km-img-title" placeholder="画像のタイトル" />
+      <label>${labels.title}</label>
+      <input type="text" id="km-img-title" placeholder="${labels.titlePlaceholder}" />
     </div>
     <div id="km-img-tab-file" style="display:none">
       <div class="km-file-input-wrapper">
@@ -151,7 +154,7 @@ function showImageDialog(
   const footer = document.createElement("div");
   footer.className = "km-modal-footer";
   footer.innerHTML = `
-    <button class="km-btn-cancel">キャンセル</button>
+    <button class="km-btn-cancel">${labels.cancel}</button>
     <button class="km-btn-primary" id="km-img-ok">OK</button>
   `;
 
@@ -245,6 +248,8 @@ interface InnerProps extends Props {
 }
 
 function MindmapEditorInner({ fileData, fileType, filePath, theme, onSave, onDirtyChange, editorRef }: InnerProps) {
+  const { t } = useTranslation("editor");
+  const { t: tCommon } = useTranslation("common");
   const readOnly = fileType === ".xmind";
   const { fitView, setViewport, getNodes } = useReactFlow();
 
@@ -434,7 +439,7 @@ function MindmapEditorInner({ fileData, fileType, filePath, theme, onSave, onDir
           }
         });
       } catch (e) {
-        setError(`ファイルの読み込みに失敗しました: ${e instanceof Error ? e.message : String(e)}`);
+        setError(t("mindmap.failedToLoad", { error: e instanceof Error ? e.message : String(e) }));
       }
     };
     load();
@@ -478,14 +483,14 @@ function MindmapEditorInner({ fileData, fileType, filePath, theme, onSave, onDir
       const isRoot = parent.id === clone.id;
       parent.children.push({
         id: newId,
-        data: { text: isRoot ? `主トピック ${childNum}` : `サブトピック ${childNum}` },
+        data: { text: isRoot ? t("mindmap.mainTopic", { n: childNum }) : t("mindmap.subtopicN", { n: childNum }) },
         children: [],
       });
       setTree(clone);
       markDirty();
       return newId;
     },
-    [pushSnapshot, markDirty],
+    [pushSnapshot, markDirty, t],
   );
 
   const insertSibling = useCallback(
@@ -503,14 +508,14 @@ function MindmapEditorInner({ fileData, fileType, filePath, theme, onSave, onDir
       const isParentRoot = parent.id === clone.id;
       parent.children.splice(index + 1, 0, {
         id: newId,
-        data: { text: isParentRoot ? `主トピック ${siblingNum}` : `サブトピック ${siblingNum}` },
+        data: { text: isParentRoot ? t("mindmap.mainTopic", { n: siblingNum }) : t("mindmap.subtopicN", { n: siblingNum }) },
         children: [],
       });
       setTree(clone);
       markDirty();
       return newId;
     },
-    [pushSnapshot, markDirty],
+    [pushSnapshot, markDirty, t],
   );
 
   const deleteNode = useCallback(
@@ -611,6 +616,7 @@ function MindmapEditorInner({ fileData, fileType, filePath, theme, onSave, onDir
       setContextMenu(null);
       const node = treeRef.current ? findNode(treeRef.current, nodeId) : null;
       showHyperlinkDialog(
+        { link: t("mindmap.link"), title: t("mindmap.linkTitle"), titlePlaceholder: t("mindmap.linkTitlePlaceholder"), urlError: t("mindmap.linkUrlError"), cancel: tCommon("cancel") },
         node ? { url: node.data.hyperlink, title: node.data.hyperlinkTitle } : null,
         (url, title) => {
           mutateTree((clone) => {
@@ -623,7 +629,7 @@ function MindmapEditorInner({ fileData, fileType, filePath, theme, onSave, onDir
         },
       );
     },
-    [mutateTree],
+    [mutateTree, t, tCommon],
   );
 
   const handleDeleteLink = useCallback(
@@ -645,6 +651,7 @@ function MindmapEditorInner({ fileData, fileType, filePath, theme, onSave, onDir
       setContextMenu(null);
       const node = treeRef.current ? findNode(treeRef.current, nodeId) : null;
       showImageDialog(
+        { image: t("mindmap.image"), imageUrl: t("mindmap.imageUrl"), title: t("mindmap.imageTitle"), titlePlaceholder: t("mindmap.imageTitlePlaceholder"), urlTab: t("mindmap.urlTab"), fileTab: t("mindmap.fileTab"), cancel: tCommon("cancel") },
         node ? { url: node.data.image, title: "" } : null,
         (url, _title) => {
           const img = new Image();
@@ -666,7 +673,7 @@ function MindmapEditorInner({ fileData, fileType, filePath, theme, onSave, onDir
         },
       );
     },
-    [mutateTree],
+    [mutateTree, t, tCommon],
   );
 
   const handleDeleteImage = useCallback(
@@ -1113,8 +1120,8 @@ function MindmapEditorInner({ fileData, fileType, filePath, theme, onSave, onDir
                 document.addEventListener("mouseup", onUp);
               }}
             >
-              <span>ノート (Markdown)</span>
-              <button onClick={() => setNotePanel(null)} title="閉じる">&times;</button>
+              <span>{t("mindmap.noteMarkdown")}</span>
+              <button onClick={() => setNotePanel(null)} title={tCommon("close")}>&times;</button>
             </div>
             <textarea
               value={notePanel.text}
@@ -1124,7 +1131,7 @@ function MindmapEditorInner({ fileData, fileType, filePath, theme, onSave, onDir
                 if (e.key === "Escape") setNotePanel(null);
               }}
               onMouseDown={(e) => e.stopPropagation()}
-              placeholder="マークダウンテキストを入力..."
+              placeholder={t("mindmap.notePlaceholder")}
             />
           </div>
         )}
@@ -1280,64 +1287,66 @@ function ContextMenu({
   onEditNote: () => void;
   onDeleteNote: () => void;
 }) {
+  const { t } = useTranslation("editor");
+  const { t: tCommon } = useTranslation("common");
   return (
     <div className="km-context-menu" style={{ left: x, top: y }} onMouseDown={(e) => e.stopPropagation()}>
       {/* Insert */}
       <div className="km-context-menu-item km-has-submenu">
-        <span>挿入</span>
+        <span>{t("mindmap.insert")}</span>
         <span className="km-submenu-arrow">▶</span>
         <div className="km-context-submenu">
           {!isRoot && (
             <div className="km-context-menu-item" onMouseDown={(e) => { e.stopPropagation(); onInsertSibling(); }}>
-              トピック
+              {t("mindmap.topic")}
             </div>
           )}
           <div className="km-context-menu-item" onMouseDown={(e) => { e.stopPropagation(); onInsertChild(); }}>
-            サブトピック
+            {t("mindmap.subtopic")}
           </div>
         </div>
       </div>
 
       {/* Copy / Cut / Paste */}
       <div className="km-context-menu-item" onMouseDown={(e) => { e.stopPropagation(); onCopy(); }}>
-        コピー
+        {tCommon("copy")}
       </div>
       {!isRoot && (
         <div className="km-context-menu-item" onMouseDown={(e) => { e.stopPropagation(); onCut(); }}>
-          切り取り
+          {tCommon("cut")}
         </div>
       )}
       <div
         className={`km-context-menu-item${hasClipboard ? "" : " km-context-menu-disabled"}`}
         onMouseDown={(e) => { e.stopPropagation(); if (hasClipboard) onPaste(); }}
       >
-        貼り付け
+        {tCommon("paste")}
       </div>
 
       <div className="km-context-menu-separator" />
 
       {/* Markers */}
       <div className="km-context-menu-item km-has-submenu">
-        <span>マーカー</span>
+        <span>{t("mindmap.markers")}</span>
         <span className="km-submenu-arrow">▶</span>
         <div className="km-context-submenu">
           <div className="km-context-menu-item km-has-submenu">
-            <span>優先度</span>
+            <span>{t("mindmap.priority")}</span>
             <span className="km-submenu-arrow">▶</span>
             <div className="km-context-submenu">
-              <div className="km-context-menu-item" onMouseDown={(e) => { e.stopPropagation(); onSetPriority(0); }}>なし</div>
+              <div className="km-context-menu-item" onMouseDown={(e) => { e.stopPropagation(); onSetPriority(0); }}>{t("mindmap.none")}</div>
               {[1, 2, 3, 4, 5].map((p) => (
                 <div key={p} className="km-context-menu-item" onMouseDown={(e) => { e.stopPropagation(); onSetPriority(p); }}>
-                  優先度 {p}
+                  {t("mindmap.priorityN", { n: p })}
                 </div>
               ))}
             </div>
           </div>
           <div className="km-context-menu-item km-has-submenu">
-            <span>進捗</span>
+            <span>{t("mindmap.progress")}</span>
             <span className="km-submenu-arrow">▶</span>
             <div className="km-context-submenu">
-              <div className="km-context-menu-item" onMouseDown={(e) => { e.stopPropagation(); onSetProgress(0); }}>なし</div>
+              <div className="km-context-menu-item" onMouseDown={(e) => { e.stopPropagation(); onSetProgress(0); }}>{t("mindmap.none")}</div>
               {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((p) => (
                 <div key={p} className="km-context-menu-item" onMouseDown={(e) => { e.stopPropagation(); onSetProgress(p); }}>
                   {Math.round(((p - 1) / 8) * 100)}%
@@ -1352,15 +1361,15 @@ function ContextMenu({
 
       {/* Link */}
       <div className="km-context-menu-item km-has-submenu">
-        <span>リンク</span>
+        <span>{t("mindmap.link")}</span>
         <span className="km-submenu-arrow">▶</span>
         <div className="km-context-submenu">
           <div className="km-context-menu-item" onMouseDown={(e) => { e.stopPropagation(); onEditLink(); }}>
-            リンクを編集...
+            {t("mindmap.editLink")}
           </div>
           {node.data.hyperlink && (
             <div className="km-context-menu-item" onMouseDown={(e) => { e.stopPropagation(); onDeleteLink(); }}>
-              リンクを削除
+              {t("mindmap.deleteLink")}
             </div>
           )}
         </div>
@@ -1368,15 +1377,15 @@ function ContextMenu({
 
       {/* Image */}
       <div className="km-context-menu-item km-has-submenu">
-        <span>画像</span>
+        <span>{t("mindmap.image")}</span>
         <span className="km-submenu-arrow">▶</span>
         <div className="km-context-submenu">
           <div className="km-context-menu-item" onMouseDown={(e) => { e.stopPropagation(); onEditImage(); }}>
-            画像を編集...
+            {t("mindmap.editImage")}
           </div>
           {node.data.image && (
             <div className="km-context-menu-item" onMouseDown={(e) => { e.stopPropagation(); onDeleteImage(); }}>
-              画像を削除
+              {t("mindmap.deleteImage")}
             </div>
           )}
         </div>
@@ -1384,15 +1393,15 @@ function ContextMenu({
 
       {/* Note */}
       <div className="km-context-menu-item km-has-submenu">
-        <span>ノート</span>
+        <span>{t("mindmap.note")}</span>
         <span className="km-submenu-arrow">▶</span>
         <div className="km-context-submenu">
           <div className="km-context-menu-item" onMouseDown={(e) => { e.stopPropagation(); onEditNote(); }}>
-            ノートを編集...
+            {t("mindmap.editNote")}
           </div>
           {node.data.note && (
             <div className="km-context-menu-item" onMouseDown={(e) => { e.stopPropagation(); onDeleteNote(); }}>
-              ノートを削除
+              {t("mindmap.deleteNote")}
             </div>
           )}
         </div>
@@ -1403,7 +1412,7 @@ function ContextMenu({
         <>
           <div className="km-context-menu-separator" />
           <div className="km-context-menu-item km-context-menu-danger" onMouseDown={(e) => { e.stopPropagation(); onDelete(); }}>
-            削除
+            {tCommon("delete")}
           </div>
         </>
       )}

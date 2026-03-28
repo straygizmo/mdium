@@ -207,7 +207,7 @@ export function App() {
     })();
   }, []);
 
-  // アプリ終了時に未保存チェック＆全opcodeサーバーを停止
+  // Check for unsaved changes on app exit & stop all opencode servers
   useEffect(() => {
     const handleBeforeUnload = () => {
       useOpencodeServerStore.getState().removeAllServers();
@@ -233,7 +233,7 @@ export function App() {
     };
   }, []);
 
-  // タブ切り替え時にエディタの表示/非表示を切り替える
+  // Toggle editor visibility when switching tabs
   useEffect(() => {
     if (activeTab) {
       const isSpecialFile = activeTab.mindmapFileType || activeTab.imageFileType || activeTab.officeFileType;
@@ -241,7 +241,7 @@ export function App() {
     }
   }, [activeTab?.id]);
 
-  // ウィンドウタイトルをフォルダパスに連動
+  // Sync window title with folder path
   useEffect(() => {
     const title = activeFolderPath
       ? `${APP_TITLE} : ${activeFolderPath}`
@@ -249,12 +249,12 @@ export function App() {
     getCurrentWindow().setTitle(title).catch(() => {});
   }, [activeFolderPath]);
 
-  // フォルダタブ切替時にファイルストアも同期
+  // Sync file store when switching folder tabs
   useEffect(() => {
     setFolderPath(activeFolderPath);
   }, [activeFolderPath, setFolderPath]);
 
-  // フォルダ変更時にGitステートを先読み（ソース管理タブを開く前に準備）
+  // Prefetch git state on folder change (prepare before opening source control tab)
   useEffect(() => {
     if (activeFolderPath) {
       useGitStore.getState().refresh(activeFolderPath);
@@ -275,8 +275,8 @@ export function App() {
       const exists = await invoke<boolean>("folder_exists", { path });
       if (!exists) {
         await message(
-          t("errors.folderNotFound", "フォルダが見つかりません: {{path}}", { path }),
-          { title: t("common.error", "エラー"), kind: "error" }
+          t("errors.folderNotFound", "Folder not found: {{path}}", { path }),
+          { title: t("common.error", "Error"), kind: "error" }
         );
         removeRecentFolder(path);
         return;
@@ -299,7 +299,7 @@ export function App() {
         const pdfExt = getPdfExt(filePath);
 
         if (pdfExt) {
-          // PDF ファイルはバイナリとして読み込み
+          // Read PDF file as binary
           const bytes = await invoke<number[]>("read_binary_file", { path: filePath });
           const binaryData = new Uint8Array(bytes);
           openTab({
@@ -311,7 +311,7 @@ export function App() {
             officeFileType: pdfExt,
           });
         } else if (officeExt) {
-          // Office ファイルはバイナリとして読み込み
+          // Read Office file as binary
           const bytes = await invoke<number[]>("read_binary_file", { path: filePath });
           const binaryData = new Uint8Array(bytes);
           openTab({
@@ -323,7 +323,7 @@ export function App() {
             officeFileType: officeExt,
           });
         } else if (mindmapExt) {
-          // マインドマップファイルはバイナリとして読み込み
+          // Read mindmap file as binary
           const bytes = await invoke<number[]>("read_binary_file", { path: filePath });
           const binaryData = new Uint8Array(bytes);
           openTab({
@@ -335,7 +335,7 @@ export function App() {
             mindmapFileType: mindmapExt,
           });
         } else if (imageExt) {
-          // 画像ファイルはバイナリとして読み込み blob URL を作成
+          // Read image file as binary and create blob URL
           const { readFile } = await import("@tauri-apps/plugin-fs");
           const bytes = await readFile(filePath);
           const mimeMap: Record<string, string> = {
@@ -364,7 +364,7 @@ export function App() {
         setActiveFile(filePath);
         addRecentFile(filePath);
 
-        // .md ファイル以外はエディタパネルを非表示にする
+        // Hide editor panel for non-.md files
         const isMd = filePath.toLowerCase().endsWith(".md");
         useUiStore.getState().setEditorVisible(isMd && !imageExt);
       } catch (e) {
@@ -439,13 +439,13 @@ export function App() {
   // Save
   const handleSave = useCallback(async () => {
     if (!activeTab) return;
-    // 無題タブ（filePathが空）の場合は「名前を付けて保存」へ
+    // If untitled tab (empty filePath), redirect to "Save As"
     if (!activeTab.filePath) {
       handleSaveAs();
       return;
     }
     try {
-      // マインドマップの場合はMindmapEditor経由で保存
+      // For mindmaps, save via MindmapEditor
       if (activeTab.mindmapFileType) {
         const json = mindmapEditorRef.current?.getJson();
         if (json) {
@@ -456,7 +456,7 @@ export function App() {
           });
         }
       } else if (activeTab.imageFileType) {
-        // 画像タブ: キャンバスをPNGとしてファイルに保存
+        // Image tab: save canvas as PNG to file
         const dataUrl = imageCanvasRef.current?.getCanvasDataUrl();
         if (dataUrl) {
           const base64 = dataUrl.split(",")[1];
@@ -488,21 +488,21 @@ export function App() {
     const state = useTabStore.getState();
     const folderTabs = state.tabs.filter((tab) => tab.folderPath === folderPath);
 
-    // プレースホルダータブ（fileName が空）を検出
+    // Detect placeholder tab (empty fileName)
     const placeholder = folderTabs.find((tab) => !tab.filePath && !tab.fileName);
 
-    // プレースホルダーが未編集なら閉じる（新しい「無題」タブに置き換え）
+    // If placeholder is unedited, close it (replace with a new untitled tab)
     if (placeholder && !placeholder.dirty) {
       state.closeTab(placeholder.id);
     }
-    // プレースホルダーが編集中なら「無題」に名前を付けて通常タブ化
+    // If placeholder is being edited, name it "Untitled" and promote to a regular tab
     if (placeholder && placeholder.dirty) {
       state.updateTabFileName(placeholder.id, baseName);
     }
 
-    // 既存の「無題」「無題 2」… タブから使用中の番号を収集
+    // Collect used numbers from existing "Untitled", "Untitled 2", ... tabs
     const usedNumbers: number[] = [];
-    // 名前付けしたプレースホルダーも含めて再取得
+    // Re-fetch tabs including renamed placeholders
     const currentTabs = useTabStore.getState().tabs.filter((tab) => tab.folderPath === folderPath);
     for (const tab of currentTabs) {
       if (tab.fileName === baseName) {
@@ -513,7 +513,7 @@ export function App() {
       }
     }
 
-    // 次の空き番号を決定
+    // Determine next available number
     let nextNumber = 1;
     while (usedNumbers.includes(nextNumber)) {
       nextNumber++;
@@ -778,7 +778,7 @@ export function App() {
         const tab = useTabStore.getState().tabs.find(
           (t) => t.id === useTabStore.getState().activeTabId
         );
-        // 無題タブや未変更タブはスキップ
+        // Skip untitled or unchanged tabs
         if (tab && tab.filePath && tab.dirty) {
           handleSave();
         }
@@ -1089,7 +1089,7 @@ export function App() {
                   className={`app__folder-panel-tab${folderPanelTab === "terminal" ? " active" : ""}`}
                   onClick={() => setFolderPanelTab("terminal")}
                 >
-                  ターミナル
+                  {t("terminal")}
                 </button>
               </div>
               <div

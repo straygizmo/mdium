@@ -461,7 +461,7 @@
 }
 
 .md-preview .pagebreak-marker::after {
-  content: "\2702  改ページ";
+  content: "\2702  Page Break";
   position: relative;
   top: -0.75em;
   display: inline-block;
@@ -477,7 +477,7 @@
   margin-right: 0.5em;
 }
 
-/* ========== Zenn 固有スタイル ========== */
+/* ========== Zenn-specific Styles ========== */
 
 /* :::message */
 .md-preview .zenn-message {
@@ -563,7 +563,7 @@
 
 /* ========== Preview Table Editing ========== */
 
-/* Editable cell hover — イベントデリゲーションのため直接セルを対象にする */
+/* Editable cell hover — targets cells directly for event delegation */
 .md-preview table th,
 .md-preview table td {
   cursor: text;

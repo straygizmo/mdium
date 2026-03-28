@@ -1,4 +1,5 @@
 import { type FC } from "react";
+import { useTranslation } from "react-i18next";
 import "./MindmapToolbar.css";
 
 const THEMES = [
@@ -14,10 +15,10 @@ const THEMES = [
 ];
 
 const LAYOUTS = [
-  { id: "right", label: "右展開" },
-  { id: "mind", label: "左右展開" },
-  { id: "bottom", label: "下展開" },
-  { id: "filetree", label: "ファイルツリー" },
+  { id: "right", labelKey: "mindmap.layoutRight" },
+  { id: "mind", labelKey: "mindmap.layoutMind" },
+  { id: "bottom", labelKey: "mindmap.layoutBottom" },
+  { id: "filetree", labelKey: "mindmap.layoutFiletree" },
 ];
 
 interface Props {
@@ -43,19 +44,20 @@ const MindmapToolbar: FC<Props> = ({
   onUndo,
   onRedo,
 }) => {
+  const { t } = useTranslation("editor");
   return (
     <div className="mindmap-toolbar">
       {readOnly && (
-        <span className="mm-tb-readonly" title="XMindファイルは読み取り専用です">読み取り専用</span>
+        <span className="mm-tb-readonly" title={t("mindmap.xmindReadOnly")}>{t("mindmap.readOnly")}</span>
       )}
       {/* Undo / Redo */}
       {!readOnly && (
         <>
-          <button className="mm-tb-btn" onClick={onUndo} disabled={!canUndo} title="元に戻す (Ctrl+Z)">
-            ↩ 戻す
+          <button className="mm-tb-btn" onClick={onUndo} disabled={!canUndo} title={t("common:undo") + " (Ctrl+Z)"}>
+            ↩ {t("common:undo")}
           </button>
-          <button className="mm-tb-btn" onClick={onRedo} disabled={!canRedo} title="やり直し (Ctrl+Y)">
-            ↪ やり直し
+          <button className="mm-tb-btn" onClick={onRedo} disabled={!canRedo} title={t("common:redo") + " (Ctrl+Y)"}>
+            ↪ {t("common:redo")}
           </button>
           <span className="mm-tb-sep" />
         </>
@@ -63,7 +65,7 @@ const MindmapToolbar: FC<Props> = ({
 
 
       {/* Theme */}
-      <span className="mm-tb-label">テーマ:</span>
+      <span className="mm-tb-label">{t("mindmap.theme")}</span>
       <select
         className="mm-tb-select"
         value={currentTheme}
@@ -77,7 +79,7 @@ const MindmapToolbar: FC<Props> = ({
       </select>
 
       {/* Layout */}
-      <span className="mm-tb-label">レイアウト:</span>
+      <span className="mm-tb-label">{t("mindmap.layout")}</span>
       <select
         className="mm-tb-select"
         value={currentLayout}
@@ -85,7 +87,7 @@ const MindmapToolbar: FC<Props> = ({
       >
         {LAYOUTS.map((l) => (
           <option key={l.id} value={l.id}>
-            {l.label}
+            {t(l.labelKey)}
           </option>
         ))}
       </select>

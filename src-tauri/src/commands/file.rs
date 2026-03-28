@@ -38,7 +38,7 @@ pub fn write_text_file_with_dirs(path: String, content: String) -> Result<(), St
     fs::write(&path, &content).map_err(|e| format!("Failed to write file: {}", e))
 }
 
-/// 対象ファイルかどうか判定
+/// Check if a file is a target file
 fn is_target_file(
     name: &str,
     include_docx: bool,
@@ -77,7 +77,7 @@ fn is_target_file(
     false
 }
 
-/// ディレクトリを再帰的に読み取り、対象ファイルとフォルダのみ返す
+/// Recursively read directory and return only target files and folders
 fn build_tree_filtered(
     dir: &Path,
     depth: u32,
@@ -123,7 +123,7 @@ fn build_tree_filtered(
                 include_pdf,
                 include_empty_dirs,
             );
-            // 対象ファイルを含むフォルダのみ表示（include_empty_dirs の場合は空フォルダも表示）
+            // Only show folders containing target files (show empty folders if include_empty_dirs)
             if !children.is_empty() || include_empty_dirs {
                 entries.push(FileEntry {
                     name,
@@ -152,7 +152,7 @@ fn build_tree_filtered(
     entries
 }
 
-/// ディレクトリを再帰的に読み取り、すべてのファイルとフォルダを返す（隠しファイル等は除外）
+/// Recursively read directory and return all files and folders (excluding hidden files etc.)
 fn build_tree_all(dir: &Path, depth: u32) -> Vec<FileEntry> {
     if depth > 10 {
         return Vec::new();
@@ -235,7 +235,7 @@ pub fn get_file_tree(
     }
 }
 
-/// Zenn プロジェクト検出結果
+/// Zenn project detection result
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ZennProjectInfo {
     pub is_zenn_project: bool,
@@ -244,7 +244,7 @@ pub struct ZennProjectInfo {
     pub has_books: bool,
 }
 
-/// Zenn 記事のフロントマターメタ情報
+/// Zenn article front matter metadata
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ZennArticleMeta {
     pub path: String,
@@ -253,7 +253,7 @@ pub struct ZennArticleMeta {
     pub published: bool,
 }
 
-/// ディレクトリが Zenn プロジェクトかどうか検出する Tauri コマンド
+/// Tauri command to detect if a directory is a Zenn project
 #[tauri::command]
 pub fn detect_zenn_project(dir_path: String) -> Result<ZennProjectInfo, String> {
     let path = Path::new(&dir_path);
@@ -266,7 +266,7 @@ pub fn detect_zenn_project(dir_path: String) -> Result<ZennProjectInfo, String> 
     let has_articles = articles_path.exists() && articles_path.is_dir();
     let has_books = books_path.exists() && books_path.is_dir();
 
-    // package.json に zenn-cli があるかもチェック
+    // Also check if zenn-cli is in package.json
     let mut is_zenn = has_articles || has_books;
     if !is_zenn {
         let pkg_path = path.join("package.json");
@@ -285,7 +285,7 @@ pub fn detect_zenn_project(dir_path: String) -> Result<ZennProjectInfo, String> 
     })
 }
 
-/// articles/ 内の .md ファイルからフロントマターのメタ情報を一括取得する Tauri コマンド
+/// Tauri command to batch-retrieve front matter metadata from .md files in articles/
 #[tauri::command]
 pub fn get_zenn_articles_meta(dir_path: String) -> Result<Vec<ZennArticleMeta>, String> {
     let articles_dir = Path::new(&dir_path).join("articles");
@@ -317,7 +317,7 @@ pub fn get_zenn_articles_meta(dir_path: String) -> Result<Vec<ZennArticleMeta>, 
     Ok(metas)
 }
 
-/// フロントマターから emoji, title, published を抽出
+/// Extract emoji, title, published from front matter
 fn extract_zenn_frontmatter(content: &str) -> Option<(String, String, bool)> {
     if !content.starts_with("---\n") && !content.starts_with("---\r\n") {
         return None;
@@ -348,14 +348,14 @@ fn extract_zenn_frontmatter(content: &str) -> Option<(String, String, bool)> {
     Some((emoji, title, published))
 }
 
-/// Markdown ファイルを読み込んでパースする Tauri コマンド
+/// Tauri command to read and parse a Markdown file
 #[tauri::command]
 pub fn read_markdown_file(file_path: String) -> Result<ParsedDocument, String> {
     let content = fs::read_to_string(&file_path).map_err(|e| e.to_string())?;
     Ok(parse_markdown(&content))
 }
 
-/// テーブルを更新して Markdown ファイルに書き戻す Tauri コマンド
+/// Tauri command to update tables and write back to a Markdown file
 #[tauri::command]
 pub fn save_markdown_file(
     file_path: String,
@@ -366,7 +366,7 @@ pub fn save_markdown_file(
     fs::write(&file_path, content).map_err(|e| e.to_string())
 }
 
-/// ファイルまたはフォルダの名前を変更する
+/// Rename a file or folder
 #[tauri::command]
 pub fn rename_file(old_path: String, new_path: String) -> Result<(), String> {
     let src = Path::new(&old_path);
@@ -380,7 +380,7 @@ pub fn rename_file(old_path: String, new_path: String) -> Result<(), String> {
     fs::rename(src, dst).map_err(|e| format!("Failed to rename: {}", e))
 }
 
-/// ファイルまたはフォルダを削除する（フォルダは再帰的に削除）
+/// Delete a file or folder (folders are deleted recursively)
 #[tauri::command]
 pub fn delete_file(path: String) -> Result<(), String> {
     let p = Path::new(&path);
@@ -403,7 +403,7 @@ pub fn create_folder(path: String) -> Result<(), String> {
     fs::create_dir_all(p).map_err(|e| format!("Failed to create folder: {}", e))
 }
 
-/// ファイルまたはフォルダをコピーする（フォルダは再帰的にコピー）
+/// Copy a file or folder (folders are copied recursively)
 #[tauri::command]
 pub fn copy_file(src: String, dest: String) -> Result<(), String> {
     let s = Path::new(&src);
@@ -443,7 +443,7 @@ fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// ファイルまたはフォルダを移動する
+/// Move a file or folder
 #[tauri::command]
 pub fn move_file(src: String, dest: String) -> Result<(), String> {
     let s = Path::new(&src);
@@ -465,7 +465,7 @@ pub fn move_file(src: String, dest: String) -> Result<(), String> {
     })
 }
 
-/// ファイルをOS関連付けアプリで開く
+/// Open a file with the OS default application
 #[tauri::command]
 pub fn open_in_default_app(path: String) -> Result<(), String> {
     let p = Path::new(&path);
@@ -496,7 +496,7 @@ pub fn open_in_default_app(path: String) -> Result<(), String> {
     Ok(())
 }
 
-/// URLをデフォルトブラウザで開く
+/// Open URL in default browser
 #[tauri::command]
 pub fn open_external_url(url: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
@@ -523,13 +523,13 @@ pub fn open_external_url(url: String) -> Result<(), String> {
     Ok(())
 }
 
-/// フォルダが存在するか確認
+/// Check if a folder exists
 #[tauri::command]
 pub fn folder_exists(path: String) -> bool {
     Path::new(&path).is_dir()
 }
 
-/// VSCodeでフォルダを開く
+/// Open folder in VSCode
 #[tauri::command]
 pub fn open_in_vscode(path: String) -> Result<(), String> {
     Command::new("code")

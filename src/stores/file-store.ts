@@ -12,39 +12,39 @@ interface DragState {
 }
 
 interface FileState {
-  /** 現在アクティブなフォルダパス（tab-store の activeFolderPath と同期） */
+  /** Currently active folder path (synced with tab-store's activeFolderPath) */
   folderPath: string | null;
   activeFile: string | null;
-  /** フォルダパスごとのファイルツリーキャッシュ */
+  /** File tree cache per folder path */
   fileTrees: Record<string, FileEntry[]>;
-  /** フォルダパスごとのディレクトリ展開状態 (dirPath → expanded) */
+  /** Directory expanded state per folder path (dirPath → expanded) */
   expandedDirs: Record<string, Record<string, boolean>>;
-  /** クリップボード（切り取り/コピー対象） */
+  /** Clipboard (cut/copy target) */
   clipboardEntry: ClipboardEntry | null;
-  /** ドラッグ中の状態 */
+  /** Drag state */
   dragState: DragState | null;
 
   setFolderPath: (path: string | null) => void;
   setActiveFile: (path: string | null) => void;
-  /** 特定フォルダのファイルツリーを設定 */
+  /** Set file tree for a specific folder */
   setFileTree: (folderPath: string, tree: FileEntry[]) => void;
-  /** 特定フォルダのキャッシュを削除 */
+  /** Remove cache for a specific folder */
   removeFileTree: (folderPath: string) => void;
-  /** 現在のフォルダのファイルツリーを取得 */
+  /** Get file tree for the current folder */
   getActiveFileTree: () => FileEntry[];
-  /** ディレクトリの展開状態をトグル */
+  /** Toggle directory expanded state */
   toggleDir: (dirPath: string, defaultExpanded: boolean) => void;
-  /** ディレクトリが展開されているか（未設定時はdefaultExpandedを返す） */
+  /** Whether directory is expanded (returns defaultExpanded if not set) */
   isDirExpanded: (dirPath: string, defaultExpanded: boolean) => boolean;
-  /** 現在のフォルダの全ディレクトリを折りたたむ */
+  /** Collapse all directories in the current folder */
   collapseAllDirs: () => void;
-  /** クリップボードにセット */
+  /** Set to clipboard */
   setClipboard: (path: string, mode: "cut" | "copy") => void;
-  /** クリップボードをクリア */
+  /** Clear clipboard */
   clearClipboard: () => void;
-  /** ドラッグ状態を更新 */
+  /** Update drag state */
   setDragState: (sourcePath: string, dropTargetPath: string | null) => void;
-  /** ドラッグ状態をクリア */
+  /** Clear drag state */
   clearDragState: () => void;
 }
 

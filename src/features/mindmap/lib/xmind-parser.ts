@@ -154,7 +154,7 @@ export async function parseXmindFile(data: ArrayBuffer | Uint8Array): Promise<Ki
   const fileKey = contentJsonKey || contentXmlKey;
 
   if (!fileKey || !files[fileKey]) {
-    throw new Error("XMindファイルの解析に失敗しました: content.json/content.xml が見つかりません");
+    throw new Error("Failed to parse XMind file: content.json/content.xml not found");
   }
 
   const fileContent = await files[fileKey].async("string");
@@ -182,7 +182,7 @@ export async function parseXmindFile(data: ArrayBuffer | Uint8Array): Promise<Ki
   }
 
   if (!rootTopic) {
-    throw new Error("XMindファイルの解析に失敗しました: ルートトピックが見つかりません");
+    throw new Error("Failed to parse XMind file: root topic not found");
   }
 
   const result: KityMinderJson = {

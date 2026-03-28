@@ -161,7 +161,7 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
     onSaveFilterVisibility?.(localVisibility);
     setShowSettings(false);
 
-    // Azure限定: AZURE_RESOURCE_NAME 環境変数の設定を確認
+    // Azure only: check AZURE_RESOURCE_NAME environment variable
     if (localAi.provider === "azure" && activeTab === "ai") {
       let alreadySet = false;
       try {

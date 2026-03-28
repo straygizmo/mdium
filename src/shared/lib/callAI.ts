@@ -2,8 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import type { AiSettings } from "@/shared/types";
 
 /**
- * AI API を呼び出す汎用関数。
- * Tauri バックエンド経由で API を呼び出す（CORS 回避）。
+ * Generic function to call AI API.
+ * Calls API via Tauri backend (to avoid CORS).
  */
 export async function callAI(
   settings: AiSettings,

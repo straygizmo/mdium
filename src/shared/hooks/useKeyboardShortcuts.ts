@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import type { Tab } from "@/stores/tab-store";
 
 interface UseKeyboardShortcutsParams {
@@ -36,6 +37,7 @@ export function useKeyboardShortcuts({
   tabsRef,
   activeTabIdRef,
 }: UseKeyboardShortcutsParams) {
+  const { t } = useTranslation();
   useEffect(() => {
     const handleKeyDown = (e: globalThis.KeyboardEvent) => {
       if (e.ctrlKey && e.key === "s") {
@@ -83,8 +85,8 @@ export function useKeyboardShortcuts({
         e.preventDefault();
         const tab = tabsRef.current.find((t) => t.id === activeTabIdRef.current);
         if (tab?.dirty) {
-          const name = tab.filePath ? tab.filePath.split(/[\\/]/).pop() ?? "このファイル" : "無題";
-          if (!window.confirm(`"${name}" の変更は保存されていません。閉じますか？`)) return;
+          const name = tab.filePath ? tab.filePath.split(/[\\/]/).pop() ?? "Untitled" : t("untitled");
+          if (!window.confirm(t("closeUnsavedConfirm", { name }))) return;
         }
         closeTab(activeTabIdRef.current);
       }
@@ -107,5 +109,6 @@ export function useKeyboardShortcuts({
     setFolderPanelTab,
     tabsRef,
     activeTabIdRef,
+    t,
   ]);
 }

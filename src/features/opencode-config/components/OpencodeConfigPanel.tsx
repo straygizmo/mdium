@@ -19,13 +19,13 @@ import "./OpencodeConfigDialog.css";
 
 const TABS: { key: OpencodeConfigTab; labelKey: string }[] = [
   { key: "rules", labelKey: "tabRules" },
-  // { key: "tools", labelKey: "tabTools" },  // planエージェント強制のため非表示
+  // { key: "tools", labelKey: "tabTools" },  // Hidden because plan agent is forced
   { key: "agents", labelKey: "tabAgents" },
   { key: "commands", labelKey: "tabCommands" },
   { key: "mcp", labelKey: "tabMcp" },
   { key: "skills", labelKey: "tabSkills" },
   { key: "custom-tools", labelKey: "tabCustomTools" },
-  // { key: "webui", labelKey: "tabWebUi" }, // 将来的に使うかもしれないが今は非表示
+  // { key: "webui", labelKey: "tabWebUi" }, // May be used in the future, hidden for now
 ];
 
 export function OpencodeConfigPanel() {

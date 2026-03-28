@@ -23,11 +23,11 @@ export function useExport({ previewRef, content, filePath, onExportSuccess }: Us
       });
       if (!savePath) return;
 
-      // PDF出力前にスクロールを先頭に戻す
+      // Reset scroll to top before PDF export
       const prevScrollTop = el.scrollTop;
       el.scrollTop = 0;
 
-      // 改ページマーカーの装飾をPDF出力時に非表示にする
+      // Hide page break marker decorations during PDF export
       const hideStyle = document.createElement("style");
       hideStyle.textContent = ".pagebreak-marker { border: none !important; margin: 0 !important; } .pagebreak-marker::after { display: none !important; }";
       document.head.appendChild(hideStyle);
@@ -45,7 +45,7 @@ export function useExport({ previewRef, content, filePath, onExportSuccess }: Us
       document.head.removeChild(hideStyle);
       await writeFile(savePath, new Uint8Array(arrayBuffer));
 
-      // スクロール位置を復元
+      // Restore scroll position
       el.scrollTop = prevScrollTop;
 
       onExportSuccess?.();

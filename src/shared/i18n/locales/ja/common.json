@@ -71,5 +71,6 @@
   "batchConvertCurrentFile": "変換中: {{file}}",
   "batchConvertFilterAll": "すべて",
   "batchConvertFilterDocx": "DOCX",
-  "batchConvertFilterPdf": "PDF"
+  "batchConvertFilterPdf": "PDF",
+  "closeUnsavedConfirm": "「{{name}}」の変更は保存されていません。閉じますか？"
 }

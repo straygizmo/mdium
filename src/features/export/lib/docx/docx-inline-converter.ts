@@ -526,7 +526,7 @@ export function createInlineConverter({
       reportResourceProgress();
 
       return new TextRun({
-        text: `[图片加载失败: ${node.alt || node.url}]`,
+        text: `[Failed to load image: ${node.alt || node.url}]`,
         italics: true,
         color: 'DC2626',
         bold: true,
@@ -550,7 +550,7 @@ export function createInlineConverter({
       console.warn('[DOCX] Failed to load SVG image:', url, error);
       reportResourceProgress();
       return new TextRun({
-        text: `[SVG 图片加载失败: ${alt || url}]`,
+        text: `[Failed to load SVG image: ${alt || url}]`,
         italics: true,
         color: 'DC2626',
       });
@@ -568,7 +568,7 @@ export function createInlineConverter({
     if (!renderer) {
       reportResourceProgress();
       return new TextRun({
-        text: '[SVG 图片 - 渲染器不可用]',
+        text: '[SVG image - renderer unavailable]',
         italics: true,
         color: '666666',
       });
@@ -606,7 +606,7 @@ export function createInlineConverter({
       console.warn('Failed to render SVG:', error);
       reportResourceProgress();
       return new TextRun({
-        text: `[SVG 渲染失败: ${(error as Error).message}]`,
+        text: `[SVG render failed: ${(error as Error).message}]`,
         italics: true,
         color: 'FF0000',
       });

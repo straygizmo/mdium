@@ -202,11 +202,11 @@ function analyzeRow(row: string[], rowIndex: number, totalCols: number): RowAnal
  * @example
  * ```typescript
  * const rows = [
- *   ['电子产品', '',   ''],      // ← Group header (index 0)
- *   ['手机',    '10', '3000'],
- *   ['电脑',    '5',  '5000'],
- *   ['办公用品', '',   ''],      // ← Group header (index 3)
- *   ['打印纸',  '100', '20'],
+ *   ['Electronics', '',   ''],      // ← Group header (index 0)
+ *   ['Phone',       '10', '3000'],
+ *   ['Computer',    '5',  '5000'],
+ *   ['Office Supplies', '',   ''],      // ← Group header (index 3)
+ *   ['Paper',       '100', '20'],
  * ];
  * const headers = detectGroupHeaders(rows);
  * // headers = [0, 3]
@@ -381,9 +381,9 @@ function isSparseTable(rowAnalyses: RowAnalysis[]): boolean {
  * ```typescript
  * // Tree structure example
  * const rows = [
- *   ['研发部', '前端组', '张三'],
- *   ['',       '',       '李四'],
- *   ['',       '后端组', '王五'],
+ *   ['R&D Dept', 'Frontend', 'Alice'],
+ *   ['',         '',         'Bob'],
+ *   ['',         'Backend',  'Charlie'],
  * ];
  * const result = analyzeTableStructure(rows);
  * // result.tableType = 'tree'
@@ -392,9 +392,9 @@ function isSparseTable(rowAnalyses: RowAnalysis[]): boolean {
  * 
  * // Group header example
  * const rows2 = [
- *   ['水果类', '',     ''],
- *   ['苹果',  '5元',  '红色'],
- *   ['香蕉',  '3元',  '黄色'],
+ *   ['Fruits', '',     ''],
+ *   ['Apple',  '$5',   'Red'],
+ *   ['Banana', '$3',   'Yellow'],
  * ];
  * const result2 = analyzeTableStructure(rows2);
  * // result2.groupHeaders.rows = [0]

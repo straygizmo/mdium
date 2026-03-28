@@ -129,7 +129,7 @@ export function GitPanel() {
   }
 
   if (!isRepo) {
-    // リフレッシュ中はローディング表示（「Gitリポジトリではありません」を誤表示しない）
+    // Show loading while refreshing (avoid incorrectly showing "Not a Git repository")
     if (loading) {
       return (
         <div className="git-panel git-panel--empty">

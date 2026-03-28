@@ -5,7 +5,7 @@ import { getFileIcon } from "@/features/file-tree/components/FileTree";
 import { ask } from "@tauri-apps/plugin-dialog";
 import "./TabBar.css";
 
-/** フォルダタブ（フル幅で表示） */
+/** Folder tabs (displayed at full width) */
 export function FolderTabBar() {
   const { t } = useTranslation();
   const tabs = useTabStore((s) => s.tabs);
@@ -55,7 +55,7 @@ export function FolderTabBar() {
   );
 }
 
-/** ファイルタブ（ワークスペース上部に表示） */
+/** File tabs (displayed at top of workspace) */
 export function TabBar() {
   const { t } = useTranslation();
   const tabs = useTabStore((s) => s.tabs);
@@ -64,17 +64,17 @@ export function TabBar() {
   const setActiveTab = useTabStore((s) => s.setActiveTab);
   const closeTab = useTabStore((s) => s.closeTab);
 
-  // 現在のフォルダに属するファイルタブ（保存済み＋新規ファイル）
+  // File tabs belonging to the current folder (saved + new files)
   const fileTabs = tabs.filter(
     (tab) => tab.folderPath === activeFolderPath && (tab.filePath || tab.fileName)
   );
 
-  // 無題タブ（フォルダ初期表示用の空プレースホルダー）
+  // Untitled tab (empty placeholder for initial folder display)
   const untitledTab = tabs.find(
     (tab) => tab.folderPath === activeFolderPath && !tab.filePath && !tab.fileName
   );
 
-  // フォルダが開かれていないときはタブバーを表示しない
+  // Don't show tab bar when no folder is open
   if (!activeFolderPath) return null;
 
   return (

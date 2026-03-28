@@ -1,35 +1,35 @@
 use serde::{Deserialize, Serialize};
 
-/// Markdown ドキュメント内の1つのテーブルを表す構造体
+/// Struct representing a single table in a Markdown document
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MarkdownTable {
-    /// テーブル直前の見出しテキスト（あれば）
+    /// Heading text immediately before the table (if any)
     pub heading: Option<String>,
-    /// ヘッダー行のセル値
+    /// Cell values of the header row
     pub headers: Vec<String>,
-    /// アライメント情報 (left / center / right / none)
+    /// Alignment info (left / center / right / none)
     pub alignments: Vec<String>,
-    /// ボディ行: 各行はセル値の配列
+    /// Body rows: each row is an array of cell values
     pub rows: Vec<Vec<String>>,
-    /// ドキュメント内でのテーブル開始行番号
+    /// Table start line number in the document
     pub start_line: usize,
-    /// ドキュメント内でのテーブル終了行番号
+    /// Table end line number in the document
     pub end_line: usize,
 }
 
-/// Markdown ドキュメント全体のパース結果
+/// Parse result for the entire Markdown document
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParsedDocument {
-    /// 元のファイル全文（行単位）
+    /// Original file content (line by line)
     pub lines: Vec<String>,
-    /// 抽出されたテーブル群
+    /// Extracted tables
     pub tables: Vec<MarkdownTable>,
 }
 
-/// パイプ区切り行をセル値の配列にパースする
+/// Parse a pipe-delimited line into an array of cell values
 fn parse_row(line: &str) -> Vec<String> {
     let trimmed = line.trim();
-    // 先頭・末尾のパイプを除去してからスプリット
+    // Strip leading/trailing pipes before splitting
     let inner = trimmed
         .strip_prefix('|')
         .unwrap_or(trimmed)
@@ -38,7 +38,7 @@ fn parse_row(line: &str) -> Vec<String> {
     inner.split('|').map(|s| s.trim().to_string()).collect()
 }
 
-/// セパレーター行かどうかを判定する (例: |---|:---:|---:|)
+/// Check if a line is a separator line (e.g., |---|:---:|---:|)
 fn is_separator_line(line: &str) -> bool {
     let trimmed = line.trim();
     if !trimmed.contains('|') {
@@ -58,7 +58,7 @@ fn is_separator_line(line: &str) -> bool {
     })
 }
 
-/// セパレーター行からアライメント情報を抽出する
+/// Extract alignment info from a separator line
 fn parse_alignments(line: &str) -> Vec<String> {
     let trimmed = line.trim();
     let inner = trimmed
@@ -82,13 +82,13 @@ fn parse_alignments(line: &str) -> Vec<String> {
         .collect()
 }
 
-/// テーブル行かどうか（パイプを含む非空行）
+/// Check if a line is a table row (non-empty line containing pipes)
 fn is_table_line(line: &str) -> bool {
     let trimmed = line.trim();
     !trimmed.is_empty() && trimmed.contains('|')
 }
 
-/// Markdown テキスト全文をパースし、テーブル群を抽出する
+/// Parse entire Markdown text and extract tables
 pub fn parse_markdown(content: &str) -> ParsedDocument {
     let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
     let mut tables: Vec<MarkdownTable> = Vec::new();
@@ -99,14 +99,14 @@ pub fn parse_markdown(content: &str) -> ParsedDocument {
     while i < len {
         let trimmed = lines[i].trim();
 
-        // 見出しを追跡
+        // Track headings
         if trimmed.starts_with('#') {
             last_heading = Some(trimmed.trim_start_matches('#').trim().to_string());
             i += 1;
             continue;
         }
 
-        // テーブルの開始を検出: ヘッダー行 + セパレーター行
+        // Detect table start: header row + separator row
         if i + 1 < len && is_table_line(&lines[i]) && is_separator_line(&lines[i + 1]) {
             let start_line = i;
             let headers = parse_row(&lines[i]);
@@ -116,7 +116,7 @@ pub fn parse_markdown(content: &str) -> ParsedDocument {
             let mut j = i + 2;
             while j < len && is_table_line(&lines[j]) && !is_separator_line(&lines[j]) {
                 let mut row = parse_row(&lines[j]);
-                // 列数をヘッダーに合わせる
+                // Adjust column count to match headers
                 row.resize(headers.len(), String::new());
                 row.truncate(headers.len());
                 rows.push(row);
@@ -142,11 +142,11 @@ pub fn parse_markdown(content: &str) -> ParsedDocument {
     ParsedDocument { lines, tables }
 }
 
-/// テーブルを Markdown テキストに変換する
+/// Convert a table to Markdown text
 pub fn serialize_table(table: &MarkdownTable) -> String {
     let col_count = table.headers.len();
 
-    // 各列の最大幅を計算
+    // Calculate max width of each column
     let mut widths: Vec<usize> = table.headers.iter().map(|h| h.len().max(3)).collect();
     for row in &table.rows {
         for (ci, cell) in row.iter().enumerate() {
@@ -158,7 +158,7 @@ pub fn serialize_table(table: &MarkdownTable) -> String {
 
     let mut out = String::new();
 
-    // ヘッダー行
+    // Header row
     out.push('|');
     for (ci, header) in table.headers.iter().enumerate() {
         let w = widths.get(ci).copied().unwrap_or(3);
@@ -166,7 +166,7 @@ pub fn serialize_table(table: &MarkdownTable) -> String {
     }
     out.push('\n');
 
-    // セパレーター行
+    // Separator row
     out.push('|');
     for ci in 0..col_count {
         let w = widths.get(ci).copied().unwrap_or(3);
@@ -185,7 +185,7 @@ pub fn serialize_table(table: &MarkdownTable) -> String {
     }
     out.push('\n');
 
-    // データ行
+    // Data rows
     for row in &table.rows {
         out.push('|');
         for ci in 0..col_count {
@@ -199,7 +199,7 @@ pub fn serialize_table(table: &MarkdownTable) -> String {
     out
 }
 
-/// ドキュメント全体を再構築する（テーブル部分を更新済みテーブルで置換）
+/// Rebuild the entire document (replace table sections with updated tables)
 pub fn rebuild_document(original_lines: &[String], tables: &[MarkdownTable]) -> String {
     if tables.is_empty() {
         return original_lines.join("\n");
@@ -209,23 +209,23 @@ pub fn rebuild_document(original_lines: &[String], tables: &[MarkdownTable]) -> 
     let mut cursor = 0;
 
     for table in tables {
-        // テーブル前のテキストをそのまま出力
+        // Output text before table as-is
         for line in &original_lines[cursor..table.start_line] {
             result.push_str(line);
             result.push('\n');
         }
-        // 更新されたテーブルを出力
+        // Output updated table
         result.push_str(&serialize_table(table));
         cursor = table.end_line + 1;
     }
 
-    // 最後のテーブル以降のテキスト
+    // Text after the last table
     for line in &original_lines[cursor..] {
         result.push_str(line);
         result.push('\n');
     }
 
-    // 末尾の余分な改行を除去
+    // Remove trailing extra newline
     if result.ends_with('\n') && !original_lines.last().map_or(false, |l| l.is_empty()) {
         result.pop();
     }
@@ -251,7 +251,7 @@ mod tests {
         let md = "# Heading\n\n| Name | Age |\n| --- | --- |\n| Alice | 30 |\n| Bob | 25 |\n";
         let doc = parse_markdown(md);
         let rebuilt = rebuild_document(&doc.lines, &doc.tables);
-        // パースし直して同じテーブルが取れることを確認
+        // Verify that re-parsing yields the same table
         let doc2 = parse_markdown(&rebuilt);
         assert_eq!(doc2.tables[0].headers, doc.tables[0].headers);
         assert_eq!(doc2.tables[0].rows, doc.tables[0].rows);

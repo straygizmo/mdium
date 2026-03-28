@@ -267,7 +267,7 @@ export function EditorPanel({ editorRef }: EditorPanelProps) {
         <button onClick={() => handleInsertFormatting("hr")} title={t("horizontalRule")}>
           ―
         </button>
-        <button onClick={() => handleInsertFormatting("pagebreak")} title={t("pageBreak", { defaultValue: "改ページ (Ctrl+Enter)" })}>
+        <button onClick={() => handleInsertFormatting("pagebreak")} title={t("pageBreak")}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="17 1 21 5 17 9" />
             <path d="M21 5H9" />
@@ -361,7 +361,7 @@ export function EditorPanel({ editorRef }: EditorPanelProps) {
                 )}
               </div>
               <span className="editor-panel__speech-overlay-text">
-                {speechStatus === "recording" ? t("speechRecording", { defaultValue: "録音中…" }) : t("speechTranscribing", { defaultValue: "認識中…" })}
+                {speechStatus === "recording" ? t("speechRecording") : t("speechTranscribing")}
               </span>
             </div>
             {speechStatus === "recording" && partialTranscript && (

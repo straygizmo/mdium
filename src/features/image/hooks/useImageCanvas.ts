@@ -184,7 +184,7 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
     setCanRedo(false);
     setZoomLevel(1);
 
-    // Ctrl+ホイールでズーム（initCanvas内で登録しないとcanvasRef未設定で登録漏れになる）
+    // Ctrl+wheel zoom (must register inside initCanvas, otherwise canvasRef is unset and registration is missed)
     c.on("mouse:wheel", (opt: fabric.TPointerEventInfo<WheelEvent>) => {
       const e = opt.e;
       if (!e.ctrlKey) return;
@@ -205,10 +205,10 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
   const serializeCanvas = useCallback(() => {
     const c = canvasRef.current;
     if (!c) return null;
-    // OCR選択矩形はシリアライズ対象外にする
+    // Exclude OCR selection rectangle from serialization
     const ocr = ocrRect.current;
     if (ocr) c.remove(ocr);
-    // 背景画像はシリアライズ対象外にする（復元時に別途設定するため）
+    // Exclude background image from serialization (it will be set separately on restore)
     const bg = c.backgroundImage;
     c.backgroundImage = undefined;
     const json = JSON.stringify(c.toJSON());
@@ -253,7 +253,7 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
     });
 
     if (savedCanvasJson) {
-      // 保存されたキャンバス状態を復元（背景画像は含まれていないため安全）
+      // Restore saved canvas state (safe because background image is not included)
       try {
         await c.loadFromJSON(savedCanvasJson);
       } catch (e) {
@@ -338,7 +338,7 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
 
       if (activeTool === "text") {
         pushUndo();
-        const text = new fabric.IText("テキスト", {
+        const text = new fabric.IText("Text", {
           left: pointer.x,
           top: pointer.y,
           fontSize,

@@ -1,4 +1,5 @@
 import { type FC, type RefObject, useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
 import "./TableGridSelector.css";
 
@@ -12,6 +13,7 @@ const MAX_ROWS = 8;
 const MAX_COLS = 8;
 
 const TableGridSelector: FC<Props> = ({ anchorRef, onSelect, onClose }) => {
+  const { t } = useTranslation("editor");
   const [hoverRow, setHoverRow] = useState(0);
   const [hoverCol, setHoverCol] = useState(0);
   const [pos, setPos] = useState({ top: 0, left: 0 });
@@ -55,7 +57,7 @@ const TableGridSelector: FC<Props> = ({ anchorRef, onSelect, onClose }) => {
       <div className="table-grid-label">
         {hoverRow > 0 && hoverCol > 0
           ? `${hoverCol} x ${hoverRow}`
-          : "表のサイズを選択"}
+          : t("selectTableSize")}
       </div>
       <div className="table-grid">
         {Array.from({ length: MAX_ROWS }, (_, r) => (

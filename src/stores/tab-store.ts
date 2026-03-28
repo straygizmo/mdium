@@ -11,28 +11,28 @@ export interface Tab {
   dirty: boolean;
   undoStack: string[];
   redoStack: string[];
-  /** Office ファイル（.docx/.xlsx 等）のバイナリデータ */
+  /** Binary data for Office files (.docx/.xlsx etc.) */
   binaryData?: Uint8Array;
-  /** Office ファイルの拡張子（例: ".docx"） */
+  /** Office file extension (e.g., ".docx") */
   officeFileType?: string;
-  /** マインドマップファイルの拡張子（例: ".km"） */
+  /** Mindmap file extension (e.g., ".km") */
   mindmapFileType?: string;
-  /** 画像ファイルの拡張子（例: ".png"） */
+  /** Image file extension (e.g., ".png") */
   imageFileType?: string;
-  /** 画像ファイルの blob URL（プレビュー用） */
+  /** Image file blob URL (for preview) */
   imageBlobUrl?: string;
-  /** 画像キャンバスの fabric.js JSON（タブ切替時の状態保持用） */
+  /** Fabric.js JSON for image canvas (for preserving state across tab switches) */
   imageCanvasJson?: string;
 }
 
 interface TabState {
   tabs: Tab[];
   activeTabId: string | null;
-  /** 現在アクティブなフォルダパス */
+  /** Currently active folder path */
   activeFolderPath: string | null;
-  /** フォルダごとの最後にアクティブだったタブID */
+  /** Last active tab ID per folder */
   folderLastActiveTab: Record<string, string>;
-  /** 開いているフォルダパスの一覧（タブとは独立して管理） */
+  /** List of open folder paths (managed independently from tabs) */
   openFolderPaths: string[];
 
   openTab: (tab: Omit<Tab, "id" | "dirty" | "undoStack" | "redoStack">) => void;
@@ -44,17 +44,17 @@ interface TabState {
   markClean: (id: string) => void;
   updateImageCanvasState: (id: string, canvasJson: string) => void;
   updateTabFilePath: (id: string, filePath: string, fileName: string) => void;
-  /** タブの表示名だけを更新する（dirty 状態は維持） */
+  /** Update only the tab display name (preserves dirty state) */
   updateTabFileName: (id: string, fileName: string) => void;
   getActiveTab: () => Tab | undefined;
 
-  /** フォルダを開いた際にフォルダタブを追加（空タブも作成） */
+  /** Add folder tab when opening a folder (also creates an empty tab) */
   openFolder: (folderPath: string) => void;
-  /** フォルダタブを切り替える */
+  /** Switch folder tab */
   switchFolder: (folderPath: string) => void;
-  /** フォルダタブを閉じる（配下のファイルタブもすべて閉じる） */
+  /** Close folder tab (also closes all file tabs under it) */
   closeFolder: (folderPath: string) => void;
-  /** 開いているフォルダ一覧 */
+  /** List of open folders */
   getOpenFolders: () => string[];
 }
 
@@ -98,7 +98,7 @@ export const useTabStore = create<TabState>()(
   },
 
   closeTab: (id) => {
-    // 画像タブの blob URL を解放
+    // Revoke blob URL for image tab
     const closingTab = get().tabs.find((t) => t.id === id);
     if (closingTab?.imageBlobUrl) {
       URL.revokeObjectURL(closingTab.imageBlobUrl);
@@ -109,14 +109,14 @@ export const useTabStore = create<TabState>()(
       let newActiveId = s.activeTabId;
 
       if (s.activeTabId === id) {
-        // 同じフォルダ内で隣のタブを選ぶ
+        // Select adjacent tab within the same folder
         const sameFolderTabs = newTabs.filter(
           (t) => t.folderPath === closedTab?.folderPath
         );
         if (sameFolderTabs.length > 0) {
           newActiveId = sameFolderTabs[sameFolderTabs.length - 1].id;
         } else {
-          // 同じフォルダにタブがない場合はnull（フォルダは開いたまま）
+          // null if no tabs in the same folder (folder stays open)
           newActiveId = null;
         }
       }
@@ -124,7 +124,7 @@ export const useTabStore = create<TabState>()(
       const newActiveTab = newTabs.find((t) => t.id === newActiveId);
       const newActiveFolderPath = newActiveTab?.folderPath ?? s.activeFolderPath;
 
-      // folderLastActiveTab を更新
+      // Update folderLastActiveTab
       const newFolderLast = { ...s.folderLastActiveTab };
       if (newActiveTab?.folderPath) {
         newFolderLast[newActiveTab.folderPath] = newActiveId!;
@@ -218,14 +218,14 @@ export const useTabStore = create<TabState>()(
 
   openFolder: (folderPath) => {
     const { tabs } = get();
-    // 既にこのフォルダのタブがあれば切り替えるだけ
+    // If tabs for this folder already exist, just switch
     const folderTabs = tabs.filter((t) => t.folderPath === folderPath);
     if (folderTabs.length > 0) {
       get().switchFolder(folderPath);
       return;
     }
 
-    // 新しいフォルダ用に空タブを作成
+    // Create empty tab for new folder
     const newTab: Tab = {
       id: generateId(),
       filePath: "",
@@ -262,10 +262,10 @@ export const useTabStore = create<TabState>()(
   closeFolder: (folderPath) => {
     const { tabs, openFolderPaths } = get();
 
-    // opencode サーバーを停止
+    // Stop opencode server
     useOpencodeServerStore.getState().removeServer(folderPath);
 
-    // 未保存チェックはUI側で行う
+    // Unsaved changes check is done on the UI side
     const newTabs = tabs.filter((t) => t.folderPath !== folderPath);
     const newOpenFolderPaths = openFolderPaths.filter((p) => p !== folderPath);
 

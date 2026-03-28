@@ -23,7 +23,7 @@ import katex from "katex";
 import "katex/dist/katex.min.css";
 import "./PreviewPanel.css";
 
-// mermaid 初期化
+// Initialize mermaid
 mermaid.initialize({
   startOnLoad: false,
   theme: "default",
@@ -33,7 +33,7 @@ mermaid.initialize({
 
 let mermaidCounter = 0;
 
-// marked 設定
+// Configure marked
 marked.use({
   async: false,
   gfm: true,
@@ -75,7 +75,7 @@ marked.use({
       return `<h${depth} id="${id}">${text}</h${depth}>`;
     },
     image({ href, title, text }: { href: string; title?: string | null; text: string }) {
-      // Zenn: ![alt](url =250x) → width指定
+      // Zenn: ![alt](url =250x) → width specification
       const sizeMatch = href.match(/^(.+?)\s+=(\d*)x(\d*)$/);
       if (sizeMatch) {
         const [, url, w, h] = sizeMatch;
@@ -94,7 +94,7 @@ marked.use({
 });
 
 /**
- * Zenn 固有記法を HTML に前処理する
+ * Preprocess Zenn-specific notation into HTML
  */
 function preprocessZenn(content: string): string {
   const lines = content.split("\n");
@@ -120,7 +120,7 @@ function preprocessZenn(content: string): string {
       continue;
     }
 
-    // :::details タイトル
+    // :::details title
     const detailsMatch = line.match(/^:{3,}details\s+(.+)$/);
     if (detailsMatch) {
       const summary = detailsMatch[1];
@@ -166,7 +166,7 @@ function preprocessZenn(content: string): string {
       continue;
     }
 
-    // Zenn 画像サイズ構文: ![alt](url =WxH) → <img> タグに変換
+    // Zenn image size syntax: ![alt](url =WxH) → convert to <img> tag
     const imgLine = line.replace(
       /!\[([^\]]*)\]\((.+?)\s+=(\d*)x(\d*)\)/g,
       (_match, alt: string, url: string, w: string, h: string) => {
@@ -187,7 +187,7 @@ function preprocessZenn(content: string): string {
 }
 
 /**
- * <!-- pagebreak --> コメントを改ページマーカーに変換する
+ * Convert <!-- pagebreak --> comments to page break markers
  */
 function preprocessPageBreaks(content: string): string {
   return content.replace(
@@ -197,7 +197,7 @@ function preprocessPageBreaks(content: string): string {
 }
 
 /**
- * テーブル行間の余分な空行を除去する（GFM テーブル認識のため）
+ * Remove extra blank lines between table rows (for GFM table recognition)
  */
 function normalizeTableLines(content: string): string {
   const lines = content.split("\n");
@@ -219,7 +219,7 @@ function normalizeTableLines(content: string): string {
 }
 
 /**
- * YAML フロントマターを抽出して本文と分離する
+ * Extract YAML front matter and separate it from the body
  */
 function extractFrontMatter(content: string): {
   meta: Record<string, string> | null;
@@ -296,7 +296,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   const [html, setHtml] = useState("");
   const [frontMatter, setFrontMatter] = useState<Record<string, string> | null>(null);
 
-  // プレビュー内テーブル編集
+  // Preview table editing
   const {
     contextMenu,
     setContextMenu,
@@ -306,7 +306,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
     deleteColumn,
   } = usePreviewTableEdit(contentRef, content, html);
 
-  // Markdown レンダリング（YAML front matter → Zenn前処理 → 数式前処理 → テーブル正規化 → marked）
+  // Markdown rendering (YAML front matter → Zenn preprocessing → math preprocessing → table normalization → marked)
   useEffect(() => {
     try {
       const { meta, body } = extractFrontMatter(content);
@@ -320,14 +320,14 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
       setHtml(result);
     } catch (error) {
       console.error("Markdown rendering error:", error);
-      setHtml("<p>Markdownのレンダリングに失敗しました</p>");
+      setHtml(`<p>${t("renderError")}</p>`);
     }
   }, [content]);
 
-  // HTML を contentRef に手動で書き込み、相対画像パスをblob URLに変換
+  // Manually write HTML to contentRef and convert relative image paths to blob URLs
   const blobUrlsRef = useRef<string[]>([]);
   useEffect(() => {
-    // 前回の blob URL を解放
+    // Revoke previous blob URLs
     for (const url of blobUrlsRef.current) URL.revokeObjectURL(url);
     blobUrlsRef.current = [];
 
@@ -352,10 +352,10 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
         if (!rawSrc) continue;
         if (/^(https?:|data:|blob:)/i.test(rawSrc)) continue;
 
-        // marked が URL エンコードした日本語パスをデコードしてファイルシステムパスに戻す
+        // Decode URL-encoded paths back to filesystem paths
         const src = decodeURIComponent(rawSrc);
 
-        // 相対パスを絶対パスに解決
+        // Resolve relative path to absolute path
         const combined = dir.replace(/\\/g, "/") + "/" + src;
         const parts = combined.split("/");
         const resolved: string[] = [];
@@ -381,13 +381,13 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
           img.src = url;
           img.dataset.filepath = absolutePath;
         } catch {
-          // ファイルが見つからない場合はスキップ
+          // Skip if file not found
         }
       }
     })();
   }, [html, filePath]);
 
-  // コードブロックにコピーボタンを追加
+  // Add copy button to code blocks
   useEffect(() => {
     const div = contentRef.current;
     if (!div) return;
@@ -396,9 +396,9 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
     const controllers: AbortController[] = [];
 
     for (const pre of Array.from(pres)) {
-      // 既にボタンがある場合はスキップ
+      // Skip if button already exists
       if (pre.querySelector(".code-copy-btn")) continue;
-      // Mermaid プレースホルダー内の pre はスキップ
+      // Skip pre elements inside Mermaid placeholders
       if (pre.closest(".mermaid-placeholder")) continue;
 
       pre.style.position = "relative";
@@ -442,7 +442,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
     };
   }, [html]);
 
-  // プレビュー内の画像をダブルクリックでタブとして開く
+  // Double-click images in preview to open as tab
   useEffect(() => {
     const div = contentRef.current;
     if (!div || !onOpenFile) return;
@@ -454,7 +454,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
     return () => div.removeEventListener("dblclick", handler);
   }, [onOpenFile]);
 
-  // 検索ハイライト
+  // Search highlight
   const showSearch = useUiStore((s) => s.showSearch);
   const searchText = useUiStore((s) => s.searchText);
   const currentMatchIndex = useUiStore((s) => s.currentMatchIndex);
@@ -463,7 +463,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
     const div = contentRef.current;
     if (!div) return;
 
-    // 既存のハイライトをクリア
+    // Clear existing highlights
     const existing = div.querySelectorAll("mark.search-highlight");
     for (const el of Array.from(existing)) {
       const parent = el.parentNode;
@@ -485,7 +485,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
 
     const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT, {
       acceptNode(node) {
-        // pre/code 内はスキップ
+        // Skip inside pre/code
         let parent = node.parentElement;
         while (parent && parent !== div) {
           const tag = parent.tagName.toLowerCase();
@@ -532,13 +532,13 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
     }
   }, [html, showSearch, searchText]);
 
-  // アクティブなハイライトをスクロール表示
+  // Scroll to active highlight
   useEffect(() => {
     const div = contentRef.current;
     if (!div || currentMatchIndex < 0) return;
 
     const marks = div.querySelectorAll("mark.search-highlight");
-    // 既存の active クラスをクリア
+    // Clear existing active class
     for (const m of Array.from(marks)) {
       m.classList.remove("search-highlight--active");
     }
@@ -550,7 +550,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
     active.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [currentMatchIndex]);
 
-  // Mermaid + KaTeX レンダリング
+  // Mermaid + KaTeX rendering
   useEffect(() => {
     const container = previewRef.current;
     if (!container) return;
@@ -611,7 +611,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
         }
       }
 
-      // --- KaTeX (インライン/ブロック) ---
+      // --- KaTeX (inline/block) ---
       if (cancelled) return;
       const mathBlocks = container.querySelectorAll<HTMLElement>(".math-block[data-math]");
       for (const el of Array.from(mathBlocks)) {
@@ -662,7 +662,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
     }
   }, [activeTab?.binaryData, activeTab?.filePath, onOpenFile, onRefreshFileTree]);
 
-  // Office ファイルの場合は OfficePreview を表示
+  // Show OfficePreview for Office files
   if (isOfficeFile) {
     return (
       <div className="preview-panel">
@@ -873,7 +873,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   );
 }
 
-/** "rgb(r,g,b)" / "rgba(r,g,b,a)" → "#rrggbb" に変換する */
+/** Convert "rgb(r,g,b)" / "rgba(r,g,b,a)" → "#rrggbb" */
 function rgbToHex(val: string): string {
   const m = val.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
   if (!m) return val;
@@ -886,12 +886,12 @@ function rgbToHex(val: string): string {
 }
 
 /**
- * ライブ DOM 上の Mermaid SVG をスタンドアロンで使える SVG 文字列に変換する。
- * - viewBox から絶対ピクセル寸法を設定（width="100%" を上書き）
- * - computed style を属性にインライン化
- * - <style> タグを除去
- * - <foreignObject> を SVG <text> に変換
- * - フォントファミリーを安全なフォントに統一
+ * Convert a live DOM Mermaid SVG into a standalone SVG string.
+ * - Set absolute pixel dimensions from viewBox (overriding width="100%")
+ * - Inline computed styles as attributes
+ * - Remove <style> tags
+ * - Convert <foreignObject> to SVG <text>
+ * - Unify font-family to a safe font
  */
 export function processSvgForStandaloneUse(liveSvgEl: SVGSVGElement): string {
   const SVG_NS = "http://www.w3.org/2000/svg";
@@ -901,7 +901,7 @@ export function processSvgForStandaloneUse(liveSvgEl: SVGSVGElement): string {
   clone.setAttribute("xmlns", SVG_NS);
   clone.setAttribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
 
-  // viewBox からサイズを確定（width="100%" のような相対指定を上書き）
+  // Determine size from viewBox (override relative values like width="100%")
   const viewBox = clone.getAttribute("viewBox");
   if (viewBox) {
     const parts = viewBox.split(/\s+/).map(Number);
@@ -911,8 +911,8 @@ export function processSvgForStandaloneUse(liveSvgEl: SVGSVGElement): string {
     }
   }
 
-  // ライブ要素とクローン要素を 1:1 で対応付けし、computed style を属性にインライン化。
-  // foreignObject の内側は HTML 要素（SVGElement ではない）なのでスキップする。
+  // Map live elements to clone elements 1:1 and inline computed styles as attributes.
+  // Skip elements inside foreignObject as they are HTML elements (not SVGElement).
   const liveEls = Array.from(liveSvgEl.querySelectorAll("*"));
   const cloneEls = Array.from(clone.querySelectorAll("*"));
 
@@ -935,16 +935,16 @@ export function processSvgForStandaloneUse(liveSvgEl: SVGSVGElement): string {
         cloneEl.setAttribute(prop, val.startsWith("url(") ? val : rgbToHex(val));
       }
     } catch {
-      // getComputedStyle が失敗した場合はスキップ（foreignObject 近傍で発生しうる）
+      // Skip if getComputedStyle fails (can occur near foreignObject)
     }
   }
 
-  // <style> はすでに属性にインライン化済みなので削除
+  // Remove <style> tags since styles are already inlined as attributes
   for (const el of Array.from(clone.querySelectorAll("style"))) {
     el.remove();
   }
 
-  // <foreignObject> → SVG <text> 変換
+  // Convert <foreignObject> → SVG <text>
   for (const fo of Array.from(clone.querySelectorAll("foreignObject"))) {
     const rawText = fo.textContent?.trim() ?? "";
     if (!rawText) {
@@ -989,7 +989,7 @@ export function processSvgForStandaloneUse(liveSvgEl: SVGSVGElement): string {
     fo.parentNode?.replaceChild(textEl, fo);
   }
 
-  // font-family を全 text/tspan 要素に設定
+  // Set font-family on all text/tspan elements
   for (const el of Array.from(clone.querySelectorAll("text, tspan"))) {
     el.setAttribute("font-family", SAFE_FONT);
   }

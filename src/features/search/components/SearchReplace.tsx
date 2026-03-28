@@ -74,7 +74,7 @@ export function SearchReplace({ onClose }: SearchReplaceProps) {
     setSearchMode(isReplace ? "search" : "replace");
   }, [isReplace, setSearchMode]);
 
-  // グローバル F3 キーハンドラー（検索パネル外でも動作）
+  // Global F3 key handler (works outside the search panel too)
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
       if (e.key === "F3") {

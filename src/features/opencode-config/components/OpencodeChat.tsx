@@ -86,14 +86,14 @@ export function OpencodeChat() {
     if (useMdContext) {
       const ctx = useEditorContextStore.getState();
       if (ctx.filePath) {
-        let prefix = `以下のMarkdownファイルについて指示があります。\n\nファイル: ${ctx.filePath}\nカーソル位置: 行 ${ctx.cursorLine}, 列 ${ctx.cursorColumn}`;
+        let prefix = `Instructions about the following Markdown file.\n\nFile: ${ctx.filePath}\nCursor position: line ${ctx.cursorLine}, column ${ctx.cursorColumn}`;
         if (ctx.selectionStart !== ctx.selectionEnd) {
           const startLC = computeLineColFromContext(ctx.content, ctx.selectionStart);
           const endLC = computeLineColFromContext(ctx.content, ctx.selectionEnd);
-          prefix += `\n選択範囲: 行 ${startLC.line} 列 ${startLC.col} 〜 行 ${endLC.line} 列 ${endLC.col}`;
-          prefix += `\n\n--- 選択テキスト ---\n${ctx.selectedText}\n--- 選択テキスト終了 ---`;
+          prefix += `\nSelection: line ${startLC.line} col ${startLC.col} - line ${endLC.line} col ${endLC.col}`;
+          prefix += `\n\n--- Selected Text ---\n${ctx.selectedText}\n--- End Selected Text ---`;
         }
-        textToSend = prefix + `\n\n指示: ${textToSend}`;
+        textToSend = prefix + `\n\nInstruction: ${textToSend}`;
       }
     }
 

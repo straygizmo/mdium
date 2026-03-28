@@ -11,15 +11,15 @@ interface ContextMenuState {
 }
 
 /**
- * イベントターゲットから所属するテーブルセルの情報を取得する。
- * テーブルセル外のクリックの場合は null を返す。
+ * Get table cell info from the event target.
+ * Returns null if the click is outside a table cell.
  */
 function findCellInfo(
   e: Event,
   container: HTMLElement,
 ): { cell: HTMLElement; tableIndex: number; row: number; col: number } | null {
   const target = e.target as HTMLElement;
-  // 編集中の input 内のイベントは無視
+  // Ignore events inside an active input
   if (target.tagName === "INPUT") return null;
 
   const cell = target.closest("th, td") as HTMLElement | null;
@@ -42,13 +42,13 @@ function findCellInfo(
 }
 
 /**
- * プレビュー内テーブルのインライン編集・コンテキストメニュー操作を提供するフック。
+ * Hook that provides inline editing and context menu operations for preview tables.
  *
- * - セルをダブルクリック → インラインで値を編集
- * - セルを右クリック → 行/列の挿入・削除メニュー
- * - Tab キーで隣のセルへ移動
+ * - Double-click a cell → edit value inline
+ * - Right-click a cell → row/column insert/delete menu
+ * - Tab key to move to adjacent cell
  *
- * イベントデリゲーション方式を採用し、innerHTML 更新タイミングに依存しない。
+ * Uses event delegation so it doesn't depend on innerHTML update timing.
  */
 export function usePreviewTableEdit(
   contentRef: React.RefObject<HTMLDivElement | null>,
@@ -59,7 +59,7 @@ export function usePreviewTableEdit(
   const activeTab = useTabStore((s) => s.getActiveTab());
   const updateTabContent = useTabStore((s) => s.updateTabContent);
 
-  // Stable refs — イベントハンドラから最新値を安全に参照するため
+  // Stable refs — safely reference latest values from event handlers
   const contentValueRef = useRef(content);
   contentValueRef.current = content;
   const activeTabRef = useRef(activeTab);
@@ -67,14 +67,14 @@ export function usePreviewTableEdit(
   const updateTabContentRef = useRef(updateTabContent);
   updateTabContentRef.current = updateTabContent;
 
-  /** Tab キーで次のセルに移動するための予約 */
+  /** Pending edit reservation for Tab key cell navigation */
   const pendingEditRef = useRef<{
     tableIndex: number;
     row: number;
     col: number;
   } | null>(null);
 
-  // ── Markdown ソースに変更を適用 ──────────────────────────
+  // ── Apply changes to Markdown source ──────────────────────────
   const applyTableChange = useCallback(
     (updater: (parsed: ReturnType<typeof parseMarkdown>) => void) => {
       const tab = activeTabRef.current;
@@ -87,7 +87,7 @@ export function usePreviewTableEdit(
     [],
   );
 
-  // ── セルのインライン編集を開始 ──────────────────────────
+  // ── Start inline cell editing ──────────────────────────
   const startInlineEdit = useCallback(
     (cell: HTMLElement, tableIndex: number, row: number, col: number) => {
       const parsed = parseMarkdown(contentValueRef.current);
@@ -153,12 +153,12 @@ export function usePreviewTableEdit(
           const valueChanged = input.value !== currentValue;
           if (valueChanged) {
             commit();
-            // コンテンツ更新後に再レンダーされるため pending に予約
+            // Schedule as pending since content update triggers re-render
             pendingEditRef.current = { tableIndex, row, col: nextCol };
           } else {
             committed = true;
             cell.innerHTML = originalContent;
-            // DOM が変わらないので直接隣のセルを編集開始
+            // DOM doesn't change, so start editing adjacent cell directly
             const tableEl = cell.closest("table");
             if (tableEl) {
               let targetCell: HTMLElement | null = null;
@@ -188,8 +188,8 @@ export function usePreviewTableEdit(
   const startInlineEditRef = useRef(startInlineEdit);
   startInlineEditRef.current = startInlineEdit;
 
-  // ── イベントデリゲーション: コンテナ div に1つずつハンドラを設置 ──
-  // innerHTML の更新タイミングに関係なく、イベントバブリングで動作する
+  // ── Event delegation: attach handlers to the container div ──
+  // Works via event bubbling regardless of innerHTML update timing
   useEffect(() => {
     const div = contentRef.current;
     if (!div) return;
@@ -225,7 +225,7 @@ export function usePreviewTableEdit(
     };
   }, []);
 
-  // ── Tab ナビゲーション予約の処理（html 更新後に実行） ──
+  // ── Process pending Tab navigation (executed after html update) ──
   useEffect(() => {
     if (!pendingEditRef.current) return;
     const div = contentRef.current;
@@ -234,7 +234,7 @@ export function usePreviewTableEdit(
     const { tableIndex, row, col } = pendingEditRef.current;
     pendingEditRef.current = null;
 
-    // PreviewPanel の innerHTML 設定より後に実行するため rAF を使う
+    // Use rAF to execute after PreviewPanel's innerHTML is set
     const frameId = requestAnimationFrame(() => {
       const tables = div.querySelectorAll("table");
       const table = tables[tableIndex];
@@ -256,7 +256,7 @@ export function usePreviewTableEdit(
     return () => cancelAnimationFrame(frameId);
   }, [html]);
 
-  // ── コンテキストメニュー操作 ────────────────────────────
+  // ── Context menu operations ────────────────────────────
   const addRow = useCallback(
     (tableIndex: number, position: "above" | "below", refRow: number) => {
       applyTableChange((parsed) => {

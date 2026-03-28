@@ -1,4 +1,5 @@
 import { type FC, useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import type { ContextMenuState } from "../../../shared/types";
 import "./ContextMenu.css";
 
@@ -37,6 +38,8 @@ const ContextMenu: FC<Props> = ({
   onStrikethrough,
   onCode,
 }) => {
+  const { t } = useTranslation("editor");
+  const { t: tCommon } = useTranslation("common");
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -59,58 +62,58 @@ const ContextMenu: FC<Props> = ({
     >
       <div className="ctx-group">
         <button onClick={onCopy}>
-          <span className="ctx-label">コピー</span>
+          <span className="ctx-label">{tCommon("copy")}</span>
           <span className="ctx-shortcut">Ctrl+C</span>
         </button>
         <button onClick={onCut}>
-          <span className="ctx-label">カット</span>
+          <span className="ctx-label">{tCommon("cut")}</span>
           <span className="ctx-shortcut">Ctrl+X</span>
         </button>
         <button onClick={onPaste}>
-          <span className="ctx-label">貼り付け</span>
+          <span className="ctx-label">{tCommon("paste")}</span>
           <span className="ctx-shortcut">Ctrl+V</span>
         </button>
       </div>
       <div className="ctx-divider" />
       <div className="ctx-group">
         <button onClick={onAddRowAbove}>
-          <span className="ctx-label">行を上に挿入</span>
+          <span className="ctx-label">{t("insertRowAbove")}</span>
         </button>
         <button onClick={onAddRowBelow}>
-          <span className="ctx-label">行を下に挿入</span>
+          <span className="ctx-label">{t("insertRowBelow")}</span>
         </button>
         <button onClick={onDeleteRow} disabled={menu.row === -1}>
-          <span className="ctx-label">行を削除</span>
+          <span className="ctx-label">{t("deleteRow")}</span>
         </button>
       </div>
       <div className="ctx-divider" />
       <div className="ctx-group">
         <button onClick={onAddColumnLeft}>
-          <span className="ctx-label">列を左に挿入</span>
+          <span className="ctx-label">{t("insertColLeft")}</span>
         </button>
         <button onClick={onAddColumnRight}>
-          <span className="ctx-label">列を右に挿入</span>
+          <span className="ctx-label">{t("insertColRight")}</span>
         </button>
         <button onClick={onDeleteColumn}>
-          <span className="ctx-label">列を削除</span>
+          <span className="ctx-label">{t("deleteCol")}</span>
         </button>
       </div>
       <div className="ctx-divider" />
       <div className="ctx-group">
         <button onClick={onBold}>
-          <span className="ctx-label">太字</span>
+          <span className="ctx-label">{t("bold")}</span>
           <span className="ctx-shortcut">Ctrl+B</span>
         </button>
         <button onClick={onItalic}>
-          <span className="ctx-label">斜体</span>
+          <span className="ctx-label">{t("italic")}</span>
           <span className="ctx-shortcut">Ctrl+I</span>
         </button>
         <button onClick={onStrikethrough}>
-          <span className="ctx-label">取り消し線</span>
+          <span className="ctx-label">{t("strikethrough")}</span>
           <span className="ctx-shortcut">Ctrl+5</span>
         </button>
         <button onClick={onCode}>
-          <span className="ctx-label">コード</span>
+          <span className="ctx-label">{t("codeBlock")}</span>
           <span className="ctx-shortcut">Ctrl+`</span>
         </button>
       </div>

@@ -127,10 +127,10 @@ fn count_db_status(db_path: &Path) -> (usize, usize) {
 #[tauri::command]
 pub fn rag_get_status(folder_path: String, model_name: Option<String>) -> Result<RagStatus, String> {
     let name = model_name.as_deref().unwrap_or(DEFAULT_MODEL_NAME);
-    // 現在のフォルダのrag_{model}.db
+    // rag_{model}.db for the current folder
     let (mut total_chunks, mut total_files) = count_db_status(&PathBuf::from(db_path(&folder_path, name)));
 
-    // サブフォルダのrag_{model}.dbも集計
+    // Also aggregate rag_{model}.db from subfolders
     let mut sub_dbs = Vec::new();
     find_sub_rag_dbs(Path::new(&folder_path), name, &mut sub_dbs);
     for sub_db in &sub_dbs {
@@ -170,10 +170,10 @@ pub fn rag_list_files(folder_path: String, model_name: Option<String>) -> Result
     let name = model_name.as_deref().unwrap_or(DEFAULT_MODEL_NAME);
     let mut files = Vec::new();
 
-    // 現在のフォルダのrag_{model}.db
+    // rag_{model}.db for the current folder
     collect_files_from_db(&PathBuf::from(db_path(&folder_path, name)), &mut files);
 
-    // サブフォルダのrag_{model}.dbも収集
+    // Also collect rag_{model}.db from subfolders
     let mut sub_dbs = Vec::new();
     find_sub_rag_dbs(Path::new(&folder_path), name, &mut sub_dbs);
     for sub_db in &sub_dbs {
@@ -202,7 +202,7 @@ pub fn rag_scan_folder(folder_path: String, file_extensions: Option<String>, min
     Ok(chunks)
 }
 
-/// 各フォルダの同階層ファイルをスキャンし、サブフォルダにも再帰する
+/// Scan files in each folder level and recurse into subfolders
 fn scan_folder_recursive(dir: &Path, chunks: &mut Vec<RagChunk>, extensions: &[String], min_chunk_length: usize, model_name: &str) -> Result<(), String> {
     let folder_str = dir.to_string_lossy().to_string();
 
@@ -211,7 +211,7 @@ fn scan_folder_recursive(dir: &Path, chunks: &mut Vec<RagChunk>, extensions: &[S
         .filter_map(|e| e.ok())
         .collect();
 
-    // サブフォルダに再帰
+    // Recurse into subfolders
     let mut md_entries = Vec::new();
     for entry in &entries {
         let path = entry.path();
@@ -228,12 +228,12 @@ fn scan_folder_recursive(dir: &Path, chunks: &mut Vec<RagChunk>, extensions: &[S
         }
     }
 
-    // .mdファイルが存在しない場合はrag_{model}.dbを作成しない
+    // Don't create rag_{model}.db if no .md files exist
     let mdium_dir = Path::new(&folder_str).join(".mdium");
     let db_filename = model_db_name(model_name);
     let db_file = mdium_dir.join(&db_filename);
     if md_entries.is_empty() {
-        // 既存のrag_{model}.dbがあり、.mdiumフォルダ内にそれしかない場合は丸ごと削除
+        // If existing rag_{model}.db is the only file in .mdium folder, delete the entire folder
         if db_file.exists() {
             let mdium_entries: Vec<_> = fs::read_dir(&mdium_dir)
                 .ok()
@@ -255,7 +255,7 @@ fn scan_folder_recursive(dir: &Path, chunks: &mut Vec<RagChunk>, extensions: &[S
     })?;
     ensure_tables(&conn).map_err(|e| e.to_string())?;
 
-    // このフォルダのrag_{model}.dbから既存ハッシュを取得
+    // Get existing hashes from this folder's rag_{model}.db
     let existing_hashes: HashMap<String, String> = {
         let mut stmt = conn
             .prepare("SELECT file, hash FROM file_hashes")
@@ -280,14 +280,14 @@ fn scan_folder_recursive(dir: &Path, chunks: &mut Vec<RagChunk>, extensions: &[S
 
         current_files.insert(file_path.clone());
 
-        // ハッシュが変わっていなければスキップ
+        // Skip if hash hasn't changed
         if let Some(existing_hash) = existing_hashes.get(&file_path) {
             if *existing_hash == hash {
                 continue;
             }
         }
 
-        // 変更あり or 新規ファイル → チャンク化
+        // Changed or new file → chunk it
         let mut current_heading = String::new();
         let mut current_text = String::new();
         let mut chunk_start = 0;
@@ -327,7 +327,7 @@ fn scan_folder_recursive(dir: &Path, chunks: &mut Vec<RagChunk>, extensions: &[S
         }
     }
 
-    // 削除されたファイルのチャンクとハッシュをDBから削除
+    // Delete chunks and hashes of removed files from DB
     for (file, _) in &existing_hashes {
         if !current_files.contains(file) {
             conn.execute("DELETE FROM chunks WHERE file = ?1", [file])
@@ -343,7 +343,7 @@ fn scan_folder_recursive(dir: &Path, chunks: &mut Vec<RagChunk>, extensions: &[S
 #[tauri::command]
 pub fn rag_save_chunks(_folder_path: String, chunks: Vec<RagChunkWithEmbedding>, model_name: Option<String>) -> Result<usize, String> {
     let name = model_name.as_deref().unwrap_or(DEFAULT_MODEL_NAME);
-    // チャンクをフォルダごとにグループ化
+    // Group chunks by folder
     let mut by_folder: HashMap<String, Vec<&RagChunkWithEmbedding>> = HashMap::new();
     for chunk in &chunks {
         by_folder.entry(chunk.folder.clone()).or_default().push(chunk);
@@ -359,7 +359,7 @@ pub fn rag_save_chunks(_folder_path: String, chunks: Vec<RagChunkWithEmbedding>,
         })?;
         ensure_tables(&conn).map_err(|e| e.to_string())?;
 
-        // 更新対象ファイルの古いチャンクのみ削除
+        // Delete only old chunks of files being updated
         let mut files: HashSet<&str> = HashSet::new();
         for chunk in folder_chunks {
             files.insert(&chunk.file);
@@ -381,7 +381,7 @@ pub fn rag_save_chunks(_folder_path: String, chunks: Vec<RagChunkWithEmbedding>,
                 rusqlite::params![chunk.file, chunk.heading, chunk.text, chunk.line, chunk.hash, embedding_bytes],
             ).map_err(|e| e.to_string())?;
 
-            // file_hashesテーブルを更新
+            // Update file_hashes table
             conn.execute(
                 "INSERT OR REPLACE INTO file_hashes (file, hash) VALUES (?1, ?2)",
                 rusqlite::params![chunk.file, chunk.hash],
@@ -433,7 +433,7 @@ fn search_single_db(db_file: &Path, embedding: &[f64], results: &mut Vec<RagSear
     Ok(())
 }
 
-/// サブフォルダ内のrag_{model}.dbを再帰的に探す
+/// Recursively find rag_{model}.db in subfolders
 fn find_sub_rag_dbs(dir: &Path, model_name: &str, dbs: &mut Vec<PathBuf>) {
     let db_filename = model_db_name(model_name);
     if let Ok(entries) = fs::read_dir(dir) {
@@ -461,18 +461,18 @@ pub fn rag_search(folder_path: String, embedding: Vec<f64>, limit: usize, model_
     let name = model_name.as_deref().unwrap_or(DEFAULT_MODEL_NAME);
     let mut results = Vec::new();
 
-    // 現在のフォルダのrag_{model}.dbを検索
+    // Search rag_{model}.db in the current folder
     let current_db = PathBuf::from(db_path(&folder_path, name));
     search_single_db(&current_db, &embedding, &mut results)?;
 
-    // サブフォルダ内のrag_{model}.dbも検索
+    // Also search rag_{model}.db in subfolders
     let mut sub_dbs = Vec::new();
     find_sub_rag_dbs(Path::new(&folder_path), name, &mut sub_dbs);
     for sub_db in &sub_dbs {
         search_single_db(sub_db, &embedding, &mut results)?;
     }
 
-    // スコア順にソートしてlimit件返す
+    // Sort by score and return top limit results
     results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
     results.truncate(limit);
 
@@ -483,13 +483,13 @@ pub fn rag_search(folder_path: String, embedding: Vec<f64>, limit: usize, model_
 pub fn rag_delete_index(folder_path: String, model_name: Option<String>) -> Result<(), String> {
     let name = model_name.as_deref().unwrap_or(DEFAULT_MODEL_NAME);
 
-    // 現在のフォルダのrag_{model}.dbを削除
+    // Delete rag_{model}.db in the current folder
     let path = db_path(&folder_path, name);
     if Path::new(&path).exists() {
         fs::remove_file(&path).map_err(|e| e.to_string())?;
     }
 
-    // サブフォルダ内のrag_{model}.dbもすべて削除
+    // Also delete all rag_{model}.db in subfolders
     let mut sub_dbs = Vec::new();
     find_sub_rag_dbs(Path::new(&folder_path), name, &mut sub_dbs);
     for sub_db in &sub_dbs {

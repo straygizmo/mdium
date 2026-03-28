@@ -7,7 +7,7 @@ let loadedModelName: string | null = null;
 
 function getPrefix(modelName: string | null, type: "query" | "passage"): string {
   if (modelName && modelName.includes("ruri")) {
-    return type === "query" ? "検索クエリ: " : "検索文書: ";
+    return type === "query" ? "Search query: " : "Search document: ";
   }
   return type === "query" ? "query: " : "passage: ";
 }

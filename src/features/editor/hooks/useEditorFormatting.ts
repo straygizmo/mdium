@@ -28,7 +28,7 @@ export function useEditorFormatting({
       let newSelEnd = end;
 
       const wrapInline = (marker: string) => {
-        const text = selected || "テキスト";
+        const text = selected || "Text";
         newContent = `${before}${marker}${text}${marker}${after}`;
         newSelStart = start + marker.length;
         newSelEnd = newSelStart + text.length;
@@ -92,7 +92,7 @@ export function useEditorFormatting({
           prefixLines("> ");
           break;
         case "link": {
-          const text = selected || "リンクテキスト";
+          const text = selected || "Link text";
           newContent = `${before}[${text}](url)${after}`;
           newSelStart = start + 1;
           newSelEnd = newSelStart + text.length;
@@ -123,7 +123,7 @@ export function useEditorFormatting({
         }
         case "details": {
           const nl = before.endsWith("\n") || before === "" ? "" : "\n";
-          const summary = selected || "クリックで展開";
+          const summary = selected || "Click to expand";
           const block = `${nl}<details>\n<summary>${summary}</summary>\n\n\n</details>\n`;
           newContent = `${before}${block}${after}`;
           // Place cursor on the empty line inside the block
@@ -154,7 +154,7 @@ export function useEditorFormatting({
       const after = content.substring(start);
 
       const nl = before.endsWith("\n") || before === "" ? "" : "\n";
-      const headers = Array.from({ length: cols }, (_, i) => ` 列${i + 1} `).join("|");
+      const headers = Array.from({ length: cols }, (_, i) => ` Col${i + 1} `).join("|");
       const separator = Array.from({ length: cols }, () => " --- ").join("|");
       const emptyRow = Array.from({ length: cols }, () => "  ").join("|");
       const dataRows = Array.from({ length: rows }, () => `|${emptyRow}|`).join("\n");
@@ -192,7 +192,7 @@ export function useEditorFormatting({
       })
       .join("\n");
 
-    const tocBlock = `## 目次\n\n${toc}\n\n`;
+    const tocBlock = `## Table of Contents\n\n${toc}\n\n`;
 
     const textarea = editorRef.current;
     let insertPosition = textarea ? textarea.selectionStart : 0;

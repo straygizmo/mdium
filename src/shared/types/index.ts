@@ -1,4 +1,4 @@
-/** Markdown テーブル1つ分のデータ */
+/** Data for a single Markdown table */
 export interface MarkdownTable {
   heading: string | null;
   headers: string[];
@@ -8,13 +8,13 @@ export interface MarkdownTable {
   end_line: number;
 }
 
-/** Markdown ドキュメント全体のパース結果 */
+/** Parse result for the entire Markdown document */
 export interface ParsedDocument {
   lines: string[];
   tables: MarkdownTable[];
 }
 
-/** ファイルツリーのエントリ */
+/** File tree entry */
 export interface FileEntry {
   name: string;
   path: string;
@@ -22,14 +22,14 @@ export interface FileEntry {
   children: FileEntry[] | null;
 }
 
-/** セルの位置 */
+/** Cell position */
 export interface CellPosition {
   tableIndex: number;
   row: number;
   col: number;
 }
 
-/** コンテキストメニューの位置と状態 */
+/** Context menu position and state */
 export interface ContextMenuState {
   x: number;
   y: number;
@@ -39,24 +39,24 @@ export interface ContextMenuState {
   col: number;
 }
 
-/** Undo/Redo 用のスナップショット */
+/** Snapshot for Undo/Redo */
 export type TablesSnapshot = MarkdownTable[];
 
-/** 最近開いたファイルのエントリ */
+/** Recent file entry */
 export interface RecentFile {
   path: string;
   name: string;
   ts: number;
 }
 
-/** 最近開いたフォルダのエントリ */
+/** Recent folder entry */
 export interface RecentFolder {
   path: string;
   name: string;
   ts: number;
 }
 
-/** MCP サーバー設定 */
+/** MCP server configuration */
 export interface McpServer {
   type: "stdio";
   command: string;
@@ -65,7 +65,7 @@ export interface McpServer {
   disabled?: boolean;
 }
 
-/** スキル情報 */
+/** Skill info */
 export interface SkillInfo {
   dirName: string;
   name: string;
@@ -75,7 +75,7 @@ export interface SkillInfo {
   content: string;
 }
 
-/** AI API 設定 */
+/** AI API settings */
 export interface AiSettings {
   provider: string;
   apiKey: string;
@@ -87,7 +87,7 @@ export interface AiSettings {
   azureApiVersion?: string;
 }
 
-/** RAG 設定 */
+/** RAG settings */
 export interface RagSettings {
   embeddingModel: "Xenova/multilingual-e5-large" | "Xenova/multilingual-e5-base" | "Xenova/multilingual-e5-small" | "sirasagi62/ruri-v3-30m-ONNX" | "sirasagi62/ruri-v3-130m-ONNX";
   minChunkLength: number;
@@ -96,7 +96,7 @@ export interface RagSettings {
   retrieveMinScore: number;
 }
 
-/** Opencode エージェント定義 */
+/** Opencode agent definition */
 export interface OpencodeAgent {
   description?: string;
   mode?: "primary" | "subagent" | "all";
@@ -111,7 +111,7 @@ export interface OpencodeAgent {
   hidden?: boolean;
 }
 
-/** Opencode カスタムコマンド */
+/** Opencode custom command */
 export interface OpencodeCommand {
   template: string;
   description?: string;
@@ -119,7 +119,7 @@ export interface OpencodeCommand {
   model?: string;
 }
 
-/** Opencode MCP サーバー */
+/** Opencode MCP server */
 export interface OpencodeMcpServer {
   type?: "local" | "remote";
   enabled?: boolean;
@@ -132,26 +132,26 @@ export interface OpencodeMcpServer {
   headers?: Record<string, string>;
 }
 
-/** Opencode カスタムツール */
+/** Opencode custom tool */
 export interface OpencodeCustomTool {
   description?: string;
   command: string;
 }
 
-/** Opencode スキル */
+/** Opencode skill */
 export interface OpencodeSkill {
   description?: string;
   content: string;
 }
 
-/** Opencode WebUI 設定 */
+/** Opencode WebUI settings */
 export interface OpencodeWebUi {
   enabled?: boolean;
   port?: number;
   host?: string;
 }
 
-/** Opencode 設定全体 */
+/** Opencode configuration */
 export interface OpencodeConfig {
   model?: string;
   rules?: string[];
@@ -164,10 +164,10 @@ export interface OpencodeConfig {
   webui?: OpencodeWebUi;
 }
 
-/** Opencode 設定タブ */
+/** Opencode config tab */
 export type OpencodeConfigTab = "rules" | "tools" | "agents" | "commands" | "mcp" | "skills" | "custom-tools" | "webui";
 
-/** Opencode 上位タブ */
+/** Opencode top-level tab */
 export type OpencodeTopTab = "chat" | "settings";
 
 /** Slidev dev server state for a given markdown file */
