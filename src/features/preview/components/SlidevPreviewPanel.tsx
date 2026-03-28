@@ -148,7 +148,7 @@ export function SlidevPreviewPanel({ content, filePath }: SlidevPreviewPanelProp
           </button>
         </div>
         <iframe
-          src={`http://127.0.0.1:${session.port}`}
+          src={`http://localhost:${session.port}`}
           style={{ flex: 1, border: "none", width: "100%" }}
           title="Slidev Preview"
         />

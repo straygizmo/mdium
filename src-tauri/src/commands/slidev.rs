@@ -265,7 +265,7 @@ pub async fn slidev_start(
     let app_clone = app.clone();
     let file_path_clone = file_path.clone();
     tokio::spawn(async move {
-        let url = format!("http://127.0.0.1:{}", port);
+        let url = format!("http://localhost:{}", port);
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(2))
             .build()
