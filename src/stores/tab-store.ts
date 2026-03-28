@@ -296,6 +296,7 @@ export const useTabStore = create<TabState>()(
     }),
     {
       name: "mdium-tab-folders",
+      skipHydration: true,
       partialize: (state) => ({
         openFolderPaths: state.openFolderPaths,
         activeFolderPath: state.activeFolderPath,

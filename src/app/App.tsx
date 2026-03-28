@@ -169,11 +169,18 @@ export function App() {
   // Restore last folders on startup
   useEffect(() => {
     const restoreLastFolders = useSettingsStore.getState().restoreLastFolders;
-    if (!restoreLastFolders) return;
+    if (!restoreLastFolders) {
+      localStorage.removeItem("mdium-tab-folders");
+      return;
+    }
 
-    const persisted = JSON.parse(
-      localStorage.getItem("mdium-tab-folders") ?? "null"
-    );
+    let persisted: any = null;
+    try {
+      persisted = JSON.parse(localStorage.getItem("mdium-tab-folders") ?? "null");
+    } catch {
+      localStorage.removeItem("mdium-tab-folders");
+      return;
+    }
     const folderPaths: string[] = persisted?.state?.openFolderPaths ?? [];
     const lastActiveFolderPath: string | null = persisted?.state?.activeFolderPath ?? null;
 
@@ -181,9 +188,13 @@ export function App() {
 
     (async () => {
       for (const path of folderPaths) {
-        const exists = await invoke<boolean>("folder_exists", { path });
-        if (exists) {
-          openFolder(path);
+        try {
+          const exists = await invoke<boolean>("folder_exists", { path });
+          if (exists) {
+            useTabStore.getState().openFolder(path);
+          }
+        } catch {
+          // Skip this folder on IPC error
         }
       }
       // Restore active folder
