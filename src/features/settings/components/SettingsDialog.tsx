@@ -53,6 +53,7 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
   const {
     showSettings, setShowSettings,
     autoSave, setAutoSave,
+    restoreLastFolders, setRestoreLastFolders,
     aiSettings, setAiSettings,
     addVerifiedModel,
     speechEnabled, setSpeechEnabled,
@@ -64,6 +65,7 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
 
   // --- Local state (deferred until Save) ---
   const [localAutoSave, setLocalAutoSave] = useState(autoSave);
+  const [localRestoreLastFolders, setLocalRestoreLastFolders] = useState(restoreLastFolders);
   const [localSpeechEnabled, setLocalSpeechEnabled] = useState(speechEnabled);
   const [localSpeechModel, setLocalSpeechModel] = useState<SpeechModel>(speechModel);
   const [localAi, setLocalAi] = useState<AiSettings>(aiSettings);
@@ -77,6 +79,7 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
   useEffect(() => {
     if (showSettings) {
       setLocalAutoSave(autoSave);
+      setLocalRestoreLastFolders(restoreLastFolders);
       setLocalSpeechEnabled(speechEnabled);
       setLocalSpeechModel(speechModel);
       setLocalAi(aiSettings);
@@ -151,6 +154,7 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
   // --- Save / Cancel ---
   const handleSave = async () => {
     setAutoSave(localAutoSave);
+    setRestoreLastFolders(localRestoreLastFolders);
     setSpeechEnabled(localSpeechEnabled);
     setSpeechModel(localSpeechModel);
     setAiSettings(localAi);
@@ -295,6 +299,20 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
                 </label>
                 <span className="settings-dialog__description">
                   {t("autoSaveDescription")}
+                </span>
+              </div>
+              <div className="settings-dialog__divider" />
+              <div className="settings-dialog__toggle-group">
+                <label className="settings-dialog__toggle">
+                  <span>{t("restoreLastFolders")}</span>
+                  <input
+                    type="checkbox"
+                    checked={localRestoreLastFolders}
+                    onChange={(e) => setLocalRestoreLastFolders(e.target.checked)}
+                  />
+                </label>
+                <span className="settings-dialog__description">
+                  {t("restoreLastFoldersDescription")}
                 </span>
               </div>
               <div className="settings-dialog__divider" />
