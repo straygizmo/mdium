@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useCallback } from "react";
+import { useRef, useEffect, useState, useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useTabStore } from "@/stores/tab-store";
 import { useUiStore } from "@/stores/ui-store";
@@ -12,6 +12,7 @@ import { OfficePreview } from "./OfficePreview";
 import { PdfPreviewPanel } from "./PdfPreviewPanel";
 import { DocxPreviewPanel } from "./DocxPreviewPanel";
 import { HtmlPreviewPanel } from "./HtmlPreviewPanel";
+import { SlidevPreviewPanel } from "./SlidevPreviewPanel";
 import { docxToMarkdown } from "@/features/export/lib/docxToMarkdown";
 import { marked } from "marked";
 import { readFile } from "@tauri-apps/plugin-fs";
@@ -248,6 +249,21 @@ function extractFrontMatter(content: string): {
   return { meta: Object.keys(meta).length > 0 ? meta : null, body };
 }
 
+const SLIDEV_FRONTMATTER_KEYS = ["theme", "class", "drawings", "highlighter", "lineNumbers", "colorSchema"];
+
+function isSlidevMarkdown(content: string): boolean {
+  const fmMatch = content.match(/^---\s*\n([\s\S]*?)\n---/);
+  if (fmMatch) {
+    const fm = fmMatch[1];
+    if (SLIDEV_FRONTMATTER_KEYS.some((key) => new RegExp(`^${key}:`, "m").test(fm))) {
+      return true;
+    }
+  }
+  const withoutFm = content.replace(/^---\s*\n[\s\S]*?\n---/, "");
+  const separators = withoutFm.match(/^\s*---\s*$/gm);
+  return (separators?.length ?? 0) >= 2;
+}
+
 interface PreviewPanelProps {
   previewRef: React.RefObject<HTMLDivElement | null>;
   onOpenFile?: (path: string) => void;
@@ -267,6 +283,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
 
   const content = activeTab?.content ?? "";
   const filePath = activeTab?.filePath ?? null;
+  const isSlidev = useMemo(() => isSlidevMarkdown(content), [content]);
 
   // Markdown rendered HTML
   const [html, setHtml] = useState("");
@@ -708,6 +725,19 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
             <line x1="14" y1="4" x2="10" y2="20" />
           </svg>
         </button>
+        {isSlidev && (
+          <button
+            className={`preview-panel__tab preview-panel__tab--icon ${activeViewTab === "slidev-preview" ? "preview-panel__tab--active" : ""}`}
+            onClick={() => setActiveViewTab("slidev-preview")}
+            title="Slidev"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+              <line x1="8" y1="21" x2="16" y2="21" />
+              <line x1="12" y1="17" x2="12" y2="21" />
+            </svg>
+          </button>
+        )}
       </div>
 
       <div className="preview-panel__body">
@@ -752,6 +782,15 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
           <div className="preview-panel__pdf-overlay">
             <HtmlPreviewPanel
               previewRef={previewRef}
+              filePath={filePath}
+            />
+          </div>
+        )}
+
+        {activeViewTab === "slidev-preview" && (
+          <div className="preview-panel__pdf-overlay">
+            <SlidevPreviewPanel
+              content={content}
               filePath={filePath}
             />
           </div>

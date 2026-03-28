@@ -6,4 +6,5 @@ pub mod git;
 pub mod mcp;
 pub mod pty;
 pub mod rag;
+pub mod slidev;
 pub mod speech;

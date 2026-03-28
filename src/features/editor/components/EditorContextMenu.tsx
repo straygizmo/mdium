@@ -19,6 +19,7 @@ interface Props {
   onInsertPageBreak: () => void;
   onInsertCodeBlock: () => void;
   onInsertDetails: () => void;
+  onGenerateImage: () => void;
 }
 
 const EditorContextMenu: FC<Props> = ({
@@ -36,6 +37,7 @@ const EditorContextMenu: FC<Props> = ({
   onInsertPageBreak,
   onInsertCodeBlock,
   onInsertDetails,
+  onGenerateImage,
 }) => {
   const { t, i18n } = useTranslation("editor");
   const tc = useTranslation("common").t;
@@ -182,6 +184,9 @@ const EditorContextMenu: FC<Props> = ({
                 ))}
               </div>
             </div>
+            <button className="editor-ctx__item" onClick={() => handleAction(onGenerateImage)}>
+              <span className="editor-ctx__label">{t("genImage")}</span>
+            </button>
           </div>
         </div>
       </div>

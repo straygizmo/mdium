@@ -77,5 +77,21 @@
   "imagePasteInsert": "Insert",
   "imagePasteAiGenerate": "Generate description with AI",
   "imagePasteNoFile": "Save the file before pasting images",
-  "imagePasteError": "Failed to save image"
+  "imagePasteError": "Failed to save image",
+  "slidevNoFile": "No file selected",
+  "slidevStarting": "Starting Slidev...",
+  "slidevError": "Slidev error",
+  "slidevRetry": "Retry",
+  "genImage": "Generate Image",
+  "genImageTitle": "Generate Image",
+  "genImagePrompt": "Prompt",
+  "genImagePromptPlaceholder": "Describe the image to generate...",
+  "genImageFilename": "Filename",
+  "genImageSize": "Size",
+  "genImageGenerate": "Generate",
+  "genImageGenerating": "Generating...",
+  "genImageGenerated": "Generated",
+  "genImageInsert": "Insert",
+  "genImageRegenerate": "Regenerate",
+  "genImageNoOpencode": "opencode server is not running"
 }

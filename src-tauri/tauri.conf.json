@@ -23,12 +23,16 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' http://asset.localhost https://asset.localhost asset: http://models.localhost https://models.localhost; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-eval'; img-src 'self' data: blob: http://asset.localhost https://asset.localhost asset:; connect-src 'self' https: http: http://asset.localhost https://asset.localhost asset: http://models.localhost https://models.localhost"
+      "csp": "default-src 'self' http://asset.localhost https://asset.localhost asset: http://models.localhost https://models.localhost; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-eval'; img-src 'self' data: blob: http://asset.localhost https://asset.localhost asset:; connect-src 'self' https: http: http://asset.localhost https://asset.localhost asset: http://models.localhost https://models.localhost; frame-src http://127.0.0.1:* http://localhost:*"
     }
   },
   "bundle": {
     "active": true,
     "targets": ["msi", "nsis"],
+    "resources": [
+      "../resources/slidev-env/package.json",
+      "../resources/mcp-servers/**/*"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

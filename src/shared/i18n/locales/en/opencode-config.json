@@ -153,5 +153,9 @@
   "ocChatMdToggleLabel": "Instruct about {{name}}",
   "webuiEnabled": "Enable WebUI",
   "webuiHost": "Host",
-  "webuiPort": "Port"
+  "webuiPort": "Port",
+  "mcpBuiltinAdd": "Add Built-In MCP Server",
+  "mcpBuiltinSelect": "Select a Built-In MCP Server...",
+  "skillBuiltinAdd": "Add Built-In Skill",
+  "skillBuiltinSelect": "Select a Built-In Skill..."
 }

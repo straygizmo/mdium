@@ -6,6 +6,7 @@ import { useTabStore } from "@/stores/tab-store";
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 import { marked } from "marked";
 import { useOpencodeConfigContext, toRelativeProjectPath } from "../OpencodeConfigContext";
+import { BUILTIN_SKILLS } from "../../lib/builtin-skills";
 
 type SkillScope = "global" | "project";
 type SkillViewTab = "editor" | "preview";
@@ -266,6 +267,30 @@ export function SkillsSection() {
 
       {!noProject && !loading && isEditing && (
         <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
+          {/* Built-In Skill selector */}
+          <div style={{ marginBottom: 8 }}>
+            <select
+              className="oc-section__input"
+              value=""
+              onChange={(e) => {
+                const key = e.target.value;
+                if (!key) return;
+                const builtin = BUILTIN_SKILLS[key];
+                if (!builtin) return;
+                const parsed = parseSkillMd(builtin.content);
+                setFormName(builtin.name);
+                setFormDesc(builtin.description);
+                setFormBody(parsed.body);
+              }}
+              style={{ color: "var(--accent)" }}
+            >
+              <option value="">{t("skillBuiltinSelect")}</option>
+              {Object.keys(BUILTIN_SKILLS).map((key) => (
+                <option key={key} value={key}>{key}</option>
+              ))}
+            </select>
+          </div>
+
           <div className="oc-section__field">
             <label className="oc-section__label">{t("skillName")}</label>
             <input

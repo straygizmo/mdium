@@ -632,3 +632,18 @@
 .preview-table-ctx-group {
   padding: 2px 0;
 }
+
+/* Slidev spinner */
+.slidev-spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: slidev-spin 0.8s linear infinite;
+}
+
+@keyframes slidev-spin {
+  to { transform: rotate(360deg); }
+}

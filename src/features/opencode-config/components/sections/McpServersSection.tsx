@@ -7,6 +7,7 @@ import { useTabStore } from "@/stores/tab-store";
 import type { OpencodeMcpServer } from "@/shared/types";
 import { useOpencodeConfigContext, toRelativeProjectPath } from "../OpencodeConfigContext";
 import { getOpencodeClient } from "../../hooks/useOpencodeChat";
+import { BUILTIN_MCP_SERVERS, resolveBuiltinCommand } from "../../lib/builtin-mcp-servers";
 
 type Scope = "global" | "project";
 type McpType = "local" | "remote";
@@ -134,6 +135,7 @@ export function McpServersSection() {
   const [jsonImportOpen, setJsonImportOpen] = useState(false);
   const [jsonInput, setJsonInput] = useState("");
   const [jsonError, setJsonError] = useState("");
+  const [resourcesPath, setResourcesPath] = useState("");
 
   // Test state: keyed by server name
   const [testingServer, setTestingServer] = useState<string | null>(null);
@@ -153,6 +155,12 @@ export function McpServersSection() {
       loadProjectMcpServers(activeFolderPath);
     }
   }, [scope, activeFolderPath, loadProjectMcpServers]);
+
+  useEffect(() => {
+    import("@tauri-apps/api/path").then(({ resourceDir }) => {
+      resourceDir().then(setResourcesPath).catch(() => {});
+    });
+  }, []);
 
   const globalServers = config.mcp ?? EMPTY_SERVERS;
   const servers = scope === "global" ? globalServers : projectMcpServers;
@@ -492,6 +500,37 @@ export function McpServersSection() {
               </div>
             </div>
           )}
+
+          {/* Built-In MCP Server selector */}
+          <div style={{ marginBottom: 8 }}>
+            <select
+              className="oc-section__input"
+              value=""
+              onChange={(e) => {
+                const key = e.target.value;
+                if (!key) return;
+                const builtin = BUILTIN_MCP_SERVERS[key];
+                if (!builtin) return;
+                const resolved = resolveBuiltinCommand(builtin.command, resourcesPath);
+                setFormName(builtin.serverName);
+                setFormType(builtin.type);
+                setFormEnabled(builtin.enabled);
+                setFormCommand(resolved[0] ?? "");
+                setFormArgs(resolved.slice(1).join(" "));
+                setFormEnv(
+                  Object.entries(builtin.environment)
+                    .map(([k, v]) => `${k}=${v}`)
+                    .join("\n")
+                );
+              }}
+              style={{ color: "var(--accent)" }}
+            >
+              <option value="">{t("mcpBuiltinSelect")}</option>
+              {Object.keys(BUILTIN_MCP_SERVERS).map((key) => (
+                <option key={key} value={key}>{key}</option>
+              ))}
+            </select>
+          </div>
 
           <div className="oc-section__field">
             <label className="oc-section__label">{t("mcpName")}</label>
