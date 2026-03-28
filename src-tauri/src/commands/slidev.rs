@@ -21,15 +21,11 @@ fn slidev_store() -> &'static SlidevMap {
     SLIDEV_MAP.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
 }
 
-/// Find an available port starting from 3030
-fn find_available_port() -> u16 {
-    let guard = slidev_store().lock().unwrap();
-    let used_ports: Vec<u16> = guard.values().map(|p| p.port).collect();
-    let mut port: u16 = 3030;
-    while used_ports.contains(&port) {
-        port += 1;
-    }
-    port
+/// Find an available port by letting the OS assign one
+fn find_available_port() -> Result<u16, String> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")
+        .map_err(|e| format!("Failed to find available port: {}", e))?;
+    Ok(listener.local_addr().unwrap().port())
 }
 
 /// Create a deterministic hash for a file path
@@ -139,7 +135,7 @@ pub async fn slidev_start(
         .map_err(|e| format!("Failed to write slides.md: {}", e))?;
 
     // Find available port
-    let port = find_available_port();
+    let port = find_available_port()?;
 
     // Spawn slidev dev server
     let npx = if cfg!(target_os = "windows") {
@@ -262,12 +258,15 @@ pub async fn slidev_start(
 
 #[tauri::command]
 pub async fn slidev_sync(file_path: String, markdown: String) -> Result<(), String> {
-    let guard = slidev_store().lock().unwrap();
-    let process = guard
-        .get(&file_path)
-        .ok_or_else(|| format!("No slidev process found for: {}", file_path))?;
+    let slides_path = {
+        let guard = slidev_store().lock().unwrap();
+        guard
+            .get(&file_path)
+            .ok_or_else(|| format!("No slidev process found for: {}", file_path))?
+            .temp_dir
+            .join("slides.md")
+    };
 
-    let slides_path = process.temp_dir.join("slides.md");
     fs::write(&slides_path, &markdown)
         .map_err(|e| format!("Failed to write slides.md: {}", e))?;
 
@@ -366,12 +365,9 @@ pub async fn slidev_stop(file_path: String) -> Result<(), String> {
             .ok_or_else(|| format!("No slidev process found for: {}", file_path))?
     };
 
-    kill_process(process.pid)?;
-
-    // Remove temp directory
+    let kill_result = kill_process(process.pid);
     let _ = fs::remove_dir_all(&process.temp_dir);
-
-    Ok(())
+    kill_result
 }
 
 #[tauri::command]
