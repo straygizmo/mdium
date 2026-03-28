@@ -10,6 +10,8 @@
   "lineHeight": "行の高さ",
   "autoSave": "自動保存",
   "autoSaveDescription": "変更を自動的に保存します",
+  "restoreLastFolders": "前回のフォルダを復元",
+  "restoreLastFoldersDescription": "起動時に前回開いていたフォルダを自動的に開きます",
   "scrollSync": "スクロール同期",
   "scrollSyncDescription": "エディタとプレビューのスクロールを同期します",
   "ai": "AI設定",

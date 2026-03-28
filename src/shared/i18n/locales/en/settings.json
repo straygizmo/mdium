@@ -10,6 +10,8 @@
   "lineHeight": "Line Height",
   "autoSave": "Auto Save",
   "autoSaveDescription": "Automatically save changes",
+  "restoreLastFolders": "Restore Last Folders",
+  "restoreLastFoldersDescription": "Automatically reopen folders from previous session on startup",
   "scrollSync": "Scroll Sync",
   "scrollSyncDescription": "Synchronize editor and preview scroll",
   "ai": "AI Settings",
