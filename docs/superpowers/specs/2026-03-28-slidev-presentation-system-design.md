@@ -130,9 +130,10 @@ The MCP server uses environment variables for provider configuration. Initially 
 {
   "mcp": {
     "image-generator": {
-      "command": "node",
-      "args": ["<resources_path>/mcp-servers/image-generator/index.js"],
-      "env": {
+      "type": "local",
+      "command": ["node", "<resources_path>/mcp-servers/image-generator/index.js"],
+      "enabled": true,
+      "environment": {
         "IMAGE_PROVIDER": "openai",
         "IMAGE_API_KEY": "",
         "IMAGE_MODEL": "dall-e-3",
@@ -149,7 +150,7 @@ The MCP server uses environment variables for provider configuration. Initially 
 
 Add an "Add Built-In MCP Server" dropdown to the existing MCP settings UI, alongside the existing "Import from JSON" option.
 
-When a built-in server is selected (e.g. "image-generator"), the form fields (SERVER NAME, COMMAND, ARGUMENTS, ENVIRONMENT VARIABLES) are auto-populated with default values. The user can then edit values (e.g. set their API key) before saving.
+When a built-in server is selected (e.g. "image-generator"), the form fields (SERVER NAME, TYPE, COMMAND, ENVIRONMENT VARIABLES, ENABLED) are auto-populated with default values. The user can then edit values (e.g. set their API key) before saving.
 
 ### Built-In Server Registry (Frontend)
 
@@ -157,9 +158,10 @@ When a built-in server is selected (e.g. "image-generator"), the form fields (SE
 const BUILTIN_MCP_SERVERS = {
   "image-generator": {
     serverName: "image-generator",
-    command: "node",
-    args: ["<resources_path>/mcp-servers/image-generator/index.js"],
-    env: {
+    type: "local",
+    command: ["node", "<resources_path>/mcp-servers/image-generator/index.js"],
+    enabled: true,
+    environment: {
       IMAGE_PROVIDER: "openai",
       IMAGE_API_KEY: "",
       IMAGE_MODEL: "dall-e-3",
