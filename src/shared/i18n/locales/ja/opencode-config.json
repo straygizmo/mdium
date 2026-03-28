@@ -153,5 +153,7 @@
   "ocChatMdToggleLabel": "{{name}}について指示する",
   "webuiEnabled": "WebUI を有効にする",
   "webuiHost": "ホスト",
-  "webuiPort": "ポート"
+  "webuiPort": "ポート",
+  "mcpBuiltinAdd": "ビルトイン MCP サーバーを追加",
+  "mcpBuiltinSelect": "ビルトイン MCP サーバーを選択..."
 }
