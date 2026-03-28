@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { ask } from "@tauri-apps/plugin-dialog";
 
+import { useTabStore } from "@/stores/tab-store";
 import { useUiStore } from "@/stores/ui-store";
 import type { RecentFile, RecentFolder } from "@/shared/types";
 import "./Toolbar.css";
@@ -31,7 +33,7 @@ export function Toolbar({
   recentFolders,
   onOpenRecentFolder,
 }: ToolbarProps) {
-  const { t } = useTranslation("toolbar");
+  const { t } = useTranslation(["toolbar", "common"]);
 
   const toggleEditor = useUiStore((s) => s.toggleEditor);
   const setShowSearch = useUiStore((s) => s.setShowSearch);
@@ -44,7 +46,11 @@ export function Toolbar({
 
   const handleMinimize = () => getCurrentWindow().minimize();
   const handleMaximize = () => getCurrentWindow().toggleMaximize();
-  const handleClose = () => getCurrentWindow().destroy();
+  const handleClose = async () => {
+    const hasDirty = useTabStore.getState().tabs.some((tab) => tab.dirty);
+    if (hasDirty && !(await ask(t("common:unsavedChanges"), { kind: "warning" }))) return;
+    getCurrentWindow().destroy();
+  };
 
   return (
     <header className="toolbar">

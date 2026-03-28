@@ -166,7 +166,7 @@ export function App() {
     initializeTheme();
   }, [initializeTheme]);
 
-  // アプリ終了時に全opcodeサーバーを停止
+  // アプリ終了時に未保存チェック＆全opcodeサーバーを停止
   useEffect(() => {
     const handleBeforeUnload = () => {
       useOpencodeServerStore.getState().removeAllServers();
@@ -174,7 +174,15 @@ export function App() {
     window.addEventListener("beforeunload", handleBeforeUnload);
 
     let unlisten: (() => void) | null = null;
-    getCurrentWindow().onCloseRequested(async () => {
+    getCurrentWindow().onCloseRequested(async (e) => {
+      const hasDirty = useTabStore.getState().tabs.some((tab) => tab.dirty);
+      if (hasDirty) {
+        const yes = await ask(t("unsavedChanges"), { kind: "warning" });
+        if (!yes) {
+          e.preventDefault();
+          return;
+        }
+      }
       await useOpencodeServerStore.getState().removeAllServers();
     }).then((fn) => { unlisten = fn; });
 
