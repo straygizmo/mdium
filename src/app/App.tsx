@@ -166,6 +166,36 @@ export function App() {
     initializeTheme();
   }, [initializeTheme]);
 
+  // Restore last folders on startup
+  useEffect(() => {
+    const restoreLastFolders = useSettingsStore.getState().restoreLastFolders;
+    if (!restoreLastFolders) return;
+
+    const persisted = JSON.parse(
+      localStorage.getItem("mdium-tab-folders") ?? "null"
+    );
+    const folderPaths: string[] = persisted?.state?.openFolderPaths ?? [];
+    const lastActiveFolderPath: string | null = persisted?.state?.activeFolderPath ?? null;
+
+    if (folderPaths.length === 0) return;
+
+    (async () => {
+      for (const path of folderPaths) {
+        const exists = await invoke<boolean>("folder_exists", { path });
+        if (exists) {
+          openFolder(path);
+        }
+      }
+      // Restore active folder
+      if (lastActiveFolderPath) {
+        const currentFolders = useTabStore.getState().openFolderPaths;
+        if (currentFolders.includes(lastActiveFolderPath)) {
+          useTabStore.getState().switchFolder(lastActiveFolderPath);
+        }
+      }
+    })();
+  }, []);
+
   // アプリ終了時に未保存チェック＆全opcodeサーバーを停止
   useEffect(() => {
     const handleBeforeUnload = () => {
