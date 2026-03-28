@@ -26,6 +26,7 @@ reqwest = { version = "0.12", features = ["stream", "json"] }
 futures-util = "0.3"
 tokio = { version = "1", features = ["fs"] }
 dirs = "5"
+junction = "1"
 percent-encoding = "2"
 http = "1"
 

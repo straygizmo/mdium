@@ -179,6 +179,12 @@ pub fn run() {
             commands::speech::speech_check_model,
             commands::speech::speech_download_model,
             commands::speech::speech_get_model_dir,
+            // Slidev operations
+            commands::slidev::slidev_start,
+            commands::slidev::slidev_sync,
+            commands::slidev::slidev_export,
+            commands::slidev::slidev_stop,
+            commands::slidev::slidev_get_temp_dir,
             // MCP operations
             commands::mcp::mcp_test_server,
             // Environment variable operations
