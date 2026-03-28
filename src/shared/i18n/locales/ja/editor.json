@@ -81,5 +81,17 @@
   "slidevNoFile": "ファイルが選択されていません",
   "slidevStarting": "Slidev を起動中...",
   "slidevError": "Slidev エラー",
-  "slidevRetry": "再試行"
+  "slidevRetry": "再試行",
+  "genImage": "生成画像",
+  "genImageTitle": "画像生成",
+  "genImagePrompt": "プロンプト",
+  "genImagePromptPlaceholder": "生成する画像の説明を入力...",
+  "genImageFilename": "ファイル名",
+  "genImageSize": "サイズ",
+  "genImageGenerate": "生成",
+  "genImageGenerating": "生成中...",
+  "genImageGenerated": "生成完了",
+  "genImageInsert": "挿入",
+  "genImageRegenerate": "再生成",
+  "genImageNoOpencode": "opencode サーバーが起動していません"
 }

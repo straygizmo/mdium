@@ -8,6 +8,7 @@ import { useImagePaste } from "../hooks/useImagePaste";
 import TableGridSelector from "@/features/table/components/TableGridSelector";
 import EditorContextMenu from "./EditorContextMenu";
 import { ImagePasteDialog } from "./ImagePasteDialog";
+import { GenerateImageDialog } from "./GenerateImageDialog";
 import { useSpeechToText } from "@/features/speech/hooks/useSpeechToText";
 import { message } from "@tauri-apps/plugin-dialog";
 import "./EditorPanel.css";
@@ -62,6 +63,7 @@ export function EditorPanel({ editorRef }: EditorPanelProps) {
 
 
   const [ctxMenu, setCtxMenu] = useState({ x: 0, y: 0, visible: false, selStart: 0, selEnd: 0 });
+  const [showGenImageDialog, setShowGenImageDialog] = useState(false);
 
   const { handleInsertFormatting, handleInsertTable, handleInsertMermaidTemplate } = useEditorFormatting({
     editorRef,
@@ -204,6 +206,15 @@ export function EditorPanel({ editorRef }: EditorPanelProps) {
       textarea.setSelectionRange(0, content.length);
     }
   }, [editorRef, content]);
+
+  const handleInsertGeneratedImage = useCallback((markdownImage: string) => {
+    const textarea = editorRef.current;
+    if (!textarea) return;
+    const start = textarea.selectionStart;
+    const before = content.substring(0, start);
+    const after = content.substring(start);
+    handleContentChange(before + markdownImage + "\n" + after);
+  }, [content, handleContentChange, editorRef]);
 
   useEffect(() => {
     updateEditorContext(activeTab?.filePath ?? null, content);
@@ -374,6 +385,12 @@ export function EditorPanel({ editorRef }: EditorPanelProps) {
         onInsertPageBreak={() => handleInsertFormatting("pagebreak")}
         onInsertCodeBlock={() => handleInsertFormatting("codeblock")}
         onInsertDetails={() => handleInsertFormatting("details")}
+        onGenerateImage={() => setShowGenImageDialog(true)}
+      />
+      <GenerateImageDialog
+        visible={showGenImageDialog}
+        onClose={() => setShowGenImageDialog(false)}
+        onInsert={handleInsertGeneratedImage}
       />
       {pasteDialogState.visible && pasteDialogState.imageBlob && pasteDialogState.imageUrl && (
         <ImagePasteDialog
