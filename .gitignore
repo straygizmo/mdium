@@ -30,3 +30,10 @@ coverage/
 
 # Worktrees
 .worktrees/
+
+# Slidev bundled environment
+resources/slidev-env/node_modules/
+
+# MCP server build artifacts
+resources/mcp-servers/*/node_modules/
+resources/mcp-servers/*/dist/

@@ -1,0 +1,9 @@
+{
+  "name": "mdium-slidev-env",
+  "private": true,
+  "dependencies": {
+    "@slidev/cli": "^51.0.0",
+    "@slidev/theme-default": "^0.25.0",
+    "playwright-chromium": "^1.50.0"
+  }
+}
