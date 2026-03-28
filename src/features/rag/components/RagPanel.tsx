@@ -16,7 +16,7 @@ interface RagPanelProps {
 }
 
 export function RagPanel({ folderPath, aiSettings, onOpenFile }: RagPanelProps) {
-  const { t } = useTranslation("common");
+  const { t } = useTranslation(["common", "editor"]);
   const {
     status,
     messages,
@@ -113,12 +113,19 @@ export function RagPanel({ folderPath, aiSettings, onOpenFile }: RagPanelProps) 
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (e.key.toLowerCase() === "m" && e.shiftKey && (e.ctrlKey || e.metaKey) && !e.altKey && speechEnabled && !e.repeat) {
+        e.preventDefault();
+        if (speechStatus === "idle" || speechStatus === "recording") {
+          toggleSpeech();
+        }
+        return;
+      }
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         handleSubmit();
       }
     },
-    [handleSubmit]
+    [handleSubmit, speechEnabled, speechStatus, toggleSpeech]
   );
 
   if (!folderPath) {
@@ -304,7 +311,7 @@ export function RagPanel({ folderPath, aiSettings, onOpenFile }: RagPanelProps) 
                 className={`rag-panel__mic-btn${speechStatus === "recording" ? " rag-panel__mic-btn--recording" : ""}`}
                 onClick={toggleSpeech}
                 disabled={speechStatus === "loading" || speechStatus === "transcribing" || status.state !== "ready"}
-                title={speechStatus === "recording" ? "Stop" : "Voice input"}
+                title={t("editor:voiceInput")}
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
