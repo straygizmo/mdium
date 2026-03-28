@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 import { useOpencodeServerStore } from "./opencode-server-store";
 
 export interface Tab {
@@ -61,7 +62,9 @@ function generateId(): string {
   return crypto.randomUUID();
 }
 
-export const useTabStore = create<TabState>()((set, get) => ({
+export const useTabStore = create<TabState>()(
+  persist(
+    (set, get) => ({
   tabs: [],
   activeTabId: null,
   activeFolderPath: null,
@@ -290,4 +293,13 @@ export const useTabStore = create<TabState>()((set, get) => ({
   getOpenFolders: () => {
     return get().openFolderPaths;
   },
-}));
+    }),
+    {
+      name: "mdium-tab-folders",
+      partialize: (state) => ({
+        openFolderPaths: state.openFolderPaths,
+        activeFolderPath: state.activeFolderPath,
+      }),
+    }
+  )
+);
