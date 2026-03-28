@@ -155,5 +155,7 @@
   "webuiHost": "ホスト",
   "webuiPort": "ポート",
   "mcpBuiltinAdd": "ビルトイン MCP サーバーを追加",
-  "mcpBuiltinSelect": "ビルトイン MCP サーバーを選択..."
+  "mcpBuiltinSelect": "ビルトイン MCP サーバーを選択...",
+  "skillBuiltinAdd": "ビルトイン スキルを追加",
+  "skillBuiltinSelect": "ビルトイン スキルを選択..."
 }
