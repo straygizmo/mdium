@@ -26,7 +26,7 @@ const DEFAULT_RAG_SETTINGS: RagSettings = {
   retrieveMinScore: 0.1,
 };
 
-export type SpeechModel = "Xenova/whisper-small" | "onnx-community/whisper-large-v3-turbo";
+export type SpeechModel = "Xenova/whisper-small" | "onnx-community/whisper-large-v3-turbo" | "onnx-community/moonshine-base-ONNX";
 
 interface SettingsState {
   themeId: string;

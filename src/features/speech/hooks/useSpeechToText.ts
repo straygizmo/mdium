@@ -1,56 +1,122 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 
+// ---------------------------------------------------------------------------
+// Module-level shared state
+// ---------------------------------------------------------------------------
 let sharedWorker: Worker | null = null;
 let sharedWorkerModelName: string | null = null;
+
+/**
+ * Map of instance ID → callback. Each hook instance registers its own
+ * callback so that EditorPanel and RagPanel don't overwrite each other.
+ */
+const listeners = new Map<
+  number,
+  (data: { type: string; text?: string; error?: string }) => void
+>();
+
+let nextInstanceId = 1;
 
 function getWorker(modelName: string): Worker {
   if (sharedWorker && sharedWorkerModelName === modelName) {
     return sharedWorker;
   }
-  // Terminate old worker if model changed
   if (sharedWorker) {
     sharedWorker.terminate();
     sharedWorker = null;
     sharedWorkerModelName = null;
   }
-  sharedWorker = new Worker(
+  const w = new Worker(
     new URL("../workers/speech-worker.ts", import.meta.url),
     { type: "module" },
   );
+  w.onmessage = (e: MessageEvent) => {
+    for (const [, cb] of listeners.entries()) {
+      cb(e.data);
+    }
+  };
+  sharedWorker = w;
   sharedWorkerModelName = modelName;
-  return sharedWorker;
+  return w;
 }
 
+// ---------------------------------------------------------------------------
+// Hook
+// ---------------------------------------------------------------------------
 export function useSpeechToText(modelName: string) {
   const [status, setStatus] = useState<"idle" | "loading" | "recording" | "transcribing">("idle");
   const [transcript, setTranscript] = useState("");
+  const [partialTranscript] = useState("");
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const chunksRef = useRef<Float32Array[]>([]);
   const workerRef = useRef<Worker | null>(null);
 
-  // Cleanup worker listener on unmount
+  // Stable instance ID for this hook's lifetime
+  const instanceIdRef = useRef<number>(0);
+  if (instanceIdRef.current === 0) {
+    instanceIdRef.current = nextInstanceId++;
+  }
+  const instanceId = instanceIdRef.current;
+
+  /**
+   * Track what this specific instance is currently waiting for from the worker.
+   * null = not waiting, "loaded" = waiting for model load, "result" = waiting for transcription
+   */
+  const expectingRef = useRef<"loaded" | "result" | null>(null);
+
+  /** Promise resolve/reject for loadModel */
+  const loadResolveRef = useRef<(() => void) | null>(null);
+  const loadRejectRef = useRef<((err: Error) => void) | null>(null);
+
+  // Register/unregister listener on mount/unmount
   useEffect(() => {
+    const handler = (data: { type: string; text?: string; error?: string }) => {
+      const expecting = expectingRef.current;
+      if (!expecting) return; // Not waiting for anything
+
+      if (expecting === "loaded") {
+        if (data.type === "loaded") {
+          expectingRef.current = null;
+          loadResolveRef.current?.();
+          loadResolveRef.current = null;
+          loadRejectRef.current = null;
+        } else if (data.type === "error") {
+          expectingRef.current = null;
+          loadRejectRef.current?.(new Error(data.error));
+          loadResolveRef.current = null;
+          loadRejectRef.current = null;
+        }
+      } else if (expecting === "result") {
+        if (data.type === "result") {
+          expectingRef.current = null;
+          setTranscript(data.text ?? "");
+          setStatus("idle");
+        } else if (data.type === "error") {
+          expectingRef.current = null;
+          console.error("Transcription failed:", data.error);
+          setStatus("idle");
+        }
+      }
+    };
+
+    listeners.set(instanceId, handler);
     return () => {
+      listeners.delete(instanceId);
       workerRef.current = null;
     };
-  }, []);
+  }, [instanceId]);
 
   const loadModel = useCallback((): Promise<void> => {
     return new Promise((resolve, reject) => {
       const worker = getWorker(modelName);
       workerRef.current = worker;
 
-      const handler = (e: MessageEvent) => {
-        worker.removeEventListener("message", handler);
-        if (e.data.type === "loaded") {
-          resolve();
-        } else if (e.data.type === "error") {
-          reject(new Error(e.data.error));
-        }
-      };
-      worker.addEventListener("message", handler);
+      loadResolveRef.current = resolve;
+      loadRejectRef.current = reject;
+      expectingRef.current = "loaded";
+
       worker.postMessage({ type: "load", modelName });
     });
   }, [modelName]);
@@ -87,7 +153,6 @@ export function useSpeechToText(modelName: string) {
   }, [loadModel]);
 
   const stop = useCallback(async () => {
-    // Immediately stop recording and update UI
     setStatus("transcribing");
 
     processorRef.current?.disconnect();
@@ -104,23 +169,14 @@ export function useSpeechToText(modelName: string) {
     }
     chunksRef.current = [];
 
-    // Send to worker — inference runs off the main thread
+    // Send to worker
     const worker = workerRef.current;
-    if (!worker) {
+    if (!worker || audioData.length === 0) {
       setStatus("idle");
       return;
     }
 
-    const handler = (e: MessageEvent) => {
-      worker.removeEventListener("message", handler);
-      if (e.data.type === "result") {
-        setTranscript(e.data.text);
-      } else if (e.data.type === "error") {
-        console.error("Transcription failed:", e.data.error);
-      }
-      setStatus("idle");
-    };
-    worker.addEventListener("message", handler);
+    expectingRef.current = "result";
     worker.postMessage({ type: "transcribe", audioData }, [audioData.buffer]);
   }, []);
 
@@ -132,5 +188,5 @@ export function useSpeechToText(modelName: string) {
     }
   }, [status, start, stop]);
 
-  return { status, transcript, toggle, setTranscript } as const;
+  return { status, transcript, partialTranscript, toggle, setTranscript } as const;
 }

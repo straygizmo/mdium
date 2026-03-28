@@ -48,7 +48,7 @@
   "regenerateHtmlPreview": "HTMLプレビュー再生成",
   "generatingHtml": "HTML生成中...",
   "saveHtmlPreview": "HTML保存",
-  "voiceInput": "音声入力 (Shift+Space長押し)",
+  "voiceInput": "音声入力 (Ctrl+Shift+M)",
   "contextMenu.selectAll": "すべて選択",
   "contextMenu.insert": "挿入",
   "contextMenu.insertTable": "表",

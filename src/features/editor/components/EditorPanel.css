@@ -114,3 +114,74 @@
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
+
+/* Speech status overlay on textarea */
+.editor-panel__textarea-wrapper {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.editor-panel__speech-overlay {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 500;
+  pointer-events: none;
+  z-index: 10;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+  max-width: 80%;
+}
+
+.editor-panel__speech-overlay-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.editor-panel__speech-overlay--recording {
+  background: var(--accent-red, #e64553);
+  color: #fff;
+  animation: editor-overlay-pulse 1.5s ease-in-out infinite;
+}
+
+.editor-panel__speech-overlay--transcribing {
+  background: var(--accent-yellow, #df8e1d);
+  color: #fff;
+}
+
+.editor-panel__speech-overlay-icon {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.editor-panel__speech-overlay-text {
+  white-space: nowrap;
+}
+
+.editor-panel__speech-overlay-partial {
+  font-weight: 400;
+  font-size: 12px;
+  opacity: 0.9;
+  line-height: 1.4;
+  text-align: center;
+  word-break: break-all;
+  max-height: 3.6em;
+  overflow: hidden;
+}
+
+@keyframes editor-overlay-pulse {
+  0%, 100% { opacity: 1; transform: translateX(-50%) scale(1); }
+  50% { opacity: 0.85; transform: translateX(-50%) scale(1.03); }
+}

@@ -57,6 +57,7 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
     addVerifiedModel,
     speechEnabled, setSpeechEnabled,
     speechModel, setSpeechModel,
+    language,
   } = useSettingsStore();
 
   const [activeTab, setActiveTab] = useState<"general" | "ai" | "display">("general");
@@ -104,7 +105,11 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
   useEffect(() => {
     if (!showSettings) return;
     const checkModels = async () => {
-      const models: SpeechModel[] = ["Xenova/whisper-small", "onnx-community/whisper-large-v3-turbo"];
+      const models: SpeechModel[] = [
+        "Xenova/whisper-small",
+        "onnx-community/whisper-large-v3-turbo",
+        ...(language === "en" ? ["onnx-community/moonshine-base-ONNX" as SpeechModel] : []),
+      ];
       const result: Record<string, boolean> = {};
       for (const m of models) {
         try {
@@ -318,6 +323,9 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
                     >
                       <option value="Xenova/whisper-small">whisper-small (~460MB)</option>
                       <option value="onnx-community/whisper-large-v3-turbo">whisper-large-v3-turbo (~1.6GB)</option>
+                      {language === "en" && (
+                        <option value="onnx-community/moonshine-base-ONNX">moonshine-base (~200MB)</option>
+                      )}
                     </select>
                   </div>
                   <div className="settings-dialog__speech-status">

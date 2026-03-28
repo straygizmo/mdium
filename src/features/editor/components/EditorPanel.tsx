@@ -23,13 +23,12 @@ export function EditorPanel({ editorRef }: EditorPanelProps) {
   const formatBarRef = useRef<HTMLDivElement>(null);
   const tableGridBtnRef = useRef<HTMLButtonElement>(null);
   const [showTableGrid, setShowTableGrid] = useState(false);
-  const spaceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isSpaceRecordingRef = useRef(false);
+  // (spaceTimerRef / isSpaceRecordingRef removed — Shift+Space is now instant toggle)
   const scrollSync = useSettingsStore((s) => s.scrollSync);
   const setScrollSync = useSettingsStore((s) => s.setScrollSync);
   const speechEnabled = useSettingsStore((s) => s.speechEnabled);
   const speechModel = useSettingsStore((s) => s.speechModel);
-  const { status: speechStatus, transcript, toggle: toggleSpeech, setTranscript } = useSpeechToText(
+  const { status: speechStatus, transcript, partialTranscript, toggle: toggleSpeech, setTranscript } = useSpeechToText(
     speechModel ?? "Xenova/whisper-small"
   );
 
@@ -96,22 +95,15 @@ export function EditorPanel({ editorRef }: EditorPanelProps) {
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      // Shift+Space long-press: start recording
-      if (e.key === " " && e.shiftKey && speechEnabled && !e.repeat) {
+      // Ctrl+Shift+M: toggle speech (works even with IME active)
+      if (e.key.toLowerCase() === "m" && e.shiftKey && (e.ctrlKey || e.metaKey) && !e.altKey && speechEnabled && !e.repeat) {
         e.preventDefault();
-        if (speechStatus === "idle") {
-          spaceTimerRef.current = setTimeout(() => {
-            isSpaceRecordingRef.current = true;
-            toggleSpeech();
-          }, 500);
+        if (speechStatus === "idle" || speechStatus === "recording") {
+          toggleSpeech();
         }
         return;
       }
-      // Suppress space repeat while recording
-      if (e.key === " " && e.shiftKey && e.repeat && isSpaceRecordingRef.current) {
-        e.preventDefault();
-        return;
-      }
+
 
       if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
@@ -135,20 +127,10 @@ export function EditorPanel({ editorRef }: EditorPanelProps) {
   );
 
   const handleKeyUp = useCallback(
-    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === " ") {
-        if (spaceTimerRef.current) {
-          clearTimeout(spaceTimerRef.current);
-          spaceTimerRef.current = null;
-        }
-        if (isSpaceRecordingRef.current) {
-          isSpaceRecordingRef.current = false;
-          toggleSpeech();
-          e.preventDefault();
-        }
-      }
+    (_e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      // No-op — kept for onKeyUp binding compatibility
     },
-    [toggleSpeech]
+    []
   );
 
   const computeLineCol = useCallback((text: string, pos: number) => {
@@ -336,21 +318,47 @@ export function EditorPanel({ editorRef }: EditorPanelProps) {
         </button>
       </div>
 
-      <textarea
-        ref={editorRef}
-        className="editor-panel__textarea"
-        value={content}
-        onChange={handleTextareaChange}
-        onKeyDown={handleKeyDown}
-        onKeyUp={(e) => { handleKeyUp(e); handleCursorChange(); }}
-        onSelect={handleCursorChange}
-        onClick={handleCursorChange}
-        onBlur={handleCursorChange}
-        onContextMenu={handleContextMenu}
-        onPaste={handlePaste}
-        placeholder={t("placeholder", { defaultValue: "" })}
-        spellCheck={false}
-      />
+      <div className="editor-panel__textarea-wrapper">
+        <textarea
+          ref={editorRef}
+          className="editor-panel__textarea"
+          value={content}
+          onChange={handleTextareaChange}
+          onKeyDown={handleKeyDown}
+          onKeyUp={(e) => { handleKeyUp(e); handleCursorChange(); }}
+          onSelect={handleCursorChange}
+          onClick={handleCursorChange}
+          onBlur={handleCursorChange}
+          onContextMenu={handleContextMenu}
+          onPaste={handlePaste}
+          placeholder={t("placeholder", { defaultValue: "" })}
+          spellCheck={false}
+        />
+        {(speechStatus === "recording" || speechStatus === "transcribing") && (
+          <div className={`editor-panel__speech-overlay editor-panel__speech-overlay--${speechStatus}`}>
+            <div className="editor-panel__speech-overlay-status">
+              <div className="editor-panel__speech-overlay-icon">
+                {speechStatus === "recording" ? (
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                    <rect x="9" y="1" width="6" height="11" rx="3" />
+                    <path d="M19 10v1a7 7 0 0 1-14 0v-1" fill="none" stroke="currentColor" strokeWidth="2" />
+                  </svg>
+                ) : (
+                  <svg className="editor-panel__mic-spinner" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+                  </svg>
+                )}
+              </div>
+              <span className="editor-panel__speech-overlay-text">
+                {speechStatus === "recording" ? t("speechRecording", { defaultValue: "録音中…" }) : t("speechTranscribing", { defaultValue: "認識中…" })}
+              </span>
+            </div>
+            {speechStatus === "recording" && partialTranscript && (
+              <span className="editor-panel__speech-overlay-partial">{partialTranscript}</span>
+            )}
+          </div>
+        )}
+      </div>
       <EditorContextMenu
         x={ctxMenu.x}
         y={ctxMenu.y}

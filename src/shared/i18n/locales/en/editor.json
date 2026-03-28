@@ -48,7 +48,7 @@
   "regenerateHtmlPreview": "Regenerate HTML Preview",
   "generatingHtml": "Generating HTML...",
   "saveHtmlPreview": "Save HTML",
-  "voiceInput": "Voice Input (hold Shift+Space)",
+  "voiceInput": "Voice Input (Ctrl+Shift+M)",
   "contextMenu.selectAll": "Select All",
   "contextMenu.insert": "Insert",
   "contextMenu.insertTable": "Table",
