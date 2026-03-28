@@ -58,12 +58,13 @@ export function SlidevPreviewPanel({ content, filePath }: SlidevPreviewPanelProp
     };
   }, [updateSession]);
 
-  // Auto-start on mount if no session
+  // Start server when needed (mount or filePath change)
+  // Session persists across tab switches via Zustand store
   useEffect(() => {
-    if (filePath && !session) {
+    if (filePath && !session && !starting) {
       startServer();
     }
-  }, [filePath]); // intentionally minimal deps - only start when filePath changes
+  }); // no deps — check every render, startServer guards against double-start
 
   // Sync content changes (debounced 500ms)
   useEffect(() => {
@@ -77,16 +78,16 @@ export function SlidevPreviewPanel({ content, filePath }: SlidevPreviewPanelProp
     };
   }, [content, filePath, session?.ready]);
 
-  // Stop server on unmount
+  // Stop server only when filePath changes (file switched/closed), not on tab switch
+  const prevFilePathRef = useRef(filePath);
   useEffect(() => {
-    return () => {
-      const fp = filePathRef.current;
-      if (fp) {
-        invoke("slidev_stop", { filePath: fp }).catch(console.warn);
-        removeSession(fp);
-      }
-    };
-  }, []); // cleanup on unmount only
+    const prevFp = prevFilePathRef.current;
+    prevFilePathRef.current = filePath;
+    if (prevFp && prevFp !== filePath) {
+      invoke("slidev_stop", { filePath: prevFp }).catch(console.warn);
+      removeSession(prevFp);
+    }
+  }, [filePath, removeSession]);
 
   const handleExport = async (format: "pptx" | "pdf") => {
     if (!filePath) return;
