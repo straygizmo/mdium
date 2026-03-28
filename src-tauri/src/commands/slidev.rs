@@ -178,6 +178,7 @@ pub async fn slidev_start(
             .args([
                 "slidev",
                 "dev",
+                "slides.md",
                 "--port",
                 &port.to_string(),
                 "--open",
@@ -200,6 +201,7 @@ pub async fn slidev_start(
             .args([
                 "slidev",
                 "dev",
+                "slides.md",
                 "--port",
                 &port.to_string(),
                 "--open",
@@ -334,6 +336,7 @@ pub async fn slidev_export(
             .args([
                 "slidev",
                 "export",
+                "slides.md",
                 "--format",
                 &format,
                 "--output",
@@ -351,6 +354,7 @@ pub async fn slidev_export(
             .args([
                 "slidev",
                 "export",
+                "slides.md",
                 "--format",
                 &format,
                 "--output",
