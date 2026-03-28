@@ -29,7 +29,8 @@ server.tool(
       const dir = outputDir;
       fs.mkdirSync(dir, { recursive: true });
 
-      const filePath = path.join(dir, filename);
+      const safeName = path.basename(filename);
+      const filePath = path.join(dir, safeName);
 
       if (provider === "openai") {
         const client = new OpenAI({ apiKey });

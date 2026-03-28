@@ -280,6 +280,12 @@ pub async fn slidev_export(
     format: String,
     output_path: String,
 ) -> Result<String, String> {
+    // Validate format against allowlist
+    let format = match format.as_str() {
+        "pdf" | "pptx" => format,
+        _ => return Err(format!("Unsupported export format: {}", format)),
+    };
+
     let (temp_dir, _port) = {
         let guard = slidev_store().lock().unwrap();
         let process = guard
@@ -360,14 +366,14 @@ pub async fn slidev_export(
 pub async fn slidev_stop(file_path: String) -> Result<(), String> {
     let process = {
         let mut guard = slidev_store().lock().unwrap();
-        guard
-            .remove(&file_path)
-            .ok_or_else(|| format!("No slidev process found for: {}", file_path))?
+        guard.remove(&file_path)
     };
-
-    let kill_result = kill_process(process.pid);
-    let _ = fs::remove_dir_all(&process.temp_dir);
-    kill_result
+    if let Some(process) = process {
+        let kill_result = kill_process(process.pid);
+        let _ = fs::remove_dir_all(&process.temp_dir);
+        kill_result?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
