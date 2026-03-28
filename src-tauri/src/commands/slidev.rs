@@ -110,11 +110,34 @@ pub async fn slidev_start(
         .map_err(|e| format!("Failed to create public/images dir: {}", e))?;
 
     // Locate bundled resources
-    let resource_dir = app
-        .path()
-        .resource_dir()
-        .map_err(|e| format!("Failed to get resource dir: {}", e))?;
-    let slidev_env_dir = resource_dir.join("resources").join("slidev-env");
+    // In production: resource_dir contains bundled files
+    // In development: fall back to project root's resources/ directory
+    let slidev_env_dir = {
+        let resource_dir = app
+            .path()
+            .resource_dir()
+            .map_err(|e| format!("Failed to get resource dir: {}", e))?;
+        let prod_path = resource_dir.join("resources").join("slidev-env");
+        if prod_path.join("package.json").exists() {
+            prod_path
+        } else {
+            // Dev mode: resources are relative to the Tauri project root
+            let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join("resources")
+                .join("slidev-env");
+            if dev_path.join("package.json").exists() {
+                dev_path
+            } else {
+                return Err(format!(
+                    "Slidev environment not found. Checked:\n  {}\n  {}",
+                    prod_path.display(),
+                    dev_path.display()
+                ));
+            }
+        }
+    };
 
     // Copy package.json
     let package_json_src = slidev_env_dir.join("package.json");
@@ -122,10 +145,10 @@ pub async fn slidev_start(
     fs::copy(&package_json_src, &package_json_dest)
         .map_err(|e| format!("Failed to copy package.json: {}", e))?;
 
-    // Link node_modules (symlink or junction)
+    // Link node_modules (symlink or junction) if bundled node_modules exists
     let node_modules_src = slidev_env_dir.join("node_modules");
     let node_modules_dest = temp_dir.join("node_modules");
-    if !node_modules_dest.exists() {
+    if node_modules_src.exists() && !node_modules_dest.exists() {
         link_node_modules(&node_modules_src, &node_modules_dest)?;
     }
 
