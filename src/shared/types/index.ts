@@ -169,3 +169,31 @@ export type OpencodeConfigTab = "rules" | "tools" | "agents" | "commands" | "mcp
 
 /** Opencode 上位タブ */
 export type OpencodeTopTab = "chat" | "settings";
+
+/** Slidev dev server state for a given markdown file */
+export interface SlidevSession {
+  /** Temp directory path */
+  tempDir: string;
+  /** Dev server port */
+  port: number;
+  /** Whether the dev server is ready */
+  ready: boolean;
+  /** Error message if startup failed */
+  error?: string;
+}
+
+/** Built-in MCP server definition */
+export interface BuiltinMcpServer {
+  serverName: string;
+  type: "local";
+  command: string[];
+  enabled: boolean;
+  environment: Record<string, string>;
+}
+
+/** Built-in skill definition */
+export interface BuiltinSkill {
+  name: string;
+  description: string;
+  content: string;
+}
