@@ -169,16 +169,14 @@ pub async fn slidev_start(
 
     let temp_dir_str = temp_dir.to_string_lossy().to_string();
 
+    // Slidev v51: `slidev [entry]` is the default command (no `dev` subcommand)
+    // Default entry is slides.md, so no need to pass it explicitly
     #[cfg(target_os = "windows")]
     let child = {
         use std::os::windows::process::CommandExt;
-        Command::new("cmd")
-            .arg("/C")
-            .arg(npx)
+        Command::new(npx)
             .args([
                 "slidev",
-                "dev",
-                "slides.md",
                 "--port",
                 &port.to_string(),
                 "--open",
@@ -200,8 +198,6 @@ pub async fn slidev_start(
         Command::new(npx)
             .args([
                 "slidev",
-                "dev",
-                "slides.md",
                 "--port",
                 &port.to_string(),
                 "--open",
@@ -336,7 +332,6 @@ pub async fn slidev_export(
             .args([
                 "slidev",
                 "export",
-                "slides.md",
                 "--format",
                 &format,
                 "--output",
@@ -354,7 +349,6 @@ pub async fn slidev_export(
             .args([
                 "slidev",
                 "export",
-                "slides.md",
                 "--format",
                 &format,
                 "--output",
