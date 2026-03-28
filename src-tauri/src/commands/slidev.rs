@@ -35,22 +35,23 @@ fn hash_path(file_path: &str) -> String {
     format!("{:x}", hasher.finish())
 }
 
-/// Create a symlink/junction to node_modules
-fn link_node_modules(src: &PathBuf, dest: &PathBuf) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        // Try symlink first, fall back to junction
-        if std::os::windows::fs::symlink_dir(src, dest).is_err() {
-            junction::create(src, dest)
-                .map_err(|e| format!("Failed to create junction: {}", e))?;
+
+/// Extract theme name from Slidev markdown frontmatter
+fn extract_theme(markdown: &str) -> Option<String> {
+    let content = markdown.strip_prefix("---\n")
+        .or_else(|| markdown.strip_prefix("---\r\n"))?;
+    let end = content.find("\n---")?;
+    let frontmatter = &content[..end];
+    for line in frontmatter.lines() {
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("theme:") {
+            let theme = value.trim().trim_matches(|c| c == '"' || c == '\'');
+            if !theme.is_empty() {
+                return Some(theme.to_string());
+            }
         }
     }
-    #[cfg(not(target_os = "windows"))]
-    {
-        std::os::unix::fs::symlink(src, dest)
-            .map_err(|e| format!("Failed to create symlink: {}", e))?;
-    }
-    Ok(())
+    None
 }
 
 /// Kill a process by PID (platform-specific)
@@ -139,23 +140,52 @@ pub async fn slidev_start(
         }
     };
 
-    // Copy package.json
-    let package_json_src = slidev_env_dir.join("package.json");
-    let package_json_dest = temp_dir.join("package.json");
-    fs::copy(&package_json_src, &package_json_dest)
-        .map_err(|e| format!("Failed to copy package.json: {}", e))?;
-
-    // Link node_modules (symlink or junction) if bundled node_modules exists
-    let node_modules_src = slidev_env_dir.join("node_modules");
-    let node_modules_dest = temp_dir.join("node_modules");
-    if node_modules_src.exists() && !node_modules_dest.exists() {
-        link_node_modules(&node_modules_src, &node_modules_dest)?;
-    }
-
-    // Write slides.md
+    // Write slides.md first (needed for theme detection)
     let slides_path = temp_dir.join("slides.md");
     fs::write(&slides_path, &markdown)
         .map_err(|e| format!("Failed to write slides.md: {}", e))?;
+
+    // Extract theme name from frontmatter (default: "default")
+    let theme = extract_theme(&markdown).unwrap_or_else(|| "default".to_string());
+    let theme_package = if theme.contains('/') {
+        theme.clone() // scoped package like @org/theme
+    } else {
+        format!("@slidev/theme-{}", theme)
+    };
+
+    // Set up node_modules: install Slidev + theme in temp dir if not already present
+    let node_modules_dest = temp_dir.join("node_modules");
+    if !node_modules_dest.join(".package-lock.json").exists() {
+        // Copy package.json as base
+        let package_json_src = slidev_env_dir.join("package.json");
+        fs::copy(&package_json_src, temp_dir.join("package.json"))
+            .map_err(|e| format!("Failed to copy package.json: {}", e))?;
+
+        // Install base dependencies + theme
+        let npm = if cfg!(target_os = "windows") { "npm.cmd" } else { "npm" };
+        let install_output = Command::new(npm)
+            .args(["install", "--prefer-offline", &theme_package])
+            .current_dir(&temp_dir)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(|e| format!("Failed to run npm install: {}", e))?;
+
+        if !install_output.status.success() {
+            let stderr = String::from_utf8_lossy(&install_output.stderr);
+            return Err(format!("npm install failed: {}", stderr));
+        }
+    } else {
+        // node_modules exists, but check if theme is installed
+        let theme_dir = node_modules_dest.join(&theme_package);
+        if !theme_dir.exists() {
+            let npm = if cfg!(target_os = "windows") { "npm.cmd" } else { "npm" };
+            let _ = Command::new(npm)
+                .args(["install", "--prefer-offline", &theme_package])
+                .current_dir(&temp_dir)
+                .stdin(std::process::Stdio::null())
+                .output();
+        }
+    }
 
     // Find available port
     let port = find_available_port()?;
@@ -171,6 +201,13 @@ pub async fn slidev_start(
 
     // Slidev v51: `slidev [entry]` is the default command (no `dev` subcommand)
     // Default entry is slides.md, so no need to pass it explicitly
+    let stderr_log = temp_dir.join("slidev-stderr.log");
+    let stderr_file = fs::File::create(&stderr_log)
+        .map_err(|e| format!("Failed to create stderr log: {}", e))?;
+    let stdout_log = temp_dir.join("slidev-stdout.log");
+    let stdout_file = fs::File::create(&stdout_log)
+        .map_err(|e| format!("Failed to create stdout log: {}", e))?;
+
     #[cfg(target_os = "windows")]
     let child = {
         use std::os::windows::process::CommandExt;
@@ -181,13 +218,11 @@ pub async fn slidev_start(
                 &port.to_string(),
                 "--open",
                 "false",
-                "--remote",
-                "false",
             ])
             .current_dir(&temp_dir)
             .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stdout(std::process::Stdio::from(stdout_file))
+            .stderr(std::process::Stdio::from(stderr_file))
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .spawn()
             .map_err(|e| format!("Failed to spawn slidev: {}", e))?
@@ -202,13 +237,11 @@ pub async fn slidev_start(
                 &port.to_string(),
                 "--open",
                 "false",
-                "--remote",
-                "false",
             ])
             .current_dir(&temp_dir)
             .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stdout(std::process::Stdio::from(stdout_file))
+            .stderr(std::process::Stdio::from(stderr_file))
             .spawn()
             .map_err(|e| format!("Failed to spawn slidev: {}", e))?
     };
