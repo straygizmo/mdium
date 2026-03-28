@@ -32,6 +32,7 @@ interface SettingsState {
   themeId: string;
   language: Language;
   autoSave: boolean;
+  restoreLastFolders: boolean;
   scrollSync: boolean;
   fontFamily: string;
   fontSize: number;
@@ -45,6 +46,7 @@ interface SettingsState {
   setThemeId: (id: string) => void;
   setLanguage: (lang: Language) => void;
   setAutoSave: (enabled: boolean) => void;
+  setRestoreLastFolders: (enabled: boolean) => void;
   setScrollSync: (enabled: boolean) => void;
   setFontFamily: (font: string) => void;
   setFontSize: (size: number) => void;
@@ -64,6 +66,7 @@ export const useSettingsStore = create<SettingsState>()(
       themeId: DEFAULT_THEME_ID,
       language: "ja",
       autoSave: false,
+      restoreLastFolders: true,
       scrollSync: true,
       fontFamily: '"Segoe UI", "Meiryo", sans-serif',
       fontSize: 14,
@@ -88,6 +91,7 @@ export const useSettingsStore = create<SettingsState>()(
       },
 
       setAutoSave: (enabled) => set({ autoSave: enabled }),
+      setRestoreLastFolders: (enabled) => set({ restoreLastFolders: enabled }),
       setScrollSync: (enabled) => set({ scrollSync: enabled }),
       setFontFamily: (font) => set({ fontFamily: font }),
       setFontSize: (size) => set({ fontSize: size }),
@@ -125,6 +129,7 @@ export const useSettingsStore = create<SettingsState>()(
         themeId: state.themeId,
         language: state.language,
         autoSave: state.autoSave,
+        restoreLastFolders: state.restoreLastFolders,
         scrollSync: state.scrollSync,
         fontFamily: state.fontFamily,
         fontSize: state.fontSize,
