@@ -105,6 +105,13 @@ export function App() {
     }
   }, [activeTab]));
 
+  // Dismiss external change dialog if the associated tab is closed or switched away
+  useEffect(() => {
+    if (externalChange && (!activeTab || activeTab.id !== externalChange.tabId)) {
+      setExternalChange(null);
+    }
+  }, [activeTab, externalChange]);
+
   // Sidebar resizing
   const [sidebarWidth, setSidebarWidth] = useState(340);
   const sidebarDragging = useRef(false);
@@ -1163,22 +1170,22 @@ export function App() {
         }}
         onSaveFilterVisibility={handleSaveFilterVisibility}
       />
-        {externalChange && (
-          <ExternalChangeDialog
-            filePath={externalChange.filePath}
-            currentContent={externalChange.currentContent}
-            externalContent={externalChange.externalContent}
-            onAcceptExternal={() => {
-              useTabStore.getState().updateTabContent(
-                externalChange.tabId,
-                externalChange.externalContent,
-              );
-              setExternalChange(null);
-            }}
-            onKeepCurrent={() => setExternalChange(null)}
-            onClose={() => setExternalChange(null)}
-          />
-        )}
+      {externalChange && (
+        <ExternalChangeDialog
+          filePath={externalChange.filePath}
+          currentContent={externalChange.currentContent}
+          externalContent={externalChange.externalContent}
+          onAcceptExternal={() => {
+            useTabStore.getState().updateTabContent(
+              externalChange.tabId,
+              externalChange.externalContent,
+            );
+            setExternalChange(null);
+          }}
+          onKeepCurrent={() => setExternalChange(null)}
+          onClose={() => setExternalChange(null)}
+        />
+      )}
     </div>
   );
 }
