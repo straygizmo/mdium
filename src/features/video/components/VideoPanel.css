@@ -1,0 +1,384 @@
+/* ─── VideoPanel Layout ──────────────────────────────────────────────────────── */
+
+.video-panel {
+  display: flex;
+  flex-direction: row;
+  height: 100%;
+  overflow: hidden;
+  color: var(--text-primary, #ccc);
+  background: var(--bg-primary, #1e1e1e);
+}
+
+.video-panel__left {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  border-right: 1px solid var(--border-color, #333);
+}
+
+.video-panel__right {
+  width: 400px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  gap: 12px;
+}
+
+.video-panel__player {
+  flex: 1;
+  background: #000;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.video-panel__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ─── VideoSettingsBar ───────────────────────────────────────────────────────── */
+
+.video-settings-bar {
+  background: var(--bg-secondary, #2a2a2a);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 4px;
+  padding: 12px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.video-settings-bar__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, #ccc);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.video-settings-bar__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.video-settings-bar__row label {
+  font-size: 12px;
+  color: var(--text-primary, #ccc);
+  min-width: 80px;
+  flex-shrink: 0;
+}
+
+.video-settings-bar__row select,
+.video-settings-bar__row input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-primary, #1e1e1e);
+  border: 1px solid var(--border-color, #333);
+  color: var(--text-primary, #ccc);
+  padding: 4px 8px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.video-settings-bar__row input[type="range"] {
+  flex: 1;
+  min-width: 60px;
+}
+
+.video-settings-bar__btn {
+  flex: 1;
+  background: var(--bg-secondary, #2a2a2a);
+  border: 1px solid var(--border-color, #333);
+  color: var(--text-primary, #ccc);
+  padding: 4px 8px;
+  border-radius: 3px;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.video-settings-bar__btn:hover {
+  background: var(--bg-hover, #3a3a3a);
+}
+
+/* ─── SceneEditForm ──────────────────────────────────────────────────────────── */
+
+.scene-edit-form {
+  background: var(--bg-secondary, #2a2a2a);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 4px;
+  padding: 12px;
+  margin-bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.scene-edit-form__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, #ccc);
+}
+
+.scene-edit-form__dirty {
+  font-size: 10px;
+  font-weight: 500;
+  background: #7c3a00;
+  color: #ffb366;
+  border-radius: 3px;
+  padding: 1px 5px;
+  flex-shrink: 0;
+}
+
+.scene-edit-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.scene-edit-form__field label {
+  font-size: 11px;
+  color: var(--text-primary, #ccc);
+  opacity: 0.7;
+}
+
+.scene-edit-form__field textarea {
+  background: var(--bg-primary, #1e1e1e);
+  border: 1px solid var(--border-color, #333);
+  color: var(--text-primary, #ccc);
+  padding: 6px 8px;
+  border-radius: 3px;
+  font-size: 12px;
+  resize: vertical;
+  font-family: inherit;
+  line-height: 1.5;
+}
+
+.scene-edit-form__field textarea:focus {
+  outline: none;
+  border-color: #555;
+}
+
+.scene-edit-form__narration-row {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.scene-edit-form__narration-row textarea {
+  flex: 1;
+}
+
+.scene-edit-form__btn {
+  background: var(--bg-primary, #1e1e1e);
+  border: 1px solid var(--border-color, #333);
+  color: var(--text-primary, #ccc);
+  padding: 4px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 14px;
+  flex-shrink: 0;
+  align-self: flex-start;
+}
+
+.scene-edit-form__btn:hover {
+  background: var(--bg-hover, #3a3a3a);
+}
+
+.scene-edit-form__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.scene-edit-form__row label {
+  font-size: 11px;
+  color: var(--text-primary, #ccc);
+  opacity: 0.7;
+  min-width: 70px;
+  flex-shrink: 0;
+}
+
+.scene-edit-form__row select {
+  flex: 1;
+  background: var(--bg-primary, #1e1e1e);
+  border: 1px solid var(--border-color, #333);
+  color: var(--text-primary, #ccc);
+  padding: 4px 8px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.scene-edit-form__toggle {
+  background: var(--bg-primary, #1e1e1e);
+  border: 1px solid var(--border-color, #333);
+  color: var(--text-primary, #ccc);
+  padding: 3px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.scene-edit-form__toggle:hover {
+  background: var(--bg-hover, #3a3a3a);
+}
+
+.scene-edit-form__toggle--on {
+  background: #1a3a1a;
+  border-color: #3a7a3a;
+  color: #7adb7a;
+}
+
+.scene-edit-form__toggle--on:hover {
+  background: #1f4a1f;
+}
+
+/* ─── ExportDialog ───────────────────────────────────────────────────────────── */
+
+.export-dialog__overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.export-dialog {
+  background: var(--bg-secondary, #2a2a2a);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+  padding: 20px 24px;
+  min-width: 360px;
+  max-width: 480px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.export-dialog h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary, #ccc);
+}
+
+.export-dialog__field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-primary, #ccc);
+}
+
+.export-dialog__field label:first-child {
+  min-width: 110px;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.export-dialog__field input[type="number"] {
+  width: 72px;
+  background: var(--bg-primary, #1e1e1e);
+  border: 1px solid var(--border-color, #333);
+  color: var(--text-primary, #ccc);
+  padding: 4px 8px;
+  border-radius: 3px;
+  font-size: 13px;
+}
+
+.export-dialog__field button {
+  flex: 1;
+  background: var(--bg-primary, #1e1e1e);
+  border: 1px solid var(--border-color, #333);
+  color: var(--text-primary, #ccc);
+  padding: 5px 10px;
+  border-radius: 3px;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.export-dialog__field button:hover {
+  background: var(--bg-hover, #3a3a3a);
+}
+
+.export-dialog__progress {
+  position: relative;
+  height: 18px;
+  background: var(--bg-primary, #1e1e1e);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 3px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.export-dialog__progress-bar {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: #2a6a2a;
+  transition: width 0.2s ease;
+}
+
+.export-dialog__progress span {
+  position: relative;
+  font-size: 11px;
+  color: var(--text-primary, #ccc);
+}
+
+.export-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.export-dialog__actions button {
+  background: var(--bg-primary, #1e1e1e);
+  border: 1px solid var(--border-color, #333);
+  color: var(--text-primary, #ccc);
+  padding: 6px 16px;
+  border-radius: 3px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.export-dialog__actions button:hover:not(:disabled) {
+  background: var(--bg-hover, #3a3a3a);
+}
+
+.export-dialog__actions button:last-child {
+  background: #1a3a1a;
+  border-color: #3a7a3a;
+  color: #7adb7a;
+}
+
+.export-dialog__actions button:last-child:hover:not(:disabled) {
+  background: #1f4a1f;
+}
+
+.export-dialog__actions button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
