@@ -15,6 +15,7 @@ MDium combines Markdown editing, AI assistance, mindmap visualization, office do
 - Mathematical expressions (KaTeX)
 - Mermaid diagrams (flowcharts, sequence, ER, Gantt, class, state, pie)
 - Code syntax highlighting (18+ languages)
+- Image paste from clipboard (Ctrl+V) with preview dialog and AI-powered alt text generation
 - Search and replace (Ctrl+F / Ctrl+H)
 - Scroll synchronization and auto-save
 - Document outline view
@@ -44,6 +45,12 @@ MDium combines Markdown editing, AI assistance, mindmap visualization, office do
 - Non-blocking Web Worker processing
 - Direct transcript insertion into editor
 - Model download with progress tracking
+
+### AI Image Generation
+
+- Built-in MCP server (Nano Banana 2) for AI image generation powered by Gemini
+- Generate images from text prompts directly in the editor (right-click → Insert → Image → Generate with MCP)
+- Generated images are automatically saved to the `images/` directory and inserted as Markdown
 
 ### Mindmap Editor
 
