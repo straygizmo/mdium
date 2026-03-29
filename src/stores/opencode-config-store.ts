@@ -15,9 +15,11 @@ interface OpencodeConfigState {
   projectCommands: Record<string, OpencodeCommand>;
   projectMcpServers: Record<string, OpencodeMcpServer>;
   projectSkillNames: string[];
+  globalSkillNames: string[];
   loading: boolean;
 
   loadConfig: () => Promise<void>;
+  loadGlobalSkills: () => Promise<void>;
   // Rules
   setRules: (rules: string[]) => Promise<void>;
   // Tools
@@ -127,12 +129,25 @@ export const useOpencodeConfigStore = create<OpencodeConfigState>()((set) => ({
   projectCommands: {},
   projectMcpServers: {},
   projectSkillNames: [],
+  globalSkillNames: [],
   loading: false,
 
   loadConfig: async () => {
     set({ loading: true });
     const config = await readConfig();
     set({ config, loading: false });
+  },
+
+  loadGlobalSkills: async () => {
+    try {
+      const home = await invoke<string>("get_home_dir");
+      const sep = home.includes("\\") ? "\\" : "/";
+      const baseDir = `${home}${sep}.config${sep}opencode`;
+      const entries = await invoke<{ dir_name: string; name: string }[]>("list_skills", { baseDir });
+      set({ globalSkillNames: entries.map((e) => e.name || e.dir_name) });
+    } catch {
+      set({ globalSkillNames: [] });
+    }
   },
 
   setRules: async (rules) => {

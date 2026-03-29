@@ -62,6 +62,7 @@ export function SkillsSection() {
   const { t } = useTranslation("opencode-config");
   const activeFolderPath = useTabStore((s) => s.activeFolderPath);
   const loadProjectSkills = useOpencodeConfigStore((s) => s.loadProjectSkills);
+  const loadGlobalSkills = useOpencodeConfigStore((s) => s.loadGlobalSkills);
   const { useRelativePaths } = useOpencodeConfigContext();
 
   const [scope, setScope] = useState<SkillScope>("global");
@@ -168,7 +169,9 @@ export function SkillsSection() {
     setAdding(false);
     setNameError("");
     await loadSkills();
-    if (scope === "project" && activeFolderPath) {
+    if (scope === "global") {
+      loadGlobalSkills();
+    } else if (activeFolderPath) {
       loadProjectSkills(activeFolderPath);
     }
   };
@@ -180,7 +183,9 @@ export function SkillsSection() {
     if (!base) return;
     await invoke("delete_skill", { baseDir: base, dirName });
     await loadSkills();
-    if (scope === "project" && activeFolderPath) {
+    if (scope === "global") {
+      loadGlobalSkills();
+    } else if (activeFolderPath) {
       loadProjectSkills(activeFolderPath);
     }
   };

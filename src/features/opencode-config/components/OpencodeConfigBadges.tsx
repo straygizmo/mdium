@@ -8,6 +8,7 @@ export function OpencodeConfigBadges() {
   const projectCommands = useOpencodeConfigStore((s) => s.projectCommands);
   const projectMcpServers = useOpencodeConfigStore((s) => s.projectMcpServers);
   const projectSkillNames = useOpencodeConfigStore((s) => s.projectSkillNames);
+  const globalSkillNames = useOpencodeConfigStore((s) => s.globalSkillNames);
 
   const badges = useMemo(() => {
     // Commands: global + project
@@ -24,9 +25,8 @@ export function OpencodeConfigBadges() {
       .map(([name]) => name);
     const allMcp = [...new Set([...globalMcp, ...projMcp])];
 
-    // Skills: global (config) + project (file-based)
-    const globalSkills = Object.keys(config.skills ?? {});
-    const allSkills = [...new Set([...globalSkills, ...projectSkillNames])];
+    // Skills: global (file-based) + project (file-based)
+    const allSkills = [...new Set([...globalSkillNames, ...projectSkillNames])];
 
     // Custom Tools
     const allCustomTools = Object.keys(config.customTools ?? {});
@@ -57,7 +57,7 @@ export function OpencodeConfigBadges() {
         items: allCustomTools,
       },
     ];
-  }, [config, projectCommands, projectMcpServers, projectSkillNames, t]);
+  }, [config, projectCommands, projectMcpServers, projectSkillNames, globalSkillNames, t]);
 
   const activeBadges = badges.filter((b) => b.count > 0);
   if (activeBadges.length === 0) return null;
