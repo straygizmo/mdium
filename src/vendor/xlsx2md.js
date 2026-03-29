@@ -1,7 +1,12 @@
 // xlsx2md – vendored build
 // https://github.com/igapyon/xlsx2md
+// Copyright 2026 Toshiki Iga
 // SPDX-License-Identifier: Apache-2.0
-// AUTO-GENERATED – do not edit by hand
+// See LICENSE-xlsx2md in this directory for the full license text.
+//
+// Modifications: TypeScript sources transpiled to JavaScript, all modules
+// concatenated into a single file, ES module export wrapper added.
+// AUTO-GENERATED – do not edit by hand. Regenerate with: npm run vendor:xlsx2md
 
 // ── module-registry ─────────────────────────────────────────────
 /*
