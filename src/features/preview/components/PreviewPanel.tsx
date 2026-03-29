@@ -681,6 +681,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
         )}
         <div className="preview-panel__office-wrap" ref={previewRef}>
           <OfficePreview
+            key={activeTab!.filePath}
             fileData={activeTab!.binaryData!}
             fileType={activeTab!.officeFileType!}
             themeType={themeType}

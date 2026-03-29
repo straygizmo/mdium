@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useTabStore } from "@/stores/tab-store";
 import { useFileStore } from "@/stores/file-store";
@@ -74,6 +75,12 @@ export function TabBar() {
     (tab) => tab.folderPath === activeFolderPath && !tab.filePath && !tab.fileName
   );
 
+  // Auto-scroll to active tab
+  const activeTabRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    activeTabRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+  }, [activeTabId]);
+
   // Don't show tab bar when no folder is open
   if (!activeFolderPath) return null;
 
@@ -94,6 +101,7 @@ export function TabBar() {
           fileTabs.map((tab) => (
             <div
               key={tab.id}
+              ref={tab.id === activeTabId ? activeTabRef : undefined}
               className={`tab-bar__tab ${tab.id === activeTabId ? "tab-bar__tab--active" : ""}`}
               onClick={() => setActiveTab(tab.id)}
               title={tab.filePath || tab.fileName}
