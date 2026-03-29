@@ -157,5 +157,8 @@
   "mcpBuiltinAdd": "Add Built-In MCP Server",
   "mcpBuiltinSelect": "Select a built-in MCP server...",
   "skillBuiltinAdd": "Add Built-In Skill",
-  "skillBuiltinSelect": "Select a built-in skill..."
+  "skillBuiltinSelect": "Select a built-in skill...",
+  "ocChatThinking": "Thinking...",
+  "ocChatDone": "Done",
+  "ocChatDoneError": "Done (with errors)"
 }

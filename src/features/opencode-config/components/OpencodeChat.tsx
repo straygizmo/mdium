@@ -46,8 +46,24 @@ export function OpencodeChat() {
   const [showHistory, setShowHistory] = useState(false);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<number>>(new Set());
+  const [toastKey, setToastKey] = useState(0);
+  const [toastMsg, setToastMsg] = useState("");
+  const prevLoadingRef = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const agentOverrideRef = useRef<string | null>(null);
+
+  // Show toast when loading finishes (loading: true → false with messages present)
+  useEffect(() => {
+    if (prevLoadingRef.current && !loading && messages.length > 0) {
+      const last = messages[messages.length - 1];
+      const hasError = last?.role === "assistant" && last.parts?.some(
+        (p) => p.type === "tool" && (p as any).state?.status === "error"
+      );
+      setToastMsg(hasError ? t("ocChatDoneError", "Done (with errors)") : t("ocChatDone", "Done"));
+      setToastKey((k) => k + 1);
+    }
+    prevLoadingRef.current = loading;
+  }, [loading, messages, t]);
 
   const completion = useCompletion({
     connected,
@@ -224,6 +240,15 @@ export function OpencodeChat() {
 
   return (
     <div className="oc-chat">
+      {/* Toast */}
+      {toastKey > 0 && (
+        <div
+          key={toastKey}
+          className={`oc-chat__toast${toastMsg.includes("error") ? " oc-chat__toast--error" : ""}`}
+        >
+          {toastMsg}
+        </div>
+      )}
       {/* Status bar */}
       <div className="oc-chat__status">
         <OpencodeConfigBadges />
@@ -360,7 +385,12 @@ export function OpencodeChat() {
             </Fragment>
           );
         })}
-        {loading && <div className="oc-chat__loading">...</div>}
+        {loading && (
+          <div className="oc-chat__loading">
+            <div className="oc-chat__loading-bar" />
+            <span className="oc-chat__loading-label">{t("ocChatThinking", "Thinking...")}</span>
+          </div>
+        )}
         <div ref={messagesEndRef} />
       </div>
 

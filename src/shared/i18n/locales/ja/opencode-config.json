@@ -157,5 +157,8 @@
   "mcpBuiltinAdd": "ビルトイン MCP サーバーを追加",
   "mcpBuiltinSelect": "ビルトイン MCP サーバーを選択...",
   "skillBuiltinAdd": "ビルトイン スキルを追加",
-  "skillBuiltinSelect": "ビルトイン スキルを選択..."
+  "skillBuiltinSelect": "ビルトイン スキルを選択...",
+  "ocChatThinking": "思考中...",
+  "ocChatDone": "完了",
+  "ocChatDoneError": "完了（エラーあり）"
 }
