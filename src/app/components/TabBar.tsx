@@ -8,7 +8,6 @@ import "./TabBar.css";
 /** Folder tabs (displayed at full width) */
 export function FolderTabBar() {
   const { t } = useTranslation();
-  const tabs = useTabStore((s) => s.tabs);
   const activeFolderPath = useTabStore((s) => s.activeFolderPath);
   const openFolders = useTabStore((s) => s.openFolderPaths);
   const switchFolder = useTabStore((s) => s.switchFolder);
@@ -16,7 +15,8 @@ export function FolderTabBar() {
   const removeFileTree = useFileStore((s) => s.removeFileTree);
 
   const handleCloseFolder = async (folder: string) => {
-    const folderTabs = tabs.filter((tab) => tab.folderPath === folder);
+    // Read tabs from store directly to avoid subscribing to all tab changes
+    const folderTabs = useTabStore.getState().tabs.filter((tab) => tab.folderPath === folder);
     const hasDirty = folderTabs.some((tab) => tab.dirty);
     if (hasDirty && !(await ask(t("unsavedChanges"), { kind: "warning" }))) return;
     closeFolder(folder);

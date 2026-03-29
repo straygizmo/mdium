@@ -638,11 +638,13 @@ export function useOpencodeChat(folderPath?: string): UseOpencodeChatResult {
     useChatUIStore.setState({ useMdContext: value });
   }, []);
 
-  // Auto-connect when folderPath changes
+  // Auto-connect when folderPath changes (deferred to avoid render storm on folder switch)
   useEffect(() => {
-    if (folderPath) {
+    if (!folderPath) return;
+    const timer = setTimeout(() => {
       doConnect(folderPath);
-    }
+    }, 500);
+    return () => clearTimeout(timer);
   }, [folderPath]);
 
   return {

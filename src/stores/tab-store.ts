@@ -276,6 +276,13 @@ export const useTabStore = create<TabState>()(
     // Stop opencode server
     useOpencodeServerStore.getState().removeServer(folderPath);
 
+    // Revoke blob URLs for image tabs being removed (prevent memory leak)
+    for (const tab of tabs) {
+      if (tab.folderPath === folderPath && tab.imageBlobUrl) {
+        URL.revokeObjectURL(tab.imageBlobUrl);
+      }
+    }
+
     // Unsaved changes check is done on the UI side
     const newTabs = tabs.filter((t) => t.folderPath !== folderPath);
     const newOpenFolderPaths = openFolderPaths.filter((p) => p !== folderPath);

@@ -41,12 +41,14 @@ export function OpencodeConfigPanel() {
   const loadProjectSkills = useOpencodeConfigStore((s) => s.loadProjectSkills);
 
   useEffect(() => {
-    loadConfig();
-    if (activeFolderPath) {
+    if (!activeFolderPath) return;
+    const timer = setTimeout(() => {
+      loadConfig();
       loadProjectCommands(activeFolderPath);
       loadProjectMcpServers(activeFolderPath);
       loadProjectSkills(activeFolderPath);
-    }
+    }, 200);
+    return () => clearTimeout(timer);
   }, [loadConfig, loadProjectCommands, loadProjectMcpServers, loadProjectSkills, activeFolderPath]);
 
   const contextValue = useMemo(() => ({ useRelativePaths: true }), []);

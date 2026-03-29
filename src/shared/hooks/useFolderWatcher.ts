@@ -12,26 +12,40 @@ export function useFolderWatcher(
   useEffect(() => {
     if (!folderPath) return;
 
-    let unlisten: (() => void) | null = null;
+    let cancelled = false;
+    let unlistenFn: (() => void) | null = null;
     const currentFolder = folderPath;
 
-    const setup = async () => {
-      try {
-        await invoke("watch_folder", { folderPath: currentFolder });
-        unlisten = await listen<string>("folder-changed", (event) => {
-          if (event.payload === currentFolder) {
-            callbackRef.current();
-          }
-        });
-      } catch (e) {
-        console.error("Folder watcher setup failed:", e);
-      }
-    };
+    // Defer watcher setup to avoid overwhelming IPC during folder switches
+    const timer = setTimeout(() => {
+      if (cancelled) return;
 
-    setup();
+      const setup = async () => {
+        try {
+          await invoke("watch_folder", { folderPath: currentFolder });
+          if (cancelled) return;
+          const fn = await listen<string>("folder-changed", (event) => {
+            if (!cancelled && event.payload === currentFolder) {
+              callbackRef.current();
+            }
+          });
+          if (cancelled) {
+            fn();
+          } else {
+            unlistenFn = fn;
+          }
+        } catch (e) {
+          console.error("Folder watcher setup failed:", e);
+        }
+      };
+
+      setup();
+    }, 100);
 
     return () => {
-      unlisten?.();
+      cancelled = true;
+      clearTimeout(timer);
+      unlistenFn?.();
       invoke("unwatch_folder", { folderPath: currentFolder }).catch(() => {});
     };
   }, [folderPath]);

@@ -54,6 +54,10 @@ export function Terminal({ id, folderPath, themeType, command, active = true }: 
   useEffect(() => {
     if (!containerRef.current) return;
 
+    // Track mounted state to prevent writes to disposed xterm
+    let disposed = false;
+    let unlistenFn: (() => void) | null = null;
+
     const theme = themeType === "dark" ? DARK_THEME : LIGHT_THEME;
     const xterm = new XTerm({
       fontFamily: '"Cascadia Code", "Consolas", monospace',
@@ -76,14 +80,21 @@ export function Terminal({ id, folderPath, themeType, command, active = true }: 
     xtermRef.current = xterm;
     fitAddonRef.current = fitAddon;
 
-    let unlisten: (() => void) | null = null;
-
     const setup = async () => {
       try {
         // Listen BEFORE spawning so we never miss the initial prompt
-        unlisten = await listen<string>(`pty-output-${id}`, (event) => {
-          xterm.write(event.payload);
+        const fn = await listen<string>(`pty-output-${id}`, (event) => {
+          if (!disposed) {
+            xterm.write(event.payload);
+          }
         });
+
+        // If component unmounted while awaiting listen, unlisten immediately
+        if (disposed) {
+          fn();
+          return;
+        }
+        unlistenFn = fn;
 
         await invoke("spawn_pty", {
           id,
@@ -93,29 +104,38 @@ export function Terminal({ id, folderPath, themeType, command, active = true }: 
           command: command ?? null,
         });
 
+        if (disposed) return;
+
         xterm.onData((data) => {
-          invoke("write_to_pty", { id, data }).catch(() => {});
+          if (!disposed) {
+            invoke("write_to_pty", { id, data }).catch(() => {});
+          }
         });
 
         if (active) {
           xterm.focus();
         }
       } catch (e) {
-        xterm.writeln(`\r\n[Terminal error: ${e}]`);
+        if (!disposed) {
+          xterm.writeln(`\r\n[Terminal error: ${e}]`);
+        }
       }
     };
 
     setup();
 
     const resizeObserver = new ResizeObserver(() => {
-      fitAddon.fit();
-      invoke("resize_pty", { id, cols: xterm.cols, rows: xterm.rows }).catch(() => {});
+      if (!disposed) {
+        fitAddon.fit();
+        invoke("resize_pty", { id, cols: xterm.cols, rows: xterm.rows }).catch(() => {});
+      }
     });
     resizeObserver.observe(containerRef.current);
 
     return () => {
+      disposed = true;
       resizeObserver.disconnect();
-      unlisten?.();
+      unlistenFn?.();
       xterm.dispose();
       invoke("kill_pty", { id }).catch(() => {});
     };

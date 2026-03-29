@@ -12,14 +12,23 @@ export function useFileWatcher(
   useEffect(() => {
     if (!filePath) return;
 
-    let unlisten: (() => void) | null = null;
+    let cancelled = false;
+    let unlistenFn: (() => void) | null = null;
 
     const setup = async () => {
       try {
         await invoke("watch_file", { filePath });
-        unlisten = await listen<string>("file-changed", (event) => {
-          callbackRef.current(event.payload);
+        if (cancelled) return;
+        const fn = await listen<string>("file-changed", (event) => {
+          if (!cancelled) {
+            callbackRef.current(event.payload);
+          }
         });
+        if (cancelled) {
+          fn();
+        } else {
+          unlistenFn = fn;
+        }
       } catch (e) {
         console.error("File watcher setup failed:", e);
       }
@@ -28,7 +37,8 @@ export function useFileWatcher(
     setup();
 
     return () => {
-      unlisten?.();
+      cancelled = true;
+      unlistenFn?.();
       invoke("unwatch_file").catch(() => {});
     };
   }, [filePath]);

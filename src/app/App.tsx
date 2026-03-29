@@ -254,11 +254,13 @@ export function App() {
     setFolderPath(activeFolderPath);
   }, [activeFolderPath, setFolderPath]);
 
-  // Prefetch git state on folder change (prepare before opening source control tab)
+  // Prefetch git state on folder change (deferred to avoid render storm)
   useEffect(() => {
-    if (activeFolderPath) {
+    if (!activeFolderPath) return;
+    const timer = setTimeout(() => {
       useGitStore.getState().refresh(activeFolderPath);
-    }
+    }, 300);
+    return () => clearTimeout(timer);
   }, [activeFolderPath]);
 
   // Open folder
