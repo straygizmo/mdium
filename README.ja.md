@@ -1,8 +1,53 @@
 # MDium
 
-React、TypeScript、Tauri で構築された、多機能ドキュメントエディタ＆ワークスペース管理アプリケーション。
+**AI 時代のための、Markdown 中心のドキュメント基盤。**
 
-Markdown 編集、AI アシスタント、マインドマップ、Office ドキュメント対応、開発者ツールを一つのデスクトップアプリに統合しています。
+MDium は、AI にとって最も自然なフォーマットである Markdown をあらゆるドキュメントワークフローの中心に据えるべきだという考えに基づいて構築されています。従来の Office ドキュメント（Word、Excel、PDF）を Markdown に変換し、その上にリッチな編集機能を提供することで、ドキュメント編集の第一選択肢となり、日常業務の中核ツールとなることを目指しています。
+
+また、Markdown を DOCX、PDF などのフォーマットに再変換することで、既存のワークフローとのシームレスな相互運用を実現します。
+
+各ワークスペースフォルダは独自の opencode-sdk インスタンスを実行し、従来の RAG（検索拡張生成）だけでなく、**Agentic RAG** — フォルダ内のすべてのデータを読み取り、推論し、参照して、プロジェクトの知識に基づいたドキュメントを生成する AI エージェント — も可能にします。
+
+```mermaid
+graph LR
+    subgraph 入力["入力"]
+        W_IN[Word .docx]
+        E_IN[Excel .xlsx]
+        P_IN[PDF .pdf]
+        X_IN[XMind .xmind]
+    end
+
+    subgraph "AIサポート<br/>(opencode-sdk)"
+        F_CHAT[Agentic RAG]
+        F_MCP[MCP]
+        F_SKL[Skills]
+    end
+
+    R[RAG]
+    V_IN["音声認識"]
+    M((MDium))
+
+    subgraph 出力["出力"]
+        W_OUT[Word .docx]
+        P_OUT[PDF .pdf]
+        S_OUT["PowerPoint .pptx<br/>(Slidev)"]
+        K_OUT["MindMap .km<br/>(KityMinder)"]
+    end
+
+    F_CHAT <--> M
+    F_MCP<--> M
+    F_SKL<--> M
+    R <--> M
+    W_IN --> M
+    E_IN --> M
+    P_IN --> M
+    X_IN --> M
+    M --> W_OUT
+    M --> P_OUT
+    M --> S_OUT
+    M --> K_OUT
+    V_IN --> M
+```
 
 [English README](README.md)
 

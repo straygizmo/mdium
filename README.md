@@ -1,8 +1,53 @@
 # MDium
 
-A modern, feature-rich document editor and workspace manager built with React, TypeScript, and Tauri.
+**A Markdown-centric document foundation designed for the AI era.**
 
-MDium combines Markdown editing, AI assistance, mindmap visualization, office document support, and developer tools into a single desktop application.
+MDium is built on the premise that Markdown — the format most naturally understood by AI — should be at the heart of every document workflow. By converting traditional Office documents (Word, Excel, PDF) into Markdown and providing rich editing capabilities on top of it, MDium aims to become the first choice for document editing and the central tool in day-to-day business operations.
+
+It also converts Markdown back to DOCX, PDF, and other formats, ensuring seamless interoperability with existing workflows.
+
+Each workspace folder runs its own opencode-sdk instance, enabling not only conventional RAG (Retrieval-Augmented Generation) but also **Agentic RAG** — an AI agent that reads, reasons over, and references all data within a folder to generate documents contextually grounded in your project's knowledge.
+
+```mermaid
+graph LR
+    subgraph Input
+        W_IN[Word .docx]
+        E_IN[Excel .xlsx]
+        P_IN[PDF .pdf]
+        X_IN[XMind .xmind]
+    end
+
+    subgraph "AI support<br/>(opencode-sdk)"
+        F_CHAT[Agentic RAG]
+        F_MCP[MCP]
+        F_SKL[Skills]
+    end
+
+    R[RAG]
+    V_IN[Voice recognition]
+    M((MDium))
+
+    subgraph Output
+        W_OUT[Word .docx]
+        P_OUT[PDF .pdf]
+        S_OUT["PowerPoint .pptx<br/>(Slidev)"]
+        K_OUT["MindMap .km<br/>(KityMinder)"]
+    end
+
+    F_CHAT <--> M
+    F_MCP<--> M
+    F_SKL<--> M
+    R <--> M
+    W_IN --> M
+    E_IN --> M
+    P_IN --> M
+    X_IN --> M
+    M --> W_OUT
+    M --> P_OUT
+    M --> S_OUT
+    M --> K_OUT
+    V_IN --> M
+```
 
 [日本語版 README](README.ja.md)
 
