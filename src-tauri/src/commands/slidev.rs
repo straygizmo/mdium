@@ -54,6 +54,25 @@ fn extract_theme(markdown: &str) -> Option<String> {
     None
 }
 
+/// Recursively copy a directory
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<(), String> {
+    fs::create_dir_all(dst)
+        .map_err(|e| format!("Failed to create dir {}: {}", dst.display(), e))?;
+    for entry in fs::read_dir(src)
+        .map_err(|e| format!("Failed to read dir {}: {}", src.display(), e))?
+    {
+        let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+        let dest_path = dst.join(entry.file_name());
+        if entry.path().is_dir() {
+            copy_dir_recursive(&entry.path(), &dest_path)?;
+        } else {
+            fs::copy(entry.path(), &dest_path)
+                .map_err(|e| format!("Failed to copy file: {}", e))?;
+        }
+    }
+    Ok(())
+}
+
 /// Kill a process by PID (platform-specific)
 fn kill_process(pid: u32) -> Result<(), String> {
     #[cfg(target_os = "windows")]
@@ -144,6 +163,33 @@ pub async fn slidev_start(
     let slides_path = temp_dir.join("slides.md");
     fs::write(&slides_path, &markdown)
         .map_err(|e| format!("Failed to write slides.md: {}", e))?;
+
+    // Copy asset files (images, etc.) from source directory to temp directory
+    if let Some(source_dir) = PathBuf::from(&file_path).parent() {
+        if source_dir.is_dir() {
+            if let Ok(entries) = fs::read_dir(source_dir) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    // Skip markdown files, node_modules, and hidden entries
+                    if name.ends_with(".md")
+                        || name == "node_modules"
+                        || name.starts_with('.')
+                    {
+                        continue;
+                    }
+                    let dest = temp_dir.join(&name);
+                    if dest.exists() {
+                        continue; // don't overwrite existing (e.g. public/)
+                    }
+                    if entry.path().is_dir() {
+                        let _ = copy_dir_recursive(&entry.path(), &dest);
+                    } else {
+                        let _ = fs::copy(entry.path(), &dest);
+                    }
+                }
+            }
+        }
+    }
 
     // Extract theme name from frontmatter (default: "default")
     let theme = extract_theme(&markdown).unwrap_or_else(|| "default".to_string());
