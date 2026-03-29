@@ -68,8 +68,19 @@ export async function xlsxToMarkdown(
     }
   }
 
+  // ── Rewrite image paths in markdown ────────────────────────────────────
+  // xlsx2md emits relative paths like "assets/Sheet1/image1.png" in the
+  // markdown, but we save assets under "{baseName}_images/". Rewrite so
+  // the references resolve relative to the .md file.
+  let markdown = combined.content;
+  for (const entry of assetEntries) {
+    const originalPath = entry.name.replace(/^output\//, "");
+    const rewrittenPath = `${baseName}_images/${originalPath}`;
+    markdown = markdown.split(originalPath).join(rewrittenPath);
+  }
+
   // ── Save markdown ────────────────────────────────────────────────────────
-  await writeTextFile(mdPath, combined.content);
+  await writeTextFile(mdPath, markdown);
 
   return { mdPath };
 }
