@@ -28,6 +28,9 @@ coverage/
 # Claude
 .claude
 
+# Vendoring temp
+.vendor-tmp/
+
 # Worktrees
 .worktrees/
 

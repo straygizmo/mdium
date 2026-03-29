@@ -10,7 +10,8 @@
     "tauri": "tauri",
     "test": "vitest run",
     "test:watch": "vitest",
-    "postinstall": "echo postinstall done"
+    "postinstall": "echo postinstall done",
+    "vendor:xlsx2md": "node scripts/vendor-xlsx2md.mjs"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.8.1",
