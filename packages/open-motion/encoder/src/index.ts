@@ -1,0 +1,217 @@
+import ffmpeg from 'fluent-ffmpeg';
+import path from 'path';
+import fs from 'fs';
+
+export interface AudioAsset {
+  src: string;
+  startFrame: number;
+  startFrom?: number;
+  volume?: number;
+  isBgm?: boolean;
+}
+
+export interface EncodeOptions {
+  framesDir: string;
+  fps: number;
+  outputFile: string;
+  audioAssets?: AudioAsset[];
+  durationInFrames?: number;
+  onProgress?: (percent: number) => void;
+}
+
+export interface EncodeGifOptions {
+  framesDir: string;
+  fps: number;
+  outputFile: string;
+  width?: number;
+  height?: number;
+  onProgress?: (percent: number) => void;
+}
+
+export const encodeGif = ({ framesDir, fps, outputFile, width, height, onProgress }: EncodeGifOptions) => {
+  // Verify frames exist
+  const files = fs.readdirSync(framesDir).filter(f => f.startsWith('frame-') && f.endsWith('.png'));
+  if (files.length === 0) {
+    throw new Error(`No frames found in ${framesDir}`);
+  }
+
+  return new Promise((resolve, reject) => {
+    const command = ffmpeg()
+      .input(path.join(framesDir, 'frame-%05d.png'))
+      .inputFPS(fps);
+
+    // Scale if dimensions are provided
+    const filters: string[] = [];
+    if (width && height) {
+      filters.push(`scale=${width}:${height}:flags=lanczos`);
+    }
+
+    // Optimize GIF with palette generation for better quality
+    if (filters.length > 0) {
+      command.videoFilters(filters);
+    }
+
+    command
+      .outputOptions([
+        '-f gif',
+        '-loop 0',  // Infinite loop
+        '-pix_fmt rgb24'
+      ])
+      .on('start', (cmd) => {
+        // console.log('FFmpeg GIF encoding started with command:', cmd)
+      })
+      .on('progress', (progress) => {
+        if (progress.percent && onProgress) {
+          onProgress(progress.percent);
+        }
+      })
+      .on('end', () => {
+        // console.log('GIF encoding finished.');
+        resolve(outputFile);
+      })
+      .on('error', (err) => {
+        console.error('FFmpeg GIF encoding error:', err);
+        reject(err);
+      })
+      .save(outputFile);
+  });
+};
+
+export const encodeWebP = ({ framesDir, fps, outputFile, width, height, onProgress }: EncodeGifOptions) => {
+  // Verify frames exist
+  const files = fs.readdirSync(framesDir).filter(f => f.startsWith('frame-') && f.endsWith('.png'));
+  if (files.length === 0) {
+    throw new Error(`No frames found in ${framesDir}`);
+  }
+
+  return new Promise((resolve, reject) => {
+    const command = ffmpeg()
+      .input(path.join(framesDir, 'frame-%05d.png'))
+      .inputFPS(fps);
+
+    // Scale if dimensions are provided
+    const filters: string[] = [];
+    if (width && height) {
+      filters.push(`scale=${width}:${height}`);
+    }
+
+    if (filters.length > 0) {
+      command.videoFilters(filters);
+    }
+
+    command
+      .outputOptions([
+        '-c:v libwebp',
+        '-lossless 0',
+        '-compression_level 4',
+        '-q:v 80',
+        '-loop 0',
+        '-preset default',
+        '-an',
+        '-vsync 0'
+      ])
+      .on('start', (cmd) => {
+        // console.log('FFmpeg WebP encoding started with command:', cmd)
+      })
+      .on('progress', (progress) => {
+        if (progress.percent && onProgress) {
+          onProgress(progress.percent);
+        }
+      })
+      .on('end', () => {
+        // console.log('WebP encoding finished.');
+        resolve(outputFile);
+      })
+      .on('error', (err) => {
+        console.error('FFmpeg WebP encoding error:', err);
+        reject(err);
+      })
+      .save(outputFile);
+  });
+};
+
+export const encodeVideo = ({ framesDir, fps, outputFile, audioAssets = [], durationInFrames, onProgress }: EncodeOptions) => {
+  // Verify frames exist
+  const files = fs.readdirSync(framesDir).filter(f => f.startsWith('frame-') && f.endsWith('.png'));
+  if (files.length === 0) {
+    throw new Error(`No frames found in ${framesDir}`);
+  }
+  // console.log(`Found ${files.length} frames for encoding.`);
+
+  return new Promise((resolve, reject) => {
+    const command = ffmpeg()
+      .input(path.join(framesDir, 'frame-%05d.png'))
+      .inputFPS(fps);
+
+    // Add audio inputs
+    audioAssets.forEach(asset => {
+      command.input(asset.src);
+
+      // For render-time BGM we loop the input so short tracks cover the full video.
+      // This is an input option and must be applied to the corresponding input.
+      if (asset.isBgm) {
+        command.inputOptions(['-stream_loop -1']);
+      }
+    });
+
+    const videoOptions = [
+      '-c:v libx264',
+      '-pix_fmt yuv420p',
+      '-crf 18'
+    ];
+
+    if (audioAssets.length > 0) {
+      const durationSec = durationInFrames ? (durationInFrames / fps) : undefined;
+
+      const filters = audioAssets.map((asset, i) => {
+        const delayMs = Math.round((asset.startFrame / fps) * 1000);
+        const startFromSec = (asset.startFrom || 0) / fps;
+        const volume = asset.volume ?? 1;
+
+        // Use a more robust filter chain for each audio input
+        if (asset.isBgm) {
+          const delay = delayMs > 0 ? `,adelay=${delayMs}|${delayMs}` : '';
+          const trimEnd = durationSec != null ? `,atrim=end=${durationSec}` : '';
+          return `[${i + 1}:a]atrim=start=${startFromSec},asetpts=PTS-STARTPTS${delay}${trimEnd},volume=${volume}[a${i}]`;
+        }
+
+        return `[${i + 1}:a]atrim=start=${startFromSec},asetpts=PTS-STARTPTS,adelay=${delayMs}|${delayMs},volume=${volume}[a${i}]`;
+      });
+
+      const mixInput = audioAssets.map((_, i) => `[a${i}]`).join('');
+      // Use dropout_transition=1000 to ensure audio doesn't cut off abruptly
+      filters.push(`${mixInput}amix=inputs=${audioAssets.length}:duration=longest:dropout_transition=1000[a]`);
+
+      command.complexFilter(filters);
+      command.outputOptions([
+        ...videoOptions,
+        '-map 0:v',
+        '-map [a]',
+        '-c:a libvorbis',
+        '-b:a 192k',
+        '-ac 2',
+      ]);
+    } else {
+      command.outputOptions(videoOptions);
+    }
+
+    command
+      .on('start', (cmd) => {
+        // console.log('FFmpeg started with command:', cmd)
+      })
+      .on('progress', (progress) => {
+        if (progress.percent && onProgress) {
+          onProgress(progress.percent);
+        }
+      })
+      .on('end', () => {
+        // console.log('Encoding finished.');
+        resolve(outputFile);
+      })
+      .on('error', (err) => {
+        console.error('FFmpeg error:', err);
+        reject(err);
+      })
+      .save(outputFile);
+  });
+};

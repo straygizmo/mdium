@@ -14,6 +14,8 @@
     "vendor:xlsx2md": "node scripts/vendor-xlsx2md.mjs"
   },
   "dependencies": {
+    "@open-motion/core": "file:packages/open-motion/core",
+    "@open-motion/components": "file:packages/open-motion/components",
     "@huggingface/transformers": "^3.8.1",
     "@opencode-ai/sdk": "^1.2.27",
     "@tauri-apps/api": "^2.10.1",
