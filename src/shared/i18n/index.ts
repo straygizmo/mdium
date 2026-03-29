@@ -20,6 +20,9 @@ import enImageEditor from "./locales/en/image-editor.json";
 import jaGit from "./locales/ja/git.json";
 import enGit from "./locales/en/git.json";
 
+import jaVideo from "./locales/ja/video.json";
+import enVideo from "./locales/en/video.json";
+
 const savedLanguage = localStorage.getItem("mdium-lang") ?? "ja";
 
 i18n.use(initReactI18next).init({
@@ -33,6 +36,7 @@ i18n.use(initReactI18next).init({
       "opencode-config": jaOpencodeConfig,
       imageEditor: jaImageEditor,
       git: jaGit,
+      video: jaVideo,
     },
     en: {
       common: enCommon,
@@ -43,6 +47,7 @@ i18n.use(initReactI18next).init({
       "opencode-config": enOpencodeConfig,
       imageEditor: enImageEditor,
       git: enGit,
+      video: enVideo,
     },
   },
   lng: savedLanguage,
