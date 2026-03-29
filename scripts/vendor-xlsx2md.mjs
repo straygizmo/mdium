@@ -143,5 +143,10 @@ try {
   console.log("Done.");
 } catch (err) {
   console.error("vendor-xlsx2md failed:", err);
+  try {
+    rmSync(join(ROOT, ".vendor-tmp"), { recursive: true, force: true });
+  } catch {
+    // ignore cleanup errors
+  }
   process.exit(1);
 }
