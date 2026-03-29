@@ -9,3 +9,4 @@ pub mod pty;
 pub mod rag;
 pub mod slidev;
 pub mod speech;
+pub mod video;
