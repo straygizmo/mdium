@@ -1,9 +1,60 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
+
+/// Strip the Windows extended-length path prefix (`\\?\`) if present.
+fn strip_win_prefix(p: &std::path::Path) -> String {
+    let s = p.to_string_lossy();
+    s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
+}
+
+/// Return the resolved path to the bundled `mcp-servers` directory.
+/// Checks production paths first, then falls back to the dev source tree.
+#[tauri::command]
+pub fn resolve_mcp_servers_path(app: tauri::AppHandle) -> Result<String, String> {
+    use tauri::Manager;
+    let resource_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|e| format!("Failed to get resource dir: {}", e))?;
+
+    // Production bundle (Tauri copies ../resources/… into _up_/resources/…)
+    let prod_path = resource_dir
+        .join("_up_")
+        .join("resources")
+        .join("mcp-servers");
+    if prod_path.exists() {
+        return Ok(strip_win_prefix(&prod_path));
+    }
+
+    // Alternative production layout (flat)
+    let flat_path = resource_dir.join("mcp-servers");
+    if flat_path.exists() {
+        return Ok(strip_win_prefix(&flat_path));
+    }
+
+    // Dev mode: project-root/resources/mcp-servers
+    let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("resources")
+        .join("mcp-servers");
+    if dev_path.exists() {
+        return Ok(strip_win_prefix(&dev_path));
+    }
+
+    Err(format!(
+        "MCP servers directory not found. Checked:\n  {}\n  {}\n  {}",
+        prod_path.display(),
+        flat_path.display(),
+        dev_path.display()
+    ))
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct McpToolInfo {
@@ -16,6 +67,18 @@ pub struct McpTestResult {
     pub success: bool,
     pub tools: Vec<McpToolInfo>,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct McpToolContent {
+    #[serde(rename = "type")]
+    pub content_type: String,
+    pub text: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct McpCallToolResult {
+    pub content: Vec<McpToolContent>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -96,7 +159,7 @@ async fn mcp_test_local(
             .envs(&env)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            .stderr(Stdio::piped());
         #[cfg(target_os = "windows")]
         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
         let mut child = cmd.spawn()
@@ -104,7 +167,20 @@ async fn mcp_test_local(
 
         let stdin = child.stdin.as_mut().ok_or("Failed to open stdin")?;
         let stdout = child.stdout.take().ok_or("Failed to open stdout")?;
+        let stderr = child.stderr.take();
         let mut reader = BufReader::new(stdout);
+
+        // Helper: collect stderr output for error diagnostics
+        let collect_stderr = |stderr: Option<std::process::ChildStderr>| -> String {
+            stderr
+                .and_then(|s| {
+                    let mut buf = String::new();
+                    std::io::Read::read_to_string(&mut BufReader::new(s), &mut buf).ok();
+                    let msg = buf.trim().to_string();
+                    if msg.is_empty() { None } else { Some(msg) }
+                })
+                .unwrap_or_default()
+        };
 
         // Send initialize request
         let init_req = JsonRpcRequest {
@@ -121,7 +197,15 @@ async fn mcp_test_local(
         writeln!(stdin, "{}", init_json).map_err(|e| format!("Failed to write to stdin: {}", e))?;
 
         // Read initialize response
-        let init_resp = read_jsonrpc_response(&mut reader)?;
+        let init_resp = match read_jsonrpc_response(&mut reader) {
+            Ok(resp) => resp,
+            Err(e) => {
+                let stderr_msg = collect_stderr(stderr);
+                let _ = child.kill();
+                let detail = if stderr_msg.is_empty() { e } else { format!("{} (stderr: {})", e, stderr_msg) };
+                return Ok(McpTestResult { success: false, tools: vec![], error: Some(detail) });
+            }
+        };
         if let Some(err) = init_resp.error {
             let _ = child.kill();
             return Ok(McpTestResult {
@@ -151,7 +235,15 @@ async fn mcp_test_local(
             .map_err(|e| format!("Failed to write to stdin: {}", e))?;
 
         // Read tools/list response
-        let tools_resp = read_jsonrpc_response(&mut reader)?;
+        let tools_resp = match read_jsonrpc_response(&mut reader) {
+            Ok(resp) => resp,
+            Err(e) => {
+                let stderr_msg = collect_stderr(stderr);
+                let _ = child.kill();
+                let detail = if stderr_msg.is_empty() { e } else { format!("{} (stderr: {})", e, stderr_msg) };
+                return Ok(McpTestResult { success: false, tools: vec![], error: Some(detail) });
+            }
+        };
         let _ = child.kill();
 
         if let Some(err) = tools_resp.error {
@@ -268,24 +360,153 @@ async fn mcp_test_remote(
     })
 }
 
-fn read_jsonrpc_response(reader: &mut BufReader<std::process::ChildStdout>) -> Result<JsonRpcResponse, String> {
-    // Read lines until we get a valid JSON-RPC response (skip notifications)
+fn read_jsonrpc_response_with_timeout(
+    reader: &mut BufReader<std::process::ChildStdout>,
+    timeout_secs: u64,
+) -> Result<JsonRpcResponse, String> {
+    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
     loop {
+        if Instant::now() > deadline {
+            return Err("Timeout waiting for MCP server response".to_string());
+        }
         let mut line = String::new();
-        reader
+        let bytes_read = reader
             .read_line(&mut line)
             .map_err(|e| format!("Failed to read from stdout: {}", e))?;
+        if bytes_read == 0 {
+            return Err("MCP server process exited before sending a response".to_string());
+        }
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
         if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(line) {
-            // Only return if it has an id (skip notifications)
             if resp.id.is_some() {
                 return Ok(resp);
             }
         }
     }
+}
+
+fn read_jsonrpc_response(reader: &mut BufReader<std::process::ChildStdout>) -> Result<JsonRpcResponse, String> {
+    read_jsonrpc_response_with_timeout(reader, 15)
+}
+
+/// Call a tool on a local MCP server via stdio JSON-RPC.
+#[tauri::command]
+pub async fn mcp_call_tool(
+    command: String,
+    args: Vec<String>,
+    env: HashMap<String, String>,
+    tool_name: String,
+    tool_args: serde_json::Value,
+) -> Result<McpCallToolResult, String> {
+    let env = resolve_env_map(env);
+    tokio::task::spawn_blocking(move || {
+        let mut cmd = Command::new(&command);
+        cmd.args(&args)
+            .envs(&env)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(0x08000000);
+        let mut child = cmd.spawn()
+            .map_err(|e| format!("Failed to spawn MCP server: {}", e))?;
+
+        let stdin = child.stdin.as_mut().ok_or("Failed to open stdin")?;
+        let stdout = child.stdout.take().ok_or("Failed to open stdout")?;
+        let stderr = child.stderr.take();
+        let mut reader = BufReader::new(stdout);
+
+        let collect_stderr = |stderr: Option<std::process::ChildStderr>| -> String {
+            stderr
+                .and_then(|s| {
+                    let mut buf = String::new();
+                    std::io::Read::read_to_string(&mut BufReader::new(s), &mut buf).ok();
+                    let msg = buf.trim().to_string();
+                    if msg.is_empty() { None } else { Some(msg) }
+                })
+                .unwrap_or_default()
+        };
+
+        // Initialize
+        let init_req = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: 1,
+            method: "initialize".to_string(),
+            params: Some(serde_json::json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": { "name": "mdium", "version": "0.1.0" }
+            })),
+        };
+        writeln!(stdin, "{}", serde_json::to_string(&init_req).unwrap())
+            .map_err(|e| format!("Failed to write to stdin: {}", e))?;
+
+        match read_jsonrpc_response(&mut reader) {
+            Ok(resp) => {
+                if let Some(err) = resp.error {
+                    let _ = child.kill();
+                    return Err(format!("Initialize error: {}", err));
+                }
+            }
+            Err(e) => {
+                let stderr_msg = collect_stderr(stderr);
+                let _ = child.kill();
+                return Err(if stderr_msg.is_empty() { e } else { format!("{} (stderr: {})", e, stderr_msg) });
+            }
+        }
+
+        // Initialized notification
+        let notif = serde_json::json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
+        writeln!(stdin, "{}", serde_json::to_string(&notif).unwrap())
+            .map_err(|e| format!("Failed to write to stdin: {}", e))?;
+
+        // Call tool
+        let call_req = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: 2,
+            method: "tools/call".to_string(),
+            params: Some(serde_json::json!({
+                "name": tool_name,
+                "arguments": tool_args,
+            })),
+        };
+        writeln!(stdin, "{}", serde_json::to_string(&call_req).unwrap())
+            .map_err(|e| format!("Failed to write to stdin: {}", e))?;
+
+        // Read tool result (longer timeout for image generation)
+        let call_resp = match read_jsonrpc_response_with_timeout(&mut reader, 120) {
+            Ok(resp) => resp,
+            Err(e) => {
+                let stderr_msg = collect_stderr(stderr);
+                let _ = child.kill();
+                return Err(if stderr_msg.is_empty() { e } else { format!("{} (stderr: {})", e, stderr_msg) });
+            }
+        };
+        let _ = child.kill();
+
+        if let Some(err) = call_resp.error {
+            return Err(format!("Tool call error: {}", err));
+        }
+
+        // Parse content array from result
+        let result = call_resp.result.ok_or("No result in tool call response")?;
+        let content_arr = result.get("content")
+            .and_then(|v| v.as_array())
+            .ok_or("No content array in tool result")?;
+
+        let content: Vec<McpToolContent> = content_arr.iter().filter_map(|c| {
+            let t = c.get("type")?.as_str()?.to_string();
+            let text = c.get("text")?.as_str()?.to_string();
+            Some(McpToolContent { content_type: t, text })
+        }).collect();
+
+        Ok(McpCallToolResult { content })
+    })
+    .await
+    .map_err(|e| format!("Task failed: {}", e))?
 }
 
 fn parse_tools(result: Option<serde_json::Value>) -> Vec<McpToolInfo> {

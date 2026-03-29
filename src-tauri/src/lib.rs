@@ -188,7 +188,9 @@ pub fn run() {
             // Image generation
             commands::image_gen::gemini_generate_image,
             // MCP operations
+            commands::mcp::resolve_mcp_servers_path,
             commands::mcp::mcp_test_server,
+            commands::mcp::mcp_call_tool,
             // Environment variable operations
             commands::env::get_env_var,
             commands::env::set_env_var,
