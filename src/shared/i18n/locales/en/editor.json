@@ -144,5 +144,10 @@
   "mindmap.layoutRight": "Right",
   "mindmap.layoutMind": "Left-Right",
   "mindmap.layoutBottom": "Bottom",
-  "mindmap.layoutFiletree": "File Tree"
+  "mindmap.layoutFiletree": "File Tree",
+  "contextMenu.imageFromMcp": "Generate with MCP Server",
+  "genMcpImageTitle": "Generate Image (MCP Server)",
+  "genMcpImageServer": "MCP Server",
+  "genMcpImageScanning": "Scanning MCP servers...",
+  "genMcpImageNoServers": "No MCP servers with generate_image tool found"
 }

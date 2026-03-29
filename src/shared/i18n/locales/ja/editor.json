@@ -144,5 +144,10 @@
   "mindmap.layoutRight": "右展開",
   "mindmap.layoutMind": "左右展開",
   "mindmap.layoutBottom": "下展開",
-  "mindmap.layoutFiletree": "ファイルツリー"
+  "mindmap.layoutFiletree": "ファイルツリー",
+  "contextMenu.imageFromMcp": "MCPサーバーで生成",
+  "genMcpImageTitle": "画像生成 (MCPサーバー)",
+  "genMcpImageServer": "MCPサーバー",
+  "genMcpImageScanning": "MCPサーバーをスキャン中...",
+  "genMcpImageNoServers": "generate_imageツールを持つMCPサーバーが見つかりません"
 }
