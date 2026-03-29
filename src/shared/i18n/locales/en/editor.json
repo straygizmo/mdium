@@ -149,5 +149,11 @@
   "genMcpImageTitle": "Generate Image (MCP Server)",
   "genMcpImageServer": "MCP Server",
   "genMcpImageScanning": "Scanning MCP servers...",
-  "genMcpImageNoServers": "No MCP servers with generate_image tool found"
+  "genMcpImageNoServers": "No MCP servers with generate_image tool found",
+  "externalChangeTitle": "File Changed Externally",
+  "externalChangeMessage": "\"{{fileName}}\" has been modified by another program. You have unsaved changes.",
+  "externalChangeAccept": "Load External Changes",
+  "externalChangeShowDiff": "Show Diff",
+  "externalChangeHideDiff": "Hide Diff",
+  "externalChangeKeep": "Keep My Changes"
 }

@@ -149,5 +149,11 @@
   "genMcpImageTitle": "画像生成 (MCPサーバー)",
   "genMcpImageServer": "MCPサーバー",
   "genMcpImageScanning": "MCPサーバーをスキャン中...",
-  "genMcpImageNoServers": "generate_imageツールを持つMCPサーバーが見つかりません"
+  "genMcpImageNoServers": "generate_imageツールを持つMCPサーバーが見つかりません",
+  "externalChangeTitle": "ファイルが外部で変更されました",
+  "externalChangeMessage": "「{{fileName}}」が外部プログラムによって変更されました。未保存の変更があります。",
+  "externalChangeAccept": "外部の変更を取り込む",
+  "externalChangeShowDiff": "差分を確認",
+  "externalChangeHideDiff": "差分を閉じる",
+  "externalChangeKeep": "自分の編集を維持"
 }
