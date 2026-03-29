@@ -28,6 +28,7 @@ import { Terminal } from "@/features/terminal/components/Terminal";
 import { RagPanel } from "@/features/rag/components/RagPanel";
 import MindmapEditor from "@/features/mindmap/components/MindmapEditor";
 import { ImageCanvas } from "@/features/image/components/ImageCanvas";
+import { ExternalChangeDialog } from "@/features/editor/components/ExternalChangeDialog";
 import type { ImageCanvasHandle } from "@/features/image/components/ImageCanvas";
 import type { MindmapEditorHandle } from "@/features/mindmap/components/MindmapEditor";
 import type { KityMinderJson } from "@/features/mindmap/lib/types";
@@ -72,6 +73,13 @@ export function App() {
   const imageCanvasRef = useRef<ImageCanvasHandle>(null);
   const editorAreaRef = useRef<HTMLDivElement>(null);
 
+  const [externalChange, setExternalChange] = useState<{
+    tabId: string;
+    filePath: string;
+    currentContent: string;
+    externalContent: string;
+  } | null>(null);
+
   useScrollSync(editorRef, previewRef, editorVisible, activeTab?.id ?? "");
   const handleEditorDividerMouseDown = useDividerDrag(editorAreaRef, editorRatio, setEditorRatio);
 
@@ -80,7 +88,16 @@ export function App() {
     if (!activeTab || activeTab.filePath !== changedPath) return;
     try {
       const newContent = await invoke<string>("read_text_file", { path: changedPath });
-      if (newContent !== activeTab.content) {
+      if (newContent === activeTab.content) return;
+
+      if (activeTab.dirty) {
+        setExternalChange({
+          tabId: activeTab.id,
+          filePath: changedPath,
+          currentContent: activeTab.content,
+          externalContent: newContent,
+        });
+      } else {
         useTabStore.getState().updateTabContent(activeTab.id, newContent);
       }
     } catch (e) {
@@ -1146,6 +1163,22 @@ export function App() {
         }}
         onSaveFilterVisibility={handleSaveFilterVisibility}
       />
+        {externalChange && (
+          <ExternalChangeDialog
+            filePath={externalChange.filePath}
+            currentContent={externalChange.currentContent}
+            externalContent={externalChange.externalContent}
+            onAcceptExternal={() => {
+              useTabStore.getState().updateTabContent(
+                externalChange.tabId,
+                externalChange.externalContent,
+              );
+              setExternalChange(null);
+            }}
+            onKeepCurrent={() => setExternalChange(null)}
+            onClose={() => setExternalChange(null)}
+          />
+        )}
     </div>
   );
 }
