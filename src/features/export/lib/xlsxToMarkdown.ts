@@ -21,7 +21,7 @@ export async function xlsxToMarkdown(
   const dir = xlsxPath.replace(/[\\/][^\\/]*$/, "");
   const baseName = xlsxPath
     .replace(/^.*[\\/]/, "")
-    .replace(/\.xlsx?m?$/i, "");
+    .replace(/\.(?:xlsx|xlsm)$/i, "");
   const imagesDir = `${dir}/${baseName}_images`;
   const mdPath = `${dir}/${baseName}.md`;
 
@@ -54,11 +54,17 @@ export async function xlsxToMarkdown(
     await mkdir(imagesDir, { recursive: true });
 
     for (const entry of assetEntries) {
-      // Strip the "output/" prefix and extract the filename
-      const fileName = entry.name
-        .replace(/^output\//, "")
-        .replace(/^.*[\\/]/, "");
-      await writeFile(`${imagesDir}/${fileName}`, entry.data);
+      // Strip the "output/" prefix, preserve subdirectory structure
+      const relativePath = entry.name.replace(/^output\//, "");
+      const targetPath = `${imagesDir}/${relativePath}`;
+
+      // Create subdirectories if needed (e.g. images/, shapes/)
+      const targetDir = targetPath.replace(/[\\/][^\\/]*$/, "");
+      if (targetDir !== imagesDir) {
+        await mkdir(targetDir, { recursive: true });
+      }
+
+      await writeFile(targetPath, entry.data);
     }
   }
 
