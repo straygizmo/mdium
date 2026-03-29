@@ -640,6 +640,9 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   const isOfficeFile = !!(activeTab?.binaryData && activeTab?.officeFileType);
   const isDocx = activeTab?.filePath?.toLowerCase().endsWith(".docx");
   const isPdf = activeTab?.filePath?.toLowerCase().endsWith(".pdf");
+  const isXlsx =
+    activeTab?.filePath?.toLowerCase().endsWith(".xlsx") ||
+    activeTab?.filePath?.toLowerCase().endsWith(".xlsm");
 
   const handleConvertToMarkdown = useCallback(async () => {
     if (!activeTab?.binaryData || !activeTab?.filePath) return;
@@ -650,6 +653,17 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
       if (activeTab.filePath.toLowerCase().endsWith(".pdf")) {
         const { pdfToMarkdown } = await import("@/features/export/lib/pdfToMarkdown");
         ({ mdPath } = await pdfToMarkdown(activeTab.binaryData, activeTab.filePath));
+      } else if (
+        activeTab.filePath.toLowerCase().endsWith(".xlsx") ||
+        activeTab.filePath.toLowerCase().endsWith(".xlsm")
+      ) {
+        const { xlsxToMarkdown } = await import(
+          "@/features/export/lib/xlsxToMarkdown"
+        );
+        ({ mdPath } = await xlsxToMarkdown(
+          activeTab.binaryData,
+          activeTab.filePath,
+        ));
       } else {
         ({ mdPath } = await docxToMarkdown(activeTab.binaryData, activeTab.filePath));
       }
@@ -666,7 +680,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   if (isOfficeFile) {
     return (
       <div className="preview-panel">
-        {(isDocx || isPdf) && (
+        {(isDocx || isPdf || isXlsx) && (
           <div className="preview-panel__convert-bar">
             <button
               onClick={handleConvertToMarkdown}
