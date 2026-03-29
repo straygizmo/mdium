@@ -1,5 +1,7 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useTranslation } from "react-i18next";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useVideoStore } from "@/stores/video-store";
 import { useUiStore } from "@/stores/ui-store";
 import { useVideoGeneration } from "../hooks/useVideoGeneration";
@@ -41,11 +43,45 @@ export function VideoPanel() {
     setActiveViewTab("preview");
   }, [setIsVideoMode, setActiveViewTab]);
 
+  const setRenderProgress = useVideoStore((s) => s.setRenderProgress);
+
+  // Listen for render progress events from Rust backend
+  useEffect(() => {
+    const unlisten = listen<{ phase?: string; percent?: number; message?: string }>(
+      "video-progress",
+      (event) => {
+        const { percent } = event.payload;
+        if (typeof percent === "number") {
+          setRenderProgress(percent);
+        }
+      },
+    );
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [setRenderProgress]);
+
   const handleExport = useCallback(
-    (options: ExportOptions) => {
-      console.log("Export requested:", options);
+    async (options: ExportOptions) => {
+      if (!videoProject) return;
+      setRenderProgress(0);
+      try {
+        const projectJson = JSON.stringify(videoProject);
+        await invoke<string>("video_export", {
+          projectJson,
+          outputPath: options.outputPath,
+          fps: options.fps,
+          concurrency: options.concurrency,
+          format: options.format,
+        });
+        setShowExport(false);
+        setRenderProgress(100);
+      } catch (e: any) {
+        alert(e instanceof Error ? e.message : String(e));
+        setRenderProgress(0);
+      }
     },
-    []
+    [videoProject, setRenderProgress],
   );
 
   return (

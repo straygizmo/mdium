@@ -1,0 +1,12 @@
+{
+  "name": "mdium-video-env",
+  "private": true,
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "vite": "^7.0.0",
+    "@vitejs/plugin-react": "^4.0.0",
+    "playwright-chromium": "^1.50.0",
+    "fluent-ffmpeg": "^2.1.3"
+  }
+}
