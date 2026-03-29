@@ -135,7 +135,7 @@ export function McpServersSection() {
   const [jsonImportOpen, setJsonImportOpen] = useState(false);
   const [jsonInput, setJsonInput] = useState("");
   const [jsonError, setJsonError] = useState("");
-  const [resourcesPath, setResourcesPath] = useState("");
+  const [mcpServersPath, setMcpServersPath] = useState("");
 
   // Test state: keyed by server name
   const [testingServer, setTestingServer] = useState<string | null>(null);
@@ -157,9 +157,7 @@ export function McpServersSection() {
   }, [scope, activeFolderPath, loadProjectMcpServers]);
 
   useEffect(() => {
-    import("@tauri-apps/api/path").then(({ resourceDir }) => {
-      resourceDir().then(setResourcesPath).catch(() => {});
-    });
+    invoke<string>("resolve_mcp_servers_path").then(setMcpServersPath).catch(() => {});
   }, []);
 
   const globalServers = config.mcp ?? EMPTY_SERVERS;
@@ -511,7 +509,7 @@ export function McpServersSection() {
                 if (!key) return;
                 const builtin = BUILTIN_MCP_SERVERS[key];
                 if (!builtin) return;
-                const resolved = resolveBuiltinCommand(builtin.command, resourcesPath);
+                const resolved = resolveBuiltinCommand(builtin.command, mcpServersPath);
                 setFormName(builtin.serverName);
                 setFormType(builtin.type);
                 setFormEnabled(builtin.enabled);

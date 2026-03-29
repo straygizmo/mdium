@@ -24,7 +24,7 @@ interface McpTestResult {
 }
 
 interface McpCallToolResult {
-  content: { content_type: string; text: string }[];
+  content: { type: string; text: string }[];
 }
 
 interface AvailableServer {
@@ -47,8 +47,7 @@ function normalizeCommand(server: OpencodeMcpServer): string[] {
 export const GenerateMcpImageDialog: FC<Props> = ({ visible, onClose, onInsert }) => {
   const { t } = useTranslation("editor");
   const activeFolderPath = useTabStore((s) => s.activeFolderPath);
-  const globalMcp = useOpencodeConfigStore((s) => s.config.mcp);
-  const projectMcp = useOpencodeConfigStore((s) => s.projectMcpServers);
+  const loadConfig = useOpencodeConfigStore((s) => s.loadConfig);
 
   const [prompt, setPrompt] = useState("");
   const [filename, setFilename] = useState("");
@@ -61,9 +60,12 @@ export const GenerateMcpImageDialog: FC<Props> = ({ visible, onClose, onInsert }
   const [previewUrl, setPreviewUrl] = useState("");
 
   const scanServers = useCallback(async () => {
+    // Ensure config is loaded (it's only loaded on-demand when settings page opens)
+    await loadConfig();
+    const freshConfig = useOpencodeConfigStore.getState();
     const allServers: Record<string, OpencodeMcpServer> = {
-      ...(globalMcp ?? {}),
-      ...(projectMcp ?? {}),
+      ...(freshConfig.config.mcp ?? {}),
+      ...(freshConfig.projectMcpServers ?? {}),
     };
 
     const entries = Object.entries(allServers).filter(
@@ -108,7 +110,7 @@ export const GenerateMcpImageDialog: FC<Props> = ({ visible, onClose, onInsert }
       setSelectedServer(found[0].name);
     }
     setScanning(false);
-  }, [globalMcp, projectMcp, selectedServer]);
+  }, [loadConfig, selectedServer]);
 
   useEffect(() => {
     if (visible) {
@@ -142,7 +144,7 @@ export const GenerateMcpImageDialog: FC<Props> = ({ visible, onClose, onInsert }
       const result = await invoke<McpCallToolResult>("mcp_call_tool", {
         command: server.command,
         args: server.args,
-        env: server.env,
+        env: { ...server.env, IMAGE_OUTPUT_DIR: outputDir },
         toolName: "generate_image",
         toolArgs: {
           prompt: prompt.trim(),
@@ -150,7 +152,7 @@ export const GenerateMcpImageDialog: FC<Props> = ({ visible, onClose, onInsert }
         },
       });
 
-      const textContent = result.content.find((c) => c.content_type === "text");
+      const textContent = result.content.find((c) => c.type === "text");
       if (!textContent) {
         setError("No text content in tool response");
         return;

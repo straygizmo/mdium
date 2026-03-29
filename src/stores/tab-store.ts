@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { useOpencodeServerStore } from "./opencode-server-store";
+import { useOpencodeConfigStore } from "./opencode-config-store";
 
 export interface Tab {
   id: string;
@@ -225,6 +226,11 @@ export const useTabStore = create<TabState>()(
       return;
     }
 
+    // Load opencode config for this folder
+    const ocStore = useOpencodeConfigStore.getState();
+    ocStore.loadConfig();
+    ocStore.loadProjectMcpServers(folderPath);
+
     // Create empty tab for new folder
     const newTab: Tab = {
       id: generateId(),
@@ -252,6 +258,11 @@ export const useTabStore = create<TabState>()(
     const lastTabId = folderLastActiveTab[folderPath];
     const folderTabs = tabs.filter((t) => t.folderPath === folderPath);
     const target = folderTabs.find((t) => t.id === lastTabId) ?? folderTabs[0];
+
+    // Load opencode config for this folder
+    const ocStore = useOpencodeConfigStore.getState();
+    ocStore.loadConfig();
+    ocStore.loadProjectMcpServers(folderPath);
 
     set({
       activeFolderPath: folderPath,

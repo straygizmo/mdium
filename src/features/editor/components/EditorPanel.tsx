@@ -8,7 +8,6 @@ import { useImagePaste } from "../hooks/useImagePaste";
 import TableGridSelector from "@/features/table/components/TableGridSelector";
 import EditorContextMenu from "./EditorContextMenu";
 import { ImagePasteDialog } from "./ImagePasteDialog";
-import { GenerateImageDialog } from "./GenerateImageDialog";
 import { GenerateMcpImageDialog } from "./GenerateMcpImageDialog";
 import { useSpeechToText } from "@/features/speech/hooks/useSpeechToText";
 import { message, open } from "@tauri-apps/plugin-dialog";
@@ -65,7 +64,6 @@ export function EditorPanel({ editorRef }: EditorPanelProps) {
 
 
   const [ctxMenu, setCtxMenu] = useState({ x: 0, y: 0, visible: false, selStart: 0, selEnd: 0 });
-  const [showGenImageDialog, setShowGenImageDialog] = useState(false);
   const [showGenMcpImageDialog, setShowGenMcpImageDialog] = useState(false);
 
   const { handleInsertFormatting, handleInsertTable, handleInsertMermaidTemplate } = useEditorFormatting({
@@ -460,13 +458,7 @@ export function EditorPanel({ editorRef }: EditorPanelProps) {
         onInsertDetails={() => handleInsertFormatting("details")}
         onInsertImageFromClipboard={handleInsertImageFromClipboard}
         onInsertImageFromFile={handleInsertImageFromFile}
-        onGenerateImage={() => setShowGenImageDialog(true)}
         onGenerateMcpImage={() => setShowGenMcpImageDialog(true)}
-      />
-      <GenerateImageDialog
-        visible={showGenImageDialog}
-        onClose={() => setShowGenImageDialog(false)}
-        onInsert={handleInsertGeneratedImage}
       />
       <GenerateMcpImageDialog
         visible={showGenMcpImageDialog}
