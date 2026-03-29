@@ -19,6 +19,8 @@ interface Props {
   onInsertPageBreak: () => void;
   onInsertCodeBlock: () => void;
   onInsertDetails: () => void;
+  onInsertImageFromClipboard: () => void;
+  onInsertImageFromFile: () => void;
   onGenerateImage: () => void;
 }
 
@@ -37,6 +39,8 @@ const EditorContextMenu: FC<Props> = ({
   onInsertPageBreak,
   onInsertCodeBlock,
   onInsertDetails,
+  onInsertImageFromClipboard,
+  onInsertImageFromFile,
   onGenerateImage,
 }) => {
   const { t, i18n } = useTranslation("editor");
@@ -184,9 +188,21 @@ const EditorContextMenu: FC<Props> = ({
                 ))}
               </div>
             </div>
-            <button className="editor-ctx__item" onClick={() => handleAction(onGenerateImage)}>
-              <span className="editor-ctx__label">{t("genImage")}</span>
-            </button>
+            <div className="editor-ctx__item editor-ctx__has-sub">
+              <span className="editor-ctx__label">{t("contextMenu.insertImage")}</span>
+              <span className="editor-ctx__arrow">&#9656;</span>
+              <div className="editor-ctx__sub">
+                <button className="editor-ctx__item" onClick={() => handleAction(onInsertImageFromClipboard)}>
+                  <span className="editor-ctx__label">{t("contextMenu.imageFromClipboard")}</span>
+                </button>
+                <button className="editor-ctx__item" onClick={() => handleAction(onInsertImageFromFile)}>
+                  <span className="editor-ctx__label">{t("contextMenu.imageFromFile")}</span>
+                </button>
+                <button className="editor-ctx__item" onClick={() => handleAction(onGenerateImage)}>
+                  <span className="editor-ctx__label">{t("contextMenu.imageFromNanoBanana")}</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>

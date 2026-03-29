@@ -185,6 +185,8 @@ pub fn run() {
             commands::slidev::slidev_export,
             commands::slidev::slidev_stop,
             commands::slidev::slidev_get_temp_dir,
+            // Image generation
+            commands::image_gen::gemini_generate_image,
             // MCP operations
             commands::mcp::mcp_test_server,
             // Environment variable operations

@@ -270,7 +270,7 @@ export function SkillsSection() {
           {/* Built-In Skill selector */}
           <div style={{ marginBottom: 8 }}>
             <select
-              className="oc-section__input"
+              className="oc-section__builtin-select"
               value=""
               onChange={(e) => {
                 const key = e.target.value;
@@ -282,7 +282,6 @@ export function SkillsSection() {
                 setFormDesc(builtin.description);
                 setFormBody(parsed.body);
               }}
-              style={{ color: "var(--accent)" }}
             >
               <option value="">{t("skillBuiltinSelect")}</option>
               {Object.keys(BUILTIN_SKILLS).map((key) => (

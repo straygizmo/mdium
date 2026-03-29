@@ -475,7 +475,7 @@ pub fn open_in_default_app(path: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         Command::new("cmd")
-            .args(["/C", "start", "", &format!("\"{}\"", path)])
+            .args(["/C", "start", "", &path])
             .spawn()
             .map_err(|e| format!("Failed to open file: {}", e))?;
     }

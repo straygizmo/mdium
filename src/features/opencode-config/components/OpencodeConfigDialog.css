@@ -629,6 +629,25 @@
   color: var(--primary);
 }
 
+/* Built-in MCP server selector (matches json-toggle style) */
+.oc-section__builtin-select {
+  background: none;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.oc-section__builtin-select:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
 .oc-section__json-area {
   display: flex;
   flex-direction: column;

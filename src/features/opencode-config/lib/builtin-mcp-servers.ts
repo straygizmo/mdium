@@ -1,15 +1,14 @@
 import type { BuiltinMcpServer } from "@/shared/types";
 
 export const BUILTIN_MCP_SERVERS: Record<string, BuiltinMcpServer> = {
-  "image-generator": {
-    serverName: "image-generator",
+  "nano-banana-2": {
+    serverName: "nano-banana-2",
     type: "local",
-    command: ["node", "<resources_path>/mcp-servers/image-generator/dist/index.js"],
+    command: ["node", "<resources_path>\\mcp-servers\\nano-banana-2\\dist\\index.js"],
     enabled: true,
     environment: {
-      IMAGE_PROVIDER: "openai",
-      IMAGE_API_KEY: "",
-      IMAGE_MODEL: "dall-e-3",
+      GEMINI_API_KEY: "{env:GEMINI_API_KEY}",
+      GEMINI_IMAGE_MODEL: "gemini-3.1-flash-image-preview",
       IMAGE_OUTPUT_DIR: "",
     },
   },

@@ -85,6 +85,12 @@ For data storage, we use SQLite — it's embedded, requires no separate server, 
 - A Mermaid diagram can express the content (flowcharts, sequence diagrams, ER diagrams)
 - The slide is a title/section divider slide
 
+### Tool parameters
+- \`prompt\` (required) — description of the image to generate
+- \`filename\` (required) — output filename (e.g. \`slide03-architecture.png\`)
+- \`aspectRatio\` (optional) — one of: 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9 (default: 16:9)
+- \`imageSize\` (optional) — one of: 512, 1K, 2K, 4K (default: 1K)
+
 ### File naming convention
 - Use descriptive names with slide context: \`slide03-system-overview.png\`, \`slide07-data-flow.png\`
 - Always place in \`/images/\` directory
@@ -95,5 +101,102 @@ For data storage, we use SQLite — it's embedded, requires no separate server, 
 - Be specific about style: "clean flat illustration", "technical diagram", "isometric view"
 - Include context about what the image should communicate
 - Specify relevant details: colors, layout orientation, key elements to include`,
+  },
+
+  "convert-to-km-mindmap": {
+    name: "convert-to-km-mindmap",
+    description:
+      "Convert text or conversation content into KityMinder mindmap JSON format",
+    content: `---
+name: convert-to-km-mindmap
+description: Convert text or conversation content into KityMinder mindmap JSON format
+---
+
+# KityMinder Mindmap Converter
+
+You are a mindmap structuring expert. When the user asks to convert content into a mindmap or create a mindmap (e.g. "convert to mindmap", "create a mindmap", "マインドマップに変換して", "マインドマップを作成して"), generate a KityMinder-compatible JSON file.
+
+## Output Format
+
+Output a single JSON code block with the following structure:
+
+\`\`\`json
+{
+  "root": {
+    "data": {
+      "text": "Central Topic"
+    },
+    "children": [
+      {
+        "data": {
+          "text": "Main Topic 1"
+        },
+        "children": [
+          {
+            "data": {
+              "text": "Subtopic 1"
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  "theme": "fresh-blue",
+  "template": "right"
+}
+\`\`\`
+
+## Node Structure
+
+Every node follows this shape:
+
+\`\`\`json
+{
+  "data": {
+    "text": "Node label"
+  },
+  "children": []
+}
+\`\`\`
+
+- \`data.text\` — the label displayed on the node (keep it concise)
+- \`children\` — array of child nodes; use \`[]\` for leaf nodes
+
+## Top-Level Properties
+
+| Property | Description | Default |
+|----------|-------------|---------|
+| \`root\` | The root node of the mindmap (required) | — |
+| \`theme\` | Visual theme | \`"fresh-blue"\` |
+| \`template\` | Layout direction | \`"right"\` |
+
+### Available Themes
+\`fresh-blue\`, \`fresh-green\`, \`fresh-pink\`, \`fresh-purple\`, \`fresh-red\`, \`fresh-soil\`, \`snow\`, \`fish\`, \`wire\`
+
+### Available Templates
+\`default\` (both sides), \`right\` (right only), \`structure\` (org-chart), \`filetree\` (file-tree style), \`fish-bone\` (fishbone diagram)
+
+## Structuring Guidelines
+
+1. **Central topic** — one root node that captures the overall subject
+2. **Main topics** — direct children of root; aim for 3–7 branches
+3. **Subtopics** — children of main topics; keep depth ≤ 4 levels
+4. **Leaf nodes** — concrete facts, examples, or action items
+5. **Language** — match the language of the user's input
+6. **Conciseness** — keep node labels short (ideally ≤ 10 words)
+7. **Balance** — distribute content evenly across branches when possible
+
+## File Extension
+
+The output file should use the \`.km\` extension (e.g. \`topic.km\`). The file content is the JSON above.
+
+## Workflow
+
+1. Identify the source content (conversation context, pasted text, or topic description)
+2. Extract the central theme as the root node
+3. Group related ideas into main branches
+4. Break each branch into subtopics and details
+5. Output the complete JSON wrapped in a code block`,
   },
 };

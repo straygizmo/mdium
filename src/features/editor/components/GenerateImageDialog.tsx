@@ -1,6 +1,7 @@
 import { type FC, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { getOpencodeClient } from "@/features/opencode-config/hooks/useOpencodeChat";
+import { invoke } from "@tauri-apps/api/core";
+import { useTabStore } from "@/stores/tab-store";
 import "./GenerateImageDialog.css";
 
 interface Props {
@@ -9,15 +10,22 @@ interface Props {
   onInsert: (markdownImage: string) => void;
 }
 
+const ASPECT_RATIOS = [
+  "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9",
+] as const;
+const IMAGE_SIZES = ["512", "1K", "2K", "4K"] as const;
+
 export const GenerateImageDialog: FC<Props> = ({ visible, onClose, onInsert }) => {
   const { t } = useTranslation("editor");
+  const activeFolderPath = useTabStore((s) => s.activeFolderPath);
   const [prompt, setPrompt] = useState("");
   const [filename, setFilename] = useState("");
-  const [width, setWidth] = useState(1024);
-  const [height, setHeight] = useState(768);
+  const [aspectRatio, setAspectRatio] = useState<string>("16:9");
+  const [imageSize, setImageSize] = useState<string>("1K");
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState("");
   const [generatedPath, setGeneratedPath] = useState("");
+  const [previewUrl, setPreviewUrl] = useState("");
 
   if (!visible) return null;
 
@@ -28,47 +36,50 @@ export const GenerateImageDialog: FC<Props> = ({ visible, onClose, onInsert }) =
     setGeneratedPath("");
 
     try {
-      const client = getOpencodeClient();
-      if (!client) {
-        setError(t("genImageNoOpencode"));
+      // Read API key from environment
+      let apiKey: string;
+      try {
+        apiKey = await invoke<string>("get_env_var", { name: "GEMINI_API_KEY" });
+      } catch {
+        setError("GEMINI_API_KEY environment variable is not set");
         return;
       }
 
-      // Use opencode chat to call the generate_image tool
-      const sessionRes = await client.session.create({ body: { title: "Image Generation" } });
-      const sessionData = sessionRes.data as any;
-      const sessionId: string = sessionData?.id ?? "";
-      await client.session.promptAsync({
-        path: { id: sessionId },
-        body: {
-          parts: [{
-            type: "text",
-            text: `Use the generate_image tool with these exact parameters:\n- prompt: "${prompt}"\n- width: ${width}\n- height: ${height}\n- filename: "${filename}"\n\nCall the tool and return the result.`,
-          }],
+      const model = "gemini-3.1-flash-image-preview";
+      const outputDir = activeFolderPath
+        ? `${activeFolderPath.replace(/\\/g, "/")}/images`
+        : "";
+
+      if (!outputDir) {
+        setError("No folder is open");
+        return;
+      }
+
+      const resultJson = await invoke<string>("gemini_generate_image", {
+        req: {
+          apiKey,
+          model,
+          prompt: prompt.trim(),
+          filename: filename.trim(),
+          outputDir,
+          aspectRatio,
+          imageSize,
         },
       });
 
-      // Parse result from session messages
-      const messagesRes = await client.session.messages({ path: { id: sessionId } });
-      const messagesData = messagesRes.data as any;
-      const msgArray: any[] = Array.isArray(messagesData) ? messagesData : [];
-      const lastMsg = msgArray[msgArray.length - 1];
-      if (lastMsg) {
-        // Try to find the image path in the response
-        const parts: any[] = lastMsg.parts ?? [];
-        const textParts = parts.filter((p: any) => p.type === "text");
-        for (const part of textParts) {
-          const text = String(part.text ?? "");
-          // Look for JSON with path field
-          const jsonMatch = text.match(/\{[^}]*"path"\s*:\s*"([^"]+)"[^}]*\}/);
-          if (jsonMatch) {
-            setGeneratedPath(jsonMatch[1]);
-            return;
-          }
-        }
+      const result = JSON.parse(resultJson);
+      setGeneratedPath(result.path);
+
+      // Load preview from the saved file
+      try {
+        const bytes = await invoke<number[]>("read_binary_file", { path: result.absolutePath });
+        const mime = result.mimeType || "image/png";
+        const blob = new Blob([new Uint8Array(bytes)], { type: mime });
+        if (previewUrl) URL.revokeObjectURL(previewUrl);
+        setPreviewUrl(URL.createObjectURL(blob));
+      } catch {
+        // Preview failed silently — not critical
       }
-      // Fallback path
-      setGeneratedPath(`/images/${filename}`);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -85,10 +96,12 @@ export const GenerateImageDialog: FC<Props> = ({ visible, onClose, onInsert }) =
   const handleReset = () => {
     setPrompt("");
     setFilename("");
-    setWidth(1024);
-    setHeight(768);
+    setAspectRatio("16:9");
+    setImageSize("1K");
     setError("");
     setGeneratedPath("");
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setPreviewUrl("");
     setGenerating(false);
     onClose();
   };
@@ -121,30 +134,44 @@ export const GenerateImageDialog: FC<Props> = ({ visible, onClose, onInsert }) =
         </div>
 
         <div className="gen-image-dialog__field">
-          <label className="gen-image-dialog__label">{t("genImageSize")}</label>
-          <div className="gen-image-dialog__size-row">
-            <input
-              className="gen-image-dialog__size-input"
-              type="number"
-              value={width}
-              onChange={(e) => setWidth(Number(e.target.value))}
-              disabled={generating}
-            />
-            <span>×</span>
-            <input
-              className="gen-image-dialog__size-input"
-              type="number"
-              value={height}
-              onChange={(e) => setHeight(Number(e.target.value))}
-              disabled={generating}
-            />
-          </div>
+          <label className="gen-image-dialog__label">{t("genImageAspectRatio")}</label>
+          <select
+            className="gen-image-dialog__select"
+            value={aspectRatio}
+            onChange={(e) => setAspectRatio(e.target.value)}
+            disabled={generating}
+          >
+            {ASPECT_RATIOS.map((r) => (
+              <option key={r} value={r}>{r}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="gen-image-dialog__field">
+          <label className="gen-image-dialog__label">{t("genImageResolution")}</label>
+          <select
+            className="gen-image-dialog__select"
+            value={imageSize}
+            onChange={(e) => setImageSize(e.target.value)}
+            disabled={generating}
+          >
+            {IMAGE_SIZES.map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
         </div>
 
         {error && <div className="gen-image-dialog__error">{error}</div>}
 
         {generatedPath ? (
           <div style={{ marginTop: 12 }}>
+            {previewUrl && (
+              <img
+                className="gen-image-dialog__preview"
+                src={previewUrl}
+                alt={prompt}
+              />
+            )}
             <p style={{ fontSize: 12, opacity: 0.7, marginBottom: 8 }}>{t("genImageGenerated")}: {generatedPath}</p>
             <div className="gen-image-dialog__actions">
               <button className="gen-image-dialog__btn gen-image-dialog__btn--primary" onClick={handleInsert}>

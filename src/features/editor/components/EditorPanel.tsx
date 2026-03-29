@@ -10,7 +10,8 @@ import EditorContextMenu from "./EditorContextMenu";
 import { ImagePasteDialog } from "./ImagePasteDialog";
 import { GenerateImageDialog } from "./GenerateImageDialog";
 import { useSpeechToText } from "@/features/speech/hooks/useSpeechToText";
-import { message } from "@tauri-apps/plugin-dialog";
+import { message, open } from "@tauri-apps/plugin-dialog";
+import { mkdir, copyFile } from "@tauri-apps/plugin-fs";
 import "./EditorPanel.css";
 
 interface EditorPanelProps {
@@ -216,6 +217,76 @@ export function EditorPanel({ editorRef }: EditorPanelProps) {
     handleContentChange(before + markdownImage + "\n" + after);
   }, [content, handleContentChange, editorRef]);
 
+  const handleInsertImageFromClipboard = useCallback(async () => {
+    const textarea = editorRef.current;
+    if (!textarea) return;
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const imageType = item.types.find((t) => t.startsWith("image/"));
+        if (imageType) {
+          const blob = await item.getType(imageType);
+          const url = URL.createObjectURL(blob);
+          setPasteDialogFromCtx({ visible: true, imageBlob: blob, imageUrl: url, cursorPos: textarea.selectionStart });
+          return;
+        }
+      }
+      message(t("imagePasteNoImage"), { kind: "warning" });
+    } catch {
+      message(t("imagePasteNoImage"), { kind: "warning" });
+    }
+  }, [editorRef, t]);
+
+  const [pasteDialogFromCtx, setPasteDialogFromCtx] = useState<{
+    visible: boolean; imageBlob: Blob | null; imageUrl: string | null; cursorPos: number;
+  }>({ visible: false, imageBlob: null, imageUrl: null, cursorPos: 0 });
+
+  const handleConfirmCtxPaste = useCallback(async (altText: string) => {
+    const filePath = activeTab?.filePath;
+    if (!filePath || !pasteDialogFromCtx.imageBlob) return;
+    const lastSep = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
+    const dirPath = lastSep >= 0 ? filePath.substring(0, lastSep) : filePath;
+    const imagesDir = `${dirPath}/images`;
+    const now = new Date();
+    const ts = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,"0")}${String(now.getDate()).padStart(2,"0")}-${String(now.getHours()).padStart(2,"0")}${String(now.getMinutes()).padStart(2,"0")}${String(now.getSeconds()).padStart(2,"0")}`;
+    const fileName = `image-${ts}.png`;
+    const savePath = `${imagesDir}/${fileName}`;
+    await mkdir(imagesDir, { recursive: true });
+    const buf = await pasteDialogFromCtx.imageBlob.arrayBuffer();
+    const { writeFile } = await import("@tauri-apps/plugin-fs");
+    await writeFile(savePath, new Uint8Array(buf));
+    const pos = pasteDialogFromCtx.cursorPos;
+    const markdownLink = `![${altText}](images/${fileName})`;
+    const newContent = content.substring(0, pos) + markdownLink + content.substring(pos);
+    handleContentChange(newContent);
+    if (pasteDialogFromCtx.imageUrl) URL.revokeObjectURL(pasteDialogFromCtx.imageUrl);
+    setPasteDialogFromCtx({ visible: false, imageBlob: null, imageUrl: null, cursorPos: 0 });
+  }, [activeTab?.filePath, pasteDialogFromCtx, content, handleContentChange]);
+
+  const handleInsertImageFromFile = useCallback(async () => {
+    const filePath = activeTab?.filePath;
+    if (!filePath) { handleNoFile(); return; }
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp", "svg"] }],
+    });
+    if (!selected) return;
+    const srcPath = typeof selected === "string" ? selected : selected;
+    const lastSep = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
+    const dirPath = lastSep >= 0 ? filePath.substring(0, lastSep) : filePath;
+    const imagesDir = `${dirPath}/images`;
+    await mkdir(imagesDir, { recursive: true });
+    // Extract filename from source path
+    const srcName = srcPath.replace(/\\/g, "/").split("/").pop() ?? "image.png";
+    const destPath = `${imagesDir}/${srcName}`;
+    await copyFile(srcPath, destPath);
+    const textarea = editorRef.current;
+    const pos = textarea?.selectionStart ?? 0;
+    const markdownLink = `![${srcName}](images/${srcName})`;
+    const newContent = content.substring(0, pos) + markdownLink + content.substring(pos);
+    handleContentChange(newContent);
+  }, [activeTab?.filePath, editorRef, content, handleContentChange, handleNoFile]);
+
   useEffect(() => {
     updateEditorContext(activeTab?.filePath ?? null, content);
   }, [activeTab?.filePath, content, updateEditorContext]);
@@ -385,6 +456,8 @@ export function EditorPanel({ editorRef }: EditorPanelProps) {
         onInsertPageBreak={() => handleInsertFormatting("pagebreak")}
         onInsertCodeBlock={() => handleInsertFormatting("codeblock")}
         onInsertDetails={() => handleInsertFormatting("details")}
+        onInsertImageFromClipboard={handleInsertImageFromClipboard}
+        onInsertImageFromFile={handleInsertImageFromFile}
         onGenerateImage={() => setShowGenImageDialog(true)}
       />
       <GenerateImageDialog
@@ -398,6 +471,17 @@ export function EditorPanel({ editorRef }: EditorPanelProps) {
           imageBlob={pasteDialogState.imageBlob}
           onInsert={confirmPaste}
           onClose={closePasteDialog}
+        />
+      )}
+      {pasteDialogFromCtx.visible && pasteDialogFromCtx.imageBlob && pasteDialogFromCtx.imageUrl && (
+        <ImagePasteDialog
+          imageUrl={pasteDialogFromCtx.imageUrl}
+          imageBlob={pasteDialogFromCtx.imageBlob}
+          onInsert={handleConfirmCtxPaste}
+          onClose={() => {
+            if (pasteDialogFromCtx.imageUrl) URL.revokeObjectURL(pasteDialogFromCtx.imageUrl);
+            setPasteDialogFromCtx({ visible: false, imageBlob: null, imageUrl: null, cursorPos: 0 });
+          }}
         />
       )}
     </div>

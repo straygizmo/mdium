@@ -502,9 +502,9 @@ export function McpServersSection() {
           )}
 
           {/* Built-In MCP Server selector */}
-          <div style={{ marginBottom: 8 }}>
+          <div style={{ marginTop: 6, marginBottom: 8 }}>
             <select
-              className="oc-section__input"
+              className="oc-section__builtin-select"
               value=""
               onChange={(e) => {
                 const key = e.target.value;
@@ -523,7 +523,6 @@ export function McpServersSection() {
                     .join("\n")
                 );
               }}
-              style={{ color: "var(--accent)" }}
             >
               <option value="">{t("mcpBuiltinSelect")}</option>
               {Object.keys(BUILTIN_MCP_SERVERS).map((key) => (

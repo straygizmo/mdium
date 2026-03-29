@@ -12,7 +12,7 @@
   min-width: 400px;
   max-width: 500px;
   width: 100%;
-  background: var(--bg-primary);
+  background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 20px;
@@ -23,7 +23,7 @@
   margin: 0 0 16px;
   font-size: 16px;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--text);
 }
 
 .gen-image-dialog__field {
@@ -33,7 +33,7 @@
 .gen-image-dialog__label {
   display: block;
   font-size: 12px;
-  color: var(--text-primary);
+  color: var(--text);
   opacity: 0.7;
   margin-bottom: 4px;
 }
@@ -41,10 +41,10 @@
 .gen-image-dialog__input,
 .gen-image-dialog__textarea {
   width: 100%;
-  background: var(--bg-secondary);
+  background: var(--bg-input);
   border: 1px solid var(--border);
   border-radius: 4px;
-  color: var(--text-primary);
+  color: var(--text);
   font-size: 13px;
   padding: 6px 8px;
   box-sizing: border-box;
@@ -54,7 +54,7 @@
 
 .gen-image-dialog__input:focus,
 .gen-image-dialog__textarea:focus {
-  border-color: var(--accent);
+  border-color: var(--primary);
 }
 
 .gen-image-dialog__textarea {
@@ -63,27 +63,22 @@
   font-family: inherit;
 }
 
-.gen-image-dialog__size-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.gen-image-dialog__size-input {
-  width: 80px;
-  background: var(--bg-secondary);
+.gen-image-dialog__select {
+  width: 100%;
+  background: var(--bg-input);
   border: 1px solid var(--border);
   border-radius: 4px;
-  color: var(--text-primary);
+  color: var(--text);
   font-size: 13px;
   padding: 6px 8px;
   box-sizing: border-box;
   outline: none;
   transition: border-color 0.15s;
+  cursor: pointer;
 }
 
-.gen-image-dialog__size-input:focus {
-  border-color: var(--accent);
+.gen-image-dialog__select:focus {
+  border-color: var(--primary);
 }
 
 .gen-image-dialog__actions {
@@ -97,8 +92,8 @@
   padding: 6px 14px;
   border-radius: 4px;
   border: 1px solid var(--border);
-  background: var(--bg-secondary);
-  color: var(--text-primary);
+  background: var(--bg-input);
+  color: var(--text);
   font-size: 13px;
   cursor: pointer;
   transition: opacity 0.15s;
@@ -114,13 +109,22 @@
 }
 
 .gen-image-dialog__btn--primary {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--primary);
+  border-color: var(--primary);
   color: #fff;
 }
 
+.gen-image-dialog__preview {
+  width: 100%;
+  max-height: 300px;
+  object-fit: contain;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  margin-bottom: 8px;
+}
+
 .gen-image-dialog__error {
-  color: var(--error);
+  color: var(--accent-red);
   font-size: 12px;
   margin-top: 8px;
 }
