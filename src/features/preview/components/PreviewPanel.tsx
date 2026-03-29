@@ -13,6 +13,9 @@ import { PdfPreviewPanel } from "./PdfPreviewPanel";
 import { DocxPreviewPanel } from "./DocxPreviewPanel";
 import { HtmlPreviewPanel } from "./HtmlPreviewPanel";
 import { SlidevPreviewPanel } from "./SlidevPreviewPanel";
+import { VideoPanel } from "@/features/video/components/VideoPanel";
+import { useVideoStore } from "@/stores/video-store";
+import { convertMdToVideoProject } from "@/features/video/lib/md-to-scenes";
 import { docxToMarkdown } from "@/features/export/lib/docxToMarkdown";
 import { marked } from "marked";
 import { readFile } from "@tauri-apps/plugin-fs";
@@ -284,6 +287,18 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   const content = activeTab?.content ?? "";
   const filePath = activeTab?.filePath ?? null;
   const isSlidev = useMemo(() => isSlidevMarkdown(content), [content]);
+
+  const isVideoMode = useVideoStore((s) => s.isVideoMode);
+  const setIsVideoMode = useVideoStore((s) => s.setIsVideoMode);
+  const setVideoProject = useVideoStore((s) => s.setVideoProject);
+
+  const handleEnterVideoMode = useCallback(() => {
+    if (!filePath) return;
+    const project = convertMdToVideoProject(content, filePath);
+    setVideoProject(project);
+    setIsVideoMode(true);
+    setActiveViewTab("video");
+  }, [content, filePath, setVideoProject, setIsVideoMode, setActiveViewTab]);
 
   // Force switch away from slidev-preview when file is not Slidev markdown
   useEffect(() => {
@@ -760,6 +775,13 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
             </svg>
           </button>
         )}
+        <button
+          className={`preview-panel__tab preview-panel__tab--icon ${activeViewTab === "video" ? "preview-panel__tab--active" : ""}`}
+          onClick={handleEnterVideoMode}
+          title="Video"
+        >
+          &#9655;
+        </button>
       </div>
 
       <div className="preview-panel__body">
@@ -817,6 +839,8 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
             />
           </div>
         )}
+
+        {activeViewTab === "video" && <VideoPanel />}
       </div>
 
       {activeViewTab === "preview" && contextMenu && (
