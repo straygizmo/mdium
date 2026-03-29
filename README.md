@@ -73,6 +73,7 @@ graph LR
 - **PDF** (.pdf) — viewing and conversion to Markdown
 - **Images** (.png, .jpg, .gif, .bmp, .svg, .webp, etc.) — preview and canvas editing
 - Bidirectional DOCX/Markdown conversion
+- Excel to Markdown conversion powered by [xlsx2md](https://github.com/igapyon/xlsx2md) (table detection, narrative extraction, images/charts/shapes, rich text)
 - Export to PDF
 
 ### AI Integration
@@ -157,7 +158,7 @@ graph LR
 | Backend       | [Rust](https://github.com/rust-lang/rust) ([Tokio](https://github.com/tokio-rs/tokio), [rusqlite](https://github.com/rusqlite/rusqlite), [reqwest](https://github.com/seanmonstar/reqwest), [portable-pty](https://github.com/wez/wezterm/tree/main/pty))       |
 | Markdown      | [marked](https://github.com/markedjs/marked), [remark](https://github.com/remarkjs/remark), [KaTeX](https://github.com/KaTeX/KaTeX), [Mermaid](https://github.com/mermaid-js/mermaid), [highlight.js](https://github.com/highlightjs/highlight.js)              |
 | AI/ML         | [Hugging Face Transformers](https://github.com/huggingface/transformers.js), [Tesseract.js](https://github.com/naptha/tesseract.js)                                                                                                                    |
-| Office        | [docx](https://github.com/dolanmiu/docx), [mammoth](https://github.com/mwilliamson/mammoth.js), [xlsx](https://github.com/SheetJS/sheetjs), [pdfjs-dist](https://github.com/nicolo-ribaudo/pdfjs-dist), [html2pdf.js](https://github.com/eKoopmans/html2pdf.js) |
+| Office        | [docx](https://github.com/dolanmiu/docx), [mammoth](https://github.com/mwilliamson/mammoth.js), [xlsx](https://github.com/SheetJS/sheetjs), [xlsx2md](https://github.com/igapyon/xlsx2md), [pdfjs-dist](https://github.com/nicolo-ribaudo/pdfjs-dist), [html2pdf.js](https://github.com/eKoopmans/html2pdf.js) |
 | Visualization | [ReactFlow](https://github.com/xyflow/xyflow), [d3-hierarchy](https://github.com/d3/d3-hierarchy), [Fabric.js](https://github.com/fabricjs/fabric.js)                                                                                                     |
 | Terminal      | [xterm.js](https://github.com/xtermjs/xterm.js)                                                                                                                                                                                                     |
 

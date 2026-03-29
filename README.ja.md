@@ -73,6 +73,7 @@ graph LR
 - **PDF**（.pdf）— 閲覧・Markdown への変換
 - **画像**（.png, .jpg, .gif, .bmp, .svg, .webp 等）— プレビュー・キャンバス編集
 - DOCX/Markdown の双方向変換
+- Excel から Markdown への変換 — [xlsx2md](https://github.com/igapyon/xlsx2md) によるテーブル検出・ナラティブ抽出・画像/チャート/シェイプ・リッチテキスト対応
 - PDF エクスポート
 
 ### AI 連携
@@ -157,7 +158,7 @@ graph LR
 | バックエンド           | [Rust](https://github.com/rust-lang/rust)（[Tokio](https://github.com/tokio-rs/tokio)、[rusqlite](https://github.com/rusqlite/rusqlite)、[reqwest](https://github.com/seanmonstar/reqwest)、[portable-pty](https://github.com/wez/wezterm/tree/main/pty)）       |
 | Markdown               | [marked](https://github.com/markedjs/marked)、[remark](https://github.com/remarkjs/remark)、[KaTeX](https://github.com/KaTeX/KaTeX)、[Mermaid](https://github.com/mermaid-js/mermaid)、[highlight.js](https://github.com/highlightjs/highlight.js)              |
 | AI/ML                  | [Hugging Face Transformers](https://github.com/huggingface/transformers.js)、[Tesseract.js](https://github.com/naptha/tesseract.js)                                                                                                                    |
-| Office                 | [docx](https://github.com/dolanmiu/docx)、[mammoth](https://github.com/mwilliamson/mammoth.js)、[xlsx](https://github.com/SheetJS/sheetjs)、[pdfjs-dist](https://github.com/nicolo-ribaudo/pdfjs-dist)、[html2pdf.js](https://github.com/eKoopmans/html2pdf.js) |
+| Office                 | [docx](https://github.com/dolanmiu/docx)、[mammoth](https://github.com/mwilliamson/mammoth.js)、[xlsx](https://github.com/SheetJS/sheetjs)、[xlsx2md](https://github.com/igapyon/xlsx2md)、[pdfjs-dist](https://github.com/nicolo-ribaudo/pdfjs-dist)、[html2pdf.js](https://github.com/eKoopmans/html2pdf.js) |
 | ビジュアライゼーション | [ReactFlow](https://github.com/xyflow/xyflow)、[d3-hierarchy](https://github.com/d3/d3-hierarchy)、[Fabric.js](https://github.com/fabricjs/fabric.js)                                                                                                     |
 | ターミナル             | [xterm.js](https://github.com/xtermjs/xterm.js)                                                                                                                                                                                                     |
 
