@@ -1,0 +1,97 @@
+.external-change-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 900;
+}
+
+.external-change-dialog {
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+  width: 560px;
+  max-width: 90vw;
+  box-shadow: 0 8px 32px var(--shadow-strong);
+}
+
+.external-change-dialog__title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+
+.external-change-dialog__message {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+
+.external-change-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.external-change-dialog__btn {
+  padding: 6px 16px;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.external-change-dialog__btn--secondary {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.external-change-dialog__btn--primary {
+  background: var(--primary);
+  border: none;
+  color: #fff;
+}
+
+.external-change-dialog__btn:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.external-change-dialog__diff {
+  margin-top: 12px;
+  margin-bottom: 12px;
+  max-height: 400px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  font-family: "Consolas", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.external-change-dialog__diff-line {
+  padding: 0 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.external-change-dialog__diff-line--added {
+  background: rgba(46, 160, 67, 0.15);
+  color: var(--text);
+}
+
+.external-change-dialog__diff-line--removed {
+  background: rgba(248, 81, 73, 0.15);
+  color: var(--text);
+}
+
+.external-change-dialog__diff-line--header {
+  color: var(--text-muted);
+  font-style: italic;
+  background: var(--bg-base);
+}
