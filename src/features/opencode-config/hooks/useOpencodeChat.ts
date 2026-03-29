@@ -148,6 +148,11 @@ function processSSEStream(stream: AsyncIterable<unknown>) {
             const state = useChatUIStore.getState();
             const last = state.messages[state.messages.length - 1];
             if (last && last.role === "assistant") {
+              // Skip spurious session.idle fired when a session is first created
+              // (before any prompt response has arrived)
+              if (!last.content && (!last.parts || last.parts.length === 0)) {
+                continue;
+              }
               let rawText = last.content;
               // Find previous user message to strip echo
               const prevIdx = state.messages.length - 2;
