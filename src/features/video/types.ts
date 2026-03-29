@@ -72,7 +72,7 @@ export interface TTSOptions {
 }
 
 export interface TTSResult {
-  audioBuffer: ArrayBuffer;
+  audioPath: string;
   durationMs: number;
   timingData?: TimingEntry[];
 }
