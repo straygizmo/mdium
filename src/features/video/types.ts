@@ -50,8 +50,10 @@ export interface TTSConfig {
 }
 
 export const DEFAULT_TTS_CONFIG: TTSConfig = {
-  provider: "openai",
+  provider: "voicevox",
+  speaker: "1",
   volume: 1.0,
+  speed: 1.0,
 };
 
 // ─── TTS Provider Interfaces ─────────────────────────────────────────────────
