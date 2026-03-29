@@ -22,6 +22,7 @@ interface Props {
   onInsertImageFromClipboard: () => void;
   onInsertImageFromFile: () => void;
   onGenerateImage: () => void;
+  onGenerateMcpImage: () => void;
 }
 
 const EditorContextMenu: FC<Props> = ({
@@ -42,6 +43,7 @@ const EditorContextMenu: FC<Props> = ({
   onInsertImageFromClipboard,
   onInsertImageFromFile,
   onGenerateImage,
+  onGenerateMcpImage,
 }) => {
   const { t, i18n } = useTranslation("editor");
   const tc = useTranslation("common").t;
@@ -200,6 +202,9 @@ const EditorContextMenu: FC<Props> = ({
                 </button>
                 <button className="editor-ctx__item" onClick={() => handleAction(onGenerateImage)}>
                   <span className="editor-ctx__label">{t("contextMenu.imageFromNanoBanana")}</span>
+                </button>
+                <button className="editor-ctx__item" onClick={() => handleAction(onGenerateMcpImage)}>
+                  <span className="editor-ctx__label">{t("contextMenu.imageFromMcp")}</span>
                 </button>
               </div>
             </div>
