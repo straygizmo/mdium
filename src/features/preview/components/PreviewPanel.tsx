@@ -288,7 +288,6 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   const filePath = activeTab?.filePath ?? null;
   const isSlidev = useMemo(() => isSlidevMarkdown(content), [content]);
 
-  const isVideoMode = useVideoStore((s) => s.isVideoMode);
   const setIsVideoMode = useVideoStore((s) => s.setIsVideoMode);
   const setVideoProject = useVideoStore((s) => s.setVideoProject);
 

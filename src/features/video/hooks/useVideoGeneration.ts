@@ -23,6 +23,16 @@ export function useVideoGeneration() {
     setGeneratingStatus("");
 
     try {
+      // Check VOICEVOX connectivity before starting
+      if (tts.provider === "voicevox") {
+        try {
+          const res = await fetch("http://localhost:50021/version");
+          if (!res.ok) throw new Error();
+        } catch {
+          throw new Error("voicevox_not_running");
+        }
+      }
+
       const provider = createTTSProvider(tts.provider);
       const scenes = videoProject.scenes;
       const total = scenes.length;

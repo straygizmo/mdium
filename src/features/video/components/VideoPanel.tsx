@@ -27,10 +27,14 @@ export function VideoPanel() {
   const handleGenerateAudio = useCallback(async () => {
     try {
       await generateAudioForAllScenes();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+    } catch (err: any) {
+      if (err?.message === "voicevox_not_running") {
+        alert(t("voicevoxNotRunning"));
+      } else {
+        alert(err instanceof Error ? err.message : String(err));
+      }
     }
-  }, [generateAudioForAllScenes]);
+  }, [generateAudioForAllScenes, t]);
 
   const handleBackToEditor = useCallback(() => {
     setIsVideoMode(false);
@@ -58,10 +62,12 @@ export function VideoPanel() {
           {videoProject && (
             <Player
               component={() => <VideoComposition project={videoProject} />}
-              durationInFrames={calculateTotalDuration(videoProject)}
-              width={videoProject.meta.width}
-              height={videoProject.meta.height}
-              fps={videoProject.meta.fps}
+              config={{
+                width: videoProject.meta.width,
+                height: videoProject.meta.height,
+                fps: videoProject.meta.fps,
+                durationInFrames: calculateTotalDuration(videoProject),
+              }}
             />
           )}
         </div>

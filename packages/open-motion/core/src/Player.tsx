@@ -23,8 +23,8 @@ export const Player: React.FC<PlayerProps> = ({
   const [isPlaying, setIsPlaying] = useState(autoPlay);
   const [scale, setScale] = useState(1);
   const containerRef = useRef<HTMLDivElement>(null);
-  const requestRef = useRef<number>();
-  const lastTimeRef = useRef<number>();
+  const requestRef = useRef<number>(undefined!);
+  const lastTimeRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     const handleResize = () => {
