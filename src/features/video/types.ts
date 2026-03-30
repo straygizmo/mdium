@@ -3,6 +3,7 @@
 export interface VideoProject {
   meta: VideoMeta;
   audio: AudioConfig;
+  theme?: VideoTheme;
   scenes: Scene[];
 }
 
@@ -105,6 +106,10 @@ export type TransitionType =
   | "slide-left"
   | "slide-right"
   | "slide-up"
+  | "wipe-left"
+  | "wipe-right"
+  | "wipe-up"
+  | "wipe-down"
   | "none";
 
 export interface TransitionConfig {
@@ -168,13 +173,43 @@ export interface CodeBlockElement {
   animation: "fade-in" | "none";
 }
 
+// ─── Background Effects ──────────────────────────────────────────────────────
+
+export type LottiePreset =
+  | "confetti" | "checkmark" | "loading" | "arrows"
+  | "sparkle" | "wave" | "pulse";
+
+export type BackgroundEffect =
+  | { type: "none" }
+  | { type: "gradient"; colors: string[]; angle?: number }
+  | { type: "gradient-animation"; colors: string[]; speed?: number }
+  | { type: "particles"; preset: "stars" | "snow" | "fireflies" | "bubbles" }
+  | { type: "wave-visualizer"; bars?: number; color?: string }
+  | { type: "three-particles"; preset: "floating" | "galaxy" | "rain" }
+  | { type: "three-geometry"; preset: "wireframe-sphere" | "rotating-cube" | "wave-mesh" }
+  | { type: "lottie"; preset: LottiePreset };
+
+export interface VideoTheme {
+  backgroundEffect?: BackgroundEffect;
+  captionStyle?: "default" | "tiktok";
+}
+
+export interface ProgressBarElement {
+  type: "progress-bar";
+  progress: number;
+  color?: string;
+  label?: string;
+  animation: "grow" | "none";
+}
+
 export type SceneElement =
   | TitleElement
   | TextElement
   | BulletListElement
   | ImageElement
   | TableElement
-  | CodeBlockElement;
+  | CodeBlockElement
+  | ProgressBarElement;
 
 // ─── Scene ────────────────────────────────────────────────────────────────────
 
@@ -189,4 +224,5 @@ export interface Scene {
   transition: TransitionConfig;
   elements: SceneElement[];
   captions?: CaptionsConfig;
+  backgroundEffect?: BackgroundEffect;
 }
