@@ -1,4 +1,4 @@
-import React, { useCallback } from "react";
+import { useCallback } from "react";
 import { useVideoConfig } from "@open-motion/core";
 import { ThreeCanvas } from "@open-motion/components";
 import * as THREE from "three";
@@ -50,7 +50,7 @@ export function ThreeGeometryBackground({
       if (!mesh) return;
 
       if (preset === "wave-mesh") {
-        const positions = mesh.geometry.attributes.position;
+        const positions = mesh.geometry.attributes.position as THREE.BufferAttribute;
         for (let i = 0; i < positions.count; i++) {
           const x = positions.getX(i);
           const y = positions.getY(i);

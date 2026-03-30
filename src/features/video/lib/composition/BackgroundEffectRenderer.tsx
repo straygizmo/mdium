@@ -1,4 +1,3 @@
-import React from "react";
 import type { BackgroundEffect } from "../../types";
 import { GradientBackground } from "./backgrounds/GradientBackground";
 import { GradientAnimationBackground } from "./backgrounds/GradientAnimationBackground";

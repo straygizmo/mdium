@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import { useMemo } from "react";
 import { useCurrentFrame } from "@open-motion/core";
 
 const PRESETS = {

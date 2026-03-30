@@ -1,6 +1,5 @@
-import React from "react";
 import { Lottie } from "@open-motion/components";
-import type { LottiePreset } from "../../types";
+import type { LottiePreset } from "../../../types";
 
 export function LottieBackground({ preset }: { preset: LottiePreset }) {
   const url = `/lottie/${preset}.json`;

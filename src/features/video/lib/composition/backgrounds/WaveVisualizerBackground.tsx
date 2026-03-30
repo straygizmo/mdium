@@ -1,4 +1,3 @@
-import React from "react";
 import { WaveVisualizer } from "@open-motion/components";
 import { useVideoConfig } from "@open-motion/core";
 

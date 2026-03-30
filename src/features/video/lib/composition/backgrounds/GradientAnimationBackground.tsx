@@ -1,4 +1,3 @@
-import React from "react";
 import { useCurrentFrame } from "@open-motion/core";
 
 export function GradientAnimationBackground({

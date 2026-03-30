@@ -1,4 +1,4 @@
-import React, { useCallback } from "react";
+import { useCallback } from "react";
 import { useVideoConfig } from "@open-motion/core";
 import { ThreeCanvas } from "@open-motion/components";
 import * as THREE from "three";
