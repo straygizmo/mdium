@@ -102,6 +102,7 @@ export function App() {
         });
       } else {
         useTabStore.getState().updateTabContent(activeTab.id, newContent);
+        useTabStore.getState().markClean(activeTab.id);
       }
     } catch (e) {
       console.error("Failed to reload file after external change:", e);
@@ -1206,6 +1207,7 @@ export function App() {
               externalChange.tabId,
               externalChange.externalContent,
             );
+            useTabStore.getState().markClean(externalChange.tabId);
             setExternalChange(null);
           }}
           onKeepCurrent={() => setExternalChange(null)}
