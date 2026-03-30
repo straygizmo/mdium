@@ -17,7 +17,7 @@ import { VideoPanel } from "@/features/video/components/VideoPanel";
 import { VideoOverwriteDialog, type OverwriteChoice } from "@/features/video/components/VideoOverwriteDialog";
 import { useVideoStore } from "@/stores/video-store";
 import { invoke } from "@tauri-apps/api/core";
-import { useChatUIStore } from "@/features/opencode-config/hooks/useOpencodeChat";
+import { useChatUIStore, consumePendingVideoOutput } from "@/features/opencode-config/hooks/useOpencodeChat";
 import { docxToMarkdown } from "@/features/export/lib/docxToMarkdown";
 import { marked } from "marked";
 import { readFile } from "@tauri-apps/plugin-fs";
@@ -322,6 +322,22 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
     useUiStore.getState().setLeftPanel("opencode-config");
     useUiStore.getState().setOpencodeTopTab("chat");
   }, []);
+
+  // Auto-open .video.json when generate-video command completes
+  const chatLoading = useChatUIStore((s) => s.loading);
+  const prevChatLoadingRef = useRef(true);
+
+  useEffect(() => {
+    // Detect transition from loading → not loading
+    if (prevChatLoadingRef.current && !chatLoading) {
+      const outputPath = consumePendingVideoOutput();
+      if (outputPath && onOpenFile) {
+        // Small delay to ensure file is written to disk
+        setTimeout(() => onOpenFile(outputPath), 500);
+      }
+    }
+    prevChatLoadingRef.current = chatLoading;
+  }, [chatLoading, onOpenFile]);
 
   const handleOverwriteChoice = useCallback((choice: OverwriteChoice) => {
     if (!overwriteDialog) return;
