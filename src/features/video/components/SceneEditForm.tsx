@@ -1,6 +1,7 @@
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useVideoStore } from "@/stores/video-store";
+import { splitNarration } from "@/features/video/lib/narration-splitter";
 import type { Scene, TransitionType } from "@/features/video/types";
 
 const TRANSITION_OPTIONS: { value: TransitionType; labelKey: string }[] = [
@@ -57,6 +58,12 @@ export function SceneEditForm({ scene, onRegenerateAudio, audioGenerating }: Sce
 
   const captionsEnabled = scene.captions?.enabled ?? false;
 
+  // Preview segments from current narration text
+  const previewSegments = useMemo(
+    () => splitNarration(scene.narration),
+    [scene.narration]
+  );
+
   return (
     <div className="scene-edit-form">
       <div className="scene-edit-form__header">
@@ -84,6 +91,27 @@ export function SceneEditForm({ scene, onRegenerateAudio, audioGenerating }: Sce
           rows={4}
           placeholder={t("narrationPlaceholder")}
         />
+        {previewSegments.length > 0 && (
+          <div className="scene-edit-form__segments">
+            <label className="scene-edit-form__segments-label">
+              {t("segmentPreview")} ({previewSegments.length})
+            </label>
+            <ol className="scene-edit-form__segments-list">
+              {previewSegments.map((seg, i) => {
+                const generated = scene.narrationSegments?.[i];
+                const hasAudio = !!generated?.audioPath && generated.text === seg;
+                return (
+                  <li key={i} className="scene-edit-form__segment-item">
+                    <span className={`scene-edit-form__segment-status${hasAudio ? " scene-edit-form__segment-status--ok" : ""}`}>
+                      {hasAudio ? "●" : "○"}
+                    </span>
+                    <span className="scene-edit-form__segment-text">{seg}</span>
+                  </li>
+                );
+              })}
+            </ol>
+          </div>
+        )}
       </div>
 
       <div className="scene-edit-form__row">

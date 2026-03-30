@@ -55,5 +55,6 @@
   "ttsSpeakerPlaceholder": "Speaker ID",
   "audioFiles": "Audio Files",
   "sceneUntitled": "Untitled Scene",
-  "narrationPlaceholder": "Enter narration text..."
+  "narrationPlaceholder": "Enter narration text...",
+  "segmentPreview": "Caption segments"
 }

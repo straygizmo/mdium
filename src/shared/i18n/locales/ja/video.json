@@ -55,5 +55,6 @@
   "ttsSpeakerPlaceholder": "話者ID",
   "audioFiles": "音声ファイル",
   "sceneUntitled": "無題のシーン",
-  "narrationPlaceholder": "ナレーションテキストを入力..."
+  "narrationPlaceholder": "ナレーションテキストを入力...",
+  "segmentPreview": "字幕セグメント"
 }
