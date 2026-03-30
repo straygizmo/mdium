@@ -29,12 +29,19 @@ export const useVideoStore = create<VideoState>()((set) => ({
   isVideoMode: false,
 
   setVideoProject: (project, sourceFilePath) =>
-    set((s) => ({
-      videoProject: project,
-      sourceFilePath: sourceFilePath ?? s.sourceFilePath,
-      audioGenerated: false,
-      renderProgress: 0,
-    })),
+    set((s) => {
+      // If all scenes already have audio and none are dirty, mark as generated
+      const allAudioReady =
+        !!project &&
+        project.scenes.length > 0 &&
+        project.scenes.every((sc) => sc.narrationAudio && !sc.narrationDirty);
+      return {
+        videoProject: project,
+        sourceFilePath: sourceFilePath ?? s.sourceFilePath,
+        audioGenerated: allAudioReady,
+        renderProgress: 0,
+      };
+    }),
 
   updateScene: (sceneId, partial) =>
     set((s) => {

@@ -7,7 +7,20 @@ import {
   useVideoConfig,
   parseSrt,
 } from "@open-motion/core";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import type { VideoProject, Scene, SceneElement } from "../types";
+
+/** Convert a local file path to a URL the webview can load. */
+function toPlayableSrc(filePath: string): string {
+  if (!filePath || filePath.startsWith("http") || filePath.startsWith("blob:") || filePath.startsWith("data:")) {
+    return filePath;
+  }
+  try {
+    return convertFileSrc(filePath);
+  } catch {
+    return filePath;
+  }
+}
 
 // ─── Public Exports ───────────────────────────────────────────────────────────
 
@@ -53,7 +66,7 @@ export function VideoComposition({
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>
       {/* Background music */}
-      {bgm && <Audio src={bgm.src} volume={bgm.volume} />}
+      {bgm && <Audio src={toPlayableSrc(bgm.src)} volume={bgm.volume} />}
 
       {/* Scenes */}
       {project.scenes.map((scene, i) => {
@@ -67,7 +80,7 @@ export function VideoComposition({
             <SceneRenderer scene={scene} />
             {scene.narrationAudio && (
               <Audio
-                src={scene.narrationAudio}
+                src={toPlayableSrc(scene.narrationAudio)}
                 volume={project.audio.tts?.volume ?? 1}
               />
             )}

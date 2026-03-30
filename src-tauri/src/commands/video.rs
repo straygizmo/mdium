@@ -281,13 +281,25 @@ pub async fn video_export(
         }
     }
 
+    // Link vendored @open-motion packages into node_modules so Node can resolve them
+    let nm_om = temp_dir.join("node_modules").join("@open-motion");
+    fs::create_dir_all(&nm_om)
+        .map_err(|e| format!("Failed to create @open-motion dir: {}", e))?;
+    for pkg in &["core", "renderer", "encoder", "components"] {
+        let src = temp_dir.join("open-motion").join(pkg);
+        let dest = nm_om.join(pkg);
+        if src.exists() && !dest.exists() {
+            copy_dir_recursive(&src, &dest)?;
+        }
+    }
+
     // Run render script
     let _ = app.emit("video-progress", serde_json::json!({
         "phase": "render", "percent": 0, "message": "Starting video render..."
     }));
 
     let render_script = video_env_dir.join("render-video.mjs");
-    let node = if cfg!(target_os = "windows") { "node.exe" } else { "node" };
+    let npx = if cfg!(target_os = "windows") { "npx.cmd" } else { "npx" };
 
     let app_clone = app.clone();
     let temp_dir_clone = temp_dir.clone();
@@ -299,8 +311,9 @@ pub async fn video_export(
         #[cfg(target_os = "windows")]
         let mut child = {
             use std::os::windows::process::CommandExt;
-            Command::new(node)
+            Command::new(npx)
                 .args([
+                    "tsx",
                     render_script.to_string_lossy().as_ref(),
                     &temp_dir_str,
                     &output_path_clone,
@@ -319,8 +332,9 @@ pub async fn video_export(
 
         #[cfg(not(target_os = "windows"))]
         let mut child = {
-            Command::new(node)
+            Command::new(npx)
                 .args([
+                    "tsx",
                     render_script.to_string_lossy().as_ref(),
                     &temp_dir_str,
                     &output_path_clone,

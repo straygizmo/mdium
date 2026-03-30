@@ -5,11 +5,11 @@ import type { Scene, TransitionType } from "@/features/video/types";
 import { generateNarrationForScene } from "../lib/narration-generator";
 
 const TRANSITION_OPTIONS: { value: TransitionType; labelKey: string }[] = [
-  { value: "fade", labelKey: "transition.fade" },
-  { value: "slide-left", labelKey: "transition.slideLeft" },
-  { value: "slide-right", labelKey: "transition.slideRight" },
-  { value: "slide-up", labelKey: "transition.slideUp" },
-  { value: "none", labelKey: "transition.none" },
+  { value: "fade", labelKey: "fade" },
+  { value: "slide-left", labelKey: "slideLeft" },
+  { value: "slide-right", labelKey: "slideRight" },
+  { value: "slide-up", labelKey: "slideUp" },
+  { value: "none", labelKey: "none" },
 ];
 
 interface SceneEditFormProps {
@@ -61,25 +61,25 @@ export function SceneEditForm({ scene }: SceneEditFormProps) {
   return (
     <div className="scene-edit-form">
       <div className="scene-edit-form__header">
-        <span>{scene.title ?? t("scene.untitled")}</span>
+        <span>{scene.title ?? t("sceneUntitled")}</span>
         {scene.narrationDirty && (
-          <span className="scene-edit-form__dirty">{t("scene.unsync")}</span>
+          <span className="scene-edit-form__dirty">{t("narrationDirty")}</span>
         )}
       </div>
 
       <div className="scene-edit-form__field">
-        <label>{t("scene.narration")}</label>
+        <label>{t("narration")}</label>
         <div className="scene-edit-form__narration-row">
           <textarea
             value={scene.narration}
             onChange={handleNarrationChange}
             rows={4}
-            placeholder={t("scene.narrationPlaceholder")}
+            placeholder={t("narrationPlaceholder")}
           />
           <button
             className="scene-edit-form__btn"
             onClick={handleRegenerateNarration}
-            title={t("scene.regenerateNarration")}
+            title={t("narrationRegenerate")}
           >
             ↻
           </button>
@@ -87,17 +87,17 @@ export function SceneEditForm({ scene }: SceneEditFormProps) {
       </div>
 
       <div className="scene-edit-form__row">
-        <label>{t("scene.captions")}</label>
+        <label>{t("captions")}</label>
         <button
           className={`scene-edit-form__toggle${captionsEnabled ? " scene-edit-form__toggle--on" : ""}`}
           onClick={handleToggleCaptions}
         >
-          {captionsEnabled ? t("scene.captionsOn") : t("scene.captionsOff")}
+          {captionsEnabled ? t("captionsOn") : t("captionsOff")}
         </button>
       </div>
 
       <div className="scene-edit-form__row">
-        <label>{t("scene.transition")}</label>
+        <label>{t("transition")}</label>
         <select value={scene.transition.type} onChange={handleTransitionChange}>
           {TRANSITION_OPTIONS.map((opt) => (
             <option key={opt.value} value={opt.value}>

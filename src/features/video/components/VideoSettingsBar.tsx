@@ -38,7 +38,7 @@ export function VideoSettingsBar() {
   const handleBgmSelect = useCallback(async () => {
     const path = await open({
       multiple: false,
-      filters: [{ name: t("bgm.audioFiles"), extensions: ["mp3", "wav", "ogg", "flac", "aac"] }],
+      filters: [{ name: t("audioFiles"), extensions: ["mp3", "wav", "ogg", "flac", "aac"] }],
     });
     if (typeof path === "string") {
       updateAudioConfig({ bgm: { src: path, volume: audio?.bgm?.volume ?? 0.5 } });
@@ -71,10 +71,10 @@ export function VideoSettingsBar() {
 
   return (
     <div className="video-settings-bar">
-      <span className="video-settings-bar__title">{t("settings.title")}</span>
+      <span className="video-settings-bar__title">{t("globalSettings")}</span>
 
       <div className="video-settings-bar__row">
-        <label>{t("settings.resolution")}</label>
+        <label>{t("resolution")}</label>
         <select
           value={currentResolutionIndex >= 0 ? currentResolutionIndex : ""}
           onChange={handleResolutionChange}
@@ -88,9 +88,9 @@ export function VideoSettingsBar() {
       </div>
 
       <div className="video-settings-bar__row">
-        <label>{t("settings.bgm")}</label>
+        <label>{t("bgm")}</label>
         <button className="video-settings-bar__btn" onClick={handleBgmSelect}>
-          {audio?.bgm?.src ? audio.bgm.src.split(/[\\/]/).pop() : t("settings.bgmSelect")}
+          {audio?.bgm?.src ? audio.bgm.src.split(/[\\/]/).pop() : t("bgmSelect")}
         </button>
         {audio?.bgm && (
           <input
@@ -100,25 +100,25 @@ export function VideoSettingsBar() {
             step={0.01}
             value={audio.bgm.volume}
             onChange={handleBgmVolumeChange}
-            title={t("settings.bgmVolume")}
+            title={t("bgmVolume")}
           />
         )}
       </div>
 
       <div className="video-settings-bar__row">
-        <label>{t("settings.ttsProvider")}</label>
+        <label>{t("ttsProvider")}</label>
         <select value={audio?.tts?.provider ?? "voicevox"} disabled>
           <option value="voicevox">VoiceVox</option>
         </select>
       </div>
 
       <div className="video-settings-bar__row">
-        <label>{t("settings.ttsSpeaker")}</label>
+        <label>{t("ttsSpeaker")}</label>
         <input
           type="text"
           value={audio?.tts?.speaker ?? ""}
           onChange={handleTtsSpeakerChange}
-          placeholder={t("settings.ttsSpeakerPlaceholder")}
+          placeholder={t("ttsSpeakerPlaceholder")}
         />
       </div>
     </div>

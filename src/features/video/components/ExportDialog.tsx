@@ -61,10 +61,10 @@ export function ExportDialog({ onClose, onExport }: ExportDialogProps) {
   return (
     <div className="export-dialog__overlay" onClick={onClose}>
       <div className="export-dialog" onClick={(e) => e.stopPropagation()}>
-        <h2>{t("export.title")}</h2>
+        <h2>{t("exportDialog")}</h2>
 
         <div className="export-dialog__field">
-          <label>{t("export.format")}</label>
+          <label>{t("format")}</label>
           <label>
             <input
               type="radio"
@@ -88,14 +88,14 @@ export function ExportDialog({ onClose, onExport }: ExportDialogProps) {
         </div>
 
         <div className="export-dialog__field">
-          <label>{t("export.resolution")}</label>
+          <label>{t("resolution")}</label>
           <span>
             {meta?.width ?? "—"} x {meta?.height ?? "—"}
           </span>
         </div>
 
         <div className="export-dialog__field">
-          <label>{t("export.fps")}</label>
+          <label>{t("fps")}</label>
           <input
             type="number"
             min={1}
@@ -106,7 +106,7 @@ export function ExportDialog({ onClose, onExport }: ExportDialogProps) {
         </div>
 
         <div className="export-dialog__field">
-          <label>{t("export.concurrency")}</label>
+          <label>{t("concurrency")}</label>
           <input
             type="number"
             min={1}
@@ -117,9 +117,9 @@ export function ExportDialog({ onClose, onExport }: ExportDialogProps) {
         </div>
 
         <div className="export-dialog__field">
-          <label>{t("export.outputPath")}</label>
+          <label>{t("outputPath")}</label>
           <button onClick={handleSelectOutputPath}>
-            {outputPath ? outputPath.split(/[\\/]/).pop() : t("export.selectOutput")}
+            {outputPath ? outputPath.split(/[\\/]/).pop() : t("selectOutput")}
           </button>
         </div>
 
@@ -135,10 +135,10 @@ export function ExportDialog({ onClose, onExport }: ExportDialogProps) {
 
         <div className="export-dialog__actions">
           <button onClick={onClose} disabled={isExporting}>
-            {t("export.cancel")}
+            {t("cancel")}
           </button>
           <button onClick={handleExport} disabled={!outputPath || isExporting}>
-            {t("export.export")}
+            {t("startExport")}
           </button>
         </div>
       </div>

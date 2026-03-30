@@ -18,6 +18,7 @@
 import { execSync, spawn } from "child_process";
 import { existsSync, readFileSync, mkdirSync } from "fs";
 import path from "path";
+import { pathToFileURL } from "url";
 import http from "http";
 
 const args = process.argv.slice(2);
@@ -57,6 +58,7 @@ async function startViteServer(projectDir, port) {
   const vite = spawn(npxCmd, ["vite", "--port", String(port), "--host", "127.0.0.1"], {
     cwd: projectDir,
     stdio: ["ignore", "pipe", "pipe"],
+    shell: isWin,
     ...(isWin ? { windowsHide: true } : {}),
   });
 
@@ -82,10 +84,10 @@ async function renderFrames(url, config, framesDir, concurrencyCount) {
 
   // Dynamic import of renderer (uses playwright)
   const { renderFrames: render } = await import(
-    path.join(tempDir, "node_modules", "@open-motion/renderer/src/index.ts")
+    pathToFileURL(path.join(tempDir, "node_modules", "@open-motion/renderer/src/index.ts")).href
   ).catch(() => {
     // Fallback: use vendored renderer directly
-    return import(path.join(tempDir, "open-motion/renderer/src/index.ts"));
+    return import(pathToFileURL(path.join(tempDir, "open-motion/renderer/src/index.ts")).href);
   });
 
   const result = await render({
@@ -107,9 +109,9 @@ async function encodeVideo(framesDir, outputFile, videoFps, audioAssets, duratio
   log({ type: "status", message: "Encoding video..." });
 
   const { encodeVideo: encode } = await import(
-    path.join(tempDir, "node_modules", "@open-motion/encoder/src/index.ts")
+    pathToFileURL(path.join(tempDir, "node_modules", "@open-motion/encoder/src/index.ts")).href
   ).catch(() => {
-    return import(path.join(tempDir, "open-motion/encoder/src/index.ts"));
+    return import(pathToFileURL(path.join(tempDir, "open-motion/encoder/src/index.ts")).href);
   });
 
   await encode({
