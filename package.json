@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@huggingface/transformers": "^3.8.1",
+    "@monaco-editor/react": "^4.7.0",
     "@open-motion/components": "file:packages/open-motion/components",
     "@open-motion/core": "file:packages/open-motion/core",
     "@opencode-ai/sdk": "^1.2.27",
@@ -40,6 +41,7 @@
     "marked": "^17.0.4",
     "mathjax-full": "^3.2.2",
     "mermaid": "^11.12.3",
+    "monaco-editor": "^0.55.1",
     "pdfjs-dist": "^5.5.207",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",

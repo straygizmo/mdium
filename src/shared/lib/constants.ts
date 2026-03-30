@@ -25,6 +25,21 @@ export function getImageExt(filePath: string): string | null {
   return IMAGE_EXTENSIONS.find((ext) => lower.endsWith(ext)) ?? null;
 }
 
+/**
+ * Returns true if the file should be opened in the code editor
+ * (i.e., it is not Markdown, Office, PDF, image, mindmap, or video JSON).
+ */
+export function isCodeFile(filePath: string): boolean {
+  const lower = filePath.toLowerCase();
+  if (lower.endsWith(".md")) return false;
+  if (lower.endsWith(".video.json")) return false;
+  if (getOfficeExt(lower)) return false;
+  if (getPdfExt(lower)) return false;
+  if (getMindmapExt(lower)) return false;
+  if (getImageExt(lower)) return false;
+  return true;
+}
+
 export const MERMAID_GENERATE_PROMPT =
   "You are a Mermaid diagram generator. " +
   "Based on the user's description, generate appropriate Mermaid diagram source code. " +

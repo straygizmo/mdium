@@ -24,6 +24,8 @@ export interface Tab {
   imageBlobUrl?: string;
   /** Fabric.js JSON for image canvas (for preserving state across tab switches) */
   imageCanvasJson?: string;
+  /** Whether this tab should use the code editor (non-markdown text file) */
+  isCodeFile?: boolean;
 }
 
 interface TabState {
