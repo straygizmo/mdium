@@ -42,10 +42,17 @@ export function useVideoGeneration() {
       for (let i = 0; i < total; i++) {
         const scene = scenes[i];
 
-        // Skip if audio file exists on disk and is not dirty
+        // Skip if audio file exists in the project's audio folder and is not dirty
         if (scene.narrationAudio && !scene.narrationDirty) {
-          const exists = await invoke<boolean>("video_file_exists", { path: scene.narrationAudio });
-          if (exists) continue;
+          const isInAudioFolder = sourceFilePath
+            ? scene.narrationAudio.replace(/\\/g, "/").startsWith(
+                sourceFilePath.replace(/\\/g, "/").replace(/\/[^/]+$/, "/audio/")
+              )
+            : false;
+          if (isInAudioFolder) {
+            const exists = await invoke<boolean>("video_file_exists", { path: scene.narrationAudio });
+            if (exists) continue;
+          }
         }
 
         setGeneratingStatus(`${i + 1}/${total}: ${scene.title ?? scene.id}`);
