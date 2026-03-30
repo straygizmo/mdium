@@ -120,9 +120,10 @@ interface Scene {
 
 ### E. UI変更（ナレーション編集）
 
-- ナレーションのテキストボックスを複数行入力可能に（改行=分割点）
-- 編集後に「音声再生成」ボタンで該当シーンのTTSを再実行
-- 各セグメントの字幕プレビューをリスト表示
+`SceneEditForm.tsx`には既にナレーション用textareaと再生成ボタン（↻）が存在する。以下を追加・変更:
+
+- textareaの下にセグメント分割プレビューをリスト表示（句点/改行で分割された各セグメントを表示）
+- 各セグメントに音声生成済み/未生成のステータス表示
 
 ### 変更ファイル
 
@@ -132,7 +133,7 @@ interface Scene {
 - `src/features/video/hooks/useVideoGeneration.ts` — 分割ロジック、セグメント単位の音声生成
 - `src/features/video/lib/scene-to-composition.tsx` — セグメント音声の連結再生、字幕表示
 - `src/features/video/lib/merge-project.ts` — narrationSegmentsのマージ対応
-- ビデオパネルUIコンポーネント — ナレーション編集テキストエリア+再生成ボタン
+- `src/features/video/components/SceneEditForm.tsx` — セグメント分割プレビュー追加
 
 ## 後方互換性
 
