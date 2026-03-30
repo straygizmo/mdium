@@ -9,6 +9,7 @@ import { SceneEditForm } from "./SceneEditForm";
 import { ExportPanel } from "./ExportPanel";
 import { Player } from "@open-motion/core";
 import { VideoComposition, calculateTotalDuration } from "../lib/composition";
+import { decorateWithLLM } from "../lib/scene-decorator";
 import type { ExportOptions } from "./ExportPanel";
 import "./VideoPanel.css";
 
@@ -21,6 +22,23 @@ export function VideoPanel() {
 
   const { generating, generatingStatus, generateAudioForAllScenes, generateAudioForScene } =
     useVideoGeneration();
+
+  const setVideoProject = useVideoStore((s) => s.setVideoProject);
+
+  const [decorating, setDecorating] = useState(false);
+
+  const handleDecorate = useCallback(async () => {
+    if (!videoProject) return;
+    setDecorating(true);
+    try {
+      const decorated = await decorateWithLLM(videoProject);
+      setVideoProject(decorated);
+    } catch (e) {
+      console.error("Decoration failed:", e);
+    } finally {
+      setDecorating(false);
+    }
+  }, [videoProject, setVideoProject]);
 
   // Splitter drag logic
   const [leftWidth, setLeftWidth] = useState(300);
@@ -141,6 +159,8 @@ export function VideoPanel() {
             onGenerateAudio={handleGenerateAudio}
             generating={generating}
             generatingStatus={generatingStatus}
+            onDecorateWithLLM={handleDecorate}
+            decorating={decorating}
           />
           {scenes.map((scene) => (
             <SceneEditForm

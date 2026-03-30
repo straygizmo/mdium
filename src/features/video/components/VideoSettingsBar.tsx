@@ -8,6 +8,8 @@ interface VideoSettingsBarProps {
   onGenerateAudio: () => void;
   generating: boolean;
   generatingStatus: string;
+  onDecorateWithLLM: () => void;
+  decorating: boolean;
 }
 
 const RESOLUTION_OPTIONS = [
@@ -17,7 +19,7 @@ const RESOLUTION_OPTIONS = [
   { label: "1080x1080 (1:1)", width: 1080, height: 1080, aspectRatio: "1:1" as AspectRatio },
 ];
 
-export function VideoSettingsBar({ onGenerateAudio, generating, generatingStatus }: VideoSettingsBarProps) {
+export function VideoSettingsBar({ onGenerateAudio, generating, generatingStatus, onDecorateWithLLM, decorating }: VideoSettingsBarProps) {
   const { t } = useTranslation("video");
   const videoProject = useVideoStore((s) => s.videoProject);
   const updateMeta = useVideoStore((s) => s.updateMeta);
@@ -136,6 +138,22 @@ export function VideoSettingsBar({ onGenerateAudio, generating, generatingStatus
         {generating
           ? generatingStatus || t("generatingAudio")
           : t("generateAudio")}
+      </button>
+
+      <button
+        onClick={onDecorateWithLLM}
+        disabled={decorating || generating}
+        style={{
+          padding: "4px 12px",
+          borderRadius: 4,
+          border: "1px solid var(--border)",
+          background: decorating ? "var(--background-muted)" : "var(--accent)",
+          color: decorating ? "var(--foreground-muted)" : "var(--accent-foreground, #fff)",
+          cursor: decorating ? "not-allowed" : "pointer",
+          fontSize: 13,
+        }}
+      >
+        {decorating ? "設定中..." : "LLMで自動設定"}
       </button>
     </div>
   );
