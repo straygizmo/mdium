@@ -549,6 +549,53 @@ fn get_code_page_from_xlsm(xlsm_path: &str) -> Result<u16, String> {
 }
 
 // ---------------------------------------------------------------------------
+// Helper: rebuild a ZIP with one entry replaced
+// ---------------------------------------------------------------------------
+
+fn replace_zip_entry(
+    original_zip: &[u8],
+    entry_name: &str,
+    new_data: &[u8],
+) -> Result<Vec<u8>, String> {
+    let reader = Cursor::new(original_zip);
+    let mut archive = zip::ZipArchive::new(reader)
+        .map_err(|e| format!("Failed to read ZIP archive: {}", e))?;
+
+    let mut output = Cursor::new(Vec::new());
+    let mut writer = zip::ZipWriter::new(&mut output);
+
+    for i in 0..archive.len() {
+        let entry = archive
+            .by_index(i)
+            .map_err(|e| format!("Failed to read ZIP entry {}: {}", i, e))?;
+        let name = entry.name().to_owned();
+
+        if name == entry_name {
+            // Write the replacement data with the same options
+            let options = entry.options();
+            drop(entry);
+            writer
+                .start_file(&name, options)
+                .map_err(|e| format!("Failed to start ZIP entry '{}': {}", name, e))?;
+            writer
+                .write_all(new_data)
+                .map_err(|e| format!("Failed to write ZIP entry '{}': {}", name, e))?;
+        } else {
+            // Copy the entry as-is
+            writer
+                .raw_copy_file(entry)
+                .map_err(|e| format!("Failed to copy ZIP entry '{}': {}", name, e))?;
+        }
+    }
+
+    writer
+        .finish()
+        .map_err(|e| format!("Failed to finalize ZIP: {}", e))?;
+
+    Ok(output.into_inner())
+}
+
+// ---------------------------------------------------------------------------
 // Command: extract_vba_modules
 // ---------------------------------------------------------------------------
 
@@ -669,9 +716,161 @@ pub fn extract_vba_modules(xlsm_path: String) -> Result<ExtractResult, String> {
     })
 }
 
+// ---------------------------------------------------------------------------
+// Command: inject_vba_modules
+// ---------------------------------------------------------------------------
+
 #[tauri::command]
 pub fn inject_vba_modules(xlsm_path: String, macros_dir: String) -> Result<InjectResult, String> {
-    Err("Not implemented yet".to_string())
+    let file_path = Path::new(&xlsm_path);
+    let macros_path = Path::new(&macros_dir);
+
+    if !file_path.exists() {
+        return Err(format!("File not found: {}", xlsm_path));
+    }
+    if !macros_path.exists() || !macros_path.is_dir() {
+        return Err(format!("Macros directory not found: {}", macros_dir));
+    }
+
+    // 1. Collect .bas/.cls files from macros_dir
+    let mut macro_files: Vec<(String, String)> = Vec::new(); // (module_name, file_path)
+    let entries = fs::read_dir(macros_path)
+        .map_err(|e| format!("Failed to read macros directory: {}", e))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+        let path = entry.path();
+        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            if ext == "bas" || ext == "cls" {
+                let module_name = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .ok_or_else(|| format!("Invalid file name: {:?}", path))?
+                    .to_string();
+                macro_files.push((module_name, path.to_string_lossy().into_owned()));
+            }
+        }
+    }
+
+    if macro_files.is_empty() {
+        return Err("No .bas or .cls files found in macros directory".to_string());
+    }
+
+    // 2. Read code page from .codepage file, or fall back to extraction
+    let codepage_file = macros_path.join(".codepage");
+    let code_page: u16 = if codepage_file.exists() {
+        let cp_str = fs::read_to_string(&codepage_file)
+            .map_err(|e| format!("Failed to read .codepage file: {}", e))?;
+        cp_str
+            .trim()
+            .parse::<u16>()
+            .map_err(|e| format!("Invalid code page in .codepage file: {}", e))?
+    } else {
+        get_code_page_from_xlsm(&xlsm_path)?
+    };
+
+    // 3. Create backup
+    let backup_path = format!("{}.bak", xlsm_path);
+    fs::copy(&xlsm_path, &backup_path)
+        .map_err(|e| format!("Failed to create backup: {}", e))?;
+
+    // 4. Read the entire xlsm file and extract vbaProject.bin
+    let xlsm_data = fs::read(&xlsm_path)
+        .map_err(|e| format!("Failed to read file: {}", e))?;
+
+    let vba_bin = read_vba_project_bin(&xlsm_path)?;
+
+    // 5. Parse OLE2, read dir stream, build module mapping
+    let mut comp = cfb::CompoundFile::open(Cursor::new(vba_bin))
+        .map_err(|e| format!("Failed to parse vbaProject.bin as OLE2: {}", e))?;
+
+    let mut dir_compressed = Vec::new();
+    comp.open_stream("/VBA/dir")
+        .map_err(|e| format!("Failed to open /VBA/dir stream: {}", e))?
+        .read_to_end(&mut dir_compressed)
+        .map_err(|e| format!("Failed to read /VBA/dir stream: {}", e))?;
+
+    let dir_data = vba_decompress(&dir_compressed)?;
+    let project = parse_dir_stream(&dir_data)?;
+
+    // Build mapping: module name -> VbaModuleInfo
+    let module_map: std::collections::HashMap<String, &VbaModuleInfo> = project
+        .modules
+        .iter()
+        .map(|m| (m.name.clone(), m))
+        .collect();
+
+    // 6. For each macro file, encode and compress, then write back
+    let mut updated_modules: Vec<String> = Vec::new();
+
+    for (module_name, file_path_str) in &macro_files {
+        let info = module_map.get(module_name).ok_or_else(|| {
+            format!(
+                "Module '{}' not found in vbaProject.bin. \
+                 Cannot inject a module that doesn't exist in the original file.",
+                module_name
+            )
+        })?;
+
+        // Read UTF-8 source from file
+        let source = fs::read_to_string(file_path_str)
+            .map_err(|e| format!("Failed to read macro file '{}': {}", file_path_str, e))?;
+
+        // Encode UTF-8 -> code page
+        let encoded = encode_string(&source, code_page)?;
+
+        // Compress with VBA compression
+        let compressed = vba_compress(&encoded);
+
+        // Read original stream to preserve performance cache
+        let stream_path = format!("/VBA/{}", info.stream_name);
+        let mut original_stream = Vec::new();
+        comp.open_stream(&stream_path)
+            .map_err(|e| format!("Failed to open stream '{}': {}", stream_path, e))?
+            .read_to_end(&mut original_stream)
+            .map_err(|e| format!("Failed to read stream '{}': {}", stream_path, e))?;
+
+        let text_offset = info.text_offset as usize;
+        let cache = if text_offset <= original_stream.len() {
+            &original_stream[..text_offset]
+        } else {
+            &original_stream[..]
+        };
+
+        // Build new stream: cache + compressed source
+        let mut new_stream = Vec::with_capacity(cache.len() + compressed.len());
+        new_stream.extend_from_slice(cache);
+        new_stream.extend_from_slice(&compressed);
+
+        // Write new stream back to OLE2
+        {
+            let mut stream = comp
+                .create_stream(&stream_path)
+                .map_err(|e| format!("Failed to create stream '{}': {}", stream_path, e))?;
+            stream
+                .write_all(&new_stream)
+                .map_err(|e| format!("Failed to write stream '{}': {}", stream_path, e))?;
+        }
+
+        updated_modules.push(module_name.clone());
+    }
+
+    // 7. Serialize updated OLE2 back to bytes
+    comp.flush()
+        .map_err(|e| format!("Failed to flush OLE2 compound file: {}", e))?;
+    let updated_vba_bin = comp.into_inner().into_inner();
+
+    // 8. Replace vbaProject.bin in the ZIP
+    let new_xlsm = replace_zip_entry(&xlsm_data, "xl/vbaProject.bin", &updated_vba_bin)?;
+
+    // 9. Write updated file back
+    fs::write(&xlsm_path, &new_xlsm)
+        .map_err(|e| format!("Failed to write updated file: {}", e))?;
+
+    Ok(InjectResult {
+        backup_path,
+        updated_modules,
+    })
 }
 
 // ---------------------------------------------------------------------------
