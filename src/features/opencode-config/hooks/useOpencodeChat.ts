@@ -193,15 +193,9 @@ function processSSEStream(stream: AsyncIterable<unknown>) {
             }
           }
         } else if (ev.type === "message.updated") {
-          // Only unblock input; completed flag is set by session.idle
-          const info = ev.properties.info;
-          if (
-            info.sessionID === _currentSessionId &&
-            info.role === "assistant" &&
-            (info as any).time?.completed
-          ) {
-            useChatUIStore.setState({ loading: false });
-          }
+          // Completion (loading: false) is handled exclusively by session.idle
+          // to avoid premature "Done" toast when intermediate messages complete
+          // before the full agent loop finishes.
         }
       }
     } catch (e) {
