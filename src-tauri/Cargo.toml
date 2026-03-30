@@ -29,6 +29,9 @@ dirs = "5"
 junction = "1"
 percent-encoding = "2"
 http = "1"
+zip = "2"
+cfb = "0.10"
+encoding_rs = "0.8"
 
 [profile.release]
 panic = "abort"

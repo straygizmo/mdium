@@ -203,6 +203,9 @@ pub fn run() {
             // Environment variable operations
             commands::env::get_env_var,
             commands::env::set_env_var,
+            // VBA macro operations
+            commands::vba::extract_vba_modules,
+            commands::vba::inject_vba_modules,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
