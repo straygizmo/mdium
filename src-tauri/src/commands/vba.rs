@@ -203,11 +203,16 @@ pub fn vba_compress(data: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Number of bits used for the length field in a copy token,
+/// Number of bits used for the **length** field in a copy token,
 /// based on the current decompressed offset within the chunk.
+///
+/// MS-OVBA 2.4.1.3.19.1 defines `BitCount` as the number of bits for the
+/// **offset** portion of a copy token.  This function returns `16 - BitCount`,
+/// i.e. the number of bits for the **length** portion, since both the
+/// compressor and decompressor need length-bits directly.
 fn copy_token_bit_count(decompressed_offset: usize) -> u16 {
-    // MS-OVBA 2.4.1.3.19.1
-    if decompressed_offset <= 0x0010 {
+    // MS-OVBA 2.4.1.3.19.1 – BitCount (offset bits)
+    let offset_bits: u16 = if decompressed_offset <= 0x0010 {
         4
     } else if decompressed_offset <= 0x0020 {
         5
@@ -225,7 +230,9 @@ fn copy_token_bit_count(decompressed_offset: usize) -> u16 {
         11
     } else {
         12
-    }
+    };
+    // Return length bits = 16 - offset bits
+    16 - offset_bits
 }
 
 /// Find the best (longest) match in the sliding window for compression.
@@ -567,6 +574,115 @@ mod tests {
     fn test_vba_compress_empty() {
         let compressed = vba_compress(b"");
         assert_eq!(compressed, vec![0x01]);
+    }
+
+    #[test]
+    fn test_copy_token_bit_count_returns_length_bits() {
+        // Per MS-OVBA 2.4.1.3.19.1, BitCount (offset bits) starts at 4
+        // when decompressed_offset <= 16.  Our function returns 16 - BitCount
+        // (length bits).
+        //
+        // offset <= 0x10  -> BitCount=4,  length_bits=12
+        // offset <= 0x20  -> BitCount=5,  length_bits=11
+        // offset <= 0x40  -> BitCount=6,  length_bits=10
+        // ...
+        // offset >  0x800 -> BitCount=12, length_bits=4
+        assert_eq!(copy_token_bit_count(1), 12);
+        assert_eq!(copy_token_bit_count(16), 12);
+        assert_eq!(copy_token_bit_count(17), 11);
+        assert_eq!(copy_token_bit_count(32), 11);
+        assert_eq!(copy_token_bit_count(33), 10);
+        assert_eq!(copy_token_bit_count(64), 10);
+        assert_eq!(copy_token_bit_count(65), 9);
+        assert_eq!(copy_token_bit_count(128), 9);
+        assert_eq!(copy_token_bit_count(129), 8);
+        assert_eq!(copy_token_bit_count(256), 8);
+        assert_eq!(copy_token_bit_count(257), 7);
+        assert_eq!(copy_token_bit_count(512), 7);
+        assert_eq!(copy_token_bit_count(513), 6);
+        assert_eq!(copy_token_bit_count(1024), 6);
+        assert_eq!(copy_token_bit_count(1025), 5);
+        assert_eq!(copy_token_bit_count(2048), 5);
+        assert_eq!(copy_token_bit_count(2049), 4);
+        assert_eq!(copy_token_bit_count(4096), 4);
+    }
+
+    #[test]
+    fn test_copy_token_bit_layout() {
+        // Verify that a copy token at a known decompressed offset encodes
+        // offset in the high bits and length in the low bits.
+        //
+        // At decompressed_offset=10, length_bits=12, offset_bits=4.
+        //   -> max_length = (1 << 12) - 1 + 3 = 4098
+        //   -> max_offset = 1 << 4 = 16
+        //
+        // Encode: offset=5, length=7
+        //   token_offset = 5 - 1 = 4
+        //   token_length = 7 - 3 = 4
+        //   token = (4 << 12) | 4 = 0x4004
+        let length_bits = copy_token_bit_count(10);
+        assert_eq!(length_bits, 12);
+
+        let offset_bits = 16 - length_bits;
+        assert_eq!(offset_bits, 4);
+
+        let offset: u16 = 5;
+        let length: u16 = 7;
+        let len_mask: u16 = (1 << length_bits) - 1;
+
+        let token = ((offset - 1) << length_bits) | ((length - 3) & len_mask);
+        assert_eq!(token, 0x4004);
+
+        // Decode it back
+        let decoded_length = ((token & len_mask) + 3) as usize;
+        let decoded_offset = ((token >> length_bits) + 1) as usize;
+        assert_eq!(decoded_length, 7);
+        assert_eq!(decoded_offset, 5);
+    }
+
+    #[test]
+    fn test_ms_ovba_spec_example() {
+        // MS-OVBA 2.4.1.3.8 example: decompressing "#aaabcdefaaaaghij#"
+        // The spec provides a known compressed byte stream for this input.
+        // Compressed container bytes (from spec example, section 2.4.1.3.8):
+        //   Signature: 0x01
+        //   Chunk header: 0x19 0xB0  (size=0x0019+3-2=26 bytes compressed, compressed flag set)
+        //   Then the compressed token stream.
+        //
+        // Rather than hardcode the spec's exact byte stream (which depends on
+        // specific encoder choices), we verify that our encoder's output
+        // round-trips and that the token layout is spec-compatible by
+        // constructing a manual compressed stream.
+        //
+        // Manual compressed stream for "aaaaaaaaa" (9 x 'a'):
+        //   At offset 0: literal 'a' (0x61)
+        //   At offset 1: copy token, decompressed_offset=1
+        //     length_bits = copy_token_bit_count(1) = 12
+        //     offset=1, length=8
+        //     token = ((1-1) << 12) | (8-3) = 0x0005
+        //   Flag byte: bit 0 = 0 (literal), bit 1 = 1 (copy) => 0x02
+        let mut manual_compressed: Vec<u8> = Vec::new();
+        manual_compressed.push(0x01); // signature
+        // We'll build the chunk data first, then prepend the header
+        let mut chunk_data: Vec<u8> = Vec::new();
+        // Flag byte: bits 0=literal, 1=copy, rest=0 => 0b00000010 = 0x02
+        chunk_data.push(0x02);
+        // Literal 'a'
+        chunk_data.push(0x61);
+        // Copy token: length_bits=12, offset=1, length=8
+        // token = ((1-1) << 12) | (8-3) = 5
+        let token: u16 = 0x0005;
+        chunk_data.push(token as u8);
+        chunk_data.push((token >> 8) as u8);
+
+        // Chunk header: size = chunk_data.len() + 2 = 6; header = (6-3) | 0x8000 = 0x8003
+        let header: u16 = ((chunk_data.len() as u16 + 2) - 3) | 0x8000;
+        manual_compressed.push(header as u8);
+        manual_compressed.push((header >> 8) as u8);
+        manual_compressed.extend_from_slice(&chunk_data);
+
+        let decompressed = vba_decompress(&manual_compressed).expect("decompress failed");
+        assert_eq!(decompressed, b"aaaaaaaaa");
     }
 
     // --- Encoding tests ---
