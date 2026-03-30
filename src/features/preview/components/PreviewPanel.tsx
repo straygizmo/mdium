@@ -14,10 +14,10 @@ import { DocxPreviewPanel } from "./DocxPreviewPanel";
 import { HtmlPreviewPanel } from "./HtmlPreviewPanel";
 import { SlidevPreviewPanel } from "./SlidevPreviewPanel";
 import { VideoPanel } from "@/features/video/components/VideoPanel";
+import { VideoOverwriteDialog, type OverwriteChoice } from "@/features/video/components/VideoOverwriteDialog";
 import { useVideoStore } from "@/stores/video-store";
-import { convertMdToVideoProject } from "@/features/video/lib/md-to-scenes";
-import { mergeWithSavedProject } from "@/features/video/lib/merge-project";
 import { invoke } from "@tauri-apps/api/core";
+import { useChatUIStore } from "@/features/opencode-config/hooks/useOpencodeChat";
 import { docxToMarkdown } from "@/features/export/lib/docxToMarkdown";
 import { marked } from "marked";
 import { readFile } from "@tauri-apps/plugin-fs";
@@ -285,6 +285,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   const contentRef = useRef<HTMLDivElement>(null);
   const [converting, setConverting] = useState(false);
   const [convertError, setConvertError] = useState<string | null>(null);
+  const [overwriteDialog, setOverwriteDialog] = useState<{ videoJsonName: string; mdPath: string; baseName: string } | null>(null);
 
   const content = activeTab?.content ?? "";
   const filePath = activeTab?.filePath ?? null;
@@ -294,17 +295,61 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   const setVideoProject = useVideoStore((s) => s.setVideoProject);
 
   const handleEnterVideoMode = useCallback(async () => {
-    if (!filePath || !onOpenFile) return;
-    const freshProject = convertMdToVideoProject(content, filePath);
-    const merged = await mergeWithSavedProject(freshProject, filePath);
-    // Save .video.json and open it
-    const projectJson = JSON.stringify(merged, null, 2);
-    await invoke("video_save_project", { mdPath: filePath, projectJson });
-    // Derive the .video.json path and open it
+    if (!filePath) return;
+
+    // Derive paths
     const lastDot = filePath.lastIndexOf(".");
-    const videoJsonPath = (lastDot > 0 ? filePath.slice(0, lastDot) : filePath) + ".video.json";
-    onOpenFile(videoJsonPath);
-  }, [content, filePath, onOpenFile]);
+    const basePath = lastDot > 0 ? filePath.slice(0, lastDot) : filePath;
+    const baseName = basePath.split(/[/\\]/).pop() ?? basePath;
+    const videoJsonPath = basePath + ".video.json";
+    const videoJsonName = baseName + ".video.json";
+
+    // Check if .video.json already exists
+    const existing = await invoke<string | null>("video_load_project", { mdPath: filePath });
+    if (existing) {
+      setOverwriteDialog({ videoJsonName, mdPath: filePath, baseName });
+      return;
+    }
+
+    // No existing file — set command directly
+    setChatCommandAndFocus(filePath, videoJsonPath);
+  }, [filePath]);
+
+  const setChatCommandAndFocus = useCallback((mdPath: string, outputPath: string) => {
+    const command = `/generate-video ${mdPath} ${outputPath}`;
+    useChatUIStore.setState({ chatInput: command });
+    // Switch to chat panel and focus
+    useUiStore.getState().setLeftPanel("opencode-config");
+    useUiStore.getState().setOpencodeTopTab("chat");
+  }, []);
+
+  const handleOverwriteChoice = useCallback((choice: OverwriteChoice) => {
+    if (!overwriteDialog) return;
+    setOverwriteDialog(null);
+
+    if (choice === "cancel") return;
+
+    const { mdPath, baseName } = overwriteDialog;
+    const lastDot = mdPath.lastIndexOf(".");
+    const basePath = lastDot > 0 ? mdPath.slice(0, lastDot) : mdPath;
+    const dir = mdPath.substring(0, Math.max(mdPath.lastIndexOf("/"), mdPath.lastIndexOf("\\")) + 1);
+
+    if (choice === "overwrite") {
+      setChatCommandAndFocus(mdPath, basePath + ".video.json");
+    } else {
+      // "new" — add timestamp
+      const now = new Date();
+      const ts = [
+        now.getFullYear(),
+        String(now.getMonth() + 1).padStart(2, "0"),
+        String(now.getDate()).padStart(2, "0"),
+        String(now.getHours()).padStart(2, "0"),
+        String(now.getMinutes()).padStart(2, "0"),
+        String(now.getSeconds()).padStart(2, "0"),
+      ].join("");
+      setChatCommandAndFocus(mdPath, dir + baseName + "_" + ts + ".video.json");
+    }
+  }, [overwriteDialog, setChatCommandAndFocus]);
 
   // When a .video.json file is opened, load its content as a VideoProject
   const isVideoJson = useMemo(
@@ -937,6 +982,13 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
             </button>
           </div>
         </div>
+      )}
+
+      {overwriteDialog && (
+        <VideoOverwriteDialog
+          fileName={overwriteDialog.videoJsonName}
+          onChoice={handleOverwriteChoice}
+        />
       )}
     </div>
   );
