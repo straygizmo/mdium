@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useVideoStore } from "@/stores/video-store";
 import { splitNarration } from "@/features/video/lib/narration-splitter";
 import type { Scene, TransitionType } from "@/features/video/types";
+import type { BackgroundEffect } from "../types";
 
 const TRANSITION_OPTIONS: { value: TransitionType; labelKey: string }[] = [
   { value: "fade", labelKey: "fade" },
@@ -132,7 +133,87 @@ export function SceneEditForm({ scene, onRegenerateAudio, audioGenerating }: Sce
               {t(opt.labelKey)}
             </option>
           ))}
+          <option value="wipe-left">Wipe Left</option>
+          <option value="wipe-right">Wipe Right</option>
+          <option value="wipe-up">Wipe Up</option>
+          <option value="wipe-down">Wipe Down</option>
         </select>
+      </div>
+
+      {/* Background Effect */}
+      <div style={{ marginBottom: 12 }}>
+        <label style={{ display: "block", fontWeight: 600, fontSize: 13, marginBottom: 4, color: "var(--foreground)" }}>
+          背景エフェクト
+        </label>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+          <label style={{ fontSize: 12, color: "var(--foreground-muted)" }}>
+            <input
+              type="checkbox"
+              checked={!scene.backgroundEffect}
+              onChange={(e) => {
+                if (e.target.checked) {
+                  updateScene(scene.id, { backgroundEffect: undefined });
+                } else {
+                  updateScene(scene.id, { backgroundEffect: { type: "none" } });
+                }
+              }}
+            />
+            {" "}プロジェクトデフォルト
+          </label>
+        </div>
+        {scene.backgroundEffect && (
+          <select
+            value={scene.backgroundEffect.type}
+            onChange={(e) => {
+              const type = e.target.value;
+              let effect: BackgroundEffect;
+              switch (type) {
+                case "gradient":
+                  effect = { type: "gradient", colors: ["#1a1a2e", "#16213e"] };
+                  break;
+                case "gradient-animation":
+                  effect = { type: "gradient-animation", colors: ["#1a1a2e", "#0f3460", "#533483"] };
+                  break;
+                case "particles":
+                  effect = { type: "particles", preset: "stars" };
+                  break;
+                case "wave-visualizer":
+                  effect = { type: "wave-visualizer" };
+                  break;
+                case "three-particles":
+                  effect = { type: "three-particles", preset: "floating" };
+                  break;
+                case "three-geometry":
+                  effect = { type: "three-geometry", preset: "wireframe-sphere" };
+                  break;
+                case "lottie":
+                  effect = { type: "lottie", preset: "sparkle" };
+                  break;
+                default:
+                  effect = { type: "none" };
+              }
+              updateScene(scene.id, { backgroundEffect: effect });
+            }}
+            style={{
+              width: "100%",
+              padding: "4px 8px",
+              borderRadius: 4,
+              border: "1px solid var(--border)",
+              background: "var(--background)",
+              color: "var(--foreground)",
+              fontSize: 13,
+            }}
+          >
+            <option value="none">なし</option>
+            <option value="gradient">グラデーション</option>
+            <option value="gradient-animation">アニメーショングラデーション</option>
+            <option value="particles">パーティクル</option>
+            <option value="wave-visualizer">波形ビジュアライザー</option>
+            <option value="three-particles">3Dパーティクル</option>
+            <option value="three-geometry">3Dジオメトリ</option>
+            <option value="lottie">Lottieアニメーション</option>
+          </select>
+        )}
       </div>
     </div>
   );
