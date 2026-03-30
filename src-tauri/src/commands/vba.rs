@@ -407,6 +407,15 @@ pub fn parse_dir_stream(data: &[u8]) -> Result<VbaProject, String> {
         let record_data = &data[pos..pos + record_size];
 
         match record_id {
+            0x0009 => {
+                // PROJECTVERSION: size field (always 4) covers MajorVersion only.
+                // MinorVersion (2 bytes) follows OUTSIDE the size field per MS-OVBA 2.3.4.2.1.10.
+                pos += record_size;
+                if pos + 2 <= data.len() {
+                    pos += 2; // skip MinorVersion
+                }
+                continue; // skip the normal pos += record_size at the end
+            }
             0x0003 => {
                 // PROJECTCODEPAGE
                 if record_size >= 2 {
