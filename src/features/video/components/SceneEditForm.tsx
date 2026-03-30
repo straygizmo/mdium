@@ -2,7 +2,6 @@ import { useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { useVideoStore } from "@/stores/video-store";
 import type { Scene, TransitionType } from "@/features/video/types";
-import { generateNarrationForScene } from "../lib/narration-generator";
 
 const TRANSITION_OPTIONS: { value: TransitionType; labelKey: string }[] = [
   { value: "fade", labelKey: "fade" },
@@ -14,9 +13,11 @@ const TRANSITION_OPTIONS: { value: TransitionType; labelKey: string }[] = [
 
 interface SceneEditFormProps {
   scene: Scene;
+  onRegenerateAudio: (sceneId: string) => Promise<void>;
+  audioGenerating: boolean;
 }
 
-export function SceneEditForm({ scene }: SceneEditFormProps) {
+export function SceneEditForm({ scene, onRegenerateAudio, audioGenerating }: SceneEditFormProps) {
   const { t } = useTranslation("video");
   const updateScene = useVideoStore((s) => s.updateScene);
   const markNarrationDirty = useVideoStore((s) => s.markNarrationDirty);
@@ -29,11 +30,9 @@ export function SceneEditForm({ scene }: SceneEditFormProps) {
     [scene.id, updateScene, markNarrationDirty]
   );
 
-  const handleRegenerateNarration = useCallback(async () => {
-    const narration = await generateNarrationForScene(scene);
-    updateScene(scene.id, { narration });
-    markNarrationDirty(scene.id);
-  }, [scene, updateScene, markNarrationDirty]);
+  const handleRegenerateAudio = useCallback(async () => {
+    await onRegenerateAudio(scene.id);
+  }, [scene.id, onRegenerateAudio]);
 
   const handleToggleCaptions = useCallback(() => {
     updateScene(scene.id, {
@@ -78,7 +77,8 @@ export function SceneEditForm({ scene }: SceneEditFormProps) {
           />
           <button
             className="scene-edit-form__btn"
-            onClick={handleRegenerateNarration}
+            onClick={handleRegenerateAudio}
+            disabled={audioGenerating}
             title={t("narrationRegenerate")}
           >
             ↻

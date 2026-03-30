@@ -20,7 +20,7 @@ export function VideoPanel() {
   const scenes = videoProject?.scenes ?? [];
   const audioGenerated = useVideoStore((s) => s.audioGenerated);
 
-  const { generating, generatingStatus, generateAudioForAllScenes } =
+  const { generating, generatingStatus, generateAudioForAllScenes, generateAudioForScene } =
     useVideoGeneration();
 
   // Splitter drag logic
@@ -139,7 +139,12 @@ export function VideoPanel() {
         <div className="video-panel__scenes">
           <VideoSettingsBar />
           {scenes.map((scene) => (
-            <SceneEditForm key={scene.id} scene={scene} />
+            <SceneEditForm
+              key={scene.id}
+              scene={scene}
+              onRegenerateAudio={generateAudioForScene}
+              audioGenerating={generating}
+            />
           ))}
         </div>
       </div>
