@@ -10,43 +10,53 @@ Each workspace folder runs its own opencode-sdk instance, enabling not only conv
 
 ```mermaid
 graph LR
-    subgraph Input
-        W_IN[Word .docx]
-        E_IN[Excel .xlsx]
-        P_IN[PDF .pdf]
-        X_IN[XMind .xmind]
+    subgraph Workspace["Workspace (per folder)"]
+
+        subgraph Input
+            W_IN[Word .docx]
+            E_IN["Excel .xlsx/.xlsm"]
+            P_IN[PDF .pdf]
+            X_IN[XMind .xmind]
+        end
+
+        subgraph OC["opencode GUI"]
+            F_CHAT[Agentic RAG]
+            F_MCP[buit-in MCP]
+            F_SKL[buit-in Skills]
+        end
+
+        R[RAG]
+        V_IN[Voice recognition]
+        M((MDium))
+
+        subgraph Output
+            W_OUT[Word .docx]
+            P_OUT[PDF .pdf]
+            S_OUT["PowerPoint .pptx<br/>(Slidev)"]
+            K_OUT["MindMap .km<br/>(KityMinder)"]
+            V_OUT["Excel .xlsm<br/>(VBA)"]
+        end
+
+        F_CHAT <--> M
+        F_MCP<--> M
+        F_SKL<--> M
+        R <--> M
+        W_IN --> M
+        E_IN --> M
+        P_IN --> M
+        X_IN --> M
+        M --> W_OUT
+        M --> P_OUT
+        M --> S_OUT
+        M --> K_OUT
+        M --> V_OUT
+        V_IN --> M
+
     end
 
-    subgraph "AI support<br/>(opencode-sdk)"
-        F_CHAT[Agentic RAG]
-        F_MCP[MCP]
-        F_SKL[Skills]
-    end
-
-    R[RAG]
-    V_IN[Voice recognition]
-    M((MDium))
-
-    subgraph Output
-        W_OUT[Word .docx]
-        P_OUT[PDF .pdf]
-        S_OUT["PowerPoint .pptx<br/>(Slidev)"]
-        K_OUT["MindMap .km<br/>(KityMinder)"]
-    end
-
-    F_CHAT <--> M
-    F_MCP<--> M
-    F_SKL<--> M
-    R <--> M
-    W_IN --> M
-    E_IN --> M
-    P_IN --> M
-    X_IN --> M
-    M --> W_OUT
-    M --> P_OUT
-    M --> S_OUT
-    M --> K_OUT
-    V_IN --> M
+    style Input fill:#f3e5f5,stroke:#7b1fa2
+    style Output fill:#e8f5e9,stroke:#2e7d32
+    style OC fill:#e3f2fd,stroke:#1565c0
 ```
 
 [日本語版 README](README.ja.md)
@@ -74,7 +84,13 @@ graph LR
 - **Images** (.png, .jpg, .gif, .bmp, .svg, .webp, etc.) — preview and canvas editing
 - Bidirectional DOCX/Markdown conversion
 - Excel to Markdown conversion powered by [xlsx2md](https://github.com/igapyon/xlsx2md) (table detection, narrative extraction, images/charts/shapes, rich text)
+- Excel VBA macro extraction and injection (.xlsm)
 - Export to PDF
+
+### Code Editor
+
+- Monaco Editor integration for code files with syntax highlighting
+- Language auto-detection based on file extension
 
 ### AI Integration
 
