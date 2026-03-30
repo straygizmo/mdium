@@ -99,6 +99,17 @@ export function LeftPanel({
             </svg>
           </button>
           <button
+            className={`left-panel__activity-btn ${leftPanel === "git" ? "left-panel__activity-btn--active" : ""}`}
+            onClick={() => setLeftPanel("git")}
+            title={t("sourceControl", { ns: "git" })}
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="18" cy="18" r="3" />
+              <circle cx="6" cy="6" r="3" />
+              <path d="M6 21V9a9 9 0 0 0 9 9" />
+            </svg>
+          </button>
+          <button
             className={`left-panel__activity-btn ${leftPanel === "rag" ? "left-panel__activity-btn--active" : ""}`}
             onClick={() => setLeftPanel("rag")}
             title="RAG"
@@ -115,17 +126,6 @@ export function LeftPanel({
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <rect x="4" y="2" width="16" height="20" />
               <rect x="8" y="6" width="8" height="12" />
-            </svg>
-          </button>
-          <button
-            className={`left-panel__activity-btn ${leftPanel === "git" ? "left-panel__activity-btn--active" : ""}`}
-            onClick={() => setLeftPanel("git")}
-            title={t("sourceControl", { ns: "git" })}
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="18" cy="18" r="3" />
-              <circle cx="6" cy="6" r="3" />
-              <path d="M6 21V9a9 9 0 0 0 9 9" />
             </svg>
           </button>
         </div>
