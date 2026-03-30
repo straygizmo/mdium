@@ -819,7 +819,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
     try {
       const filePath = activeTab.filePath;
       const lastDot = filePath.lastIndexOf(".");
-      const macrosDir = filePath.substring(0, lastDot) + "_macros";
+      const macrosDir = filePath.substring(0, lastDot) + "_assets/macros";
 
       const result = await invoke<{ backupPath: string; updatedModules: string[] }>(
         "inject_vba_modules",

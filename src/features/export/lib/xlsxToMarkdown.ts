@@ -3,8 +3,8 @@ import type { ConvertResult } from "./docxToMarkdown";
 
 /**
  * Convert an .xlsx / .xlsm file (as Uint8Array) to Markdown.
- * Images and shapes are extracted and saved to `{baseName}_images/` next to the
- * original spreadsheet.  Returns the path of the generated .md file.
+ * Images and shapes are extracted and saved to `{baseName}_assets/images/` next
+ * to the original spreadsheet.  Returns the path of the generated .md file.
  */
 export async function xlsxToMarkdown(
   data: Uint8Array,
@@ -22,7 +22,8 @@ export async function xlsxToMarkdown(
   const baseName = xlsxPath
     .replace(/^.*[\\/]/, "")
     .replace(/\.(?:xlsx|xlsm)$/i, "");
-  const imagesDir = `${dir}/${baseName}_images`;
+  const assetsDir = `${dir}/${baseName}_assets`;
+  const imagesDir = `${assetsDir}/images`;
   const mdPath = `${dir}/${baseName}.md`;
 
   // ── Parse workbook ────────────────────────────────────────────────────────
@@ -54,8 +55,8 @@ export async function xlsxToMarkdown(
     await mkdir(imagesDir, { recursive: true });
 
     for (const entry of assetEntries) {
-      // Strip the "output/" prefix, preserve subdirectory structure
-      const relativePath = entry.name.replace(/^output\//, "");
+      // Strip "output/" prefix and "assets/" prefix (now represented by imagesDir)
+      const relativePath = entry.name.replace(/^output\//, "").replace(/^assets\//, "");
       const targetPath = `${imagesDir}/${relativePath}`;
 
       // Create subdirectories if needed (e.g. images/, shapes/)
@@ -70,12 +71,13 @@ export async function xlsxToMarkdown(
 
   // ── Rewrite image paths in markdown ────────────────────────────────────
   // xlsx2md emits relative paths like "assets/Sheet1/image1.png" in the
-  // markdown, but we save assets under "{baseName}_images/". Rewrite so
+  // markdown, but we save assets under "{baseName}_assets/images/". Rewrite so
   // the references resolve relative to the .md file.
   let markdown = combined.content;
   for (const entry of assetEntries) {
     const originalPath = entry.name.replace(/^output\//, "");
-    const rewrittenPath = `${baseName}_images/${originalPath}`;
+    const strippedPath = originalPath.replace(/^assets\//, "");
+    const rewrittenPath = `${baseName}_assets/images/${strippedPath}`;
     markdown = markdown.split(originalPath).join(rewrittenPath);
   }
 

@@ -646,7 +646,7 @@ pub fn extract_vba_modules(xlsm_path: String) -> Result<ExtractResult, String> {
     let parent_dir = file_path
         .parent()
         .ok_or("Cannot determine parent directory")?;
-    let macros_dir = parent_dir.join(format!("{}_macros", file_stem));
+    let macros_dir = parent_dir.join(format!("{}_assets", file_stem)).join("macros");
 
     fs::create_dir_all(&macros_dir)
         .map_err(|e| format!("Failed to create macros directory: {}", e))?;
