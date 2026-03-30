@@ -158,13 +158,33 @@ async function main() {
       // Add narration audio from each scene
       let frameOffset = 0;
       for (const scene of projectJson.scenes) {
-        if (scene.narrationAudio) {
+        const ttsVolume = projectJson.audio?.tts?.volume ?? 1.0;
+
+        if (scene.narrationSegments?.length) {
+          // Segment-based audio: each segment placed sequentially within the scene
+          let segFrameOffset = frameOffset;
+          for (const seg of scene.narrationSegments) {
+            if (seg.audioPath) {
+              allAudioAssets.push({
+                src: seg.audioPath,
+                startFrame: segFrameOffset,
+                volume: ttsVolume,
+              });
+            }
+            const segFrames = seg.durationMs
+              ? Math.ceil((seg.durationMs / 1000) * fps)
+              : 0;
+            segFrameOffset += segFrames;
+          }
+        } else if (scene.narrationAudio) {
+          // Legacy: single narration audio per scene
           allAudioAssets.push({
             src: scene.narrationAudio,
             startFrame: frameOffset,
-            volume: projectJson.audio?.tts?.volume ?? 1.0,
+            volume: ttsVolume,
           });
         }
+
         const sceneDuration = scene.durationInFrames || 150;
         const transitionFrames = scene.transition?.durationInFrames || 0;
         frameOffset += sceneDuration - transitionFrames;
