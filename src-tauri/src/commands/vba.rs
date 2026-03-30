@@ -1,7 +1,3 @@
-use std::io::{Read, Cursor};
-use std::path::{Path, PathBuf};
-use std::fs;
-use std::collections::HashMap;
 use serde::Serialize;
 use encoding_rs::*;
 
@@ -87,7 +83,7 @@ pub fn vba_decompress(data: &[u8]) -> Result<Vec<u8>, String> {
                     pos += 1;
                 } else {
                     // Copy token
-                    if pos + 2 > data.len() {
+                    if pos + 2 > chunk_end {
                         return Err("Truncated copy token".to_string());
                     }
                     let token = u16::from_le_bytes([data[pos], data[pos + 1]]);
