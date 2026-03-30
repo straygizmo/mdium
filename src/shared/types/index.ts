@@ -197,3 +197,12 @@ export interface BuiltinSkill {
   description: string;
   content: string;
 }
+
+/** Built-in command definition */
+export interface BuiltinCommand {
+  name: string;
+  description: string;
+  template: string;
+  agent?: string;
+  model?: string;
+}
