@@ -26,19 +26,25 @@ export const Player: React.FC<PlayerProps> = ({
   const requestRef = useRef<number>(undefined!);
   const lastTimeRef = useRef<number | undefined>(undefined);
 
+  const videoAreaRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     const updateScale = () => {
-      if (containerRef.current) {
-        const w = containerRef.current.clientWidth;
-        const s = Math.min(1, w / config.width);
+      const el = videoAreaRef.current;
+      if (el) {
+        const w = el.clientWidth;
+        const h = el.clientHeight;
+        const sw = w / config.width;
+        const sh = h > 0 ? h / config.height : sw;
+        const s = Math.min(1, sw, sh);
         if (s > 0) setScale(s);
       }
     };
     updateScale();
     const ro = new ResizeObserver(updateScale);
-    if (containerRef.current) ro.observe(containerRef.current);
+    if (videoAreaRef.current) ro.observe(videoAreaRef.current);
     return () => ro.disconnect();
-  }, [config.width]);
+  }, [config.width, config.height]);
 
   const animate = useCallback((time: number) => {
     if (lastTimeRef.current !== undefined) {
@@ -90,22 +96,26 @@ export const Player: React.FC<PlayerProps> = ({
       ref={containerRef}
       style={{
         width: '100%',
+        height: '100%',
         maxWidth: config.width,
-        border: '1px solid #ccc',
+        border: '1px solid var(--border, #ccc)',
         borderRadius: '4px',
         overflow: 'hidden',
-        background: '#f0f0f0',
+        background: 'var(--bg-surface, #f0f0f0)',
         boxSizing: 'border-box',
+        display: 'flex',
+        flexDirection: 'column',
       }}
     >
-      <div style={{ width: '100%', height: config.height * scale, overflow: 'hidden' }}>
+      <div ref={videoAreaRef} style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', alignItems: 'start' }}>
         <div
           style={{
             width: config.width,
             height: config.height,
             transform: `scale(${scale})`,
             transformOrigin: 'top left',
-            background: '#fff'
+            background: '#fff',
+            flexShrink: 0,
           }}
         >
         <CompositionProvider config={config} frame={frame} inputProps={inputProps}>
@@ -121,8 +131,20 @@ export const Player: React.FC<PlayerProps> = ({
       </div>
 
       {controls && (
-        <div style={{ padding: '10px', background: '#f0f0f0', display: 'flex', alignItems: 'center', gap: '10px', position: 'relative', zIndex: 10 }}>
-          <button onClick={togglePlay}>
+        <div style={{ padding: '10px', background: 'var(--bg-surface, #f0f0f0)', display: 'flex', alignItems: 'center', gap: '10px', position: 'relative', zIndex: 10, borderTop: '1px solid var(--border, #ccc)' }}>
+          <button
+            onClick={togglePlay}
+            style={{
+              padding: '4px 14px',
+              background: 'var(--primary, #6366f1)',
+              border: '1px solid var(--primary, #6366f1)',
+              color: 'var(--bg-base, #fff)',
+              borderRadius: '4px',
+              fontSize: '12px',
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
             {isPlaying ? 'Pause' : 'Play'}
           </button>
           <input
@@ -134,7 +156,7 @@ export const Player: React.FC<PlayerProps> = ({
             onChange={handleSeek}
             style={{ flex: 1 }}
           />
-          <div style={{ minWidth: '80px', fontSize: '12px', textAlign: 'right', color: '#000' }}>
+          <div style={{ minWidth: '80px', fontSize: '12px', textAlign: 'right', color: 'var(--text, #000)' }}>
             {Math.floor(frame)} / {config.durationInFrames}
           </div>
         </div>
