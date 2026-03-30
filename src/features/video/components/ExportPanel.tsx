@@ -29,7 +29,14 @@ export function ExportPanel({ disabled, onExport }: ExportPanelProps) {
   const [concurrency, setConcurrency] = useState(2);
   const [outputPath, setOutputPath] = useState("");
 
+  const sourceFilePath = useVideoStore((s) => s.sourceFilePath);
+
   const handleSelectOutputPath = useCallback(async () => {
+    // Default: same directory, filename = {stem}.video.json → {stem}.mp4/webm
+    let defaultPath = `output.${format}`;
+    if (sourceFilePath) {
+      defaultPath = sourceFilePath.replace(/\.video\.json$/i, `.${format}`).replace(/\.md$/i, `.${format}`);
+    }
     const path = await save({
       filters: [
         {
@@ -37,12 +44,12 @@ export function ExportPanel({ disabled, onExport }: ExportPanelProps) {
           extensions: [format],
         },
       ],
-      defaultPath: `output.${format}`,
+      defaultPath,
     });
     if (path) {
       setOutputPath(path);
     }
-  }, [format]);
+  }, [format, sourceFilePath]);
 
   const handleExport = useCallback(() => {
     if (!outputPath || !meta) return;
