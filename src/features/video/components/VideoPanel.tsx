@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useVideoStore } from "@/stores/video-store";
-import { useUiStore } from "@/stores/ui-store";
 import { useVideoGeneration } from "../hooks/useVideoGeneration";
 import { VideoSettingsBar } from "./VideoSettingsBar";
 import { SceneEditForm } from "./SceneEditForm";
@@ -20,11 +19,36 @@ export function VideoPanel() {
   const videoProject = useVideoStore((s) => s.videoProject);
   const scenes = videoProject?.scenes ?? [];
   const audioGenerated = useVideoStore((s) => s.audioGenerated);
-  const setIsVideoMode = useVideoStore((s) => s.setIsVideoMode);
-  const setActiveViewTab = useUiStore((s) => s.setActiveViewTab);
 
   const { generating, generatingStatus, generateAudioForAllScenes } =
     useVideoGeneration();
+
+  // Splitter drag logic
+  const [leftWidth, setLeftWidth] = useState(300);
+  const splitterDragging = useRef(false);
+
+  const handleSplitterMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    splitterDragging.current = true;
+    const startX = e.clientX;
+    const startWidth = leftWidth;
+
+    const onMouseMove = (ev: MouseEvent) => {
+      const newWidth = Math.max(200, Math.min(800, startWidth + ev.clientX - startX));
+      setLeftWidth(newWidth);
+    };
+    const onMouseUp = () => {
+      splitterDragging.current = false;
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  }, [leftWidth]);
 
   const handleGenerateAudio = useCallback(async () => {
     try {
@@ -37,11 +61,6 @@ export function VideoPanel() {
       }
     }
   }, [generateAudioForAllScenes, t]);
-
-  const handleBackToEditor = useCallback(() => {
-    setIsVideoMode(false);
-    setActiveViewTab("preview");
-  }, [setIsVideoMode, setActiveViewTab]);
 
   const setRenderProgress = useVideoStore((s) => s.setRenderProgress);
   const sourceFilePath = useVideoStore((s) => s.sourceFilePath);
@@ -103,12 +122,32 @@ export function VideoPanel() {
 
   return (
     <div className="video-panel">
-      <div className="video-panel__left">
-        <VideoSettingsBar />
-        {scenes.map((scene) => (
-          <SceneEditForm key={scene.id} scene={scene} />
-        ))}
+      <div className="video-panel__left" style={{ width: leftWidth }}>
+        <div className="video-panel__actions">
+          <button onClick={handleGenerateAudio} disabled={generating}>
+            {generating
+              ? generatingStatus || t("generatingAudio")
+              : t("generateAudio")}
+          </button>
+          <button
+            onClick={() => setShowExport(true)}
+            disabled={!audioGenerated}
+          >
+            {t("export")}
+          </button>
+        </div>
+        <div className="video-panel__scenes">
+          <VideoSettingsBar />
+          {scenes.map((scene) => (
+            <SceneEditForm key={scene.id} scene={scene} />
+          ))}
+        </div>
       </div>
+
+      <div
+        className={`video-panel__splitter${splitterDragging.current ? " video-panel__splitter--dragging" : ""}`}
+        onMouseDown={handleSplitterMouseDown}
+      />
 
       <div className="video-panel__right">
         <div className="video-panel__player">
@@ -123,21 +162,6 @@ export function VideoPanel() {
               }}
             />
           )}
-        </div>
-
-        <div className="video-panel__actions">
-          <button onClick={handleGenerateAudio} disabled={generating}>
-            {generating
-              ? generatingStatus || t("generatingAudio")
-              : t("generateAudio")}
-          </button>
-          <button
-            onClick={() => setShowExport(true)}
-            disabled={!audioGenerated}
-          >
-            {t("export")}
-          </button>
-          <button onClick={handleBackToEditor}>{t("backToEditor")}</button>
         </div>
       </div>
 

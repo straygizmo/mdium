@@ -27,16 +27,17 @@ export const Player: React.FC<PlayerProps> = ({
   const lastTimeRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
-    const handleResize = () => {
+    const updateScale = () => {
       if (containerRef.current) {
-        const parentWidth = containerRef.current.parentElement?.clientWidth || window.innerWidth;
-        const s = Math.min(1, (parentWidth - 40) / config.width);
+        const w = containerRef.current.clientWidth;
+        const s = Math.min(1, w / config.width);
         if (s > 0) setScale(s);
       }
     };
-    handleResize();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    updateScale();
+    const ro = new ResizeObserver(updateScale);
+    if (containerRef.current) ro.observe(containerRef.current);
+    return () => ro.disconnect();
   }, [config.width]);
 
   const animate = useCallback((time: number) => {
@@ -88,23 +89,25 @@ export const Player: React.FC<PlayerProps> = ({
     <div
       ref={containerRef}
       style={{
-        display: 'inline-block',
+        width: '100%',
+        maxWidth: config.width,
         border: '1px solid #ccc',
         borderRadius: '4px',
         overflow: 'hidden',
         background: '#f0f0f0',
-        width: config.width * scale,
+        boxSizing: 'border-box',
       }}
     >
-      <div
-        style={{
-          width: config.width,
-          height: config.height,
-          transform: `scale(${scale})`,
-          transformOrigin: 'top left',
-          background: '#fff'
-        }}
-      >
+      <div style={{ width: '100%', height: config.height * scale, overflow: 'hidden' }}>
+        <div
+          style={{
+            width: config.width,
+            height: config.height,
+            transform: `scale(${scale})`,
+            transformOrigin: 'top left',
+            background: '#fff'
+          }}
+        >
         <CompositionProvider config={config} frame={frame} inputProps={inputProps}>
           <Component />
           <AudioSyncManager
@@ -114,6 +117,7 @@ export const Player: React.FC<PlayerProps> = ({
             durationInFrames={config.durationInFrames}
           />
         </CompositionProvider>
+        </div>
       </div>
 
       {controls && (

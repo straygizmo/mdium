@@ -1,6 +1,5 @@
 {
   "videoMode": "動画モード",
-  "backToEditor": "MDに戻る",
   "generateAudio": "音声生成",
   "export": "エクスポート",
   "globalSettings": "全体設定",
@@ -33,6 +32,8 @@
   "kenBurns": "Ken Burns",
   "rowByRow": "行ごと",
   "exportDialog": "動画エクスポート",
+  "selectOutput": "ファイルを選択...",
+  "startExport": "エクスポート開始",
   "format": "フォーマット",
   "fps": "FPS",
   "concurrency": "並列数",
@@ -49,5 +50,9 @@
   "overwriteDialogMessage": "「{{fileName}}」が既に存在します。",
   "overwriteDialogYes": "はい（上書き）",
   "overwriteDialogNo": "いいえ（新規作成）",
-  "overwriteDialogCancel": "キャンセル"
+  "overwriteDialogCancel": "キャンセル",
+  "ttsSpeakerPlaceholder": "話者ID",
+  "audioFiles": "音声ファイル",
+  "sceneUntitled": "無題のシーン",
+  "narrationPlaceholder": "ナレーションテキストを入力..."
 }

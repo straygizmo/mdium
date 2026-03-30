@@ -5,20 +5,36 @@
   flex-direction: row;
   height: 100%;
   overflow: hidden;
-  color: var(--text-primary, #ccc);
-  background: var(--bg-primary, #1e1e1e);
+  color: var(--text);
+  background: var(--bg-base);
 }
 
 .video-panel__left {
-  flex: 1;
+  min-width: 200px;
   overflow-y: auto;
   padding: 12px;
-  border-right: 1px solid var(--border-color, #333);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.video-panel__splitter {
+  width: 4px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.15s;
+  border-right: 1px solid var(--border);
+}
+
+.video-panel__splitter:hover,
+.video-panel__splitter--dragging {
+  background: var(--primary);
 }
 
 .video-panel__right {
-  width: 400px;
-  flex-shrink: 0;
+  flex: 1;
+  min-width: 200px;
   display: flex;
   flex-direction: column;
   padding: 12px;
@@ -34,15 +50,26 @@
 
 .video-panel__actions {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   gap: 8px;
+  flex-shrink: 0;
+}
+
+.video-panel__actions button {
+  flex: 1;
+}
+
+.video-panel__scenes {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 /* ─── VideoSettingsBar ───────────────────────────────────────────────────────── */
 
 .video-settings-bar {
-  background: var(--bg-secondary, #2a2a2a);
-  border: 1px solid var(--border-color, #333);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
   border-radius: 4px;
   padding: 12px;
   margin-bottom: 12px;
@@ -54,7 +81,7 @@
 .video-settings-bar__title {
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-primary, #ccc);
+  color: var(--text);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -68,7 +95,7 @@
 
 .video-settings-bar__row label {
   font-size: 12px;
-  color: var(--text-primary, #ccc);
+  color: var(--text);
   min-width: 80px;
   flex-shrink: 0;
 }
@@ -77,9 +104,9 @@
 .video-settings-bar__row input[type="text"] {
   flex: 1;
   min-width: 0;
-  background: var(--bg-primary, #1e1e1e);
-  border: 1px solid var(--border-color, #333);
-  color: var(--text-primary, #ccc);
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  color: var(--text);
   padding: 4px 8px;
   border-radius: 3px;
   font-size: 12px;
@@ -92,9 +119,9 @@
 
 .video-settings-bar__btn {
   flex: 1;
-  background: var(--bg-secondary, #2a2a2a);
-  border: 1px solid var(--border-color, #333);
-  color: var(--text-primary, #ccc);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text);
   padding: 4px 8px;
   border-radius: 3px;
   font-size: 12px;
@@ -106,14 +133,14 @@
 }
 
 .video-settings-bar__btn:hover {
-  background: var(--bg-hover, #3a3a3a);
+  background: var(--bg-overlay);
 }
 
 /* ─── SceneEditForm ──────────────────────────────────────────────────────────── */
 
 .scene-edit-form {
-  background: var(--bg-secondary, #2a2a2a);
-  border: 1px solid var(--border-color, #333);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
   border-radius: 4px;
   padding: 12px;
   margin-bottom: 8px;
@@ -128,14 +155,14 @@
   gap: 8px;
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-primary, #ccc);
+  color: var(--text);
 }
 
 .scene-edit-form__dirty {
   font-size: 10px;
   font-weight: 500;
-  background: #7c3a00;
-  color: #ffb366;
+  background: color-mix(in srgb, var(--accent-red) 20%, transparent);
+  color: var(--accent-red);
   border-radius: 3px;
   padding: 1px 5px;
   flex-shrink: 0;
@@ -149,14 +176,14 @@
 
 .scene-edit-form__field label {
   font-size: 11px;
-  color: var(--text-primary, #ccc);
+  color: var(--text);
   opacity: 0.7;
 }
 
 .scene-edit-form__field textarea {
-  background: var(--bg-primary, #1e1e1e);
-  border: 1px solid var(--border-color, #333);
-  color: var(--text-primary, #ccc);
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  color: var(--text);
   padding: 6px 8px;
   border-radius: 3px;
   font-size: 12px;
@@ -167,7 +194,7 @@
 
 .scene-edit-form__field textarea:focus {
   outline: none;
-  border-color: #555;
+  border-color: var(--border-hover);
 }
 
 .scene-edit-form__narration-row {
@@ -181,9 +208,9 @@
 }
 
 .scene-edit-form__btn {
-  background: var(--bg-primary, #1e1e1e);
-  border: 1px solid var(--border-color, #333);
-  color: var(--text-primary, #ccc);
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  color: var(--text);
   padding: 4px 8px;
   border-radius: 3px;
   cursor: pointer;
@@ -193,7 +220,7 @@
 }
 
 .scene-edit-form__btn:hover {
-  background: var(--bg-hover, #3a3a3a);
+  background: var(--bg-overlay);
 }
 
 .scene-edit-form__row {
@@ -204,7 +231,7 @@
 
 .scene-edit-form__row label {
   font-size: 11px;
-  color: var(--text-primary, #ccc);
+  color: var(--text);
   opacity: 0.7;
   min-width: 70px;
   flex-shrink: 0;
@@ -212,18 +239,18 @@
 
 .scene-edit-form__row select {
   flex: 1;
-  background: var(--bg-primary, #1e1e1e);
-  border: 1px solid var(--border-color, #333);
-  color: var(--text-primary, #ccc);
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  color: var(--text);
   padding: 4px 8px;
   border-radius: 3px;
   font-size: 12px;
 }
 
 .scene-edit-form__toggle {
-  background: var(--bg-primary, #1e1e1e);
-  border: 1px solid var(--border-color, #333);
-  color: var(--text-primary, #ccc);
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  color: var(--text);
   padding: 3px 10px;
   border-radius: 3px;
   cursor: pointer;
@@ -232,17 +259,17 @@
 }
 
 .scene-edit-form__toggle:hover {
-  background: var(--bg-hover, #3a3a3a);
+  background: var(--bg-overlay);
 }
 
 .scene-edit-form__toggle--on {
-  background: #1a3a1a;
-  border-color: #3a7a3a;
-  color: #7adb7a;
+  background: color-mix(in srgb, var(--accent-green) 20%, transparent);
+  border-color: var(--accent-green);
+  color: var(--accent-green);
 }
 
 .scene-edit-form__toggle--on:hover {
-  background: #1f4a1f;
+  background: color-mix(in srgb, var(--accent-green) 30%, transparent);
 }
 
 /* ─── ExportDialog ───────────────────────────────────────────────────────────── */
@@ -258,8 +285,8 @@
 }
 
 .export-dialog {
-  background: var(--bg-secondary, #2a2a2a);
-  border: 1px solid var(--border-color, #333);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 20px 24px;
   min-width: 360px;
@@ -274,7 +301,7 @@
   margin: 0;
   font-size: 15px;
   font-weight: 600;
-  color: var(--text-primary, #ccc);
+  color: var(--text);
 }
 
 .export-dialog__field {
@@ -282,7 +309,7 @@
   align-items: center;
   gap: 10px;
   font-size: 13px;
-  color: var(--text-primary, #ccc);
+  color: var(--text);
 }
 
 .export-dialog__field label:first-child {
@@ -293,9 +320,9 @@
 
 .export-dialog__field input[type="number"] {
   width: 72px;
-  background: var(--bg-primary, #1e1e1e);
-  border: 1px solid var(--border-color, #333);
-  color: var(--text-primary, #ccc);
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  color: var(--text);
   padding: 4px 8px;
   border-radius: 3px;
   font-size: 13px;
@@ -303,9 +330,9 @@
 
 .export-dialog__field button {
   flex: 1;
-  background: var(--bg-primary, #1e1e1e);
-  border: 1px solid var(--border-color, #333);
-  color: var(--text-primary, #ccc);
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  color: var(--text);
   padding: 5px 10px;
   border-radius: 3px;
   font-size: 12px;
@@ -317,14 +344,14 @@
 }
 
 .export-dialog__field button:hover {
-  background: var(--bg-hover, #3a3a3a);
+  background: var(--bg-overlay);
 }
 
 .export-dialog__progress {
   position: relative;
   height: 18px;
-  background: var(--bg-primary, #1e1e1e);
-  border: 1px solid var(--border-color, #333);
+  background: var(--bg-base);
+  border: 1px solid var(--border);
   border-radius: 3px;
   overflow: hidden;
   display: flex;
@@ -337,14 +364,15 @@
   left: 0;
   top: 0;
   bottom: 0;
-  background: #2a6a2a;
+  background: var(--accent-green);
+  opacity: 0.6;
   transition: width 0.2s ease;
 }
 
 .export-dialog__progress span {
   position: relative;
   font-size: 11px;
-  color: var(--text-primary, #ccc);
+  color: var(--text);
 }
 
 .export-dialog__actions {
@@ -355,9 +383,9 @@
 }
 
 .export-dialog__actions button {
-  background: var(--bg-primary, #1e1e1e);
-  border: 1px solid var(--border-color, #333);
-  color: var(--text-primary, #ccc);
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  color: var(--text);
   padding: 6px 16px;
   border-radius: 3px;
   font-size: 13px;
@@ -365,17 +393,17 @@
 }
 
 .export-dialog__actions button:hover:not(:disabled) {
-  background: var(--bg-hover, #3a3a3a);
+  background: var(--bg-overlay);
 }
 
 .export-dialog__actions button:last-child {
-  background: #1a3a1a;
-  border-color: #3a7a3a;
-  color: #7adb7a;
+  background: color-mix(in srgb, var(--accent-green) 20%, transparent);
+  border-color: var(--accent-green);
+  color: var(--accent-green);
 }
 
 .export-dialog__actions button:last-child:hover:not(:disabled) {
-  background: #1f4a1f;
+  background: color-mix(in srgb, var(--accent-green) 30%, transparent);
 }
 
 .export-dialog__actions button:disabled {

@@ -1,6 +1,5 @@
 {
   "videoMode": "Video Mode",
-  "backToEditor": "Back to MD",
   "generateAudio": "Generate Audio",
   "export": "Export",
   "globalSettings": "Global Settings",
@@ -33,6 +32,8 @@
   "kenBurns": "Ken Burns",
   "rowByRow": "Row by Row",
   "exportDialog": "Export Video",
+  "selectOutput": "Select file...",
+  "startExport": "Start Export",
   "format": "Format",
   "fps": "FPS",
   "concurrency": "Concurrency",
@@ -49,5 +50,9 @@
   "overwriteDialogMessage": "\"{{fileName}}\" already exists.",
   "overwriteDialogYes": "Yes (overwrite)",
   "overwriteDialogNo": "No (create new)",
-  "overwriteDialogCancel": "Cancel"
+  "overwriteDialogCancel": "Cancel",
+  "ttsSpeakerPlaceholder": "Speaker ID",
+  "audioFiles": "Audio Files",
+  "sceneUntitled": "Untitled Scene",
+  "narrationPlaceholder": "Enter narration text..."
 }
