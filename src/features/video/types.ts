@@ -70,6 +70,7 @@ export interface TTSOptions {
   speed?: number;
   language?: string;
   mdPath?: string;
+  filename?: string;
 }
 
 export interface TTSResult {

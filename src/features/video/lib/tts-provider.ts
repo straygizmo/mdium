@@ -149,6 +149,7 @@ export class VoicevoxProvider implements TTSProvider {
     const result = await invoke<{ path: string; durationMs: number }>("video_save_audio", {
       audioBytes,
       mdPath: options.mdPath ?? null,
+      filename: options.filename ?? null,
     });
 
     // 6. Use timing data for duration estimate, fall back to WAV header duration

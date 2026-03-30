@@ -65,11 +65,13 @@ export function useVideoGeneration() {
           updateScene(scene.id, { narration: narrationText });
         }
 
+        const sceneNum = String(i + 1).padStart(2, "0");
         const options: TTSOptions = {
           speaker: tts.speaker,
           speed: tts.speed,
           volume: tts.volume,
           mdPath: sourceFilePath ?? undefined,
+          filename: `scene_${sceneNum}.wav`,
         };
 
         const result = await provider.synthesize(narrationText, options);
@@ -104,7 +106,8 @@ export function useVideoGeneration() {
       const tts = videoProject.audio.tts;
       if (!tts) return;
 
-      const scene = videoProject.scenes.find((s) => s.id === sceneId);
+      const sceneIndex = videoProject.scenes.findIndex((s) => s.id === sceneId);
+      const scene = sceneIndex >= 0 ? videoProject.scenes[sceneIndex] : undefined;
       if (!scene) return;
 
       setGenerating(true);
@@ -120,11 +123,13 @@ export function useVideoGeneration() {
           updateScene(scene.id, { narration: narrationText });
         }
 
+        const sceneNum = String(sceneIndex + 1).padStart(2, "0");
         const options: TTSOptions = {
           speaker: tts.speaker,
           speed: tts.speed,
           volume: tts.volume,
           mdPath: sourceFilePath ?? undefined,
+          filename: `scene_${sceneNum}.wav`,
         };
 
         const result = await provider.synthesize(narrationText, options);
