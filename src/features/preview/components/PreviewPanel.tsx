@@ -18,6 +18,7 @@ import { VideoOverwriteDialog, type OverwriteChoice } from "@/features/video/com
 import { useVideoStore } from "@/stores/video-store";
 import { invoke } from "@tauri-apps/api/core";
 import { useChatUIStore, consumePendingVideoOutput } from "@/features/opencode-config/hooks/useOpencodeChat";
+import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 import { docxToMarkdown } from "@/features/export/lib/docxToMarkdown";
 import { marked } from "marked";
 import { readFile } from "@tauri-apps/plugin-fs";
@@ -297,6 +298,14 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   const handleEnterVideoMode = useCallback(async () => {
     if (!filePath) return;
 
+    // Check if generate-video command is registered
+    const { config, projectCommands } = useOpencodeConfigStore.getState();
+    const globalCommands = config.command ?? {};
+    if (!globalCommands["generate-video"] && !projectCommands["generate-video"]) {
+      alert(t("commandNotRegistered"));
+      return;
+    }
+
     // Derive paths
     const lastDot = filePath.lastIndexOf(".");
     const basePath = lastDot > 0 ? filePath.slice(0, lastDot) : filePath;
@@ -313,7 +322,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
 
     // No existing file — set command directly
     setChatCommandAndFocus(filePath, videoJsonPath);
-  }, [filePath]);
+  }, [filePath, t]);
 
   const setChatCommandAndFocus = useCallback((mdPath: string, outputPath: string) => {
     const command = `/generate-video "${mdPath}" "${outputPath}"`;

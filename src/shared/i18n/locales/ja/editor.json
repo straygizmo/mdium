@@ -155,5 +155,6 @@
   "externalChangeAccept": "外部の変更を取り込む",
   "externalChangeShowDiff": "差分を確認",
   "externalChangeHideDiff": "差分を閉じる",
-  "externalChangeKeep": "自分の編集を維持"
+  "externalChangeKeep": "自分の編集を維持",
+  "commandNotRegistered": "ビルトインコマンド「generate-video」が登録されていません。\n設定 > コマンド でビルトインテンプレートから追加してください。"
 }

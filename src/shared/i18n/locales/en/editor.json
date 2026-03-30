@@ -155,5 +155,6 @@
   "externalChangeAccept": "Load External Changes",
   "externalChangeShowDiff": "Show Diff",
   "externalChangeHideDiff": "Hide Diff",
-  "externalChangeKeep": "Keep My Changes"
+  "externalChangeKeep": "Keep My Changes",
+  "commandNotRegistered": "The built-in command \"generate-video\" is not registered.\nPlease add it from the built-in template in Settings > Commands."
 }
