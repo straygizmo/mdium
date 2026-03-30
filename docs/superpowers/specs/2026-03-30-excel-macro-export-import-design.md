@@ -72,6 +72,7 @@
 
 - `zip` — ZIP アーカイブの読み書き
 - `cfb` — OLE2 Compound File Binary 形式のパース・書き込み
+- `encoding_rs` — Shift_JIS 等のコードページ ⇔ UTF-8 変換
 
 ### `extract_vba_modules` コマンド
 
@@ -130,6 +131,30 @@
 5. ファイル名 (拡張子除く) でモジュールを照合し、ソースコードを VBA 圧縮してストリームに書き戻す
 6. 更新した OLE2 をバイト列にシリアライズ
 7. ZIP 内の `xl/vbaProject.bin` を置換して `.xlsm` を上書き保存
+
+### 文字エンコーディング
+
+VBA ソースコードは `vbaProject.bin` 内で **コードページ依存のエンコーディング** で格納されている。日本語環境では通常 **Shift_JIS (code page 932)** が使われる。
+
+**エクスポート時:**
+1. `dir` ストリーム内の `PROJECTCODEPAGE` レコードからコードページを取得
+2. 各モジュールのソースバイト列を、取得したコードページから **UTF-8 に変換** して `.bas` / `.cls` に書き出す
+3. ファイルは BOM なし UTF-8 で保存（エディタ/opencode での編集互換性のため）
+
+**インポート時:**
+1. `.bas` / `.cls` ファイルを UTF-8 として読み込み
+2. エクスポート時に記録したコードページ（または `vbaProject.bin` から再取得）で **UTF-8 → 元のコードページに逆変換**
+3. 変換後のバイト列を VBA 圧縮してストリームに書き戻す
+
+**Rust 実装:**
+- `encoding_rs` クレートを使用（Shift_JIS, Windows-1252 等の主要コードページに対応）
+- コードページ番号 → `encoding_rs::Encoding` へのマッピングテーブルを用意
+- 変換不能文字が検出された場合はエラーを返す（黙って `?` に置換しない）
+
+**エクスポートフォルダにコードページ情報を保持:**
+- `_macros/` フォルダ内に `.codepage` ファイル（内容: `932` 等の数値）を生成
+- インポート時にこのファイルを読み、逆変換に使用
+- `.codepage` が存在しない場合は `vbaProject.bin` の `PROJECTCODEPAGE` から取得
 
 ### VBA 圧縮/解凍
 
@@ -243,6 +268,7 @@ export const OFFICE_EXTENSIONS = [".docx", ".xlsx", ".xlsm", ".xlam"];
 ```
 Book1.xlsm
 Book1_macros/
+  .codepage          ← コードページ番号 (例: "932")
   Module1.bas
   Class1.cls
   ThisWorkbook.cls
