@@ -52,7 +52,7 @@ export function OfficePreview({ fileData, fileType, themeType }: OfficePreviewPr
 
   // .xlsx / .xlsm rendering
   useEffect(() => {
-    if (fileType !== ".xlsx" && fileType !== ".xlsm") return;
+    if (fileType !== ".xlsx" && fileType !== ".xlsm" && fileType !== ".xlam") return;
     if (!fileData) return;
 
     let cancelled = false;

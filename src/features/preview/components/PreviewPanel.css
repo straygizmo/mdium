@@ -135,6 +135,12 @@
   color: #c53030;
 }
 
+.preview-panel__convert-success {
+  color: #22c55e;
+  font-size: 0.85em;
+  margin-left: 8px;
+}
+
 .preview-panel__office-wrap {
   flex: 1;
   display: flex;

@@ -156,5 +156,15 @@
   "externalChangeShowDiff": "Show Diff",
   "externalChangeHideDiff": "Hide Diff",
   "externalChangeKeep": "Keep My Changes",
+  "exportMacros": "Export Macros",
+  "importMacros": "Import Macros",
+  "exportingMacros": "Exporting...",
+  "importingMacros": "Importing...",
+  "macroExportSuccess": "Exported {{count}} modules",
+  "macroImportSuccess": "Imported {{count}} modules (backup: .bak)",
+  "macroExportNoVba": "No VBA macros found in this file",
+  "macroDirNotFound": "Macro folder not found",
+  "macroImportSkipped": "{{name}} was skipped: no matching module found",
+  "macroNoFiles": "No files to import",
   "commandNotRegistered": "The built-in command \"generate-video\" is not registered.\nPlease add it from the built-in template in Settings > Commands."
 }

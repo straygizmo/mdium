@@ -156,5 +156,15 @@
   "externalChangeShowDiff": "差分を確認",
   "externalChangeHideDiff": "差分を閉じる",
   "externalChangeKeep": "自分の編集を維持",
+  "exportMacros": "マクロのエクスポート",
+  "importMacros": "マクロのインポート",
+  "exportingMacros": "エクスポート中...",
+  "importingMacros": "インポート中...",
+  "macroExportSuccess": "{{count}}個のモジュールをエクスポートしました",
+  "macroImportSuccess": "{{count}}個のモジュールをインポートしました（バックアップ: .bak）",
+  "macroExportNoVba": "このファイルにはVBAマクロが含まれていません",
+  "macroDirNotFound": "マクロフォルダが見つかりません",
+  "macroImportSkipped": "{{name}} はスキップされました：対応するモジュールが見つかりません",
+  "macroNoFiles": "インポート対象のファイルがありません",
   "commandNotRegistered": "ビルトインコマンド「generate-video」が登録されていません。\n設定 > コマンド でビルトインテンプレートから追加してください。"
 }

@@ -1,4 +1,4 @@
-export const OFFICE_EXTENSIONS = [".docx", ".xlsx", ".xlsm"];
+export const OFFICE_EXTENSIONS = [".docx", ".xlsx", ".xlsm", ".xlam"];
 export const MINDMAP_EXTENSIONS = [".km", ".xmind"];
 export const PDF_EXTENSIONS = [".pdf"];
 export const IMAGE_EXTENSIONS = [

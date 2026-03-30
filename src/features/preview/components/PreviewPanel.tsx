@@ -286,6 +286,10 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   const contentRef = useRef<HTMLDivElement>(null);
   const [converting, setConverting] = useState(false);
   const [convertError, setConvertError] = useState<string | null>(null);
+  const [macroExporting, setMacroExporting] = useState(false);
+  const [macroImporting, setMacroImporting] = useState(false);
+  const [macroError, setMacroError] = useState<string | null>(null);
+  const [macroSuccess, setMacroSuccess] = useState<string | null>(null);
   const [overwriteDialog, setOverwriteDialog] = useState<{ videoJsonName: string; mdPath: string; baseName: string } | null>(null);
 
   const content = activeTab?.content ?? "";
@@ -749,7 +753,11 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   const isPdf = activeTab?.filePath?.toLowerCase().endsWith(".pdf");
   const isXlsx =
     activeTab?.filePath?.toLowerCase().endsWith(".xlsx") ||
-    activeTab?.filePath?.toLowerCase().endsWith(".xlsm");
+    activeTab?.filePath?.toLowerCase().endsWith(".xlsm") ||
+    activeTab?.filePath?.toLowerCase().endsWith(".xlam");
+  const isMacroEnabled =
+    activeTab?.filePath?.toLowerCase().endsWith(".xlsm") ||
+    activeTab?.filePath?.toLowerCase().endsWith(".xlam");
 
   const handleConvertToMarkdown = useCallback(async () => {
     if (!activeTab?.binaryData || !activeTab?.filePath) return;
@@ -762,7 +770,8 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
         ({ mdPath } = await pdfToMarkdown(activeTab.binaryData, activeTab.filePath));
       } else if (
         activeTab.filePath.toLowerCase().endsWith(".xlsx") ||
-        activeTab.filePath.toLowerCase().endsWith(".xlsm")
+        activeTab.filePath.toLowerCase().endsWith(".xlsm") ||
+        activeTab.filePath.toLowerCase().endsWith(".xlam")
       ) {
         const { xlsxToMarkdown } = await import(
           "@/features/export/lib/xlsxToMarkdown"
@@ -782,6 +791,58 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
       setConverting(false);
     }
   }, [activeTab?.binaryData, activeTab?.filePath, onOpenFile, onRefreshFileTree]);
+
+  const handleExportMacros = useCallback(async () => {
+    if (!activeTab?.filePath) return;
+    setMacroExporting(true);
+    setMacroError(null);
+    setMacroSuccess(null);
+    try {
+      const result = await invoke<{ macrosDir: string; modules: { name: string; moduleType: string; path: string }[] }>(
+        "extract_vba_modules",
+        { xlsmPath: activeTab.filePath }
+      );
+      setMacroSuccess(t("macroExportSuccess", { count: result.modules.length }));
+      onRefreshFileTree?.();
+    } catch (e) {
+      setMacroError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setMacroExporting(false);
+    }
+  }, [activeTab?.filePath, onRefreshFileTree, t]);
+
+  const handleImportMacros = useCallback(async () => {
+    if (!activeTab?.filePath) return;
+    setMacroImporting(true);
+    setMacroError(null);
+    setMacroSuccess(null);
+    try {
+      const filePath = activeTab.filePath;
+      const lastDot = filePath.lastIndexOf(".");
+      const macrosDir = filePath.substring(0, lastDot) + "_macros";
+
+      const result = await invoke<{ backupPath: string; updatedModules: string[] }>(
+        "inject_vba_modules",
+        { xlsmPath: filePath, macrosDir }
+      );
+      setMacroSuccess(t("macroImportSuccess", { count: result.updatedModules.length }));
+
+      // Reload binary data to refresh preview
+      const bytes = await invoke<number[]>("read_binary_file", { path: filePath });
+      const binaryData = new Uint8Array(bytes);
+      const tabs = useTabStore.getState().tabs;
+      const activeId = useTabStore.getState().activeTabId;
+      useTabStore.setState({
+        tabs: tabs.map((tab) =>
+          tab.id === activeId ? { ...tab, binaryData } : tab
+        ),
+      });
+    } catch (e) {
+      setMacroError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setMacroImporting(false);
+    }
+  }, [activeTab?.filePath, t]);
 
   // Show VideoPanel for .video.json files
   if (isVideoJson) {
@@ -804,8 +865,30 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
             >
               {converting ? t("converting") : t("convertToMarkdown")}
             </button>
+            {isMacroEnabled && (
+              <>
+                <button
+                  onClick={handleExportMacros}
+                  disabled={macroExporting || macroImporting}
+                >
+                  {macroExporting ? t("exportingMacros") : t("exportMacros")}
+                </button>
+                <button
+                  onClick={handleImportMacros}
+                  disabled={macroImporting || macroExporting}
+                >
+                  {macroImporting ? t("importingMacros") : t("importMacros")}
+                </button>
+              </>
+            )}
             {convertError && (
               <span className="preview-panel__convert-error">{convertError}</span>
+            )}
+            {macroError && (
+              <span className="preview-panel__convert-error">{macroError}</span>
+            )}
+            {macroSuccess && (
+              <span className="preview-panel__convert-success">{macroSuccess}</span>
             )}
           </div>
         )}
