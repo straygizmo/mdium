@@ -1,5 +1,8 @@
 use serde::Serialize;
 use encoding_rs::*;
+use std::io::{Read, Write, Cursor};
+use std::path::Path;
+use std::fs;
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -504,9 +507,166 @@ pub fn parse_dir_stream(data: &[u8]) -> Result<VbaProject, String> {
     })
 }
 
+// ---------------------------------------------------------------------------
+// Helper: read vbaProject.bin from an xlsm/xlam ZIP file
+// ---------------------------------------------------------------------------
+
+fn read_vba_project_bin(xlsm_path: &str) -> Result<Vec<u8>, String> {
+    let file = fs::File::open(xlsm_path)
+        .map_err(|e| format!("Failed to open file: {}", e))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| format!("Failed to read ZIP archive: {}", e))?;
+
+    let mut vba_file = archive.by_name("xl/vbaProject.bin").map_err(|_| {
+        "No VBA macros found in this file (xl/vbaProject.bin not present)".to_string()
+    })?;
+
+    let mut buf = Vec::new();
+    vba_file
+        .read_to_end(&mut buf)
+        .map_err(|e| format!("Failed to read vbaProject.bin: {}", e))?;
+    Ok(buf)
+}
+
+// ---------------------------------------------------------------------------
+// Helper: extract code page from an xlsm file's vbaProject.bin
+// ---------------------------------------------------------------------------
+
+fn get_code_page_from_xlsm(xlsm_path: &str) -> Result<u16, String> {
+    let vba_bin = read_vba_project_bin(xlsm_path)?;
+    let mut comp = cfb::CompoundFile::open(Cursor::new(vba_bin))
+        .map_err(|e| format!("Failed to parse vbaProject.bin as OLE2: {}", e))?;
+
+    let mut dir_compressed = Vec::new();
+    comp.open_stream("/VBA/dir")
+        .map_err(|e| format!("Failed to open /VBA/dir stream: {}", e))?
+        .read_to_end(&mut dir_compressed)
+        .map_err(|e| format!("Failed to read /VBA/dir stream: {}", e))?;
+
+    let dir_data = vba_decompress(&dir_compressed)?;
+    let project = parse_dir_stream(&dir_data)?;
+    Ok(project.code_page)
+}
+
+// ---------------------------------------------------------------------------
+// Command: extract_vba_modules
+// ---------------------------------------------------------------------------
+
 #[tauri::command]
 pub fn extract_vba_modules(xlsm_path: String) -> Result<ExtractResult, String> {
-    Err("Not implemented yet".to_string())
+    let file_path = Path::new(&xlsm_path);
+    if !file_path.exists() {
+        return Err(format!("File not found: {}", xlsm_path));
+    }
+
+    // 1. Read vbaProject.bin from the ZIP
+    let vba_bin = read_vba_project_bin(&xlsm_path)?;
+
+    // 2. Parse as OLE2 compound file
+    let mut comp = cfb::CompoundFile::open(Cursor::new(vba_bin))
+        .map_err(|e| format!("Failed to parse vbaProject.bin as OLE2: {}", e))?;
+
+    // 3. Read and decompress the /VBA/dir stream
+    let mut dir_compressed = Vec::new();
+    comp.open_stream("/VBA/dir")
+        .map_err(|e| format!("Failed to open /VBA/dir stream: {}", e))?
+        .read_to_end(&mut dir_compressed)
+        .map_err(|e| format!("Failed to read /VBA/dir stream: {}", e))?;
+
+    let dir_data = vba_decompress(&dir_compressed)?;
+
+    // 4. Parse dir stream to get module list and code page
+    let project = parse_dir_stream(&dir_data)?;
+
+    // 5. Determine output directory
+    let file_stem = file_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or("Invalid file name")?;
+    let parent_dir = file_path
+        .parent()
+        .ok_or("Cannot determine parent directory")?;
+    let macros_dir = parent_dir.join(format!("{}_macros", file_stem));
+
+    fs::create_dir_all(&macros_dir)
+        .map_err(|e| format!("Failed to create macros directory: {}", e))?;
+
+    // 6. Write .codepage file
+    fs::write(
+        macros_dir.join(".codepage"),
+        project.code_page.to_string(),
+    )
+    .map_err(|e| format!("Failed to write .codepage file: {}", e))?;
+
+    // 7. For each module, read stream, decompress, decode, write file
+    let mut modules = Vec::new();
+
+    for module_info in &project.modules {
+        // Read the module stream from OLE2
+        let stream_path = format!("/VBA/{}", module_info.stream_name);
+        let mut stream_data = Vec::new();
+        comp.open_stream(&stream_path)
+            .map_err(|e| {
+                format!(
+                    "Failed to open stream '{}': {}",
+                    stream_path, e
+                )
+            })?
+            .read_to_end(&mut stream_data)
+            .map_err(|e| {
+                format!(
+                    "Failed to read stream '{}': {}",
+                    stream_path, e
+                )
+            })?;
+
+        // The stream has text_offset bytes of performance cache,
+        // followed by compressed VBA source
+        let text_offset = module_info.text_offset as usize;
+        if text_offset > stream_data.len() {
+            return Err(format!(
+                "Module '{}': text_offset {} exceeds stream length {}",
+                module_info.name, text_offset, stream_data.len()
+            ));
+        }
+
+        let compressed_source = &stream_data[text_offset..];
+        let decompressed = vba_decompress(compressed_source)?;
+
+        // Decode from code page to UTF-8
+        let source = decode_bytes(&decompressed, project.code_page)?;
+
+        // Determine file extension and refined module type
+        let (ext, module_type) = if module_info.module_type == "standard" {
+            ("bas", "standard".to_string())
+        } else {
+            // 0x22 type: distinguish document vs class
+            let is_document = module_info.name.starts_with("Sheet")
+                || module_info.name == "ThisWorkbook";
+            if is_document {
+                ("cls", "document".to_string())
+            } else {
+                ("cls", "class".to_string())
+            }
+        };
+
+        let file_name = format!("{}.{}", module_info.name, ext);
+        let module_path = macros_dir.join(&file_name);
+
+        fs::write(&module_path, &source)
+            .map_err(|e| format!("Failed to write module '{}': {}", file_name, e))?;
+
+        modules.push(VbaModule {
+            name: module_info.name.clone(),
+            module_type,
+            path: module_path.to_string_lossy().into_owned(),
+        });
+    }
+
+    Ok(ExtractResult {
+        macros_dir: macros_dir.to_string_lossy().into_owned(),
+        modules,
+    })
 }
 
 #[tauri::command]
