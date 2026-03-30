@@ -76,6 +76,42 @@ export interface BuiltinCommand {
 
 ### 変更ファイル
 
+#### `src/features/opencode-config/components/sections/CommandsSection.tsx`
+
+SkillsSectionのビルトインスキル選択プルダウン（276-296行目）と同じパターンで、ビルトインコマンド選択UIを追加する。
+
+編集フォーム表示時（`isEditing === true`）に `<select>` プルダウンを表示:
+- `BUILTIN_COMMANDS` からキーを列挙
+- 選択時にフォームフィールド（name, description, template, agent, model）を自動入力
+- SkillsSectionの実装をそのまま踏襲
+
+```tsx
+<select
+  className="oc-section__builtin-select"
+  value=""
+  onChange={(e) => {
+    const key = e.target.value;
+    if (!key) return;
+    const builtin = BUILTIN_COMMANDS[key];
+    if (!builtin) return;
+    setFormName(builtin.name);
+    setFormDesc(builtin.description ?? "");
+    setFormTemplate(builtin.template);
+    setFormAgent(builtin.agent ?? "");
+    setFormModel(builtin.model ?? "");
+  }}
+>
+  <option value="">{t("commandBuiltinSelect")}</option>
+  {Object.keys(BUILTIN_COMMANDS).map((key) => (
+    <option key={key} value={key}>{key}</option>
+  ))}
+</select>
+```
+
+#### i18n追加キー
+
+- `commandBuiltinSelect`: "ビルトインコマンドを選択…" / "Select built-in command…"
+
 #### `src/features/preview/components/PreviewPanel.tsx`
 
 `handleEnterVideoMode` を以下のように変更:
