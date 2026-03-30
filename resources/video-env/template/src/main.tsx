@@ -1,7 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { CompositionProvider, registerComposition } from "@open-motion/core";
-import { VideoComposition, calculateTotalDuration } from "./scene-to-composition";
+import { VideoComposition, calculateTotalDuration } from "./composition";
 import projectData from "../project.json";
 
 const project = projectData as any;

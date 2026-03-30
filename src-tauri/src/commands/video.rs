@@ -266,15 +266,26 @@ pub async fn video_export(
     let _ = fs::remove_dir_all(om_dest.join("core").join("node_modules"));
     let _ = fs::remove_dir_all(om_dest.join("components").join("node_modules"));
 
-    // Copy scene-to-composition.tsx and types.ts into temp src/
+    // Copy Lottie presets into public/lottie/ for Vite to serve
+    let lottie_src = video_env_dir
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("lottie-presets");
+    if lottie_src.exists() {
+        let lottie_dest = temp_dir.join("public").join("lottie");
+        fs::create_dir_all(&lottie_dest)
+            .map_err(|e| format!("Failed to create lottie dir: {}", e))?;
+        copy_dir_recursive(&lottie_src, &lottie_dest)?;
+    }
+
+    // Copy composition/ directory and types.ts into temp src/
     let src_dir = temp_dir.join("src");
     fs::create_dir_all(&src_dir)
         .map_err(|e| format!("Failed to create src dir: {}", e))?;
 
-    let composition_src = video_feature_dir.join("lib").join("scene-to-composition.tsx");
-    if composition_src.exists() {
-        fs::copy(&composition_src, src_dir.join("scene-to-composition.tsx"))
-            .map_err(|e| format!("Failed to copy scene-to-composition.tsx: {}", e))?;
+    let composition_dir = video_feature_dir.join("lib").join("composition");
+    if composition_dir.exists() {
+        copy_dir_recursive(&composition_dir, &src_dir.join("composition"))?;
     }
     let types_src = video_feature_dir.join("types.ts");
     if types_src.exists() {
