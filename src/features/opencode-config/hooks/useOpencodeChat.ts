@@ -51,6 +51,13 @@ export function getOpencodeClient(): OpencodeClient | null {
   return _client;
 }
 
+/** Get and clear the pending video output path (consumed once) */
+export function consumePendingVideoOutput(): string | null {
+  const path = _pendingVideoOutput;
+  _pendingVideoOutput = null;
+  return path;
+}
+
 // ─── Module-level connection state (persists across mount/unmount) ───
 let _client: OpencodeClient | null = null;
 let _abort: AbortController | null = null;
@@ -59,6 +66,8 @@ let _connectLock = false;
 let _currentSessionId: string | null = null;
 /** Pending folder path requested while a connection was in progress */
 let _pendingFolder: { path: string | undefined } | null = null;
+/** Output path to auto-open when a generate-video command completes */
+let _pendingVideoOutput: string | null = null;
 
 // ─── Zustand store for UI state (persists across mount/unmount) ───
 interface OpencodeChatUIState {
@@ -440,6 +449,15 @@ async function doExecuteCommand(commandName: string, args?: string) {
   if (!sessionId) return;
 
   const displayText = `/${commandName}${args ? ` ${args}` : ""}`;
+
+  // Track generate-video output path for auto-open
+  if (commandName === "generate-video" && args) {
+    const parts = args.trim().split(/\s+/);
+    if (parts.length >= 2) {
+      _pendingVideoOutput = parts[parts.length - 1];
+    }
+  }
+
   useChatUIStore.setState((s) => ({
     messages: [
       ...s.messages,
