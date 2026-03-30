@@ -56,5 +56,9 @@
   "audioFiles": "音声ファイル",
   "sceneUntitled": "無題のシーン",
   "narrationPlaceholder": "ナレーションテキストを入力...",
-  "segmentPreview": "字幕セグメント"
+  "segmentPreview": "字幕セグメント",
+  "exportPhaseSetup": "準備中...",
+  "exportPhaseRender": "レンダリング中",
+  "exportPhaseEncode": "エンコード中",
+  "exportPhaseDone": "完了"
 }

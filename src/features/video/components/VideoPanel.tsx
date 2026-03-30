@@ -62,6 +62,7 @@ export function VideoPanel() {
   }, [generateAudioForAllScenes, t]);
 
   const setRenderProgress = useVideoStore((s) => s.setRenderProgress);
+  const setExportPhase = useVideoStore((s) => s.setExportPhase);
   const sourceFilePath = useVideoStore((s) => s.sourceFilePath);
 
   // Auto-save video project settings to .video.json
@@ -85,21 +86,25 @@ export function VideoPanel() {
     const unlisten = listen<{ phase?: string; percent?: number; message?: string }>(
       "video-progress",
       (event) => {
-        const { percent } = event.payload;
+        const { percent, phase } = event.payload;
         if (typeof percent === "number") {
           setRenderProgress(percent);
+        }
+        if (phase) {
+          setExportPhase(phase);
         }
       },
     );
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [setRenderProgress]);
+  }, [setRenderProgress, setExportPhase]);
 
   const handleExport = useCallback(
     async (options: ExportOptions) => {
       if (!videoProject) return;
       setRenderProgress(0);
+      setExportPhase("setup");
       try {
         const projectJson = JSON.stringify(videoProject);
         await invoke<string>("video_export", {
@@ -110,9 +115,11 @@ export function VideoPanel() {
           format: options.format,
         });
         setRenderProgress(100);
+        setExportPhase("done");
       } catch (e: any) {
         alert(e instanceof Error ? e.message : String(e));
         setRenderProgress(0);
+        setExportPhase(null);
       }
     },
     [videoProject, setRenderProgress],

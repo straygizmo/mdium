@@ -56,5 +56,9 @@
   "audioFiles": "Audio Files",
   "sceneUntitled": "Untitled Scene",
   "narrationPlaceholder": "Enter narration text...",
-  "segmentPreview": "Caption segments"
+  "segmentPreview": "Caption segments",
+  "exportPhaseSetup": "Preparing...",
+  "exportPhaseRender": "Rendering",
+  "exportPhaseEncode": "Encoding",
+  "exportPhaseDone": "Complete"
 }

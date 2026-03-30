@@ -7,19 +7,24 @@ import {
   useVideoConfig,
   parseSrt,
 } from "@open-motion/core";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import type { VideoProject, Scene, SceneElement } from "../types";
 
-/** Convert a local file path to a URL the webview can load. */
+/** Convert a local file path to a URL the webview can load.
+ *  Uses Tauri's asset protocol when running inside the webview,
+ *  falls back to the raw path in the Playwright render environment. */
 function toPlayableSrc(filePath: string): string {
   if (!filePath || filePath.startsWith("http") || filePath.startsWith("blob:") || filePath.startsWith("data:")) {
     return filePath;
   }
   try {
-    return convertFileSrc(filePath);
+    const internals = (window as any).__TAURI_INTERNALS__;
+    if (internals?.convertFileSrc) {
+      return internals.convertFileSrc(filePath, "asset");
+    }
   } catch {
-    return filePath;
+    // not in Tauri environment
   }
+  return filePath;
 }
 
 // ─── Resolution-based scaling ────────────────────────────────────────────────

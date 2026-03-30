@@ -6,6 +6,7 @@ interface VideoState {
   sourceFilePath: string | null;
   audioGenerated: boolean;
   renderProgress: number;
+  exportPhase: string | null;
   selectedSceneId: string | null;
   isVideoMode: boolean;
 
@@ -14,6 +15,7 @@ interface VideoState {
   setSelectedSceneId: (id: string | null) => void;
   setAudioGenerated: (generated: boolean) => void;
   setRenderProgress: (progress: number) => void;
+  setExportPhase: (phase: string | null) => void;
   setIsVideoMode: (mode: boolean) => void;
   updateMeta: (partial: Partial<VideoProject["meta"]>) => void;
   updateAudioConfig: (partial: Partial<VideoProject["audio"]>) => void;
@@ -25,6 +27,7 @@ export const useVideoStore = create<VideoState>()((set) => ({
   sourceFilePath: null,
   audioGenerated: false,
   renderProgress: 0,
+  exportPhase: null,
   selectedSceneId: null,
   isVideoMode: false,
 
@@ -46,6 +49,7 @@ export const useVideoStore = create<VideoState>()((set) => ({
         sourceFilePath: sourceFilePath ?? s.sourceFilePath,
         audioGenerated: allAudioReady,
         renderProgress: 0,
+        exportPhase: null,
       };
     }),
 
@@ -67,6 +71,8 @@ export const useVideoStore = create<VideoState>()((set) => ({
   setAudioGenerated: (generated) => set({ audioGenerated: generated }),
 
   setRenderProgress: (progress) => set({ renderProgress: progress }),
+
+  setExportPhase: (phase) => set({ exportPhase: phase }),
 
   setIsVideoMode: (mode) => set({ isVideoMode: mode }),
 

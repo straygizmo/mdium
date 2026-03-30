@@ -17,10 +17,18 @@ interface ExportPanelProps {
   onExport: (options: ExportOptions) => void;
 }
 
+const phaseKeys: Record<string, string> = {
+  setup: "exportPhaseSetup",
+  render: "exportPhaseRender",
+  encode: "exportPhaseEncode",
+  done: "exportPhaseDone",
+};
+
 export function ExportPanel({ disabled, onExport }: ExportPanelProps) {
   const { t } = useTranslation("video");
   const videoProject = useVideoStore((s) => s.videoProject);
   const renderProgress = useVideoStore((s) => s.renderProgress);
+  const exportPhase = useVideoStore((s) => s.exportPhase);
 
   const meta = videoProject?.meta;
 
@@ -63,10 +71,11 @@ export function ExportPanel({ disabled, onExport }: ExportPanelProps) {
     });
   }, [format, fps, concurrency, outputPath, meta, onExport]);
 
-  const isExporting = renderProgress > 0 && renderProgress < 100;
+  const isExporting = exportPhase != null && exportPhase !== "done";
+  const isDone = exportPhase === "done";
 
   return (
-    <div className={`export-panel${disabled ? " export-panel--disabled" : ""}`}>
+    <div className={`export-panel${disabled && !isExporting ? " export-panel--disabled" : ""}`}>
       <span className="export-panel__title">{t("exportDialog")}</span>
 
       <div className="export-panel__body">
@@ -140,13 +149,20 @@ export function ExportPanel({ disabled, onExport }: ExportPanelProps) {
           </button>
         </div>
 
-        {isExporting && (
-          <div className="export-panel__progress">
-            <div
-              className="export-panel__progress-bar"
-              style={{ width: `${Math.round(renderProgress)}%` }}
-            />
-            <span>{Math.round(renderProgress)}%</span>
+        {(isExporting || isDone) && (
+          <div className="export-panel__status">
+            <div className="export-panel__progress">
+              <div
+                className={`export-panel__progress-bar${isDone ? " export-panel__progress-bar--done" : ""}`}
+                style={{ width: `${Math.round(renderProgress)}%` }}
+              />
+              <span>
+                {exportPhase && phaseKeys[exportPhase]
+                  ? t(phaseKeys[exportPhase])
+                  : ""}{" "}
+                {renderProgress > 0 ? `${Math.round(renderProgress)}%` : ""}
+              </span>
+            </div>
           </div>
         )}
 
@@ -155,7 +171,7 @@ export function ExportPanel({ disabled, onExport }: ExportPanelProps) {
           onClick={handleExport}
           disabled={disabled || !outputPath || isExporting}
         >
-          {t("startExport")}
+          {isExporting ? t("exporting") : t("startExport")}
         </button>
       </div>
     </div>
