@@ -804,13 +804,10 @@ pub fn inject_vba_modules(xlsm_path: String, macros_dir: String) -> Result<Injec
     let mut updated_modules: Vec<String> = Vec::new();
 
     for (module_name, file_path_str) in &macro_files {
-        let info = module_map.get(module_name).ok_or_else(|| {
-            format!(
-                "Module '{}' not found in vbaProject.bin. \
-                 Cannot inject a module that doesn't exist in the original file.",
-                module_name
-            )
-        })?;
+        let info = match module_map.get(module_name) {
+            Some(info) => info,
+            None => continue, // skip unmatched modules
+        };
 
         // Read UTF-8 source from file
         let source = fs::read_to_string(file_path_str)
@@ -853,6 +850,10 @@ pub fn inject_vba_modules(xlsm_path: String, macros_dir: String) -> Result<Injec
         }
 
         updated_modules.push(module_name.clone());
+    }
+
+    if updated_modules.is_empty() {
+        return Err("No matching modules found to update. Module names in .bas/.cls files must match existing VBA module names.".to_string());
     }
 
     // 7. Serialize updated OLE2 back to bytes
