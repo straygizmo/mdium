@@ -101,6 +101,11 @@ pub async fn video_save_audio(audio_bytes: Vec<u8>, md_path: Option<String>) -> 
 }
 
 #[tauri::command]
+pub async fn video_file_exists(path: String) -> Result<bool, String> {
+    Ok(std::path::Path::new(&path).exists())
+}
+
+#[tauri::command]
 pub async fn video_clean_temp() -> Result<(), String> {
     let temp_dir = std::env::temp_dir().join("mdium-video");
     if temp_dir.exists() {

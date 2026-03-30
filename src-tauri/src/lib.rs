@@ -187,6 +187,7 @@ pub fn run() {
             commands::slidev::slidev_get_temp_dir,
             // Video operations
             commands::video::video_save_audio,
+            commands::video::video_file_exists,
             commands::video::video_clean_temp,
             commands::video::video_copy_images,
             commands::video::video_export,

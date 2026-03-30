@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useVideoStore } from "@/stores/video-store";
 import { createTTSProvider } from "../lib/tts-provider";
 import { generateSrt } from "../lib/srt-generator";
@@ -41,9 +42,10 @@ export function useVideoGeneration() {
       for (let i = 0; i < total; i++) {
         const scene = scenes[i];
 
-        // Skip if audio exists and is not dirty
+        // Skip if audio file exists on disk and is not dirty
         if (scene.narrationAudio && !scene.narrationDirty) {
-          continue;
+          const exists = await invoke<boolean>("video_file_exists", { path: scene.narrationAudio });
+          if (exists) continue;
         }
 
         setGeneratingStatus(`${i + 1}/${total}: ${scene.title ?? scene.id}`);
