@@ -277,6 +277,230 @@ fn find_best_match(
     (best_len, best_offset)
 }
 
+// ---------------------------------------------------------------------------
+// Encoding helpers  (Windows code page <-> UTF-8)
+// ---------------------------------------------------------------------------
+
+/// Look up an `encoding_rs::Encoding` from a Windows code page number.
+fn encoding_from_codepage(codepage: u16) -> Result<&'static Encoding, String> {
+    match codepage {
+        932 => Ok(SHIFT_JIS),
+        936 => Ok(GBK),
+        949 => Ok(EUC_KR),
+        950 => Ok(BIG5),
+        1200 => Ok(UTF_16LE),
+        1250 => Ok(WINDOWS_1250),
+        1251 => Ok(WINDOWS_1251),
+        1252 => Ok(WINDOWS_1252),
+        1253 => Ok(WINDOWS_1253),
+        1254 => Ok(WINDOWS_1254),
+        1255 => Ok(WINDOWS_1255),
+        1256 => Ok(WINDOWS_1256),
+        1257 => Ok(WINDOWS_1257),
+        1258 => Ok(WINDOWS_1258),
+        10000 => Ok(MACINTOSH),
+        65001 => Ok(UTF_8),
+        _ => Err(format!("Unsupported code page: {}", codepage)),
+    }
+}
+
+/// Decode bytes from a Windows code page to a UTF-8 String.
+/// Returns an error if the bytes contain unmappable characters.
+pub fn decode_bytes(bytes: &[u8], codepage: u16) -> Result<String, String> {
+    let encoding = encoding_from_codepage(codepage)?;
+    let (cow, _encoding_used, had_errors) = encoding.decode(bytes);
+    if had_errors {
+        return Err(format!(
+            "Failed to decode bytes with code page {}: unmappable characters",
+            codepage
+        ));
+    }
+    Ok(cow.into_owned())
+}
+
+/// Encode a UTF-8 string to bytes in a Windows code page.
+/// Returns an error if the string contains characters that cannot be
+/// represented in the target encoding.
+pub fn encode_string(s: &str, codepage: u16) -> Result<Vec<u8>, String> {
+    let encoding = encoding_from_codepage(codepage)?;
+    let (cow, _encoding_used, had_errors) = encoding.encode(s);
+    if had_errors {
+        return Err(format!(
+            "Failed to encode string with code page {}: unmappable characters",
+            codepage
+        ));
+    }
+    Ok(cow.into_owned())
+}
+
+// ---------------------------------------------------------------------------
+// VBA dir stream parsing  (MS-OVBA 2.3.4.2)
+// ---------------------------------------------------------------------------
+
+/// Internal representation of a module parsed from the dir stream.
+#[derive(Debug, Clone)]
+pub struct VbaModuleInfo {
+    pub name: String,
+    pub stream_name: String,
+    pub module_type: String, // "standard" | "class" | "document"
+    pub text_offset: u32,
+}
+
+/// Result of parsing the VBA dir stream.
+#[derive(Debug)]
+pub struct VbaProject {
+    pub code_page: u16,
+    pub modules: Vec<VbaModuleInfo>,
+}
+
+/// Parse the decompressed VBA dir stream to extract the code page and module list.
+///
+/// Record layout (MS-OVBA 2.3.4.2):
+///   - Each record starts with a 2-byte LE record id, then a 4-byte LE size, then data.
+///   - Notable records:
+///     0x0003 = PROJECTCODEPAGE  (2-byte code page)
+///     0x0019 = MODULENAME       (variable: module name in code page encoding)
+///     0x0047 = MODULENAMEUNICODE (variable: module name in UTF-16LE; we prefer this)
+///     0x001A = MODULESTREAMNAME (variable)
+///     0x0021 = MODULETYPE procedural (standard module, size=0)
+///     0x0022 = MODULETYPE document/class (size=0)
+///     0x0031 = MODULEOFFSET     (4-byte text offset)
+///     0x002B = MODULETERMINATOR
+///     0x0010 = PROJECTTERMINATOR
+pub fn parse_dir_stream(data: &[u8]) -> Result<VbaProject, String> {
+    let mut pos: usize = 0;
+    let mut code_page: u16 = 1252; // default to Windows-1252
+    let mut modules: Vec<VbaModuleInfo> = Vec::new();
+
+    // Current module being accumulated
+    let mut cur_name: Option<String> = None;
+    let mut cur_stream_name: Option<String> = None;
+    let mut cur_type: Option<String> = None;
+    let mut cur_offset: u32 = 0;
+
+    while pos + 6 <= data.len() {
+        let record_id = u16::from_le_bytes([data[pos], data[pos + 1]]);
+        let record_size = u32::from_le_bytes([
+            data[pos + 2],
+            data[pos + 3],
+            data[pos + 4],
+            data[pos + 5],
+        ]) as usize;
+        pos += 6;
+
+        if pos + record_size > data.len() {
+            return Err(format!(
+                "Record 0x{:04X} at offset {} claims size {} but only {} bytes remain",
+                record_id,
+                pos - 6,
+                record_size,
+                data.len() - pos
+            ));
+        }
+
+        let record_data = &data[pos..pos + record_size];
+
+        match record_id {
+            0x0003 => {
+                // PROJECTCODEPAGE
+                if record_size >= 2 {
+                    code_page = u16::from_le_bytes([record_data[0], record_data[1]]);
+                }
+            }
+            0x0019 => {
+                // MODULENAME (code-page encoded)
+                // Only use if we don't get a Unicode version
+                if cur_name.is_none() {
+                    cur_name = Some(
+                        decode_bytes(record_data, code_page)
+                            .unwrap_or_else(|_| String::from_utf8_lossy(record_data).into_owned()),
+                    );
+                }
+            }
+            0x0047 => {
+                // MODULENAMEUNICODE (UTF-16LE)
+                if record_size >= 2 {
+                    let utf16: Vec<u16> = record_data
+                        .chunks_exact(2)
+                        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                        .collect();
+                    cur_name = Some(
+                        String::from_utf16(&utf16)
+                            .map_err(|e| format!("Invalid UTF-16LE module name: {}", e))?,
+                    );
+                }
+            }
+            0x001A => {
+                // MODULESTREAMNAME (code-page encoded)
+                cur_stream_name = Some(
+                    decode_bytes(record_data, code_page)
+                        .unwrap_or_else(|_| String::from_utf8_lossy(record_data).into_owned()),
+                );
+                // The next record (0x0032) is MODULESTREAMNAMEUNICODE - we'll handle it below
+            }
+            0x0032 => {
+                // MODULESTREAMNAMEUNICODE (UTF-16LE)
+                if record_size >= 2 {
+                    let utf16: Vec<u16> = record_data
+                        .chunks_exact(2)
+                        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                        .collect();
+                    if let Ok(s) = String::from_utf16(&utf16) {
+                        cur_stream_name = Some(s);
+                    }
+                }
+            }
+            0x0021 => {
+                // MODULETYPE procedural (standard module)
+                cur_type = Some("standard".to_string());
+            }
+            0x0022 => {
+                // MODULETYPE document/class
+                cur_type = Some("class".to_string());
+            }
+            0x0031 => {
+                // MODULEOFFSET
+                if record_size >= 4 {
+                    cur_offset = u32::from_le_bytes([
+                        record_data[0],
+                        record_data[1],
+                        record_data[2],
+                        record_data[3],
+                    ]);
+                }
+            }
+            0x002B => {
+                // MODULETERMINATOR - finalize current module
+                if let (Some(name), Some(stream_name)) = (cur_name.take(), cur_stream_name.take())
+                {
+                    modules.push(VbaModuleInfo {
+                        name,
+                        stream_name,
+                        module_type: cur_type.take().unwrap_or_else(|| "standard".to_string()),
+                        text_offset: cur_offset,
+                    });
+                }
+                cur_type = None;
+                cur_offset = 0;
+            }
+            0x0010 => {
+                // PROJECTTERMINATOR - stop parsing
+                break;
+            }
+            _ => {
+                // Skip unknown records
+            }
+        }
+
+        pos += record_size;
+    }
+
+    Ok(VbaProject {
+        code_page,
+        modules,
+    })
+}
+
 #[tauri::command]
 pub fn extract_vba_modules(xlsm_path: String) -> Result<ExtractResult, String> {
     Err("Not implemented yet".to_string())
@@ -294,6 +518,8 @@ pub fn inject_vba_modules(xlsm_path: String, macros_dir: String) -> Result<Injec
 mod tests {
     use super::*;
 
+    // --- Compression/Decompression tests ---
+
     #[test]
     fn test_vba_decompress_roundtrip() {
         let source = b"Sub HelloWorld()\r\n    MsgBox \"Hello, World!\"\r\nEnd Sub\r\n";
@@ -306,7 +532,6 @@ mod tests {
     fn test_vba_decompress_repeated_data() {
         let source = b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
         let compressed = vba_compress(source);
-        // Repeated data should compress well (compressed < original + overhead)
         assert!(
             compressed.len() < source.len(),
             "compressed len {} should be less than source len {}",
@@ -319,10 +544,10 @@ mod tests {
 
     #[test]
     fn test_vba_decompress_japanese() {
-        // Shift_JIS bytes for some common Japanese text
+        // Shift_JIS bytes for "こんにちは"
         let sjis_bytes: Vec<u8> = vec![
             0x82, 0xB1, 0x82, 0xF1, 0x82, 0xC9, 0x82, 0xBF, 0x82, 0xCD,
-        ]; // "こんにちは" in Shift_JIS
+        ];
         let compressed = vba_compress(&sjis_bytes);
         let decompressed = vba_decompress(&compressed).expect("decompress failed");
         assert_eq!(decompressed, sjis_bytes);
@@ -333,13 +558,127 @@ mod tests {
         let bad_data = vec![0x00, 0x01, 0x02];
         let result = vba_decompress(&bad_data);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Invalid VBA compression signature"));
+        assert!(result
+            .unwrap_err()
+            .contains("Invalid VBA compression signature"));
     }
 
     #[test]
     fn test_vba_compress_empty() {
         let compressed = vba_compress(b"");
-        // Empty input gives just the signature byte
         assert_eq!(compressed, vec![0x01]);
+    }
+
+    // --- Encoding tests ---
+
+    #[test]
+    fn test_decode_shift_jis() {
+        // Shift_JIS bytes for "こんにちは"
+        let sjis_bytes: &[u8] = &[
+            0x82, 0xB1, 0x82, 0xF1, 0x82, 0xC9, 0x82, 0xBF, 0x82, 0xCD,
+        ];
+        let decoded = decode_bytes(sjis_bytes, 932).expect("decode failed");
+        assert_eq!(decoded, "こんにちは");
+    }
+
+    #[test]
+    fn test_encode_shift_jis() {
+        let encoded = encode_string("こんにちは", 932).expect("encode failed");
+        let expected: Vec<u8> = vec![
+            0x82, 0xB1, 0x82, 0xF1, 0x82, 0xC9, 0x82, 0xBF, 0x82, 0xCD,
+        ];
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn test_decode_encode_roundtrip_ascii() {
+        let ascii = "Hello, World! 123";
+        let encoded = encode_string(ascii, 1252).expect("encode failed");
+        let decoded = decode_bytes(&encoded, 1252).expect("decode failed");
+        assert_eq!(decoded, ascii);
+    }
+
+    // --- Dir stream parsing tests ---
+
+    /// Helper: build a dir stream record (id: u16, data: &[u8]).
+    fn make_record(id: u16, data: &[u8]) -> Vec<u8> {
+        let mut rec = Vec::new();
+        rec.extend_from_slice(&id.to_le_bytes());
+        rec.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        rec.extend_from_slice(data);
+        rec
+    }
+
+    #[test]
+    fn test_parse_dir_stream_basic() {
+        let mut stream = Vec::new();
+
+        // PROJECTCODEPAGE = 932 (Shift_JIS)
+        stream.extend_from_slice(&make_record(0x0003, &932u16.to_le_bytes()));
+
+        // --- Module 1 ---
+        // MODULENAME (Shift_JIS for "Module1" - all ASCII so same bytes)
+        stream.extend_from_slice(&make_record(0x0019, b"Module1"));
+        // MODULESTREAMNAME
+        stream.extend_from_slice(&make_record(0x001A, b"Module1"));
+        // MODULETYPE = standard (0x0021)
+        stream.extend_from_slice(&make_record(0x0021, &[]));
+        // MODULEOFFSET
+        stream.extend_from_slice(&make_record(0x0031, &100u32.to_le_bytes()));
+        // MODULETERMINATOR
+        stream.extend_from_slice(&make_record(0x002B, &[]));
+
+        // --- Module 2 ---
+        stream.extend_from_slice(&make_record(0x0019, b"Sheet1"));
+        stream.extend_from_slice(&make_record(0x001A, b"Sheet1"));
+        // MODULETYPE = class/document (0x0022)
+        stream.extend_from_slice(&make_record(0x0022, &[]));
+        stream.extend_from_slice(&make_record(0x0031, &200u32.to_le_bytes()));
+        stream.extend_from_slice(&make_record(0x002B, &[]));
+
+        // PROJECTTERMINATOR
+        stream.extend_from_slice(&make_record(0x0010, &[]));
+
+        let project = parse_dir_stream(&stream).expect("parse failed");
+        assert_eq!(project.code_page, 932);
+        assert_eq!(project.modules.len(), 2);
+
+        assert_eq!(project.modules[0].name, "Module1");
+        assert_eq!(project.modules[0].stream_name, "Module1");
+        assert_eq!(project.modules[0].module_type, "standard");
+        assert_eq!(project.modules[0].text_offset, 100);
+
+        assert_eq!(project.modules[1].name, "Sheet1");
+        assert_eq!(project.modules[1].stream_name, "Sheet1");
+        assert_eq!(project.modules[1].module_type, "class");
+        assert_eq!(project.modules[1].text_offset, 200);
+    }
+
+    #[test]
+    fn test_parse_dir_stream_unicode_name() {
+        let mut stream = Vec::new();
+
+        // PROJECTCODEPAGE = 932
+        stream.extend_from_slice(&make_record(0x0003, &932u16.to_le_bytes()));
+
+        // MODULENAME (Shift_JIS)
+        stream.extend_from_slice(&make_record(0x0019, b"Module1"));
+        // MODULENAMEUNICODE overrides
+        let unicode_name: Vec<u8> = "TestModule"
+            .encode_utf16()
+            .flat_map(|c| c.to_le_bytes())
+            .collect();
+        stream.extend_from_slice(&make_record(0x0047, &unicode_name));
+        stream.extend_from_slice(&make_record(0x001A, b"Module1"));
+        stream.extend_from_slice(&make_record(0x0021, &[]));
+        stream.extend_from_slice(&make_record(0x0031, &0u32.to_le_bytes()));
+        stream.extend_from_slice(&make_record(0x002B, &[]));
+
+        stream.extend_from_slice(&make_record(0x0010, &[]));
+
+        let project = parse_dir_stream(&stream).expect("parse failed");
+        assert_eq!(project.modules.len(), 1);
+        // Unicode name should take priority
+        assert_eq!(project.modules[0].name, "TestModule");
     }
 }
