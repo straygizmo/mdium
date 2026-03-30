@@ -625,6 +625,10 @@ pub fn extract_vba_modules(xlsm_path: String) -> Result<ExtractResult, String> {
     // 4. Parse dir stream to get module list and code page
     let project = parse_dir_stream(&dir_data)?;
 
+    if project.modules.is_empty() {
+        return Err("No VBA macros found in this file".to_string());
+    }
+
     // 5. Determine output directory
     let file_stem = file_path
         .file_stem()
@@ -774,11 +778,21 @@ pub fn inject_vba_modules(xlsm_path: String, macros_dir: String) -> Result<Injec
     fs::copy(&xlsm_path, &backup_path)
         .map_err(|e| format!("Failed to create backup: {}", e))?;
 
-    // 4. Read the entire xlsm file and extract vbaProject.bin
+    // 4. Read the entire xlsm file and extract vbaProject.bin from it
     let xlsm_data = fs::read(&xlsm_path)
         .map_err(|e| format!("Failed to read file: {}", e))?;
 
-    let vba_bin = read_vba_project_bin(&xlsm_path)?;
+    let vba_bin = {
+        let mut archive = zip::ZipArchive::new(Cursor::new(&xlsm_data))
+            .map_err(|e| format!("Failed to read ZIP archive: {}", e))?;
+        let mut entry = archive
+            .by_name("xl/vbaProject.bin")
+            .map_err(|_| "No vbaProject.bin found in file".to_string())?;
+        let mut buf = Vec::new();
+        entry.read_to_end(&mut buf)
+            .map_err(|e| format!("Failed to read vbaProject.bin: {}", e))?;
+        buf
+    };
 
     // 5. Parse OLE2, read dir stream, build module mapping
     let mut comp = cfb::CompoundFile::open(Cursor::new(vba_bin))
