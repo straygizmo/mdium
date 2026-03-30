@@ -164,6 +164,17 @@ fn open_motion_dir_valid(dir: &PathBuf) -> bool {
 }
 
 #[tauri::command]
+pub async fn video_check_ffmpeg() -> Result<bool, String> {
+    let result = Command::new("ffmpeg")
+        .arg("-version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    Ok(result.is_ok())
+}
+
+#[tauri::command]
 pub async fn video_export(
     app: AppHandle,
     project_json: String,

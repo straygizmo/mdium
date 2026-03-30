@@ -190,6 +190,7 @@ pub fn run() {
             commands::video::video_file_exists,
             commands::video::video_clean_temp,
             commands::video::video_copy_images,
+            commands::video::video_check_ffmpeg,
             commands::video::video_export,
             commands::video::video_save_project,
             commands::video::video_load_project,

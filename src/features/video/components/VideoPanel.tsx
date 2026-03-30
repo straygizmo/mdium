@@ -103,6 +103,14 @@ export function VideoPanel() {
   const handleExport = useCallback(
     async (options: ExportOptions) => {
       if (!videoProject) return;
+
+      // Check ffmpeg availability before starting export
+      const ffmpegOk = await invoke<boolean>("video_check_ffmpeg").catch(() => false);
+      if (!ffmpegOk) {
+        alert(t("ffmpegNotFound"));
+        return;
+      }
+
       setRenderProgress(0);
       setExportPhase("setup");
       try {
