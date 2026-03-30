@@ -2,9 +2,10 @@ import { useCallback, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useVideoStore } from "@/stores/video-store";
 import { createTTSProvider } from "../lib/tts-provider";
-import { generateSrt } from "../lib/srt-generator";
+import { generateSrtFromSegments } from "../lib/srt-generator";
 import { generateNarrationForScene } from "../lib/narration-generator";
-import type { TTSOptions } from "../types";
+import { splitNarration } from "../lib/narration-splitter";
+import type { TTSOptions, NarrationSegment } from "../types";
 
 export function useVideoGeneration() {
   const [generating, setGenerating] = useState(false);
@@ -14,6 +15,55 @@ export function useVideoGeneration() {
   const sourceFilePath = useVideoStore((s) => s.sourceFilePath);
   const updateScene = useVideoStore((s) => s.updateScene);
   const setAudioGenerated = useVideoStore((s) => s.setAudioGenerated);
+
+  const generateSegmentsForScene = useCallback(
+    async (
+      sceneIndex: number,
+      sceneId: string,
+      narrationText: string,
+      provider: ReturnType<typeof createTTSProvider>,
+      tts: NonNullable<typeof videoProject>["audio"]["tts"],
+      fps: number,
+    ) => {
+      const texts = splitNarration(narrationText);
+      const segments: NarrationSegment[] = [];
+      const sceneNum = String(sceneIndex + 1).padStart(2, "0");
+
+      for (let segIdx = 0; segIdx < texts.length; segIdx++) {
+        const segNum = String(segIdx + 1).padStart(2, "0");
+        const filename = `scene_${sceneNum}_${segNum}.wav`;
+
+        const options: TTSOptions = {
+          speaker: tts!.speaker,
+          speed: tts!.speed,
+          volume: tts!.volume,
+          mdPath: sourceFilePath ?? undefined,
+          filename,
+        };
+
+        const result = await provider.synthesize(texts[segIdx], options);
+
+        segments.push({
+          text: texts[segIdx],
+          audioPath: result.audioPath,
+          durationMs: result.durationMs,
+        });
+      }
+
+      const srt = generateSrtFromSegments(segments);
+      const totalMs = segments.reduce((sum, s) => sum + (s.durationMs ?? 0), 0);
+      const durationInFrames = Math.ceil((totalMs / 1000) * fps) + 15;
+
+      updateScene(sceneId, {
+        narrationSegments: segments,
+        narrationAudio: segments[0]?.audioPath,
+        durationInFrames,
+        narrationDirty: false,
+        captions: { enabled: true, srt },
+      });
+    },
+    [sourceFilePath, updateScene],
+  );
 
   const generateAudioForAllScenes = useCallback(async () => {
     if (!videoProject) return;
@@ -42,15 +92,13 @@ export function useVideoGeneration() {
       for (let i = 0; i < total; i++) {
         const scene = scenes[i];
 
-        // Skip if audio file exists in the project's audio folder and is not dirty
-        if (scene.narrationAudio && !scene.narrationDirty) {
-          const isInAudioFolder = sourceFilePath
-            ? scene.narrationAudio.replace(/\\/g, "/").startsWith(
-                sourceFilePath.replace(/\\/g, "/").replace(/\/[^/]+$/, "/audio/")
-              )
-            : false;
-          if (isInAudioFolder) {
-            const exists = await invoke<boolean>("video_file_exists", { path: scene.narrationAudio });
+        // Skip if segments exist with audio and not dirty
+        if (scene.narrationSegments?.length && !scene.narrationDirty) {
+          const allHaveAudio = scene.narrationSegments.every((s) => s.audioPath);
+          if (allHaveAudio) {
+            // Verify at least first file exists
+            const firstPath = scene.narrationSegments[0].audioPath!;
+            const exists = await invoke<boolean>("video_file_exists", { path: firstPath });
             if (exists) continue;
           }
         }
@@ -59,37 +107,19 @@ export function useVideoGeneration() {
 
         let narrationText = scene.narration;
 
-        // Generate narration text if empty
         if (!narrationText || !narrationText.trim()) {
           narrationText = await generateNarrationForScene(scene);
           updateScene(scene.id, { narration: narrationText });
         }
 
-        const sceneNum = String(i + 1).padStart(2, "0");
-        const options: TTSOptions = {
-          speaker: tts.speaker,
-          speed: tts.speed,
-          volume: tts.volume,
-          mdPath: sourceFilePath ?? undefined,
-          filename: `scene_${sceneNum}.wav`,
-        };
-
-        const result = await provider.synthesize(narrationText, options);
-
-        const srt = generateSrt(result.timingData, narrationText, result.durationMs);
-
-        const fps = videoProject.meta.fps;
-        const durationInFrames = Math.ceil((result.durationMs / 1000) * fps) + 15;
-
-        updateScene(scene.id, {
-          narrationAudio: result.audioPath,
-          durationInFrames,
-          narrationDirty: false,
-          captions: {
-            enabled: true,
-            srt,
-          },
-        });
+        await generateSegmentsForScene(
+          i,
+          scene.id,
+          narrationText,
+          provider,
+          tts,
+          videoProject.meta.fps,
+        );
       }
 
       setAudioGenerated(true);
@@ -97,7 +127,7 @@ export function useVideoGeneration() {
       setGenerating(false);
       setGeneratingStatus("");
     }
-  }, [videoProject, sourceFilePath, updateScene, setAudioGenerated]);
+  }, [videoProject, sourceFilePath, updateScene, setAudioGenerated, generateSegmentsForScene]);
 
   const generateAudioForScene = useCallback(
     async (sceneId: string) => {
@@ -123,37 +153,20 @@ export function useVideoGeneration() {
           updateScene(scene.id, { narration: narrationText });
         }
 
-        const sceneNum = String(sceneIndex + 1).padStart(2, "0");
-        const options: TTSOptions = {
-          speaker: tts.speaker,
-          speed: tts.speed,
-          volume: tts.volume,
-          mdPath: sourceFilePath ?? undefined,
-          filename: `scene_${sceneNum}.wav`,
-        };
-
-        const result = await provider.synthesize(narrationText, options);
-
-        const srt = generateSrt(result.timingData, narrationText, result.durationMs);
-
-        const fps = videoProject.meta.fps;
-        const durationInFrames = Math.ceil((result.durationMs / 1000) * fps) + 15;
-
-        updateScene(scene.id, {
-          narrationAudio: result.audioPath,
-          durationInFrames,
-          narrationDirty: false,
-          captions: {
-            enabled: true,
-            srt,
-          },
-        });
+        await generateSegmentsForScene(
+          sceneIndex,
+          scene.id,
+          narrationText,
+          provider,
+          tts,
+          videoProject.meta.fps,
+        );
       } finally {
         setGenerating(false);
         setGeneratingStatus("");
       }
     },
-    [videoProject, sourceFilePath, updateScene]
+    [videoProject, sourceFilePath, updateScene, generateSegmentsForScene],
   );
 
   return {

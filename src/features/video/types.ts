@@ -64,6 +64,12 @@ export interface TimingEntry {
   text: string;
 }
 
+export interface NarrationSegment {
+  text: string;
+  audioPath?: string;
+  durationMs?: number;
+}
+
 export interface TTSOptions {
   speaker?: string;
   volume?: number;
@@ -108,7 +114,7 @@ export interface TransitionConfig {
 
 export const DEFAULT_TRANSITION: TransitionConfig = {
   type: "fade",
-  durationInFrames: 15,
+  durationInFrames: 30,
 };
 
 // ─── Captions ────────────────────────────────────────────────────────────────
@@ -178,6 +184,7 @@ export interface Scene {
   durationInFrames?: number;
   narration: string;
   narrationAudio?: string;
+  narrationSegments?: NarrationSegment[];
   narrationDirty?: boolean;
   transition: TransitionConfig;
   elements: SceneElement[];

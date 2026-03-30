@@ -34,7 +34,13 @@ export const useVideoStore = create<VideoState>()((set) => ({
       const allAudioReady =
         !!project &&
         project.scenes.length > 0 &&
-        project.scenes.every((sc) => sc.narrationAudio && !sc.narrationDirty);
+        project.scenes.every((sc) => {
+          if (sc.narrationDirty) return false;
+          if (sc.narrationSegments?.length) {
+            return sc.narrationSegments.every((seg) => seg.audioPath);
+          }
+          return !!sc.narrationAudio;
+        });
       return {
         videoProject: project,
         sourceFilePath: sourceFilePath ?? s.sourceFilePath,
