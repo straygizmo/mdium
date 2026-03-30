@@ -1,4 +1,4 @@
-import type { TimingEntry } from "../types";
+import type { NarrationSegment, TimingEntry } from "../types";
 
 /**
  * Formats a millisecond timestamp as SRT time: HH:MM:SS,mmm
@@ -20,12 +20,29 @@ function formatSrtTime(ms: number): string {
 }
 
 /**
- * Generates an SRT subtitle string from timing data or a fallback text/duration.
- *
- * - If `timingData` has entries, generates SRT from each entry.
- * - If no timing data but `fallbackText` and `fallbackDurationMs` > 0, generates
- *   a single entry spanning the full duration.
- * - Otherwise returns an empty string.
+ * Generate SRT from NarrationSegment[].
+ * Each segment becomes one subtitle entry, timed by accumulating durationMs.
+ */
+export function generateSrtFromSegments(segments: NarrationSegment[]): string {
+  const entries: string[] = [];
+  let offsetMs = 0;
+
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    if (!seg.durationMs || seg.durationMs <= 0) continue;
+
+    const start = formatSrtTime(offsetMs);
+    const end = formatSrtTime(offsetMs + seg.durationMs);
+    entries.push(`${entries.length + 1}\n${start} --> ${end}\n${seg.text}\n`);
+    offsetMs += seg.durationMs;
+  }
+
+  return entries.join("\n");
+}
+
+/**
+ * Legacy: Generates SRT from timing data or fallback text/duration.
+ * Kept for backward compatibility with old projects that have no segments.
  */
 export function generateSrt(
   timingData?: TimingEntry[],
