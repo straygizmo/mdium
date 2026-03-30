@@ -10,6 +10,7 @@ export function useVideoGeneration() {
   const [generatingStatus, setGeneratingStatus] = useState("");
 
   const videoProject = useVideoStore((s) => s.videoProject);
+  const sourceFilePath = useVideoStore((s) => s.sourceFilePath);
   const updateScene = useVideoStore((s) => s.updateScene);
   const setAudioGenerated = useVideoStore((s) => s.setAudioGenerated);
 
@@ -59,6 +60,7 @@ export function useVideoGeneration() {
           speaker: tts.speaker,
           speed: tts.speed,
           volume: tts.volume,
+          mdPath: sourceFilePath ?? undefined,
         };
 
         const result = await provider.synthesize(narrationText, options);
@@ -84,7 +86,7 @@ export function useVideoGeneration() {
       setGenerating(false);
       setGeneratingStatus("");
     }
-  }, [videoProject, updateScene, setAudioGenerated]);
+  }, [videoProject, sourceFilePath, updateScene, setAudioGenerated]);
 
   const generateAudioForScene = useCallback(
     async (sceneId: string) => {
@@ -113,6 +115,7 @@ export function useVideoGeneration() {
           speaker: tts.speaker,
           speed: tts.speed,
           volume: tts.volume,
+          mdPath: sourceFilePath ?? undefined,
         };
 
         const result = await provider.synthesize(narrationText, options);
@@ -136,7 +139,7 @@ export function useVideoGeneration() {
         setGeneratingStatus("");
       }
     },
-    [videoProject, updateScene]
+    [videoProject, sourceFilePath, updateScene]
   );
 
   return {

@@ -86,6 +86,8 @@ export function App() {
   // Watch active tab file for external changes (e.g., opencode edits)
   useFileWatcher(activeTab?.filePath ?? null, useCallback(async (changedPath: string) => {
     if (!activeTab || activeTab.filePath !== changedPath) return;
+    // Skip for .video.json — managed by the video panel's auto-save
+    if (changedPath.toLowerCase().endsWith(".video.json")) return;
     try {
       const newContent = await invoke<string>("read_text_file", { path: changedPath });
       if (newContent === activeTab.content) return;

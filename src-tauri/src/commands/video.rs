@@ -42,10 +42,18 @@ fn hash_string(s: &str) -> String {
 }
 
 #[tauri::command]
-pub async fn video_save_audio(audio_bytes: Vec<u8>) -> Result<serde_json::Value, String> {
-    let temp_dir = std::env::temp_dir().join("mdium-video").join("audio");
-    fs::create_dir_all(&temp_dir)
-        .map_err(|e| format!("Failed to create temp dir: {}", e))?;
+pub async fn video_save_audio(audio_bytes: Vec<u8>, md_path: Option<String>) -> Result<serde_json::Value, String> {
+    // Save to {md_dir}/audio/ when md_path is provided, otherwise fall back to temp
+    let audio_dir = if let Some(ref md) = md_path {
+        let md_p = std::path::Path::new(md);
+        md_p.parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join("audio")
+    } else {
+        std::env::temp_dir().join("mdium-video").join("audio")
+    };
+    fs::create_dir_all(&audio_dir)
+        .map_err(|e| format!("Failed to create audio dir: {}", e))?;
 
     // Generate unique filename using hash of current time + data length
     let now = std::time::SystemTime::now()
@@ -53,7 +61,7 @@ pub async fn video_save_audio(audio_bytes: Vec<u8>) -> Result<serde_json::Value,
         .unwrap_or_default();
     let seed = format!("{}{}", now.as_nanos(), audio_bytes.len());
     let hash = hash_string(&seed);
-    let file_path: PathBuf = temp_dir.join(format!("{}.wav", hash));
+    let file_path: PathBuf = audio_dir.join(format!("{}.wav", hash));
 
     fs::write(&file_path, &audio_bytes)
         .map_err(|e| format!("Failed to write audio file: {}", e))?;

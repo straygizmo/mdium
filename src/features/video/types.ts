@@ -69,6 +69,7 @@ export interface TTSOptions {
   volume?: number;
   speed?: number;
   language?: string;
+  mdPath?: string;
 }
 
 export interface TTSResult {
