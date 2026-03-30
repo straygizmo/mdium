@@ -1,7 +1,22 @@
-import { useCallback } from "react";
+import React, { useCallback } from "react";
 import { useVideoConfig } from "@open-motion/core";
 import { ThreeCanvas } from "@open-motion/components";
 import * as THREE from "three";
+import { GradientBackground } from "./GradientBackground";
+
+class WebGLErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+  static getDerivedStateFromError() { return { hasError: true }; }
+  render() {
+    if (this.state.hasError) {
+      return <GradientBackground colors={["#1a1a2e", "#16213e"]} />;
+    }
+    return this.props.children;
+  }
+}
 
 const PRESETS = {
   floating: { count: 200, speed: 0.3, size: 2, color: 0xffffff },
@@ -57,8 +72,10 @@ export function ThreeParticlesBackground({
   );
 
   return (
-    <div style={{ position: "absolute", inset: 0, zIndex: 10, pointerEvents: "none" }}>
-      <ThreeCanvas width={width} height={height} init={init} renderScene={renderScene} />
-    </div>
+    <WebGLErrorBoundary>
+      <div style={{ position: "absolute", inset: 0, zIndex: 10, pointerEvents: "none" }}>
+        <ThreeCanvas width={width} height={height} init={init} renderScene={renderScene} />
+      </div>
+    </WebGLErrorBoundary>
   );
 }

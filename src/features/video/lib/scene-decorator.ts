@@ -154,8 +154,12 @@ export async function decorateWithLLM(project: VideoProject): Promise<VideoProje
       jsonStr = fenceMatch[1].trim();
     }
 
-    const result: DecorationResult = JSON.parse(jsonStr);
-    return applyResult(project, result);
+    const result = JSON.parse(jsonStr) as Partial<DecorationResult>;
+    if (!result.theme || !result.scenes) {
+      console.error("scene-decorator: invalid LLM response structure");
+      return project;
+    }
+    return applyResult(project, result as DecorationResult);
   } catch (e) {
     console.error("scene-decorator LLM call failed:", e);
     return project;

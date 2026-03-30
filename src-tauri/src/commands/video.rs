@@ -287,9 +287,11 @@ pub async fn video_export(
     if composition_dir.exists() {
         copy_dir_recursive(&composition_dir, &src_dir.join("composition"))?;
     }
+    // types.ts must be at temp_dir/types.ts because composition files
+    // use "../../types" relative imports (composition/ is at temp_dir/src/composition/)
     let types_src = video_feature_dir.join("types.ts");
     if types_src.exists() {
-        fs::copy(&types_src, src_dir.join("types.ts"))
+        fs::copy(&types_src, temp_dir.join("types.ts"))
             .map_err(|e| format!("Failed to copy types.ts: {}", e))?;
     }
 
