@@ -8,7 +8,7 @@ import { VideoSettingsBar } from "./VideoSettingsBar";
 import { SceneEditForm } from "./SceneEditForm";
 import { ExportPanel } from "./ExportPanel";
 import { Player } from "@open-motion/core";
-import { VideoComposition, calculateTotalDuration } from "../lib/scene-to-composition";
+import { VideoComposition, calculateTotalDuration } from "../lib/composition";
 import type { ExportOptions } from "./ExportPanel";
 import "./VideoPanel.css";
 
