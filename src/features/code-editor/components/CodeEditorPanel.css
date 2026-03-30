@@ -1,0 +1,14 @@
+/* src/features/code-editor/components/CodeEditorPanel.css */
+
+.code-editor-panel {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.code-editor-panel__editor {
+  flex: 1;
+  min-height: 0;
+}
