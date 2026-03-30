@@ -160,5 +160,6 @@
   "skillBuiltinSelect": "Select a built-in skill...",
   "ocChatThinking": "Thinking...",
   "ocChatDone": "Done",
-  "ocChatDoneError": "Done (with errors)"
+  "ocChatDoneError": "Done (with errors)",
+  "commandBuiltinSelect": "Select a built-in command..."
 }

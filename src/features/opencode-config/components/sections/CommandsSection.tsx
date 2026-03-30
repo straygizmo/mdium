@@ -6,6 +6,7 @@ import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 import { useTabStore } from "@/stores/tab-store";
 import type { OpencodeCommand } from "@/shared/types";
 import { useOpencodeConfigContext, toRelativeProjectPath } from "../OpencodeConfigContext";
+import { BUILTIN_COMMANDS } from "../../lib/builtin-commands";
 
 type Scope = "global" | "project";
 
@@ -161,6 +162,29 @@ export function CommandsSection() {
         <div className="oc-section__empty">{t("commandNoProject")}</div>
       ) : isEditing ? (
         <>
+          {/* Built-In Command selector */}
+          <div style={{ marginBottom: 8 }}>
+            <select
+              className="oc-section__builtin-select"
+              value=""
+              onChange={(e) => {
+                const key = e.target.value;
+                if (!key) return;
+                const builtin = BUILTIN_COMMANDS[key];
+                if (!builtin) return;
+                setFormName(builtin.name);
+                setFormDesc(builtin.description ?? "");
+                setFormTemplate(builtin.template);
+                setFormAgent(builtin.agent ?? "");
+                setFormModel(builtin.model ?? "");
+              }}
+            >
+              <option value="">{t("commandBuiltinSelect")}</option>
+              {Object.keys(BUILTIN_COMMANDS).map((key) => (
+                <option key={key} value={key}>{key}</option>
+              ))}
+            </select>
+          </div>
           <div className="oc-section__field">
             <label className="oc-section__label">{t("commandName")} <span className="oc-section__label-hint">{t("commandNameHint")}</span></label>
             <input className="oc-section__input" value={formName} onChange={(e) => setFormName(e.target.value)} disabled={editing !== null} />

@@ -160,5 +160,6 @@
   "skillBuiltinSelect": "ビルトイン スキルを選択...",
   "ocChatThinking": "思考中...",
   "ocChatDone": "完了",
-  "ocChatDoneError": "完了（エラーあり）"
+  "ocChatDoneError": "完了（エラーあり）",
+  "commandBuiltinSelect": "ビルトイン コマンドを選択..."
 }
