@@ -7,7 +7,7 @@ import { useSettingsStore } from "@/stores/settings-store";
 import { useTabStore } from "@/stores/tab-store";
 import { useGitStore } from "@/stores/git-store";
 import { useOpencodeServerStore } from "@/stores/opencode-server-store";
-import { getOfficeExt, getMindmapExt, getImageExt, getPdfExt } from "@/shared/lib/constants";
+import { getOfficeExt, getMindmapExt, getImageExt, getPdfExt, isCodeFile } from "@/shared/lib/constants";
 import { useFileStore } from "@/stores/file-store";
 import { useUiStore } from "@/stores/ui-store";
 import { useRecentItems } from "@/shared/hooks/useRecentItems";
@@ -28,6 +28,7 @@ import { Terminal } from "@/features/terminal/components/Terminal";
 import { RagPanel } from "@/features/rag/components/RagPanel";
 import MindmapEditor from "@/features/mindmap/components/MindmapEditor";
 import { ImageCanvas } from "@/features/image/components/ImageCanvas";
+import { CodeEditorPanel } from "@/features/code-editor/components/CodeEditorPanel";
 import { ExternalChangeDialog } from "@/features/editor/components/ExternalChangeDialog";
 import type { ImageCanvasHandle } from "@/features/image/components/ImageCanvas";
 import type { MindmapEditorHandle } from "@/features/mindmap/components/MindmapEditor";
@@ -264,7 +265,8 @@ export function App() {
     if (activeTab) {
       const isSpecialFile = activeTab.mindmapFileType || activeTab.imageFileType || activeTab.officeFileType;
       const isVideoJson = activeTab.filePath?.toLowerCase().endsWith(".video.json");
-      useUiStore.getState().setEditorVisible(!isSpecialFile && !isVideoJson);
+      const isCode = activeTab.isCodeFile;
+      useUiStore.getState().setEditorVisible(!isSpecialFile && !isVideoJson && !isCode);
       if (isVideoJson) {
         useUiStore.getState().setActiveViewTab("video");
       }
@@ -391,6 +393,7 @@ export function App() {
             folderPath: activeFolderPath ?? "",
             fileName,
             content,
+            isCodeFile: isCodeFile(filePath),
           });
         }
         setActiveFile(filePath);
@@ -399,7 +402,8 @@ export function App() {
         // Hide editor panel for non-.md files
         const isMd = filePath.toLowerCase().endsWith(".md");
         const isVideoJson = filePath.toLowerCase().endsWith(".video.json");
-        useUiStore.getState().setEditorVisible(isMd && !imageExt && !isVideoJson);
+        const isCode = isCodeFile(filePath);
+        useUiStore.getState().setEditorVisible(isMd && !imageExt && !isVideoJson && !isCode);
         if (isVideoJson) {
           useUiStore.getState().setActiveViewTab("video");
         }
@@ -445,10 +449,16 @@ export function App() {
     if (!activeTab) return;
     try {
       const isMindmap = !!activeTab.mindmapFileType;
+      const isCode = !!activeTab.isCodeFile;
+      const ext = activeTab.filePath
+        ? (activeTab.filePath.split(".").pop() ?? "txt")
+        : "txt";
       const selected = await save({
         filters: isMindmap
           ? [{ name: "Mindmap", extensions: ["km"] }]
-          : [{ name: "Markdown", extensions: ["md"] }],
+          : isCode
+            ? [{ name: "Code", extensions: [ext] }, { name: "All", extensions: ["*"] }]
+            : [{ name: "Markdown", extensions: ["md"] }],
       });
       if (!selected) return;
 
@@ -829,9 +839,11 @@ export function App() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.ctrlKey && e.key === "z") {
+        if (activeTab?.isCodeFile) return;
         e.preventDefault();
         handleUndo();
       } else if (e.ctrlKey && e.key === "y") {
+        if (activeTab?.isCodeFile) return;
         e.preventDefault();
         handleRedo();
       } else if (e.ctrlKey && e.shiftKey && e.key === "S") {
@@ -841,6 +853,7 @@ export function App() {
         e.preventDefault();
         handleSave();
       } else if (e.ctrlKey && e.key === "f") {
+        if (activeTab?.isCodeFile) return;
         e.preventDefault();
         if (!showSearch) {
           useUiStore.getState().setSearchMode("search");
@@ -849,6 +862,7 @@ export function App() {
           setShowSearch(false);
         }
       } else if (e.ctrlKey && e.key === "h") {
+        if (activeTab?.isCodeFile) return;
         e.preventDefault();
         if (!showSearch) {
           useUiStore.getState().setSearchMode("replace");
@@ -985,6 +999,8 @@ export function App() {
                     onCanvasModified={handleImageCanvasModified}
                   />
                 </div>
+              ) : activeTab.isCodeFile ? (
+                <CodeEditorPanel />
               ) : (
                 <>
                   {editorVisible && (
