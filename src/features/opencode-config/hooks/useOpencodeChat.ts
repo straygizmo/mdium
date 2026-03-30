@@ -452,9 +452,15 @@ async function doExecuteCommand(commandName: string, args?: string) {
 
   // Track generate-video output path for auto-open
   if (commandName === "generate-video" && args) {
-    const parts = args.trim().split(/\s+/);
-    if (parts.length >= 2) {
-      _pendingVideoOutput = parts[parts.length - 1];
+    // Extract quoted paths or whitespace-separated tokens
+    const quoted = [...args.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    if (quoted.length >= 2) {
+      _pendingVideoOutput = quoted[quoted.length - 1];
+    } else {
+      const parts = args.trim().split(/\s+/);
+      if (parts.length >= 2) {
+        _pendingVideoOutput = parts[parts.length - 1];
+      }
     }
   }
 

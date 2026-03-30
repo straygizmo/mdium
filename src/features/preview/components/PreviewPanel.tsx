@@ -316,7 +316,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   }, [filePath]);
 
   const setChatCommandAndFocus = useCallback((mdPath: string, outputPath: string) => {
-    const command = `/generate-video ${mdPath} ${outputPath}`;
+    const command = `/generate-video "${mdPath}" "${outputPath}"`;
     useChatUIStore.setState({ chatInput: command });
     // Switch to chat panel and focus
     useUiStore.getState().setLeftPanel("opencode-config");
