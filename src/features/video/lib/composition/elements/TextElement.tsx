@@ -1,10 +1,10 @@
-import React from "react";
+import type React from "react";
 import { Transition } from "@open-motion/components";
 import { BASE, scaled } from "../constants";
 
 export function TextElement({
   element,
-  index,
+  index: _index,
   scale: s,
 }: {
   element: { content: string; animation: string };

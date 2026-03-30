@@ -1,4 +1,3 @@
-import React from "react";
 import { SlideInItem } from "@open-motion/components";
 import { BASE, ANIM, scaled } from "../constants";
 

@@ -1,4 +1,3 @@
-import React from "react";
 import { useCurrentFrame, interpolate } from "@open-motion/core";
 import { ProgressBar } from "@open-motion/components";
 import { BASE, ANIM, scaled } from "../constants";

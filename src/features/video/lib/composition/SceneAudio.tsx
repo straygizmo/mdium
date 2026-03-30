@@ -1,4 +1,3 @@
-import React from "react";
 import { Sequence, Audio } from "@open-motion/core";
 import type { Scene } from "../../types";
 import { toPlayableSrc } from "./constants";

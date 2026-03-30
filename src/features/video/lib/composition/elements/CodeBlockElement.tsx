@@ -1,10 +1,10 @@
-import React from "react";
+import type React from "react";
 import { Transition } from "@open-motion/components";
 import { BASE, scaled } from "../constants";
 
 export function CodeBlockElement({
   element,
-  index,
+  index: _index,
   scale: s,
 }: {
   element: { code: string; language: string; animation: string };

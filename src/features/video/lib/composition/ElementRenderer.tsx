@@ -1,4 +1,3 @@
-import React from "react";
 import type { SceneElement } from "../../types";
 import { TitleElement } from "./elements/TitleElement";
 import { TextElement } from "./elements/TextElement";
