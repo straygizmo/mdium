@@ -190,6 +190,8 @@ pub fn run() {
             commands::video::video_clean_temp,
             commands::video::video_copy_images,
             commands::video::video_export,
+            commands::video::video_save_project,
+            commands::video::video_load_project,
             // Image generation
             commands::image_gen::gemini_generate_image,
             // MCP operations

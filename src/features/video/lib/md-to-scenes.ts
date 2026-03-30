@@ -1,4 +1,3 @@
-import * as path from "path";
 import type {
   VideoProject,
   Scene,
@@ -238,14 +237,15 @@ function parseElements(
 // ─── Image path resolution ─────────────────────────────────────────────────────
 
 function resolveImagePath(src: string, fileDir: string): string {
-  if (path.isAbsolute(src)) {
+  if (/^([a-zA-Z]:|\/|\\)/.test(src)) {
     return src;
   }
   if (src.startsWith("http://") || src.startsWith("https://") || src.startsWith("data:")) {
     return src;
   }
   // Relative path: resolve relative to the markdown file's directory
-  return path.resolve(fileDir, src);
+  const sep = fileDir.includes("\\") ? "\\" : "/";
+  return fileDir + sep + src;
 }
 
 // ─── Auto narration ────────────────────────────────────────────────────────────
@@ -265,8 +265,11 @@ function autoNarration(elements: SceneElement[]): string {
 // ─── Main conversion ──────────────────────────────────────────────────────────
 
 export function convertMdToVideoProject(markdown: string, filePath: string): VideoProject {
-  const fileDir = path.dirname(filePath);
-  const fileBasename = path.basename(filePath, path.extname(filePath));
+  const lastSep = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
+  const fileDir = lastSep >= 0 ? filePath.slice(0, lastSep) : ".";
+  const fileName = lastSep >= 0 ? filePath.slice(lastSep + 1) : filePath;
+  const dotIdx = fileName.lastIndexOf(".");
+  const fileBasename = dotIdx > 0 ? fileName.slice(0, dotIdx) : fileName;
 
   const chunks = splitOnPagebreaks(markdown);
 

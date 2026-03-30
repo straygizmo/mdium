@@ -261,7 +261,11 @@ export function App() {
   useEffect(() => {
     if (activeTab) {
       const isSpecialFile = activeTab.mindmapFileType || activeTab.imageFileType || activeTab.officeFileType;
-      useUiStore.getState().setEditorVisible(!isSpecialFile);
+      const isVideoJson = activeTab.filePath?.toLowerCase().endsWith(".video.json");
+      useUiStore.getState().setEditorVisible(!isSpecialFile && !isVideoJson);
+      if (isVideoJson) {
+        useUiStore.getState().setActiveViewTab("video");
+      }
     }
   }, [activeTab?.id]);
 
@@ -392,7 +396,11 @@ export function App() {
 
         // Hide editor panel for non-.md files
         const isMd = filePath.toLowerCase().endsWith(".md");
-        useUiStore.getState().setEditorVisible(isMd && !imageExt);
+        const isVideoJson = filePath.toLowerCase().endsWith(".video.json");
+        useUiStore.getState().setEditorVisible(isMd && !imageExt && !isVideoJson);
+        if (isVideoJson) {
+          useUiStore.getState().setActiveViewTab("video");
+        }
       } catch (e) {
         console.error("Failed to open file:", e);
       }

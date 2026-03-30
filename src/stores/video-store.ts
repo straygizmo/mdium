@@ -3,12 +3,13 @@ import type { VideoProject, Scene } from "@/features/video/types";
 
 interface VideoState {
   videoProject: VideoProject | null;
+  sourceFilePath: string | null;
   audioGenerated: boolean;
   renderProgress: number;
   selectedSceneId: string | null;
   isVideoMode: boolean;
 
-  setVideoProject: (project: VideoProject | null) => void;
+  setVideoProject: (project: VideoProject | null, sourceFilePath?: string | null) => void;
   updateScene: (sceneId: string, partial: Partial<Scene>) => void;
   setSelectedSceneId: (id: string | null) => void;
   setAudioGenerated: (generated: boolean) => void;
@@ -21,13 +22,19 @@ interface VideoState {
 
 export const useVideoStore = create<VideoState>()((set) => ({
   videoProject: null,
+  sourceFilePath: null,
   audioGenerated: false,
   renderProgress: 0,
   selectedSceneId: null,
   isVideoMode: false,
 
-  setVideoProject: (project) =>
-    set({ videoProject: project, audioGenerated: false, renderProgress: 0 }),
+  setVideoProject: (project, sourceFilePath) =>
+    set((s) => ({
+      videoProject: project,
+      sourceFilePath: sourceFilePath ?? s.sourceFilePath,
+      audioGenerated: false,
+      renderProgress: 0,
+    })),
 
   updateScene: (sceneId, partial) =>
     set((s) => {

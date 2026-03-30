@@ -47,7 +47,7 @@ fn is_target_file(
     include_images: bool,
     include_pdf: bool,
 ) -> bool {
-    if name.ends_with(".md") {
+    if name.ends_with(".md") || name.ends_with(".video.json") {
         return true;
     }
     let lower = name.to_lowercase();

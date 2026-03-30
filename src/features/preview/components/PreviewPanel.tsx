@@ -16,6 +16,8 @@ import { SlidevPreviewPanel } from "./SlidevPreviewPanel";
 import { VideoPanel } from "@/features/video/components/VideoPanel";
 import { useVideoStore } from "@/stores/video-store";
 import { convertMdToVideoProject } from "@/features/video/lib/md-to-scenes";
+import { mergeWithSavedProject } from "@/features/video/lib/merge-project";
+import { invoke } from "@tauri-apps/api/core";
 import { docxToMarkdown } from "@/features/export/lib/docxToMarkdown";
 import { marked } from "marked";
 import { readFile } from "@tauri-apps/plugin-fs";
@@ -291,13 +293,34 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   const setIsVideoMode = useVideoStore((s) => s.setIsVideoMode);
   const setVideoProject = useVideoStore((s) => s.setVideoProject);
 
-  const handleEnterVideoMode = useCallback(() => {
-    if (!filePath) return;
-    const project = convertMdToVideoProject(content, filePath);
-    setVideoProject(project);
-    setIsVideoMode(true);
-    setActiveViewTab("video");
-  }, [content, filePath, setVideoProject, setIsVideoMode, setActiveViewTab]);
+  const handleEnterVideoMode = useCallback(async () => {
+    if (!filePath || !onOpenFile) return;
+    const freshProject = convertMdToVideoProject(content, filePath);
+    const merged = await mergeWithSavedProject(freshProject, filePath);
+    // Save .video.json and open it
+    const projectJson = JSON.stringify(merged, null, 2);
+    await invoke("video_save_project", { mdPath: filePath, projectJson });
+    // Derive the .video.json path and open it
+    const lastDot = filePath.lastIndexOf(".");
+    const videoJsonPath = (lastDot > 0 ? filePath.slice(0, lastDot) : filePath) + ".video.json";
+    onOpenFile(videoJsonPath);
+  }, [content, filePath, onOpenFile]);
+
+  // When a .video.json file is opened, load its content as a VideoProject
+  const isVideoJson = useMemo(
+    () => !!filePath && filePath.toLowerCase().endsWith(".video.json"),
+    [filePath],
+  );
+  useEffect(() => {
+    if (!isVideoJson || !content || !filePath) return;
+    try {
+      const project = JSON.parse(content);
+      // Derive source MD path from .video.json path
+      const mdPath = filePath.replace(/\.video\.json$/i, ".md");
+      setVideoProject(project, mdPath);
+      setIsVideoMode(true);
+    } catch { /* ignore parse errors */ }
+  }, [isVideoJson, content, filePath, setVideoProject, setIsVideoMode]);
 
   // Force switch away from slidev-preview when file is not Slidev markdown
   useEffect(() => {
@@ -690,6 +713,15 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
     }
   }, [activeTab?.binaryData, activeTab?.filePath, onOpenFile, onRefreshFileTree]);
 
+  // Show VideoPanel for .video.json files
+  if (isVideoJson) {
+    return (
+      <div className="preview-panel">
+        <VideoPanel />
+      </div>
+    );
+  }
+
   // Show OfficePreview for Office files
   if (isOfficeFile) {
     return (
@@ -775,7 +807,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
           </button>
         )}
         <button
-          className={`preview-panel__tab preview-panel__tab--icon ${activeViewTab === "video" ? "preview-panel__tab--active" : ""}`}
+          className="preview-panel__tab preview-panel__tab--icon"
           onClick={handleEnterVideoMode}
           title="Video"
         >
@@ -839,7 +871,6 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
           </div>
         )}
 
-        {activeViewTab === "video" && <VideoPanel />}
       </div>
 
       {activeViewTab === "preview" && contextMenu && (

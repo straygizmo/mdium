@@ -6,6 +6,35 @@ use std::path::PathBuf;
 use std::process::Command;
 use tauri::{AppHandle, Emitter, Manager};
 
+/// Derive the sidecar `.video.json` path from a markdown file path.
+fn video_json_path(md_path: &str) -> PathBuf {
+    let p = std::path::Path::new(md_path);
+    let stem = p.file_stem().unwrap_or_default();
+    let mut out = p.to_path_buf();
+    out.set_file_name(format!("{}.video.json", stem.to_string_lossy()));
+    out
+}
+
+#[tauri::command]
+pub async fn video_save_project(md_path: String, project_json: String) -> Result<(), String> {
+    let json_path = video_json_path(&md_path);
+    fs::write(&json_path, &project_json)
+        .map_err(|e| format!("Failed to save video project: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn video_load_project(md_path: String) -> Result<Option<String>, String> {
+    let json_path = video_json_path(&md_path);
+    if json_path.exists() {
+        let content = fs::read_to_string(&json_path)
+            .map_err(|e| format!("Failed to read video project: {}", e))?;
+        Ok(Some(content))
+    } else {
+        Ok(None)
+    }
+}
+
 fn hash_string(s: &str) -> String {
     let mut hasher = DefaultHasher::new();
     s.hash(&mut hasher);

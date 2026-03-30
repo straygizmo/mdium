@@ -46,6 +46,7 @@ interface ContextMenuInfo {
 
 export function getFileIcon(name: string): string {
   const lower = name.toLowerCase();
+  if (lower.endsWith(".video.json")) return "🎬";
   if (lower.endsWith(".md")) return "📄";
   if (lower.endsWith(".docx")) return "📘";
   if (lower.match(/\.xls.?$/)) return "📗";

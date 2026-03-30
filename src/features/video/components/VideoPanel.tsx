@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -44,6 +44,23 @@ export function VideoPanel() {
   }, [setIsVideoMode, setActiveViewTab]);
 
   const setRenderProgress = useVideoStore((s) => s.setRenderProgress);
+  const sourceFilePath = useVideoStore((s) => s.sourceFilePath);
+
+  // Auto-save video project settings to .video.json
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!videoProject || !sourceFilePath) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      invoke("video_save_project", {
+        mdPath: sourceFilePath,
+        projectJson: JSON.stringify(videoProject),
+      }).catch(() => {});
+    }, 500);
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [videoProject, sourceFilePath]);
 
   // Listen for render progress events from Rust backend
   useEffect(() => {
