@@ -4,7 +4,6 @@ import {
   useVideoConfig,
   interpolate,
   spring,
-  Easing,
   Sequence,
   delayRender,
   continueRender,
@@ -166,7 +165,7 @@ export const TikTokCaption: React.FC<{
   text: string;
   active: boolean;
   style?: React.CSSProperties;
-}> = ({ text, active, style }) => {
+}> = ({ text, active: _active, style }) => {
   const frame = useCurrentFrame();
   // Simple word-level highlight simulation
   const words = text.split(' ');
@@ -203,7 +202,7 @@ export const TikTokCaption: React.FC<{
  * based on their duration.
  */
 export const Series: React.FC<{
-  children: React.ReactElement<{ durationInFrames: number }>[];
+  children: React.ReactElement<{ durationInFrames: number; children?: React.ReactNode }>[];
 }> = ({ children }) => {
   let currentFrom = 0;
 
@@ -351,7 +350,7 @@ export const Transition: React.FC<{
   direction?: 'left' | 'right' | 'top' | 'bottom';
   children: React.ReactNode;
   style?: React.CSSProperties;
-}> = ({ type, durationInFrames = 15, direction = 'left', children, style }) => {
+}> = ({ type, durationInFrames: _durationInFrames = 15, direction = 'left', children, style }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 

@@ -14,9 +14,9 @@
     "vendor:xlsx2md": "node scripts/vendor-xlsx2md.mjs"
   },
   "dependencies": {
-    "@open-motion/core": "file:packages/open-motion/core",
-    "@open-motion/components": "file:packages/open-motion/components",
     "@huggingface/transformers": "^3.8.1",
+    "@open-motion/components": "file:packages/open-motion/components",
+    "@open-motion/core": "file:packages/open-motion/core",
     "@opencode-ai/sdk": "^1.2.27",
     "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/plugin-dialog": "^2.6.0",
@@ -62,6 +62,7 @@
     "@types/diff": "^7.0.2",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "@types/three": "^0.150.0",
     "@types/turndown": "^5.0.6",
     "@vitejs/plugin-react": "^5.1.4",
     "typescript": "~5.9.3",
