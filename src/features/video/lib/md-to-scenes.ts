@@ -150,7 +150,7 @@ function parseElements(
           type: "bullet-list",
           items,
           animation: "sequential",
-          delayPerItem: 30,
+          delayPerItem: 20,
         };
         elements.push(el);
       }
