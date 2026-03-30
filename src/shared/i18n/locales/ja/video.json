@@ -44,5 +44,10 @@
   "voicevoxNotRunning": "VOICEVOXに接続できません。VOICEVOXを起動してください。",
   "ffmpegNotFound": "FFmpegが見つかりません。インストールしてください。",
   "generatingNarration": "ナレーション生成中...",
-  "generatingAudio": "音声生成中..."
+  "generatingAudio": "音声生成中...",
+  "overwriteDialogTitle": "既存のビデオ設定を上書きしますか？",
+  "overwriteDialogMessage": "「{{fileName}}」が既に存在します。",
+  "overwriteDialogYes": "はい（上書き）",
+  "overwriteDialogNo": "いいえ（新規作成）",
+  "overwriteDialogCancel": "キャンセル"
 }

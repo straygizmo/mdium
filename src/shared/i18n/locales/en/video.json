@@ -44,5 +44,10 @@
   "voicevoxNotRunning": "Cannot connect to VOICEVOX. Please start VOICEVOX.",
   "ffmpegNotFound": "FFmpeg not found. Please install it.",
   "generatingNarration": "Generating narration...",
-  "generatingAudio": "Generating audio..."
+  "generatingAudio": "Generating audio...",
+  "overwriteDialogTitle": "Overwrite existing video settings?",
+  "overwriteDialogMessage": "\"{{fileName}}\" already exists.",
+  "overwriteDialogYes": "Yes (overwrite)",
+  "overwriteDialogNo": "No (create new)",
+  "overwriteDialogCancel": "Cancel"
 }
