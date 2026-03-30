@@ -4,6 +4,12 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useVideoStore } from "@/stores/video-store";
 import type { AspectRatio } from "@/features/video/types";
 
+interface VideoSettingsBarProps {
+  onGenerateAudio: () => void;
+  generating: boolean;
+  generatingStatus: string;
+}
+
 const RESOLUTION_OPTIONS = [
   { label: "1920x1080 (16:9)", width: 1920, height: 1080, aspectRatio: "16:9" as AspectRatio },
   { label: "1080x1920 (9:16)", width: 1080, height: 1920, aspectRatio: "9:16" as AspectRatio },
@@ -11,7 +17,7 @@ const RESOLUTION_OPTIONS = [
   { label: "1080x1080 (1:1)", width: 1080, height: 1080, aspectRatio: "1:1" as AspectRatio },
 ];
 
-export function VideoSettingsBar() {
+export function VideoSettingsBar({ onGenerateAudio, generating, generatingStatus }: VideoSettingsBarProps) {
   const { t } = useTranslation("video");
   const videoProject = useVideoStore((s) => s.videoProject);
   const updateMeta = useVideoStore((s) => s.updateMeta);
@@ -121,6 +127,16 @@ export function VideoSettingsBar() {
           placeholder={t("ttsSpeakerPlaceholder")}
         />
       </div>
+
+      <button
+        className="video-settings-bar__generate-btn"
+        onClick={onGenerateAudio}
+        disabled={generating}
+      >
+        {generating
+          ? generatingStatus || t("generatingAudio")
+          : t("generateAudio")}
+      </button>
     </div>
   );
 }

@@ -6,15 +6,14 @@ import { useVideoStore } from "@/stores/video-store";
 import { useVideoGeneration } from "../hooks/useVideoGeneration";
 import { VideoSettingsBar } from "./VideoSettingsBar";
 import { SceneEditForm } from "./SceneEditForm";
-import { ExportDialog } from "./ExportDialog";
+import { ExportPanel } from "./ExportPanel";
 import { Player } from "@open-motion/core";
 import { VideoComposition, calculateTotalDuration } from "../lib/scene-to-composition";
-import type { ExportOptions } from "./ExportDialog";
+import type { ExportOptions } from "./ExportPanel";
 import "./VideoPanel.css";
 
 export function VideoPanel() {
   const { t } = useTranslation("video");
-  const [showExport, setShowExport] = useState(false);
 
   const videoProject = useVideoStore((s) => s.videoProject);
   const scenes = videoProject?.scenes ?? [];
@@ -110,7 +109,6 @@ export function VideoPanel() {
           concurrency: options.concurrency,
           format: options.format,
         });
-        setShowExport(false);
         setRenderProgress(100);
       } catch (e: any) {
         alert(e instanceof Error ? e.message : String(e));
@@ -123,21 +121,12 @@ export function VideoPanel() {
   return (
     <div className="video-panel">
       <div className="video-panel__left" style={{ width: leftWidth }}>
-        <div className="video-panel__actions">
-          <button onClick={handleGenerateAudio} disabled={generating}>
-            {generating
-              ? generatingStatus || t("generatingAudio")
-              : t("generateAudio")}
-          </button>
-          <button
-            onClick={() => setShowExport(true)}
-            disabled={!audioGenerated}
-          >
-            {t("export")}
-          </button>
-        </div>
         <div className="video-panel__scenes">
-          <VideoSettingsBar />
+          <VideoSettingsBar
+            onGenerateAudio={handleGenerateAudio}
+            generating={generating}
+            generatingStatus={generatingStatus}
+          />
           {scenes.map((scene) => (
             <SceneEditForm
               key={scene.id}
@@ -168,14 +157,11 @@ export function VideoPanel() {
             />
           )}
         </div>
-      </div>
-
-      {showExport && (
-        <ExportDialog
-          onClose={() => setShowExport(false)}
+        <ExportPanel
+          disabled={!audioGenerated}
           onExport={handleExport}
         />
-      )}
+      </div>
     </div>
   );
 }

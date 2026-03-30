@@ -67,23 +67,23 @@ export function SceneEditForm({ scene, onRegenerateAudio, audioGenerating }: Sce
       </div>
 
       <div className="scene-edit-form__field">
-        <label>{t("narration")}</label>
-        <div className="scene-edit-form__narration-row">
-          <textarea
-            value={scene.narration}
-            onChange={handleNarrationChange}
-            rows={4}
-            placeholder={t("narrationPlaceholder")}
-          />
+        <div className="scene-edit-form__label-row">
+          <label>{t("narration")}</label>
           <button
-            className="scene-edit-form__btn"
+            className="scene-edit-form__btn scene-edit-form__btn--small"
             onClick={handleRegenerateAudio}
             disabled={audioGenerating}
-            title={t("narrationRegenerate")}
+            title={t("regenerateTtsAudio")}
           >
             ↻
           </button>
         </div>
+        <textarea
+          value={scene.narration}
+          onChange={handleNarrationChange}
+          rows={4}
+          placeholder={t("narrationPlaceholder")}
+        />
       </div>
 
       <div className="scene-edit-form__row">

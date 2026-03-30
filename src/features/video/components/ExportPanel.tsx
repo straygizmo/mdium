@@ -1,0 +1,156 @@
+import { useState, useCallback } from "react";
+import { useTranslation } from "react-i18next";
+import { save } from "@tauri-apps/plugin-dialog";
+import { useVideoStore } from "@/stores/video-store";
+
+export interface ExportOptions {
+  format: "mp4" | "webm";
+  width: number;
+  height: number;
+  fps: number;
+  concurrency: number;
+  outputPath: string;
+}
+
+interface ExportPanelProps {
+  disabled: boolean;
+  onExport: (options: ExportOptions) => void;
+}
+
+export function ExportPanel({ disabled, onExport }: ExportPanelProps) {
+  const { t } = useTranslation("video");
+  const videoProject = useVideoStore((s) => s.videoProject);
+  const renderProgress = useVideoStore((s) => s.renderProgress);
+
+  const meta = videoProject?.meta;
+
+  const [format, setFormat] = useState<"mp4" | "webm">("mp4");
+  const [fps, setFps] = useState(meta?.fps ?? 30);
+  const [concurrency, setConcurrency] = useState(2);
+  const [outputPath, setOutputPath] = useState("");
+
+  const handleSelectOutputPath = useCallback(async () => {
+    const path = await save({
+      filters: [
+        {
+          name: format === "mp4" ? "MP4 Video" : "WebM Video",
+          extensions: [format],
+        },
+      ],
+      defaultPath: `output.${format}`,
+    });
+    if (path) {
+      setOutputPath(path);
+    }
+  }, [format]);
+
+  const handleExport = useCallback(() => {
+    if (!outputPath || !meta) return;
+    onExport({
+      format,
+      width: meta.width,
+      height: meta.height,
+      fps,
+      concurrency,
+      outputPath,
+    });
+  }, [format, fps, concurrency, outputPath, meta, onExport]);
+
+  const isExporting = renderProgress > 0 && renderProgress < 100;
+
+  return (
+    <div className={`export-panel${disabled ? " export-panel--disabled" : ""}`}>
+      <span className="export-panel__title">{t("exportDialog")}</span>
+
+      <div className="export-panel__body">
+        <div className="export-panel__field">
+          <label>{t("format")}</label>
+          <div className="export-panel__radios">
+            <label>
+              <input
+                type="radio"
+                name="format"
+                value="mp4"
+                checked={format === "mp4"}
+                onChange={() => setFormat("mp4")}
+                disabled={disabled}
+              />
+              MP4
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="format"
+                value="webm"
+                checked={format === "webm"}
+                onChange={() => setFormat("webm")}
+                disabled={disabled}
+              />
+              WebM
+            </label>
+          </div>
+        </div>
+
+        <div className="export-panel__field">
+          <label>{t("resolution")}</label>
+          <span className="export-panel__value">
+            {meta?.width ?? "\u2014"} x {meta?.height ?? "\u2014"}
+          </span>
+        </div>
+
+        <div className="export-panel__field">
+          <label>{t("fps")}</label>
+          <input
+            type="number"
+            min={1}
+            max={120}
+            value={fps}
+            onChange={(e) => setFps(parseInt(e.target.value, 10) || 30)}
+            disabled={disabled}
+          />
+        </div>
+
+        <div className="export-panel__field">
+          <label>{t("concurrency")}</label>
+          <input
+            type="number"
+            min={1}
+            max={16}
+            value={concurrency}
+            onChange={(e) => setConcurrency(parseInt(e.target.value, 10) || 1)}
+            disabled={disabled}
+          />
+        </div>
+
+        <div className="export-panel__field">
+          <label>{t("outputPath")}</label>
+          <button
+            className="export-panel__path-btn"
+            onClick={handleSelectOutputPath}
+            disabled={disabled}
+          >
+            {outputPath ? outputPath.split(/[\\/]/).pop() : t("selectOutput")}
+          </button>
+        </div>
+
+        {isExporting && (
+          <div className="export-panel__progress">
+            <div
+              className="export-panel__progress-bar"
+              style={{ width: `${Math.round(renderProgress)}%` }}
+            />
+            <span>{Math.round(renderProgress)}%</span>
+          </div>
+        )}
+
+        <button
+          className="export-panel__export-btn"
+          onClick={handleExport}
+          disabled={disabled || !outputPath || isExporting}
+        >
+          {t("startExport")}
+        </button>
+      </div>
+    </div>
+  );
+}

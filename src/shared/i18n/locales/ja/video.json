@@ -13,6 +13,7 @@
   "scene": "シーン",
   "narration": "ナレーション",
   "narrationRegenerate": "再生成",
+  "regenerateTtsAudio": "TTS音声を再生成",
   "narrationDirty": "未同期",
   "captions": "字幕",
   "captionsOn": "ON",

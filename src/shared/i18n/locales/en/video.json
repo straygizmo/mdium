@@ -13,6 +13,7 @@
   "scene": "Scene",
   "narration": "Narration",
   "narrationRegenerate": "Regenerate",
+  "regenerateTtsAudio": "Regenerate TTS audio",
   "narrationDirty": "Out of sync",
   "captions": "Captions",
   "captionsOn": "ON",
