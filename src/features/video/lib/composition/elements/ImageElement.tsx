@@ -45,6 +45,28 @@ export function ImageElement({
       kenProgress * ANIM.kenBurnsPanX - ANIM.kenBurnsPanX / 2;
   }
 
+  // Background position: full-screen cover behind other elements
+  if (element.position === "background") {
+    const bgStyle: React.CSSProperties = {
+      position: "absolute",
+      inset: 0,
+      width: "100%",
+      height: "100%",
+      objectFit: "cover",
+      transform: `scale(${imgScale}) translateX(${imgTranslateX}px)`,
+      zIndex: 10,
+    };
+
+    if (element.animation === "none") {
+      return <img src={toPlayableSrc(element.src)} alt={element.alt ?? ""} style={bgStyle} />;
+    }
+    return (
+      <Transition type="fade">
+        <img src={toPlayableSrc(element.src)} alt={element.alt ?? ""} style={bgStyle} />
+      </Transition>
+    );
+  }
+
   const imgStyle: React.CSSProperties = {
     maxWidth: "80%",
     maxHeight: scaled(400, s),
@@ -52,6 +74,11 @@ export function ImageElement({
     transform: `scale(${imgScale}) translateX(${imgTranslateX}px)`,
     display: "block",
     margin: element.position === "center" ? "0 auto" : undefined,
+    marginLeft: element.position === "left" ? "0" : undefined,
+    marginRight: element.position === "right" ? "0" : undefined,
+    alignSelf:
+      element.position === "left" ? "flex-start" :
+      element.position === "right" ? "flex-end" : undefined,
   };
 
   if (element.animation === "none") {

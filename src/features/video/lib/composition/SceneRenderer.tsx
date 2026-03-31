@@ -64,6 +64,13 @@ export function SceneRenderer({
       {/* Background effect layer */}
       {effect.type !== "none" && <BackgroundEffectRenderer effect={effect} />}
 
+      {/* Background images layer (behind elements) */}
+      {scene.elements.map((element, i) =>
+        element.type === "image" && element.position === "background" && element.enabled !== false ? (
+          <ElementRenderer key={`bg-${i}`} element={element} index={i} scale={s} />
+        ) : null
+      )}
+
       {/* Elements layer */}
       <div
         style={{
@@ -78,9 +85,11 @@ export function SceneRenderer({
           gap: `${scaled(BASE.gap, s)}px`,
         }}
       >
-        {scene.elements.map((element, i) => (
-          <ElementRenderer key={i} element={element} index={i} scale={s} />
-        ))}
+        {scene.elements.map((element, i) =>
+          element.type === "image" && element.position === "background" ? null : (
+            <ElementRenderer key={i} element={element} index={i} scale={s} />
+          )
+        )}
       </div>
 
       {/* Captions layer */}
