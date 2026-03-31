@@ -121,8 +121,9 @@ export class VoicevoxProvider implements TTSProvider {
 
     const audioQuery: VoicevoxAudioQuery = await queryRes.json();
 
-    // 2. Apply speed scale from options
+    // 2. Apply speed / volume scale from options
     audioQuery.speedScale = speedScale;
+    audioQuery.volumeScale = options.volume ?? audioQuery.volumeScale;
 
     // 3. Extract timing data from accent_phrases
     const timingData = extractTimingData(audioQuery, speedScale);

@@ -188,6 +188,7 @@ pub fn run() {
             // Video operations
             commands::video::video_save_audio,
             commands::video::video_file_exists,
+            commands::video::video_delete_audio_by_prefix,
             commands::video::video_clean_temp,
             commands::video::video_copy_images,
             commands::video::video_check_ffmpeg,

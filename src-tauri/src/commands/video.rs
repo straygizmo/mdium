@@ -109,6 +109,32 @@ pub async fn video_file_exists(path: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
+pub async fn video_delete_audio_by_prefix(md_path: String, prefix: String) -> Result<u32, String> {
+    let md_p = std::path::Path::new(&md_path);
+    let audio_dir = md_p
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("audio");
+    if !audio_dir.exists() {
+        return Ok(0);
+    }
+    let pattern = format!("{}_scene_", prefix);
+    let mut count: u32 = 0;
+    for entry in fs::read_dir(&audio_dir)
+        .map_err(|e| format!("Failed to read audio dir: {}", e))?
+    {
+        let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with(&pattern) && name.ends_with(".wav") {
+            fs::remove_file(entry.path())
+                .map_err(|e| format!("Failed to delete {}: {}", name, e))?;
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+#[tauri::command]
 pub async fn video_clean_temp() -> Result<(), String> {
     let temp_dir = std::env::temp_dir().join("mdium-video");
     if temp_dir.exists() {

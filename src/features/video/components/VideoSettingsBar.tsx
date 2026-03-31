@@ -90,6 +90,21 @@ export function VideoSettingsBar({ onGenerateAudio, generating, generatingStatus
     [audio?.tts, updateAudioConfig]
   );
 
+  const handleTtsVolumeChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const volume = parseFloat(e.target.value);
+      updateAudioConfig({
+        tts: {
+          provider: audio?.tts?.provider ?? "voicevox",
+          speaker: audio?.tts?.speaker,
+          speed: audio?.tts?.speed,
+          volume,
+        },
+      });
+    },
+    [audio?.tts, updateAudioConfig]
+  );
+
   const setAllCaptions = useVideoStore((s) => s.setAllCaptions);
   const allCaptionsEnabled = videoProject?.scenes.every((s) => s.captions?.enabled) ?? false;
 
@@ -135,35 +150,62 @@ export function VideoSettingsBar({ onGenerateAudio, generating, generatingStatus
         )}
       </div>
 
-      <div className="video-settings-bar__row">
-        <label>{t("ttsProvider")}</label>
-        <select value={audio?.tts?.provider ?? "voicevox"} disabled>
-          <option value="voicevox">VoiceVox</option>
-        </select>
-      </div>
+      <fieldset className="video-settings-bar__narration-group">
+        <legend className="video-settings-bar__narration-legend">ナレーション設定</legend>
 
-      <div className="video-settings-bar__row">
-        <label>{t("ttsSpeaker")}</label>
-        <input
-          type="text"
-          value={audio?.tts?.speaker ?? ""}
-          onChange={handleTtsSpeakerChange}
-          placeholder={t("ttsSpeakerPlaceholder")}
-        />
-      </div>
+        <div className="video-settings-bar__row">
+          <label>{t("ttsProvider")}</label>
+          <select value={audio?.tts?.provider ?? "voicevox"} disabled>
+            <option value="voicevox">VoiceVox</option>
+          </select>
+        </div>
 
-      <div className="video-settings-bar__row">
-        <label>速度</label>
-        <input
-          type="range"
-          min={0.7}
-          max={1.5}
-          step={0.1}
-          value={audio?.tts?.speed ?? 1.0}
-          onChange={handleTtsSpeedChange}
-        />
-        <span style={{ fontSize: 11, minWidth: 28, textAlign: "right" }}>{(audio?.tts?.speed ?? 1.0).toFixed(1)}</span>
-      </div>
+        <div className="video-settings-bar__row">
+          <label>{t("ttsSpeaker")}</label>
+          <input
+            type="text"
+            value={audio?.tts?.speaker ?? ""}
+            onChange={handleTtsSpeakerChange}
+            placeholder={t("ttsSpeakerPlaceholder")}
+          />
+        </div>
+
+        <div className="video-settings-bar__row">
+          <label>速度</label>
+          <input
+            type="range"
+            min={0.7}
+            max={1.5}
+            step={0.1}
+            value={audio?.tts?.speed ?? 1.0}
+            onChange={handleTtsSpeedChange}
+          />
+          <span style={{ fontSize: 11, minWidth: 28, textAlign: "right" }}>{(audio?.tts?.speed ?? 1.0).toFixed(1)}</span>
+        </div>
+
+        <div className="video-settings-bar__row">
+          <label>音量</label>
+          <input
+            type="range"
+            min={0.0}
+            max={2.0}
+            step={0.1}
+            value={audio?.tts?.volume ?? 1.0}
+            onChange={handleTtsVolumeChange}
+          />
+          <span style={{ fontSize: 11, minWidth: 28, textAlign: "right" }}>{(audio?.tts?.volume ?? 1.0).toFixed(1)}</span>
+        </div>
+
+        <button
+          className="video-settings-bar__generate-btn"
+          onClick={onGenerateAudio}
+          disabled={generating}
+        >
+          {generating
+            ? generatingStatus || t("generatingAudio")
+            : t("generateAudio")}
+        </button>
+      </fieldset>
 
       <div className="video-settings-bar__row">
         <label>字幕</label>
@@ -183,16 +225,6 @@ export function VideoSettingsBar({ onGenerateAudio, generating, generatingStatus
           <span className="scene-edit-form__switch-thumb" />
         </span>
       </div>
-
-      <button
-        className="video-settings-bar__generate-btn"
-        onClick={onGenerateAudio}
-        disabled={generating}
-      >
-        {generating
-          ? generatingStatus || t("generatingAudio")
-          : t("generateAudio")}
-      </button>
 
       <button
         className="video-settings-bar__decorate-btn"

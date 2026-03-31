@@ -88,22 +88,18 @@ export function useVideoGeneration() {
       }
 
       const provider = createTTSProvider(tts.provider);
+
+      // Delete existing audio files for this project before regenerating
+      const prefix = videoFilePrefix(sourceFilePath);
+      if (sourceFilePath) {
+        await invoke("video_delete_audio_by_prefix", { mdPath: sourceFilePath, prefix });
+      }
+
       const scenes = videoProject.scenes;
       const total = scenes.length;
 
       for (let i = 0; i < total; i++) {
         const scene = scenes[i];
-
-        // Skip if segments exist with audio and not dirty
-        if (scene.narrationSegments?.length && !scene.narrationDirty) {
-          const allHaveAudio = scene.narrationSegments.every((s) => s.audioPath);
-          if (allHaveAudio) {
-            // Verify at least first file exists
-            const firstPath = scene.narrationSegments[0].audioPath!;
-            const exists = await invoke<boolean>("video_file_exists", { path: firstPath });
-            if (exists) continue;
-          }
-        }
 
         setGeneratingStatus(`${i + 1}/${total}: ${scene.title ?? scene.id}`);
 

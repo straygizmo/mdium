@@ -24,7 +24,7 @@ export function SceneAudio({
           frameOffset += segFrames;
           return (
             <Sequence key={i} from={from} durationInFrames={segFrames || 9999}>
-              <Audio src={toPlayableSrc(seg.audioPath)} volume={ttsVolume} />
+              <Audio src={toPlayableSrc(seg.audioPath)} volume={Math.min(ttsVolume, 1)} />
             </Sequence>
           );
         })}
@@ -33,7 +33,7 @@ export function SceneAudio({
   }
 
   if (scene.narrationAudio) {
-    return <Audio src={toPlayableSrc(scene.narrationAudio)} volume={ttsVolume} />;
+    return <Audio src={toPlayableSrc(scene.narrationAudio)} volume={Math.min(ttsVolume, 1)} />;
   }
 
   return <></>;
