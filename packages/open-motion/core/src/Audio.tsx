@@ -16,8 +16,8 @@ export const Audio: React.FC<AudioProps> = (props) => {
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
-    const assets: any[] = ((window as any).__OPEN_MOTION_AUDIO_ASSETS__ =
-      (window as any).__OPEN_MOTION_AUDIO_ASSETS__ || []);
+    const assets: any[] = (window.__OPEN_MOTION_AUDIO_ASSETS__ =
+      window.__OPEN_MOTION_AUDIO_ASSETS__ || []);
 
     const exists = assets.find(
       (a: any) =>
@@ -35,7 +35,7 @@ export const Audio: React.FC<AudioProps> = (props) => {
     }
 
     return () => {
-      const arr: any[] = (window as any).__OPEN_MOTION_AUDIO_ASSETS__;
+      const arr = window.__OPEN_MOTION_AUDIO_ASSETS__;
       if (!arr) return;
       const idx = arr.findIndex(
         (a: any) =>

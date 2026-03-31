@@ -79,7 +79,7 @@ export const Lottie: React.FC<{
     const safetyTimer = setTimeout(safeContine, 10000);
 
     const loadLottie = async () => {
-      if (!(window as any).lottie) {
+      if (!window.lottie) {
         try {
           await new Promise<void>((resolve, reject) => {
             const script = document.createElement('script');
@@ -96,7 +96,7 @@ export const Lottie: React.FC<{
       }
 
       if (containerRef.current) {
-        animationRef.current = (window as any).lottie.loadAnimation({
+        animationRef.current = window.lottie.loadAnimation({
           container: containerRef.current,
           renderer: 'svg',
           loop: false,

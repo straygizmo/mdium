@@ -24,16 +24,16 @@ export const CompositionProvider: React.FC<{
 
   React.useEffect(() => {
     if (typeof window !== 'undefined') {
-      (window as any).__OPEN_MOTION_READY__ = true;
+      window.__OPEN_MOTION_READY__ = true;
     }
   }, [currentFrame]);
 
   React.useEffect(() => {
     // Also set ready when children might have finished async loading
     if (typeof window !== 'undefined') {
-      const delayCount = (window as any).__OPEN_MOTION_DELAY_RENDER_COUNT__ || 0;
+      const delayCount = window.__OPEN_MOTION_DELAY_RENDER_COUNT__ || 0;
       if (delayCount === 0) {
-        (window as any).__OPEN_MOTION_READY__ = true;
+        window.__OPEN_MOTION_READY__ = true;
       }
     }
   }, []);
@@ -108,7 +108,7 @@ const compositions: Map<string, CompositionProps> = new Map();
 export const registerComposition = (props: CompositionProps) => {
   compositions.set(props.id, props);
   if (typeof window !== 'undefined') {
-    (window as any).__OPEN_MOTION_COMPOSITIONS__ = Array.from(compositions.values());
+    window.__OPEN_MOTION_COMPOSITIONS__ = Array.from(compositions.values());
   }
 };
 
@@ -133,8 +133,8 @@ let delayRenderCounter = 0;
 export const delayRender = (label?: string) => {
   const handle = delayRenderCounter++;
   if (typeof window !== 'undefined') {
-    (window as any).__OPEN_MOTION_DELAY_RENDER_COUNT__ = ((window as any).__OPEN_MOTION_DELAY_RENDER_COUNT__ || 0) + 1;
-    console.debug(`[OpenMotion] delayRender: ${label || handle}, count: ${(window as any).__OPEN_MOTION_DELAY_RENDER_COUNT__}`);
+    window.__OPEN_MOTION_DELAY_RENDER_COUNT__ = (window.__OPEN_MOTION_DELAY_RENDER_COUNT__ || 0) + 1;
+    console.debug(`[OpenMotion] delayRender: ${label || handle}, count: ${window.__OPEN_MOTION_DELAY_RENDER_COUNT__}`);
   }
   return handle;
 };
@@ -144,8 +144,8 @@ export const delayRender = (label?: string) => {
  */
 export const continueRender = (handle: number) => {
   if (typeof window !== 'undefined') {
-    (window as any).__OPEN_MOTION_DELAY_RENDER_COUNT__ = Math.max(0, ((window as any).__OPEN_MOTION_DELAY_RENDER_COUNT__ || 0) - 1);
-    console.debug(`[OpenMotion] continueRender: ${handle}, count: ${(window as any).__OPEN_MOTION_DELAY_RENDER_COUNT__}`);
+    window.__OPEN_MOTION_DELAY_RENDER_COUNT__ = Math.max(0, (window.__OPEN_MOTION_DELAY_RENDER_COUNT__ || 0) - 1);
+    console.debug(`[OpenMotion] continueRender: ${handle}, count: ${window.__OPEN_MOTION_DELAY_RENDER_COUNT__}`);
   }
 };
 
@@ -436,7 +436,7 @@ export const OffthreadVideo: React.FC<{
   playbackRate?: number;
   style?: React.CSSProperties;
 }> = (props) => {
-  const isRendering = typeof (window as any).__OPEN_MOTION_FRAME__ === 'number';
+  const isRendering = typeof window.__OPEN_MOTION_FRAME__ === 'number';
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 
@@ -447,14 +447,14 @@ export const OffthreadVideo: React.FC<{
     const targetTime = (frame * playbackRate + startFrom) / fps;
 
     if (typeof window !== 'undefined') {
-      (window as any).__OPEN_MOTION_VIDEO_ASSETS__ = (window as any).__OPEN_MOTION_VIDEO_ASSETS__ || [];
+      window.__OPEN_MOTION_VIDEO_ASSETS__ = window.__OPEN_MOTION_VIDEO_ASSETS__ || [];
       // We use a unique ID for this instance based on its properties
       const id = `offthread-${props.src}-${startFrom}-${playbackRate}`;
 
       // Check if already registered for this frame
-      const exists = (window as any).__OPEN_MOTION_VIDEO_ASSETS__.find((a: any) => a.id === id);
+      const exists = window.__OPEN_MOTION_VIDEO_ASSETS__.find((a: any) => a.id === id);
       if (!exists) {
-        (window as any).__OPEN_MOTION_VIDEO_ASSETS__.push({
+        window.__OPEN_MOTION_VIDEO_ASSETS__.push({
           id,
           src: props.src,
           time: targetTime,
@@ -463,7 +463,7 @@ export const OffthreadVideo: React.FC<{
       }
 
       // Render a placeholder image that the renderer will populate or we can use a data-uri
-      const frameDataUri = (window as any).__OPEN_MOTION_VIDEO_FRAMES__?.[id];
+      const frameDataUri = window.__OPEN_MOTION_VIDEO_FRAMES__?.[id];
 
       return (
         <img

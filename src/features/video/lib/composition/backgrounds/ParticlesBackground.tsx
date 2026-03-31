@@ -2,11 +2,11 @@ import { useMemo } from "react";
 import { useCurrentFrame } from "@open-motion/core";
 
 const PRESETS = {
-  stars: { count: 60, color: "#ffffff", sizeRange: [1, 3] as const, speed: 0.2, opacity: 0.8 },
-  snow: { count: 40, color: "#ffffff", sizeRange: [2, 6] as const, speed: 0.8, opacity: 0.6 },
-  fireflies: { count: 25, color: "#ffdd44", sizeRange: [2, 5] as const, speed: 0.3, opacity: 0.7 },
-  bubbles: { count: 20, color: "#88ccff", sizeRange: [4, 12] as const, speed: 0.4, opacity: 0.3 },
-} as const;
+  stars: { count: 60, color: "#ffffff", sizeRange: [1, 3], speed: 0.2, opacity: 0.8 },
+  snow: { count: 40, color: "#ffffff", sizeRange: [2, 6], speed: 0.8, opacity: 0.6 },
+  fireflies: { count: 25, color: "#ffdd44", sizeRange: [2, 5], speed: 0.3, opacity: 0.7 },
+  bubbles: { count: 20, color: "#88ccff", sizeRange: [4, 12], speed: 0.4, opacity: 0.3 },
+};
 
 function seededRandom(seed: number): number {
   const x = Math.sin(seed * 9301 + 49297) * 233280;

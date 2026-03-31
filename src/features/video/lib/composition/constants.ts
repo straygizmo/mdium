@@ -23,7 +23,7 @@ export const BASE = {
   lineHeightHeading: 1.2,
   lineHeightText: 1.6,
   lineHeightCaption: 1.4,
-} as const;
+};
 
 export function scaled(base: number, scale: number): number {
   return Math.round(base * scale);
@@ -42,7 +42,7 @@ export const ANIM = {
   floatPeriodFrames: 120,
   kenBurnsScale: 1.05,
   kenBurnsPanX: 15,
-} as const;
+};
 
 // ─── Asset URL helper ────────────────────────────────────────────────────────
 
@@ -57,7 +57,7 @@ export function toPlayableSrc(filePath: string): string {
     return filePath;
   }
   try {
-    const internals = (window as any).__TAURI_INTERNALS__;
+    const internals = window.__TAURI_INTERNALS__;
     if (internals?.convertFileSrc) {
       return internals.convertFileSrc(filePath, "asset");
     }

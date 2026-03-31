@@ -27,7 +27,7 @@ export function ThreeGeometryBackground({
 
   const init = useCallback(
     (scene: THREE.Scene, camera: THREE.Camera) => {
-      (camera as THREE.PerspectiveCamera).position.z = 5;
+      camera.position.z = 5;
       scene.background = null;
 
       const material = new THREE.MeshBasicMaterial({
@@ -61,11 +61,11 @@ export function ThreeGeometryBackground({
 
   const renderScene = useCallback(
     (scene: THREE.Scene, _camera: THREE.Camera, frame: number) => {
-      const mesh = scene.getObjectByName("geometry") as THREE.Mesh;
-      if (!mesh) return;
+      const mesh = scene.getObjectByName("geometry");
+      if (!mesh || !(mesh instanceof THREE.Mesh)) return;
 
       if (preset === "wave-mesh") {
-        const positions = mesh.geometry.attributes.position as THREE.BufferAttribute;
+        const positions = mesh.geometry.attributes.position;
         for (let i = 0; i < positions.count; i++) {
           const x = positions.getX(i);
           const y = positions.getY(i);

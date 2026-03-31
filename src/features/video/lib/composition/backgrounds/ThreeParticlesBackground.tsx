@@ -22,7 +22,7 @@ const PRESETS = {
   floating: { count: 200, speed: 0.3, size: 2, color: 0xffffff },
   galaxy: { count: 500, speed: 0.1, size: 1, color: 0x8888ff },
   rain: { count: 300, speed: 1.0, size: 1, color: 0xaaddff },
-} as const;
+};
 
 export function ThreeParticlesBackground({
   preset,
@@ -34,7 +34,7 @@ export function ThreeParticlesBackground({
 
   const init = useCallback(
     (scene: THREE.Scene, camera: THREE.Camera) => {
-      (camera as THREE.PerspectiveCamera).position.z = 5;
+      camera.position.z = 5;
       scene.background = null;
 
       const geometry = new THREE.BufferGeometry();
@@ -62,7 +62,7 @@ export function ThreeParticlesBackground({
 
   const renderScene = useCallback(
     (scene: THREE.Scene, _camera: THREE.Camera, frame: number) => {
-      const points = scene.getObjectByName("particles") as THREE.Points;
+      const points = scene.getObjectByName("particles");
       if (points) {
         points.rotation.y = frame * 0.002 * config.speed;
         points.rotation.x = frame * 0.001 * config.speed;

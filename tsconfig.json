@@ -19,5 +19,5 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src"]
+  "include": ["src", "packages/open-motion/core", "packages/open-motion/components"]
 }

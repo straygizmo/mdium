@@ -4,7 +4,7 @@ import { CompositionProvider, registerComposition } from "@open-motion/core";
 import { VideoComposition, calculateTotalDuration } from "./composition";
 import projectData from "../project.json";
 
-const project = projectData as any;
+const project: any = projectData;
 const totalDuration = calculateTotalDuration(project);
 
 const config = {
@@ -23,8 +23,8 @@ registerComposition({
 
 function App() {
   const initialFrame =
-    typeof (window as any).__OPEN_MOTION_FRAME__ === "number"
-      ? (window as any).__OPEN_MOTION_FRAME__
+    typeof window.__OPEN_MOTION_FRAME__ === "number"
+      ? window.__OPEN_MOTION_FRAME__
       : 0;
 
   return (

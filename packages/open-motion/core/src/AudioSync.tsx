@@ -33,7 +33,7 @@ export const AudioSyncManager: React.FC<AudioSyncManagerProps> = ({
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
-    const assets: any[] = (window as any).__OPEN_MOTION_AUDIO_ASSETS__ || [];
+    const assets: any[] = window.__OPEN_MOTION_AUDIO_ASSETS__ || [];
 
     assets.forEach((asset: any) => {
       const id = `${asset.src}-${asset.startFrame || 0}-${asset.startFrom || 0}`;
@@ -71,7 +71,7 @@ export const AudioSyncManager: React.FC<AudioSyncManagerProps> = ({
     if (lastSyncedFrameRef.current === frame && !isPlayingChanged) return;
     lastSyncedFrameRef.current = frame;
 
-    const assets: any[] = (window as any).__OPEN_MOTION_AUDIO_ASSETS__ || [];
+    const assets: any[] = window.__OPEN_MOTION_AUDIO_ASSETS__ || [];
 
     audioElementsRef.current.forEach((entry, id) => {
       const { audio } = entry;

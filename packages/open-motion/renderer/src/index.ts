@@ -108,11 +108,11 @@ export const getCompositions = async (url: string, options: GetCompositionsOptio
 
   // Wait for React to mount and all compositions to register
   // We wait for the variable to exist AND for a small stabilization period
-  await page.waitForFunction(() => (window as any).__OPEN_MOTION_COMPOSITIONS__ !== undefined, { timeout }).catch(() => {});
+  await page.waitForFunction(() => window.__OPEN_MOTION_COMPOSITIONS__ !== undefined, { timeout }).catch(() => {});
   await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 500)));
 
   const compositions = await page.evaluate(() => {
-    return (window as any).__OPEN_MOTION_COMPOSITIONS__ || [];
+    return window.__OPEN_MOTION_COMPOSITIONS__ || [];
   });
 
   // Process calculateMetadata if available
@@ -128,7 +128,7 @@ export const getCompositions = async (url: string, options: GetCompositionsOptio
       }
     }
     return compositions;
-  }, [compositions, inputProps] as const);
+  }, [compositions, inputProps]);
 
   await browser.close();
   return processedCompositions;
@@ -214,28 +214,28 @@ export const renderFrames = async ({ url, config, outputDir, compositionId, inpu
     for (let i = startFrame; i <= endFrame && i < config.durationInFrames; i++) {
       if (i === startFrame) {
         await page.addInitScript(({ frame, fps, hijackScript, compositionId, inputProps, fontPayloads }) => {
-          (window as any).__OPEN_MOTION_FRAME__ = frame;
-          (window as any).__OPEN_MOTION_COMPOSITION_ID__ = compositionId;
-          (window as any).__OPEN_MOTION_INPUT_PROPS__ = inputProps;
-          (window as any).__OPEN_MOTION_READY__ = false;
-          (window as any).__OPEN_MOTION_VIDEO_FRAMES__ = {};
-          (window as any).__OPEN_MOTION_ERROR__ = null;
+          window.__OPEN_MOTION_FRAME__ = frame;
+          window.__OPEN_MOTION_COMPOSITION_ID__ = compositionId;
+          window.__OPEN_MOTION_INPUT_PROPS__ = inputProps;
+          window.__OPEN_MOTION_READY__ = false;
+          window.__OPEN_MOTION_VIDEO_FRAMES__ = {};
+          window.__OPEN_MOTION_ERROR__ = null;
 
           // Catch unhandled errors so waitForFunction doesn't hang for 300s
           window.addEventListener('error', (e) => {
-            (window as any).__OPEN_MOTION_ERROR__ = e.message || 'Unknown error';
-            (window as any).__OPEN_MOTION_READY__ = true;
-            (window as any).__OPEN_MOTION_DELAY_RENDER_COUNT__ = 0;
+            window.__OPEN_MOTION_ERROR__ = e.message || 'Unknown error';
+            window.__OPEN_MOTION_READY__ = true;
+            window.__OPEN_MOTION_DELAY_RENDER_COUNT__ = 0;
           });
           window.addEventListener('unhandledrejection', (e) => {
-            (window as any).__OPEN_MOTION_ERROR__ = (e.reason && e.reason.message) || String(e.reason) || 'Unhandled rejection';
-            (window as any).__OPEN_MOTION_READY__ = true;
-            (window as any).__OPEN_MOTION_DELAY_RENDER_COUNT__ = 0;
+            window.__OPEN_MOTION_ERROR__ = (e.reason && e.reason.message) || String(e.reason) || 'Unhandled rejection';
+            window.__OPEN_MOTION_READY__ = true;
+            window.__OPEN_MOTION_DELAY_RENDER_COUNT__ = 0;
           });
 
-          (window as any).__OPEN_MOTION_FONTS_READY__ = Promise.resolve();
+          window.__OPEN_MOTION_FONTS_READY__ = Promise.resolve();
           if (fontPayloads && Array.isArray(fontPayloads) && 'fonts' in document) {
-            (window as any).__OPEN_MOTION_FONTS_READY__ = (async () => {
+            window.__OPEN_MOTION_FONTS_READY__ = (async () => {
               for (const f of fontPayloads) {
                 try {
                   const src = `url(data:${f.mime};base64,${f.base64})${f.format ? ` format('${f.format}')` : ''}`;
@@ -244,13 +244,13 @@ export const renderFrames = async ({ url, config, outputDir, compositionId, inpu
                     style: f.style ? String(f.style) : undefined,
                   });
                   await face.load();
-                  (document as any).fonts.add(face);
+                  document.fonts.add(face);
                 } catch (e) {
                   // ignore
                 }
               }
               try {
-                await (document as any).fonts.ready;
+                await document.fonts.ready;
               } catch (e) {
                 // ignore
               }
@@ -282,10 +282,10 @@ export const renderFrames = async ({ url, config, outputDir, compositionId, inpu
       } else {
         // Update frame for subsequent renders
         await page.evaluate(({ frame, fps, hijackScript }) => {
-          (window as any).__OPEN_MOTION_READY__ = false;
-          (window as any).__OPEN_MOTION_ERROR__ = null;
-          (window as any).__OPEN_MOTION_FRAME__ = frame;
-          (window as any).__OPEN_MOTION_VIDEO_ASSETS__ = []; // Reset for this frame
+          window.__OPEN_MOTION_READY__ = false;
+          window.__OPEN_MOTION_ERROR__ = null;
+          window.__OPEN_MOTION_FRAME__ = frame;
+          window.__OPEN_MOTION_VIDEO_ASSETS__ = []; // Reset for this frame
           eval(hijackScript);
           window.dispatchEvent(new CustomEvent('open-motion-frame-update', { detail: { frame } }));
         }, {
@@ -299,18 +299,18 @@ export const renderFrames = async ({ url, config, outputDir, compositionId, inpu
       const frameTimeout = i === startFrame ? timeout : Math.min(timeout, 60000);
       try {
         await page.waitForFunction(() => {
-          const ready = (window as any).__OPEN_MOTION_READY__ === true;
-          const delayCount = (window as any).__OPEN_MOTION_DELAY_RENDER_COUNT__ || 0;
+          const ready = window.__OPEN_MOTION_READY__ === true;
+          const delayCount = window.__OPEN_MOTION_DELAY_RENDER_COUNT__ || 0;
           return ready && delayCount === 0;
         }, { timeout: frameTimeout, polling: 100 });
-      } catch (waitErr: any) {
+      } catch (waitErr) {
         // Collect diagnostic info on timeout
-        const diag = await page.evaluate(() => {
+        const diag: Record<string, unknown> = await page.evaluate(() => {
           const root = document.getElementById('root');
           return {
-            ready: (window as any).__OPEN_MOTION_READY__,
-            delayCount: (window as any).__OPEN_MOTION_DELAY_RENDER_COUNT__,
-            error: (window as any).__OPEN_MOTION_ERROR__,
+            ready: window.__OPEN_MOTION_READY__,
+            delayCount: window.__OPEN_MOTION_DELAY_RENDER_COUNT__,
+            error: window.__OPEN_MOTION_ERROR__,
             hasRoot: !!root,
             rootEmpty: root ? root.innerHTML.length === 0 : true,
             rootSnippet: root ? root.innerHTML.substring(0, 200) : '(no #root)',
@@ -324,18 +324,18 @@ export const renderFrames = async ({ url, config, outputDir, compositionId, inpu
         }
         throw new Error(
           `Frame ${i} timed out after ${frameTimeout}ms. ` +
-          `ready=${(diag as any).ready}, delayCount=${(diag as any).delayCount}, ` +
-          `rootEmpty=${(diag as any).rootEmpty}, error=${(diag as any).error}` +
+          `ready=${diag.ready}, delayCount=${diag.delayCount}, ` +
+          `rootEmpty=${diag.rootEmpty}, error=${diag.error}` +
           (pageErrors.length > 0 ? `. Page errors: ${pageErrors.join('; ')}` : '')
         );
       }
 
       // Check if the page reported an error
-      const pageError = await page.evaluate(() => (window as any).__OPEN_MOTION_ERROR__);
+      const pageError = await page.evaluate(() => window.__OPEN_MOTION_ERROR__);
       if (pageError) {
         console.error(`[open-motion] Page error on frame ${i}: ${pageError}`);
         // Reset error flag and continue - best effort rendering
-        await page.evaluate(() => { (window as any).__OPEN_MOTION_ERROR__ = null; });
+        await page.evaluate(() => { window.__OPEN_MOTION_ERROR__ = null; });
       }
 
       // Only wait for networkidle on the first frame to avoid hanging on persistent requests
@@ -344,7 +344,7 @@ export const renderFrames = async ({ url, config, outputDir, compositionId, inpu
       }
 
       // Check for OffthreadVideo assets
-      const videoAssets = await page.evaluate(() => (window as any).__OPEN_MOTION_VIDEO_ASSETS__ || []);
+      const videoAssets = await page.evaluate(() => window.__OPEN_MOTION_VIDEO_ASSETS__ || []);
 
       if (videoAssets.length > 0) {
         const videoFrames: Record<string, string> = {};
@@ -363,7 +363,7 @@ export const renderFrames = async ({ url, config, outputDir, compositionId, inpu
 
         // Inject frames back into the page
         await page.evaluate((frames) => {
-          (window as any).__OPEN_MOTION_VIDEO_FRAMES__ = frames;
+          window.__OPEN_MOTION_VIDEO_FRAMES__ = frames;
         }, videoFrames);
 
         // Brief wait for React to re-render the <img> tags with new src
@@ -376,7 +376,7 @@ export const renderFrames = async ({ url, config, outputDir, compositionId, inpu
       // Ensure webfonts (if any) are loaded before screenshot
       await page.evaluate(async () => {
         try {
-          const p = (window as any).__OPEN_MOTION_FONTS_READY__;
+          const p = window.__OPEN_MOTION_FONTS_READY__;
           if (p && typeof p.then === 'function') {
             await p;
           }
@@ -386,7 +386,7 @@ export const renderFrames = async ({ url, config, outputDir, compositionId, inpu
 
         try {
           if ('fonts' in document) {
-            await (document as any).fonts.ready;
+            await document.fonts.ready;
           }
         } catch (e) {
           // ignore
@@ -394,7 +394,7 @@ export const renderFrames = async ({ url, config, outputDir, compositionId, inpu
       });
 
       // Extract audio assets
-      const assets = await page.evaluate(() => (window as any).__OPEN_MOTION_AUDIO_ASSETS__ || []);
+      const assets = await page.evaluate(() => window.__OPEN_MOTION_AUDIO_ASSETS__ || []);
       workerAudioAssets.push(...assets);
 
       const screenshotPath = path.join(outputDir, `frame-${i.toString().padStart(5, '0')}.png`);
