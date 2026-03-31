@@ -20,6 +20,7 @@ interface VideoState {
   updateMeta: (partial: Partial<VideoProject["meta"]>) => void;
   updateAudioConfig: (partial: Partial<VideoProject["audio"]>) => void;
   markNarrationDirty: (sceneId: string) => void;
+  updateImageElement: (sceneId: string, elementIndex: number, updates: Partial<{ src: string; position: "center" | "left" | "right" | "background"; animation: "fade-in" | "zoom-in" | "ken-burns" | "none"; enabled: boolean }>) => void;
 }
 
 export const useVideoStore = create<VideoState>()((set) => ({
@@ -108,6 +109,26 @@ export const useVideoStore = create<VideoState>()((set) => ({
           scenes: s.videoProject.scenes.map((scene) =>
             scene.id === sceneId ? { ...scene, narrationDirty: true } : scene
           ),
+        },
+      };
+    }),
+
+  updateImageElement: (sceneId, elementIndex, updates) =>
+    set((s) => {
+      if (!s.videoProject) return s;
+      return {
+        videoProject: {
+          ...s.videoProject,
+          scenes: s.videoProject.scenes.map((scene) => {
+            if (scene.id !== sceneId) return scene;
+            return {
+              ...scene,
+              elements: scene.elements.map((el, i) => {
+                if (i !== elementIndex || el.type !== "image") return el;
+                return { ...el, ...updates };
+              }),
+            };
+          }),
         },
       };
     }),
