@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useContext, useEffect } from 'react';
+import { SequenceOffsetContext } from './context';
 
 export interface AudioProps {
   src: string;
@@ -8,11 +9,16 @@ export interface AudioProps {
 }
 
 export const Audio: React.FC<AudioProps> = (props) => {
-  const startFrame = props.startFrame ?? 0;
+  const sequenceOffset = useContext(SequenceOffsetContext);
+  const startFrame = sequenceOffset + (props.startFrame ?? 0);
 
-  if (typeof window !== 'undefined') {
-    (window as any).__OPEN_MOTION_AUDIO_ASSETS__ = (window as any).__OPEN_MOTION_AUDIO_ASSETS__ || [];
-    const exists = (window as any).__OPEN_MOTION_AUDIO_ASSETS__.find(
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const assets: any[] = ((window as any).__OPEN_MOTION_AUDIO_ASSETS__ =
+      (window as any).__OPEN_MOTION_AUDIO_ASSETS__ || []);
+
+    const exists = assets.find(
       (a: any) =>
         a.src === props.src &&
         (a.startFrom || 0) === (props.startFrom || 0) &&
@@ -21,11 +27,25 @@ export const Audio: React.FC<AudioProps> = (props) => {
     );
     if (!exists) {
       console.log('[Audio] Registering asset:', props.src, 'startFrame:', startFrame, 'volume:', props.volume);
-      (window as any).__OPEN_MOTION_AUDIO_ASSETS__.push({
+      assets.push({
         ...props,
         startFrame,
       });
     }
-  }
+
+    return () => {
+      const arr: any[] = (window as any).__OPEN_MOTION_AUDIO_ASSETS__;
+      if (!arr) return;
+      const idx = arr.findIndex(
+        (a: any) =>
+          a.src === props.src &&
+          (a.startFrom || 0) === (props.startFrom || 0) &&
+          (a.volume || 1) === (props.volume || 1) &&
+          a.startFrame === startFrame
+      );
+      if (idx !== -1) arr.splice(idx, 1);
+    };
+  }, [props.src, props.startFrom, props.volume, startFrame]);
+
   return null;
 };

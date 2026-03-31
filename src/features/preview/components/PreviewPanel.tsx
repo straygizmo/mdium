@@ -18,6 +18,7 @@ import { VideoScenarioDialog, type VideoScenarioParams } from "@/features/video/
 import { useVideoStore } from "@/stores/video-store";
 import { DEFAULT_META, DEFAULT_TTS_CONFIG, DEFAULT_TRANSITION, type NarrationSegment } from "@/features/video/types";
 import { splitNarration } from "@/features/video/lib/narration-splitter";
+import { videoFilePrefix } from "@/features/video/lib/audio-filename";
 import { invoke } from "@tauri-apps/api/core";
 import { useChatUIStore, consumePendingVideoOutput, doConnect, doSendMessage, setPendingVideoOutput } from "@/features/opencode-config/hooks/useOpencodeChat";
 import { BUILTIN_COMMANDS } from "@/features/opencode-config/lib/builtin-commands";
@@ -281,6 +282,7 @@ async function restoreNarrationSegments(
   mdPath: string,
 ): Promise<void> {
   const mdDir = mdPath.replace(/\\/g, "/").replace(/\/[^/]+$/, "");
+  const prefix = videoFilePrefix(mdPath);
   const updateScene = useVideoStore.getState().updateScene;
 
   for (let i = 0; i < project.scenes.length; i++) {
@@ -295,7 +297,7 @@ async function restoreNarrationSegments(
 
     for (let j = 0; j < texts.length; j++) {
       const segNum = String(j + 1).padStart(2, "0");
-      const audioPath = `${mdDir}/audio/scene_${sceneNum}_${segNum}.wav`;
+      const audioPath = `${mdDir}/audio/${prefix}_scene_${sceneNum}_${segNum}.wav`;
       const exists = await invoke<boolean>("video_file_exists", { path: audioPath }).catch(() => false);
       segments.push({ text: texts[j], audioPath: exists ? audioPath : undefined });
       if (exists) hasAny = true;

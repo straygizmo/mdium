@@ -1,7 +1,7 @@
 import React, { createContext, useContext } from 'react';
-import { AbsoluteFrameContext } from './context';
+import { AbsoluteFrameContext, SequenceOffsetContext } from './context';
 
-export { AbsoluteFrameContext };
+export { AbsoluteFrameContext, SequenceOffsetContext };
 
 export interface VideoConfig {
   width: number;
@@ -299,15 +299,18 @@ export const Sequence: React.FC<{
   children: React.ReactNode;
 }> = ({ from, durationInFrames, children }) => {
   const currentFrame = useCurrentFrame();
+  const parentOffset = useContext(SequenceOffsetContext);
   const relativeFrame = currentFrame - from;
   const isVisible = relativeFrame >= 0 && (durationInFrames === undefined || relativeFrame < durationInFrames);
 
   if (!isVisible) return null;
 
   return (
-    <FrameContext.Provider value={relativeFrame}>
-      {children}
-    </FrameContext.Provider>
+    <SequenceOffsetContext.Provider value={parentOffset + from}>
+      <FrameContext.Provider value={relativeFrame}>
+        {children}
+      </FrameContext.Provider>
+    </SequenceOffsetContext.Provider>
   );
 };
 

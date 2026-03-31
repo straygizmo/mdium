@@ -10,6 +10,12 @@ function getMime(src: string): string {
     case "gif": return "image/gif";
     case "webp": return "image/webp";
     case "bmp": return "image/bmp";
+    case "wav": return "audio/wav";
+    case "mp3": return "audio/mpeg";
+    case "ogg": return "audio/ogg";
+    case "flac": return "audio/flac";
+    case "aac": return "audio/aac";
+    case "m4a": return "audio/mp4";
     default: return "image/jpeg";
   }
 }
@@ -19,14 +25,14 @@ function isRemoteOrBlob(src: string): boolean {
 }
 
 /**
- * Collect all unique local image paths from a VideoProject,
+ * Collect all unique local image AND audio paths from a VideoProject,
  * load them as blob URLs, and return a project with replaced src values.
  */
 export function useImageBlobUrls(project: VideoProject | null): VideoProject | null {
   const [blobMap, setBlobMap] = useState<Record<string, string>>({});
   const blobUrlsRef = useRef<string[]>([]);
 
-  // Collect unique local image paths
+  // Collect unique local image & audio paths
   const localPaths = useMemo(() => {
     if (!project) return [];
     const paths = new Set<string>();
@@ -36,6 +42,21 @@ export function useImageBlobUrls(project: VideoProject | null): VideoProject | n
           paths.add(el.src);
         }
       }
+      // Audio: narrationSegments and narrationAudio
+      if (scene.narrationSegments) {
+        for (const seg of scene.narrationSegments) {
+          if (seg.audioPath && !isRemoteOrBlob(seg.audioPath)) {
+            paths.add(seg.audioPath);
+          }
+        }
+      }
+      if (scene.narrationAudio && !isRemoteOrBlob(scene.narrationAudio)) {
+        paths.add(scene.narrationAudio);
+      }
+    }
+    // BGM
+    if (project.audio.bgm?.src && !isRemoteOrBlob(project.audio.bgm.src)) {
+      paths.add(project.audio.bgm.src);
     }
     return Array.from(paths);
   }, [project]);
@@ -79,17 +100,32 @@ export function useImageBlobUrls(project: VideoProject | null): VideoProject | n
     };
   }, []);
 
-  // Return project with replaced image src
+  // Return project with replaced image & audio src
   return useMemo(() => {
     if (!project || Object.keys(blobMap).length === 0) return project;
     return {
       ...project,
+      audio: {
+        ...project.audio,
+        bgm: project.audio.bgm && blobMap[project.audio.bgm.src]
+          ? { ...project.audio.bgm, src: blobMap[project.audio.bgm.src] }
+          : project.audio.bgm,
+      },
       scenes: project.scenes.map((scene) => ({
         ...scene,
         elements: scene.elements.map((el) => {
           if (el.type !== "image" || !blobMap[el.src]) return el;
           return { ...el, src: blobMap[el.src] };
         }),
+        narrationAudio: scene.narrationAudio && blobMap[scene.narrationAudio]
+          ? blobMap[scene.narrationAudio]
+          : scene.narrationAudio,
+        narrationSegments: scene.narrationSegments?.map((seg) => ({
+          ...seg,
+          audioPath: seg.audioPath && blobMap[seg.audioPath]
+            ? blobMap[seg.audioPath]
+            : seg.audioPath,
+        })),
       })),
     };
   }, [project, blobMap]);

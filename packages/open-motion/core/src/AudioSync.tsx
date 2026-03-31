@@ -26,6 +26,7 @@ export const AudioSyncManager: React.FC<AudioSyncManagerProps> = ({
 }) => {
   const audioElementsRef = useRef<Map<string, AudioEntry>>(new Map());
   const lastSyncedFrameRef = useRef<number>(-1);
+  const lastIsPlayingRef = useRef<boolean>(false);
 
   // Register audio elements for newly discovered assets (runs each frame to pick up
   // assets added by Sequence-gated <Audio> components that appear mid-playback).
@@ -61,7 +62,10 @@ export const AudioSyncManager: React.FC<AudioSyncManagerProps> = ({
 
   // Synchronise audio playback position and play/pause state.
   useEffect(() => {
-    if (lastSyncedFrameRef.current === frame) return;
+    const isPlayingChanged = lastIsPlayingRef.current !== isPlaying;
+    lastIsPlayingRef.current = isPlaying;
+
+    if (lastSyncedFrameRef.current === frame && !isPlayingChanged) return;
     lastSyncedFrameRef.current = frame;
 
     const assets: any[] = (window as any).__OPEN_MOTION_AUDIO_ASSETS__ || [];

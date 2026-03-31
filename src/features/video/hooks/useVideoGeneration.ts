@@ -5,6 +5,7 @@ import { createTTSProvider } from "../lib/tts-provider";
 import { generateSrtFromSegments } from "../lib/srt-generator";
 import { generateNarrationForScene } from "../lib/narration-generator";
 import { splitNarration } from "../lib/narration-splitter";
+import { videoFilePrefix } from "../lib/audio-filename";
 import type { TTSOptions, NarrationSegment } from "../types";
 
 export function useVideoGeneration() {
@@ -28,10 +29,11 @@ export function useVideoGeneration() {
       const texts = splitNarration(narrationText);
       const segments: NarrationSegment[] = [];
       const sceneNum = String(sceneIndex + 1).padStart(2, "0");
+      const prefix = videoFilePrefix(sourceFilePath);
 
       for (let segIdx = 0; segIdx < texts.length; segIdx++) {
         const segNum = String(segIdx + 1).padStart(2, "0");
-        const filename = `scene_${sceneNum}_${segNum}.wav`;
+        const filename = `${prefix}_scene_${sceneNum}_${segNum}.wav`;
 
         const options: TTSOptions = {
           speaker: tts!.speaker,
