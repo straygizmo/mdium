@@ -31,7 +31,16 @@
     "targets": ["msi", "nsis"],
     "resources": [
       "../resources/slidev-env/package.json",
-      "../resources/mcp-servers/**/*"
+      "../resources/mcp-servers/**/*",
+      "../resources/video-env/**/*",
+      "../resources/lottie-presets/**/*",
+      "../packages/open-motion/core/**/*",
+      "../packages/open-motion/components/**/*",
+      "../packages/open-motion/renderer/**/*",
+      "../packages/open-motion/encoder/**/*",
+      "../packages/open-motion/LICENSE",
+      "../src/features/video/lib/composition/**/*",
+      "../src/features/video/types.ts"
     ],
     "icon": [
       "icons/32x32.png",

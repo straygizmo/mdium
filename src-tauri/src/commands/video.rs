@@ -238,17 +238,34 @@ pub async fn video_export(
                 .path()
                 .resource_dir()
                 .map_err(|e| format!("Failed to get resource dir: {}", e))?;
-            resource_dir.join("resources").join("open-motion")
+            let prod_path = resource_dir.join("packages").join("open-motion");
+            if open_motion_dir_valid(&prod_path) {
+                prod_path
+            } else {
+                // Legacy fallback
+                resource_dir.join("resources").join("open-motion")
+            }
         }
     };
 
-    // Locate mdium video feature source files
-    let video_feature_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."))
-        .join("src")
-        .join("features")
-        .join("video");
+    // Locate mdium video feature source files (composition + types)
+    let video_feature_dir = {
+        let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join("src")
+            .join("features")
+            .join("video");
+        if dev_path.join("lib").join("composition").join("index.tsx").exists() {
+            dev_path
+        } else {
+            let resource_dir = app
+                .path()
+                .resource_dir()
+                .map_err(|e| format!("Failed to get resource dir: {}", e))?;
+            resource_dir.join("src").join("features").join("video")
+        }
+    };
 
     // Write project.json
     fs::write(temp_dir.join("project.json"), &project_json)
@@ -267,10 +284,21 @@ pub async fn video_export(
     let _ = fs::remove_dir_all(om_dest.join("components").join("node_modules"));
 
     // Copy Lottie presets into public/lottie/ for Vite to serve
-    let lottie_src = video_env_dir
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."))
-        .join("lottie-presets");
+    let lottie_src = {
+        let sibling = video_env_dir
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join("lottie-presets");
+        if sibling.exists() {
+            sibling
+        } else {
+            let resource_dir = app
+                .path()
+                .resource_dir()
+                .map_err(|e| format!("Failed to get resource dir: {}", e))?;
+            resource_dir.join("resources").join("lottie-presets")
+        }
+    };
     if lottie_src.exists() {
         let lottie_dest = temp_dir.join("public").join("lottie");
         fs::create_dir_all(&lottie_dest)
@@ -286,6 +314,12 @@ pub async fn video_export(
     let composition_dir = video_feature_dir.join("lib").join("composition");
     if composition_dir.exists() {
         copy_dir_recursive(&composition_dir, &src_dir.join("composition"))?;
+    } else {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return Err(format!(
+            "Video composition files not found at: {}",
+            composition_dir.display()
+        ));
     }
     // types.ts must be at temp_dir/types.ts because composition files
     // use "../../types" relative imports (composition/ is at temp_dir/src/composition/)
@@ -293,6 +327,12 @@ pub async fn video_export(
     if types_src.exists() {
         fs::copy(&types_src, temp_dir.join("types.ts"))
             .map_err(|e| format!("Failed to copy types.ts: {}", e))?;
+    } else {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return Err(format!(
+            "Video types.ts not found at: {}",
+            types_src.display()
+        ));
     }
 
     // Copy video-env package.json
