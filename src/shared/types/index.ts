@@ -130,6 +130,8 @@ export interface OpencodeMcpServer {
   // remote
   url?: string;
   headers?: Record<string, string>;
+  // timeout in milliseconds for tool calls (default: 10000)
+  timeout?: number;
 }
 
 /** Opencode custom tool */

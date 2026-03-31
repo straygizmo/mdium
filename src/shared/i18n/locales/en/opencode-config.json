@@ -110,6 +110,7 @@
   "mcpEnv": "Environment Variables (KEY=value)",
   "mcpUrl": "URL",
   "mcpHeaders": "Headers (Key: Value)",
+  "mcpTimeout": "Timeout [ms]",
   "mcpJsonImport": "Import from JSON",
   "mcpJsonApply": "Apply to fields",
   "mcpJsonPlaceholder": "Paste JSON here...",

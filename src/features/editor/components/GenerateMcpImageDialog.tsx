@@ -32,6 +32,7 @@ interface AvailableServer {
   command: string;
   args: string[];
   env: Record<string, string>;
+  timeout?: number;
 }
 
 function normalizeCommand(server: OpencodeMcpServer): string[] {
@@ -98,6 +99,7 @@ export const GenerateMcpImageDialog: FC<Props> = ({ visible, onClose, onInsert }
             command: cmdArr[0],
             args: cmdArr.slice(1),
             env: server.environment ?? {},
+            timeout: server.timeout,
           });
         }
       } catch {
@@ -150,6 +152,7 @@ export const GenerateMcpImageDialog: FC<Props> = ({ visible, onClose, onInsert }
           prompt: prompt.trim(),
           filename: filename.trim(),
         },
+        timeoutMs: server.timeout ?? null,
       });
 
       const textContent = result.content.find((c) => c.type === "text");

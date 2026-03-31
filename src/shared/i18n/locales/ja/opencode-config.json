@@ -110,6 +110,7 @@
   "mcpEnv": "環境変数（KEY=value形式）",
   "mcpUrl": "URL",
   "mcpHeaders": "ヘッダー（Key: Value形式）",
+  "mcpTimeout": "タイムアウト [ms]",
   "mcpJsonImport": "JSON からインポート",
   "mcpJsonApply": "項目にセット",
   "mcpJsonPlaceholder": "JSON を貼り付け...",

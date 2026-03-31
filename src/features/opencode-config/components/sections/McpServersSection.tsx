@@ -132,6 +132,7 @@ export function McpServersSection() {
   const [formEnv, setFormEnv] = useState("");
   const [formUrl, setFormUrl] = useState("");
   const [formHeaders, setFormHeaders] = useState("");
+  const [formTimeout, setFormTimeout] = useState("10000");
   const [jsonImportOpen, setJsonImportOpen] = useState(false);
   const [jsonInput, setJsonInput] = useState("");
   const [jsonError, setJsonError] = useState("");
@@ -184,6 +185,7 @@ export function McpServersSection() {
         ? Object.entries(server.headers).map(([k, v]) => `${k}: ${v}`).join("\n")
         : ""
     );
+    setFormTimeout(String(server.timeout ?? 10000));
   };
 
   const startAdd = () => {
@@ -196,6 +198,7 @@ export function McpServersSection() {
     setFormEnv("");
     setFormUrl("");
     setFormHeaders("");
+    setFormTimeout("10000");
     setJsonImportOpen(false);
     setJsonInput("");
     setJsonError("");
@@ -289,6 +292,11 @@ export function McpServersSection() {
       setFormHeaders(Object.entries(hdrs).map(([k, v]) => `${k}: ${v}`).join("\n"));
     }
 
+    // Apply timeout
+    if (typeof serverConfig.timeout === "number") {
+      setFormTimeout(String(serverConfig.timeout));
+    }
+
     setJsonImportOpen(false);
     setJsonInput("");
   };
@@ -331,6 +339,11 @@ export function McpServersSection() {
           }
         }
       }
+    }
+
+    const timeoutVal = parseInt(formTimeout, 10);
+    if (!isNaN(timeoutVal) && timeoutVal > 0) {
+      server.timeout = timeoutVal;
     }
 
     if (scope === "global") {
@@ -569,6 +582,10 @@ export function McpServersSection() {
                 <label className="oc-section__label">{t("mcpEnv")}</label>
                 <textarea className="oc-section__textarea" value={formEnv} onChange={(e) => setFormEnv(e.target.value)} placeholder="KEY=value" />
               </div>
+              <div className="oc-section__field">
+                <label className="oc-section__label">{t("mcpTimeout")}</label>
+                <input className="oc-section__input" type="number" min="1000" step="1000" value={formTimeout} onChange={(e) => setFormTimeout(e.target.value)} placeholder="10000" />
+              </div>
             </>
           ) : (
             <>
@@ -579,6 +596,10 @@ export function McpServersSection() {
               <div className="oc-section__field">
                 <label className="oc-section__label">{t("mcpHeaders")}</label>
                 <textarea className="oc-section__textarea" value={formHeaders} onChange={(e) => setFormHeaders(e.target.value)} placeholder="Authorization: Bearer TOKEN" />
+              </div>
+              <div className="oc-section__field">
+                <label className="oc-section__label">{t("mcpTimeout")}</label>
+                <input className="oc-section__input" type="number" min="1000" step="1000" value={formTimeout} onChange={(e) => setFormTimeout(e.target.value)} placeholder="10000" />
               </div>
             </>
           )}

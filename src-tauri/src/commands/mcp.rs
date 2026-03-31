@@ -400,6 +400,7 @@ pub async fn mcp_call_tool(
     env: HashMap<String, String>,
     tool_name: String,
     tool_args: serde_json::Value,
+    timeout_ms: Option<u64>,
 ) -> Result<McpCallToolResult, String> {
     let env = resolve_env_map(env);
     tokio::task::spawn_blocking(move || {
@@ -476,8 +477,9 @@ pub async fn mcp_call_tool(
         writeln!(stdin, "{}", serde_json::to_string(&call_req).unwrap())
             .map_err(|e| format!("Failed to write to stdin: {}", e))?;
 
-        // Read tool result (longer timeout for image generation)
-        let call_resp = match read_jsonrpc_response_with_timeout(&mut reader, 120) {
+        // Read tool result with configurable timeout (default 120s)
+        let timeout_secs = timeout_ms.map(|ms| ms / 1000).unwrap_or(120);
+        let call_resp = match read_jsonrpc_response_with_timeout(&mut reader, timeout_secs) {
             Ok(resp) => resp,
             Err(e) => {
                 let stderr_msg = collect_stderr(stderr);
