@@ -49,41 +49,61 @@ async function findAvailablePort() {
   });
 }
 
-async function startViteServer(projectDir, port) {
-  log({ type: "status", message: "Starting Vite dev server..." });
+async function buildProject(projectDir) {
+  log({ type: "status", message: "Building project with Vite..." });
 
   const isWin = process.platform === "win32";
   const npxCmd = isWin ? "npx.cmd" : "npx";
 
-  const vite = spawn(npxCmd, ["vite", "--port", String(port), "--host", "127.0.0.1"], {
+  try {
+    execSync(`${npxCmd} vite build`, {
+      cwd: projectDir,
+      stdio: "pipe",
+      ...(isWin ? { shell: true } : {}),
+    });
+  } catch (e) {
+    const stderr = e.stderr ? e.stderr.toString().trim() : "";
+    throw new Error(`Vite build failed: ${stderr || e.message}`);
+  }
+
+  log({ type: "status", message: "Build complete" });
+}
+
+async function startPreviewServer(projectDir, port) {
+  log({ type: "status", message: "Starting preview server..." });
+
+  const isWin = process.platform === "win32";
+  const npxCmd = isWin ? "npx.cmd" : "npx";
+
+  const server = spawn(npxCmd, ["vite", "preview", "--port", String(port), "--host", "127.0.0.1"], {
     cwd: projectDir,
     stdio: ["ignore", "pipe", "pipe"],
     shell: isWin,
     ...(isWin ? { windowsHide: true } : {}),
   });
 
-  // Forward Vite stderr for diagnostics
-  if (vite.stderr) {
-    vite.stderr.on("data", (data) => {
+  // Forward stderr for diagnostics
+  if (server.stderr) {
+    server.stderr.on("data", (data) => {
       const text = data.toString().trim();
-      if (text) console.error(`[vite] ${text}`);
+      if (text) console.error(`[vite-preview] ${text}`);
     });
   }
 
   // Wait for server to be ready
-  const maxWait = 60000;
+  const maxWait = 30000;
   const start = Date.now();
   while (Date.now() - start < maxWait) {
     try {
       await fetch(`http://127.0.0.1:${port}`);
-      log({ type: "status", message: `Vite server ready on port ${port}` });
-      return vite;
+      log({ type: "status", message: `Preview server ready on port ${port}` });
+      return server;
     } catch {
       await new Promise((r) => setTimeout(r, 500));
     }
   }
-  vite.kill();
-  throw new Error("Vite server failed to start within 60s");
+  server.kill();
+  throw new Error("Preview server failed to start within 30s");
 }
 
 async function verifyPlaywrightBrowser() {
@@ -187,9 +207,10 @@ async function main() {
       durationInFrames: totalDuration,
     };
 
-    // 1. Start Vite dev server
+    // 1. Build project and start preview server
+    await buildProject(tempDir);
     const port = await findAvailablePort();
-    const viteProcess = await startViteServer(tempDir, port);
+    const viteProcess = await startPreviewServer(tempDir, port);
 
     try {
       const url = `http://127.0.0.1:${port}`;

@@ -257,16 +257,20 @@ export const renderFrames = async ({ url, config, outputDir, compositionId, inpu
             })();
           }
 
-          // Execute hijack script
-          const script = document.createElement('script');
-          script.textContent = hijackScript;
-          document.documentElement.appendChild(script);
-          script.remove();
+          // Execute hijack script (guard against early execution before DOM is ready)
+          if (document.documentElement) {
+            const script = document.createElement('script');
+            script.textContent = hijackScript;
+            document.documentElement.appendChild(script);
+            script.remove();
+          }
 
           // Reset styles - 保证 #root 占满整个视口，但不添加 flex center 避免影响内部组件布局
-          const style = document.createElement('style');
-          style.textContent = 'body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; } #root { width: 100%; height: 100%; display: block; }';
-          document.head.appendChild(style);
+          if (document.head) {
+            const style = document.createElement('style');
+            style.textContent = 'body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; } #root { width: 100%; height: 100%; display: block; }';
+            document.head.appendChild(style);
+          }
         }, {
           frame: i,
           fps: config.fps,

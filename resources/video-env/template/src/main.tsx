@@ -4,7 +4,7 @@ import { CompositionProvider, registerComposition } from "@open-motion/core";
 import { VideoComposition, calculateTotalDuration } from "./composition";
 import projectData from "../project.json";
 
-const project: any = projectData;
+const project = projectData;
 const totalDuration = calculateTotalDuration(project);
 
 const config = {
