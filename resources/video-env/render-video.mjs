@@ -16,13 +16,15 @@
  */
 
 import { execSync, spawn } from "child_process";
-import { existsSync, readFileSync, mkdirSync } from "fs";
+import { existsSync, readFileSync, mkdirSync, realpathSync } from "fs";
 import path from "path";
 import { pathToFileURL } from "url";
 import http from "http";
 
 const args = process.argv.slice(2);
-const tempDir = args[0];
+// Resolve Windows 8.3 short filenames (e.g. AW083~1 → aw083028) so that
+// Vite's internal path comparisons produce correct relative paths.
+const tempDir = args[0] ? realpathSync(args[0]) : args[0];
 const outputPath = args[1];
 
 function getArg(name, defaultVal) {
