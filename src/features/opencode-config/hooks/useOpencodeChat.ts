@@ -345,25 +345,44 @@ async function ensureBuiltinAgents(_folderPath: string): Promise<void> {
     }
   }
 
-  // Ensure tool and prompt files exist
+  // Ensure tool and prompt files exist in global config dir
+  const configDir = `${home}${sep}.config${sep}opencode`;
+
   for (const entry of Object.values(BUILTIN_AGENTS)) {
-    if (entry.toolFiles) {
-      for (const relPath of Object.keys(entry.toolFiles)) {
-        const fullPath = `${folderPath}${sep}${relPath.replace(/\//g, sep)}`;
+    // Copy tool files from project source to global config
+    if (entry.sourceToolFiles) {
+      for (const [srcRel, destRel] of Object.entries(entry.sourceToolFiles)) {
+        const destPath = `${configDir}${sep}${destRel.replace(/\//g, sep)}`;
         try {
-          await invoke<string>("read_text_file", { path: fullPath });
+          await invoke<string>("read_text_file", { path: destPath });
         } catch {
-          console.warn(`[opencode] builtin tool file missing: ${fullPath}`);
+          // File doesn't exist at global location — copy from project source
+          const srcPath = `${_folderPath}${sep}${srcRel.replace(/\//g, sep)}`;
+          try {
+            const content = await invoke<string>("read_text_file", { path: srcPath });
+            await invoke("write_text_file_with_dirs", { path: destPath, content });
+            console.log(`[opencode] copied builtin tool to ${destPath}`);
+          } catch (e) {
+            console.warn(`[opencode] failed to copy builtin tool ${srcRel}:`, e);
+          }
         }
       }
     }
-    if (entry.promptFiles) {
-      for (const relPath of Object.keys(entry.promptFiles)) {
-        const fullPath = `${folderPath}${sep}${relPath.replace(/\//g, sep)}`;
+    // Copy prompt files from project source to global config
+    if (entry.sourcePromptFiles) {
+      for (const [srcRel, destRel] of Object.entries(entry.sourcePromptFiles)) {
+        const destPath = `${configDir}${sep}${destRel.replace(/\//g, sep)}`;
         try {
-          await invoke<string>("read_text_file", { path: fullPath });
+          await invoke<string>("read_text_file", { path: destPath });
         } catch {
-          console.warn(`[opencode] builtin prompt file missing: ${fullPath}`);
+          const srcPath = `${_folderPath}${sep}${srcRel.replace(/\//g, sep)}`;
+          try {
+            const content = await invoke<string>("read_text_file", { path: srcPath });
+            await invoke("write_text_file_with_dirs", { path: destPath, content });
+            console.log(`[opencode] copied builtin prompt to ${destPath}`);
+          } catch (e) {
+            console.warn(`[opencode] failed to copy builtin prompt ${srcRel}:`, e);
+          }
         }
       }
     }

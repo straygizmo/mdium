@@ -4,13 +4,20 @@ import type {
   OpencodeMcpServer,
   OpencodeSkill,
 } from "@/shared/types";
+import { BUILTIN_COMMANDS as SRC_COMMANDS } from "./builtin-commands";
+import { BUILTIN_MCP_SERVERS as SRC_MCP } from "./builtin-mcp-servers";
+import { BUILTIN_SKILLS as SRC_SKILLS } from "./builtin-skills";
 
 export interface BuiltinAgentEntry {
   agent: OpencodeAgent;
-  /** Tool file paths relative to project root (created during auto-registration) */
+  /** Tool file paths relative to ~/.config/opencode/ (created during auto-registration) */
   toolFiles?: Record<string, string>;
-  /** Prompt file paths relative to project root (created during auto-registration) */
+  /** Prompt file paths relative to ~/.config/opencode/ (created during auto-registration) */
   promptFiles?: Record<string, string>;
+  /** Source file paths relative to project root (templates to copy from) */
+  sourceToolFiles?: Record<string, string>;
+  /** Source prompt file paths relative to project root (templates to copy from) */
+  sourcePromptFiles?: Record<string, string>;
 }
 
 export const BUILTIN_AGENTS: Record<string, BuiltinAgentEntry> = {
@@ -18,26 +25,47 @@ export const BUILTIN_AGENTS: Record<string, BuiltinAgentEntry> = {
     agent: {
       description: "RAG - Document search agent powered by vector database",
       mode: "all",
-      prompt: "{file:.opencode/prompts/rag.md}",
+      prompt: "{file:prompts/rag.md}",
       tools: {
         rag_search: true,
         bash: false,
       },
     },
     toolFiles: {
-      ".opencode/tools/rag_search.ts": "rag_search",
+      "tools/rag_search.ts": "rag_search",
     },
     promptFiles: {
-      ".opencode/prompts/rag.md": "rag",
+      "prompts/rag.md": "rag",
+    },
+    sourceToolFiles: {
+      ".opencode/tools/rag_search.ts": "tools/rag_search.ts",
+    },
+    sourcePromptFiles: {
+      ".opencode/prompts/rag.md": "prompts/rag.md",
     },
   },
 };
 
-export const BUILTIN_COMMANDS: Record<string, OpencodeCommand> = {};
+export const BUILTIN_COMMANDS: Record<string, OpencodeCommand> = Object.fromEntries(
+  Object.entries(SRC_COMMANDS).map(([k, v]) => [
+    k,
+    { template: v.template, description: v.description } satisfies OpencodeCommand,
+  ])
+);
 
-export const BUILTIN_MCP: Record<string, OpencodeMcpServer> = {};
+export const BUILTIN_MCP: Record<string, OpencodeMcpServer> = Object.fromEntries(
+  Object.entries(SRC_MCP).map(([k, v]) => [
+    k,
+    { type: v.type, command: v.command, enabled: v.enabled, environment: v.environment } satisfies OpencodeMcpServer,
+  ])
+);
 
-export const BUILTIN_SKILLS: Record<string, OpencodeSkill> = {};
+export const BUILTIN_SKILLS: Record<string, OpencodeSkill> = Object.fromEntries(
+  Object.entries(SRC_SKILLS).map(([k, v]) => [
+    k,
+    { content: v.content, description: v.description } satisfies OpencodeSkill,
+  ])
+);
 
 /** Returns builtin agent names not present in current config */
 export function getMissingBuiltinAgents(
