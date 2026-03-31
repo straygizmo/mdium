@@ -7,7 +7,7 @@
 export function videoFilePrefix(filePath: string | null | undefined): string {
   if (!filePath) return "video";
   const name = filePath.replace(/\\/g, "/").split("/").pop() ?? "";
-  // Strip .video.json or .video.jsonc (case-insensitive)
-  const stripped = name.replace(/\.video\.jsonc?$/i, "");
+  // Strip .video.json, .video.jsonc, or .md (case-insensitive)
+  const stripped = name.replace(/\.video\.jsonc?$|\.md$/i, "");
   return stripped || "video";
 }
