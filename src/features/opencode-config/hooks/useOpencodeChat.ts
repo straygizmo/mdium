@@ -303,12 +303,13 @@ function doDisconnect() {
   });
 }
 
-// ─── Auto-register builtin agents in project config ───
-async function ensureBuiltinAgents(folderPath: string): Promise<void> {
-  const sep = folderPath.includes("\\") ? "\\" : "/";
-  const configPath = `${folderPath}${sep}opencode.jsonc`;
+// ─── Auto-register builtin agents in global config ───
+async function ensureBuiltinAgents(_folderPath: string): Promise<void> {
+  const home = await invoke<string>("get_home_dir");
+  const sep = home.includes("\\") ? "\\" : "/";
+  const configPath = `${home}${sep}.config${sep}opencode${sep}opencode.jsonc`;
 
-  // Read existing project config
+  // Read existing global config
   let config: Record<string, any> = {};
   try {
     const raw = await invoke<string>("read_text_file", { path: configPath });

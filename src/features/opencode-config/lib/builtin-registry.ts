@@ -16,7 +16,7 @@ export interface BuiltinAgentEntry {
 export const BUILTIN_AGENTS: Record<string, BuiltinAgentEntry> = {
   rag: {
     agent: {
-      description: "RAG - ドキュメント検索エージェント",
+      description: "RAG - Document search agent powered by vector database",
       mode: "all",
       prompt: "{file:.opencode/prompts/rag.md}",
       tools: {

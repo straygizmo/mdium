@@ -185,8 +185,8 @@ export default tool({
 
     if (dbsByModel.size === 0) {
       return (
-        "RAGインデックスが未作成です。組み込みのファイル検索ツール（glob, grep, read）を使って検索してください。\n" +
-        "精度向上にはmdiumのRAG設定画面でインデックスを作成することを推奨します。"
+        "RAG index not found. Please use built-in file search tools (glob, grep, read) to search instead.\n" +
+        "For better accuracy, create an index via the RAG settings in mdium."
       );
     }
 
@@ -199,7 +199,7 @@ export default tool({
       try {
         queryEmbedding = await getEmbedding(args.query, modelName);
       } catch (e: any) {
-        warnings.push(`モデル「${modelName}」のロードに失敗（${dbPaths.length}個のDBをスキップ）: ${e.message ?? e}`);
+        warnings.push(`Failed to load model "${modelName}" (skipped ${dbPaths.length} DB(s)): ${e.message ?? e}`);
         continue;
       }
 
@@ -217,8 +217,8 @@ export default tool({
 
     if (topResults.length === 0) {
       return (
-        `「${args.query}」に関連するドキュメントは見つかりませんでした（min_score: ${minScore}）。\n` +
-        "組み込みのファイル検索ツール（glob, grep, read）で直接検索してみてください。" +
+        `No documents found related to "${args.query}" (min_score: ${minScore}).\n` +
+        "Try searching directly with built-in file search tools (glob, grep, read)." +
         warningText
       );
     }
