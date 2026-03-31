@@ -144,7 +144,8 @@ async function findRagDbs(rootDir: string): Promise<Map<string, string[]>> {
         if (
           entry.isDirectory() &&
           !entry.name.startsWith(".") &&
-          entry.name !== "node_modules"
+          entry.name !== "node_modules" &&
+          entry.name !== "target"
         ) {
           await scan(join(dir, entry.name), depth + 1);
         }
@@ -191,13 +192,15 @@ export default tool({
 
     // Search across all DBs, grouped by model
     const allResults: SearchResult[] = [];
+    const warnings: string[] = [];
     for (const [modelShort, dbPaths] of dbsByModel) {
       const modelName = resolveModelName(modelShort);
       let queryEmbedding: number[];
       try {
         queryEmbedding = await getEmbedding(args.query, modelName);
       } catch (e: any) {
-        return `埋め込みモデル「${modelName}」のロードに失敗しました: ${e.message ?? e}`;
+        warnings.push(`モデル「${modelName}」のロードに失敗（${dbPaths.length}個のDBをスキップ）: ${e.message ?? e}`);
+        continue;
       }
 
       for (const dbPath of dbPaths) {
@@ -210,13 +213,16 @@ export default tool({
     allResults.sort((a, b) => b.score - a.score);
     const topResults = allResults.slice(0, topK);
 
+    const warningText = warnings.length > 0 ? "\n\n⚠️ " + warnings.join("\n⚠️ ") : "";
+
     if (topResults.length === 0) {
       return (
         `「${args.query}」に関連するドキュメントは見つかりませんでした（min_score: ${minScore}）。\n` +
-        "組み込みのファイル検索ツール（glob, grep, read）で直接検索してみてください。"
+        "組み込みのファイル検索ツール（glob, grep, read）で直接検索してみてください。" +
+        warningText
       );
     }
 
-    return JSON.stringify(topResults, null, 2);
+    return JSON.stringify(topResults, null, 2) + warningText;
   },
 });
