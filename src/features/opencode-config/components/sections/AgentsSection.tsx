@@ -3,6 +3,11 @@ import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 import type { OpencodeAgent } from "@/shared/types";
+import {
+  BUILTIN_AGENTS,
+  getMissingBuiltinAgents,
+  isBuiltinAgent,
+} from "../../lib/builtin-registry";
 
 const EMPTY_AGENTS: Record<string, OpencodeAgent> = {};
 
@@ -26,8 +31,10 @@ export function AgentsSection() {
   const [formTools, setFormTools] = useState("");
   const [formHidden, setFormHidden] = useState(false);
   const [formDisable, setFormDisable] = useState(false);
+  const [showBuiltinMenu, setShowBuiltinMenu] = useState(false);
 
   const entries = Object.entries(agents);
+  const missingBuiltins = getMissingBuiltinAgents(agents);
 
   const resetForm = () => {
     setFormName("");
@@ -102,7 +109,6 @@ export function AgentsSection() {
     if (formHidden) agent.hidden = true;
     if (formDisable) agent.disable = true;
 
-    // If editing and name changed, delete old entry
     if (editing && editing !== name) {
       await deleteAgent(editing);
     }
@@ -110,6 +116,13 @@ export function AgentsSection() {
     await saveAgent(name, agent);
     setEditing(null);
     setAdding(false);
+  };
+
+  const handleAddBuiltin = async (name: string) => {
+    const entry = BUILTIN_AGENTS[name];
+    if (!entry) return;
+    await saveAgent(name, { ...entry.agent });
+    setShowBuiltinMenu(false);
   };
 
   const handleCancel = () => {
@@ -264,7 +277,12 @@ export function AgentsSection() {
           {entries.map(([name, agent]) => (
             <div key={name} className="oc-section__item" style={{ marginBottom: 4 }}>
               <div className="oc-section__item-info">
-                <span className="oc-section__item-name">{name}</span>
+                <span className="oc-section__item-name">
+                  {name}
+                  {isBuiltinAgent(name) && (
+                    <span className="oc-section__builtin-badge">Built-in</span>
+                  )}
+                </span>
                 <span className="oc-section__item-detail">{agent.description ?? agent.model ?? ""}</span>
               </div>
               <div className="oc-section__item-actions">
@@ -273,7 +291,32 @@ export function AgentsSection() {
               </div>
             </div>
           ))}
-          <button className="oc-section__add-btn" onClick={startAdd} style={{ marginTop: 4 }}>+ {t("add")}</button>
+          <div style={{ display: "flex", alignItems: "center", marginTop: 4, position: "relative" }}>
+            <button className="oc-section__add-btn" onClick={startAdd}>+ {t("add")}</button>
+            {missingBuiltins.length > 0 && (
+              <>
+                <button
+                  className="oc-section__builtin-btn"
+                  onClick={() => setShowBuiltinMenu((v) => !v)}
+                >
+                  + Built-in
+                </button>
+                {showBuiltinMenu && (
+                  <div className="oc-section__builtin-dropdown">
+                    {missingBuiltins.map((name) => (
+                      <button
+                        key={name}
+                        className="oc-section__builtin-dropdown-item"
+                        onClick={() => handleAddBuiltin(name)}
+                      >
+                        {name} — {BUILTIN_AGENTS[name].agent.description ?? ""}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
         </>
       )}
     </div>

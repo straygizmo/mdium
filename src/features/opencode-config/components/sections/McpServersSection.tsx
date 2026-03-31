@@ -8,6 +8,11 @@ import type { OpencodeMcpServer } from "@/shared/types";
 import { useOpencodeConfigContext, toRelativeProjectPath } from "../OpencodeConfigContext";
 import { getOpencodeClient } from "../../hooks/useOpencodeChat";
 import { BUILTIN_MCP_SERVERS, resolveBuiltinCommand } from "../../lib/builtin-mcp-servers";
+import {
+  BUILTIN_MCP as REGISTRY_MCP,
+  getMissingBuiltinMcp,
+  isBuiltinMcp,
+} from "../../lib/builtin-registry";
 
 type Scope = "global" | "project";
 type McpType = "local" | "remote";
@@ -143,6 +148,7 @@ export function McpServersSection() {
   const [serverTools, setServerTools] = useState<Record<string, McpToolInfo[]>>({});
   const [testErrors, setTestErrors] = useState<Record<string, string>>({});
   const [toolsDialogServer, setToolsDialogServer] = useState<string | null>(null);
+  const [showBuiltinMenu, setShowBuiltinMenu] = useState(false);
 
   useEffect(() => {
     invoke<string>("get_home_dir").then((home) => {
@@ -164,6 +170,18 @@ export function McpServersSection() {
   const globalServers = config.mcp ?? EMPTY_SERVERS;
   const servers = scope === "global" ? globalServers : projectMcpServers;
   const entries = Object.entries(servers);
+  const missingBuiltins = getMissingBuiltinMcp(servers);
+
+  const handleAddBuiltin = async (name: string) => {
+    const entry = REGISTRY_MCP[name];
+    if (!entry) return;
+    if (scope === "global") {
+      await saveMcpServer(name, { ...entry });
+    } else if (activeFolderPath) {
+      await saveProjectMcpServer(activeFolderPath, name, { ...entry });
+    }
+    setShowBuiltinMenu(false);
+  };
 
   const startEdit = (name: string, server: OpencodeMcpServer) => {
     const serverType = server.type ?? "local";
@@ -629,6 +647,9 @@ export function McpServersSection() {
                 <div className="oc-section__item-info">
                   <span className="oc-section__item-name">
                     {name}
+                    {isBuiltinMcp(name) && (
+                      <span className="oc-section__builtin-badge">Built-in</span>
+                    )}
                     <span className={`oc-section__item-badge${serverType === "remote" ? " oc-section__item-badge--remote" : ""}`}>
                       {serverType}
                     </span>
@@ -677,7 +698,32 @@ export function McpServersSection() {
               </div>
             );
           })}
-          <button className="oc-section__add-btn" onClick={startAdd} style={{ marginTop: 4 }}>+ {t("add")}</button>
+          <div style={{ display: "flex", alignItems: "center", marginTop: 4, position: "relative" }}>
+            <button className="oc-section__add-btn" onClick={startAdd}>+ {t("add")}</button>
+            {missingBuiltins.length > 0 && (
+              <>
+                <button
+                  className="oc-section__builtin-btn"
+                  onClick={() => setShowBuiltinMenu((v) => !v)}
+                >
+                  + Built-in
+                </button>
+                {showBuiltinMenu && (
+                  <div className="oc-section__builtin-dropdown">
+                    {missingBuiltins.map((name) => (
+                      <button
+                        key={name}
+                        className="oc-section__builtin-dropdown-item"
+                        onClick={() => handleAddBuiltin(name)}
+                      >
+                        {name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
         </>
       )}
 

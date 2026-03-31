@@ -4,9 +4,15 @@ import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { useTabStore } from "@/stores/tab-store";
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
+import type { OpencodeSkill } from "@/shared/types";
 import { marked } from "marked";
 import { useOpencodeConfigContext, toRelativeProjectPath } from "../OpencodeConfigContext";
 import { BUILTIN_SKILLS } from "../../lib/builtin-skills";
+import {
+  BUILTIN_SKILLS as REGISTRY_SKILLS,
+  getMissingBuiltinSkills,
+  isBuiltinSkill,
+} from "../../lib/builtin-registry";
 
 type SkillScope = "global" | "project";
 type SkillViewTab = "editor" | "preview";
@@ -80,6 +86,7 @@ export function SkillsSection() {
   const [viewTab, setViewTab] = useState<SkillViewTab>("editor");
   const [nameError, setNameError] = useState("");
   const [displayPath, setDisplayPath] = useState("");
+  const [showBuiltinMenu, setShowBuiltinMenu] = useState(false);
 
   const getBaseDir = useCallback(async (): Promise<string | null> => {
     if (scope === "global") {
@@ -216,6 +223,29 @@ export function SkillsSection() {
     },
     [formBody]
   );
+
+  // Compute missing builtin skills by comparing registry keys against loaded skill dir_names
+  const currentSkillNames = skills.reduce<Record<string, OpencodeSkill>>((acc, s) => {
+    acc[s.dir_name] = { content: s.content, description: s.description };
+    return acc;
+  }, {});
+  const missingBuiltins = getMissingBuiltinSkills(currentSkillNames);
+
+  const handleAddBuiltin = async (name: string) => {
+    const entry = REGISTRY_SKILLS[name];
+    if (!entry) return;
+    const base = await getBaseDir();
+    if (!base) return;
+    const md = buildSkillMd(name, entry.description ?? "", entry.content);
+    await invoke("write_skill", { baseDir: base, dirName: name, content: md });
+    setShowBuiltinMenu(false);
+    await loadSkills();
+    if (scope === "global") {
+      loadGlobalSkills();
+    } else if (activeFolderPath) {
+      loadProjectSkills(activeFolderPath);
+    }
+  };
 
   const noProject = scope === "project" && !activeFolderPath;
   const isEditing = adding || editing !== null;
@@ -389,7 +419,12 @@ export function SkillsSection() {
           {skills.map((skill) => (
             <div key={skill.dir_name} className="oc-section__item" style={{ marginBottom: 4 }}>
               <div className="oc-section__item-info">
-                <span className="oc-section__item-name">{skill.name || skill.dir_name}</span>
+                <span className="oc-section__item-name">
+                  {skill.name || skill.dir_name}
+                  {isBuiltinSkill(skill.dir_name) && (
+                    <span className="oc-section__builtin-badge">Built-in</span>
+                  )}
+                </span>
                 <span className="oc-section__item-detail">{skill.description}</span>
               </div>
               <div className="oc-section__item-actions">
@@ -402,9 +437,34 @@ export function SkillsSection() {
               </div>
             </div>
           ))}
-          <button className="oc-section__add-btn" onClick={startAdd} style={{ marginTop: 4, alignSelf: "flex-start" }}>
-            + {t("add")}
-          </button>
+          <div style={{ display: "flex", alignItems: "center", marginTop: 4, position: "relative" }}>
+            <button className="oc-section__add-btn" onClick={startAdd}>
+              + {t("add")}
+            </button>
+            {missingBuiltins.length > 0 && (
+              <>
+                <button
+                  className="oc-section__builtin-btn"
+                  onClick={() => setShowBuiltinMenu((v) => !v)}
+                >
+                  + Built-in
+                </button>
+                {showBuiltinMenu && (
+                  <div className="oc-section__builtin-dropdown">
+                    {missingBuiltins.map((name) => (
+                      <button
+                        key={name}
+                        className="oc-section__builtin-dropdown-item"
+                        onClick={() => handleAddBuiltin(name)}
+                      >
+                        {name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
         </>
       )}
     </div>

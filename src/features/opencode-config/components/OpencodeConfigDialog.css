@@ -824,3 +824,65 @@
 .oc-section__test-status--error {
   color: var(--accent-red, #ef4444);
 }
+
+/* Built-in badge */
+.oc-section__builtin-badge {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--accent-blue);
+  color: #fff;
+  font-weight: 600;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+/* Built-in add button */
+.oc-section__builtin-btn {
+  background: none;
+  border: 1px dashed var(--border);
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  margin-left: 6px;
+}
+
+.oc-section__builtin-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.oc-section__builtin-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Built-in dropdown */
+.oc-section__builtin-dropdown {
+  position: absolute;
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  z-index: 10;
+  min-width: 160px;
+  margin-top: 2px;
+}
+
+.oc-section__builtin-dropdown-item {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.oc-section__builtin-dropdown-item:hover {
+  background: var(--bg-overlay);
+}

@@ -7,6 +7,11 @@ import { useTabStore } from "@/stores/tab-store";
 import type { OpencodeCommand } from "@/shared/types";
 import { useOpencodeConfigContext, toRelativeProjectPath } from "../OpencodeConfigContext";
 import { BUILTIN_COMMANDS } from "../../lib/builtin-commands";
+import {
+  BUILTIN_COMMANDS as REGISTRY_COMMANDS,
+  getMissingBuiltinCommands,
+  isBuiltinCommand,
+} from "../../lib/builtin-registry";
 import { marked } from "marked";
 
 type Scope = "global" | "project";
@@ -36,6 +41,7 @@ export function CommandsSection() {
   const [formAgent, setFormAgent] = useState("");
   const [formModel, setFormModel] = useState("");
   const [viewTab, setViewTab] = useState<ViewTab>("editor");
+  const [showBuiltinMenu, setShowBuiltinMenu] = useState(false);
 
   const previewHtml = useMemo(() => {
     if (!formTemplate) return "";
@@ -80,6 +86,14 @@ export function CommandsSection() {
   const globalCommands = config.command ?? EMPTY_COMMANDS;
   const commands = scope === "global" ? globalCommands : projectCommands;
   const entries = Object.entries(commands);
+  const missingBuiltins = getMissingBuiltinCommands(commands);
+
+  const handleAddBuiltin = async (name: string) => {
+    const entry = REGISTRY_COMMANDS[name];
+    if (!entry) return;
+    await saveCommand(name, { ...entry });
+    setShowBuiltinMenu(false);
+  };
 
   const startEdit = (name: string, cmd: OpencodeCommand) => {
     setEditing(name);
@@ -288,7 +302,12 @@ export function CommandsSection() {
           {entries.map(([name, cmd]) => (
             <div key={name} className="oc-section__item" style={{ marginBottom: 4 }}>
               <div className="oc-section__item-info">
-                <span className="oc-section__item-name">{name}</span>
+                <span className="oc-section__item-name">
+                  {name}
+                  {isBuiltinCommand(name) && (
+                    <span className="oc-section__builtin-badge">Built-in</span>
+                  )}
+                </span>
                 <span className="oc-section__item-detail">{cmd.description ?? cmd.template}</span>
               </div>
               <div className="oc-section__item-actions">
@@ -297,7 +316,32 @@ export function CommandsSection() {
               </div>
             </div>
           ))}
-          <button className="oc-section__add-btn" onClick={startAdd} style={{ marginTop: 4 }}>+ {t("add")}</button>
+          <div style={{ display: "flex", alignItems: "center", marginTop: 4, position: "relative" }}>
+            <button className="oc-section__add-btn" onClick={startAdd}>+ {t("add")}</button>
+            {missingBuiltins.length > 0 && (
+              <>
+                <button
+                  className="oc-section__builtin-btn"
+                  onClick={() => setShowBuiltinMenu((v) => !v)}
+                >
+                  + Built-in
+                </button>
+                {showBuiltinMenu && (
+                  <div className="oc-section__builtin-dropdown">
+                    {missingBuiltins.map((name) => (
+                      <button
+                        key={name}
+                        className="oc-section__builtin-dropdown-item"
+                        onClick={() => handleAddBuiltin(name)}
+                      >
+                        {name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
         </>
       )}
     </div>
