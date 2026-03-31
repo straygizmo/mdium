@@ -151,7 +151,7 @@ export function VideoSettingsBar({ onGenerateAudio, generating, generatingStatus
       </div>
 
       <fieldset className="video-settings-bar__narration-group">
-        <legend className="video-settings-bar__narration-legend">ナレーション設定</legend>
+        <legend className="video-settings-bar__narration-legend">{t("narrationSettings")}</legend>
 
         <div className="video-settings-bar__row">
           <label>{t("ttsProvider")}</label>
@@ -171,7 +171,7 @@ export function VideoSettingsBar({ onGenerateAudio, generating, generatingStatus
         </div>
 
         <div className="video-settings-bar__row">
-          <label>速度</label>
+          <label>{t("ttsSpeed")}</label>
           <input
             type="range"
             min={0.7}
@@ -184,7 +184,7 @@ export function VideoSettingsBar({ onGenerateAudio, generating, generatingStatus
         </div>
 
         <div className="video-settings-bar__row">
-          <label>音量</label>
+          <label>{t("ttsVolume")}</label>
           <input
             type="range"
             min={0.0}
@@ -208,7 +208,7 @@ export function VideoSettingsBar({ onGenerateAudio, generating, generatingStatus
       </fieldset>
 
       <div className="video-settings-bar__row">
-        <label>字幕</label>
+        <label>{t("captions")}</label>
         <span
           className={`scene-edit-form__switch${allCaptionsEnabled ? " scene-edit-form__switch--on" : ""}`}
           role="switch"
@@ -231,7 +231,7 @@ export function VideoSettingsBar({ onGenerateAudio, generating, generatingStatus
         onClick={onDecorateWithLLM}
         disabled={decorating || generating}
       >
-        {decorating ? "設定中..." : "LLMで自動設定"}
+        {decorating ? t("autoConfiguring") : t("autoConfigWithLLM")}
       </button>
     </div>
   );

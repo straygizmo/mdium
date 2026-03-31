@@ -1,4 +1,5 @@
 import { useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { useVideoStore } from "@/stores/video-store";
 import type { Scene, SceneElement, TitleElement, TextElement, BulletListElement, CodeBlockElement, TableElement } from "@/features/video/types";
 
@@ -7,6 +8,7 @@ interface SceneContentEditorProps {
 }
 
 export function SceneContentEditor({ scene }: SceneContentEditorProps) {
+  const { t } = useTranslation("video");
   const updateElement = useVideoStore((s) => s.updateElement);
 
   const textElements = scene.elements
@@ -24,7 +26,7 @@ export function SceneContentEditor({ scene }: SceneContentEditorProps) {
 
   return (
     <div className="scene-content-editor">
-      <label className="scene-content-editor__title">コンテンツ ({textElements.length})</label>
+      <label className="scene-content-editor__title">{t("contents")} ({textElements.length})</label>
       {textElements.map(({ el, i }) => (
         <ContentElementEditor
           key={i}

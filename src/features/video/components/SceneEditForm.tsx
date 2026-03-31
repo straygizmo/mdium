@@ -195,7 +195,7 @@ export function SceneEditForm({ scene, onRegenerateAudio, audioGenerating }: Sce
 
       {imageElements.length > 0 && (
         <div className="scene-edit-form__images">
-          <label className="scene-edit-form__images-title">画像 ({imageElements.length})</label>
+          <label className="scene-edit-form__images-title">{t("images")} ({imageElements.length})</label>
           {imageElements.map(({ el, i }) => {
             const enabled = el.enabled !== false;
             const fileName = el.src.split(/[\\/]/).pop() ?? el.src;
@@ -233,13 +233,13 @@ export function SceneEditForm({ scene, onRegenerateAudio, audioGenerating }: Sce
                       className="scene-edit-form__btn scene-edit-form__btn--small"
                       onClick={() => handleImageReplace(i)}
                     >
-                      入替
+                      {t("imageReplace")}
                     </button>
                   </div>
                   {enabled && (
                     <div className="scene-edit-form__image-selects">
                       <div className="scene-edit-form__image-select-group">
-                        <label>配置</label>
+                        <label>{t("imagePosition")}</label>
                         <select
                           value={el.position}
                           onChange={(e) => handleImagePositionChange(i, e.target.value)}
@@ -251,7 +251,7 @@ export function SceneEditForm({ scene, onRegenerateAudio, audioGenerating }: Sce
                         </select>
                       </div>
                       <div className="scene-edit-form__image-select-group">
-                        <label>アニメーション</label>
+                        <label>{t("imageAnimation")}</label>
                         <select
                           value={el.animation}
                           onChange={(e) => handleImageAnimationChange(i, e.target.value)}
@@ -342,7 +342,7 @@ export function SceneEditForm({ scene, onRegenerateAudio, audioGenerating }: Sce
       {/* Background Effect */}
       <div style={{ marginBottom: 12 }}>
         <label style={{ display: "block", fontWeight: 600, fontSize: 13, marginBottom: 4, color: "var(--foreground)" }}>
-          背景エフェクト
+          {t("backgroundEffect")}
         </label>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
           <label style={{ fontSize: 12, color: "var(--foreground-muted)" }}>
@@ -357,7 +357,7 @@ export function SceneEditForm({ scene, onRegenerateAudio, audioGenerating }: Sce
                 }
               }}
             />
-            {" "}プロジェクトデフォルト
+            {" "}{t("projectDefault")}
           </label>
         </div>
         {scene.backgroundEffect && (
@@ -403,14 +403,14 @@ export function SceneEditForm({ scene, onRegenerateAudio, audioGenerating }: Sce
               fontSize: 13,
             }}
           >
-            <option value="none">なし</option>
-            <option value="gradient">グラデーション</option>
-            <option value="gradient-animation">アニメーショングラデーション</option>
-            <option value="particles">パーティクル</option>
-            <option value="wave-visualizer">波形ビジュアライザー</option>
-            <option value="three-particles">3Dパーティクル</option>
-            <option value="three-geometry">3Dジオメトリ</option>
-            <option value="lottie">Lottieアニメーション</option>
+            <option value="none">{t("bgEffectNone")}</option>
+            <option value="gradient">{t("bgEffectGradient")}</option>
+            <option value="gradient-animation">{t("bgEffectGradientAnimation")}</option>
+            <option value="particles">{t("bgEffectParticles")}</option>
+            <option value="wave-visualizer">{t("bgEffectWaveVisualizer")}</option>
+            <option value="three-particles">{t("bgEffectThreeParticles")}</option>
+            <option value="three-geometry">{t("bgEffectThreeGeometry")}</option>
+            <option value="lottie">{t("bgEffectLottie")}</option>
           </select>
         )}
       </div>

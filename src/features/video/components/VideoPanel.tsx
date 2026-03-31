@@ -211,7 +211,7 @@ export function VideoPanel() {
                 <span className="video-panel__scene-arrow">{expandedScenesResolved[scene.id] ? "▼" : "▶"}</span>
                 <span className="video-panel__scene-number">{idx + 1}</span>
                 <span className="video-panel__scene-title">{scene.title ?? `Scene ${idx + 1}`}</span>
-                {scene.narrationDirty && <span className="scene-edit-form__dirty">未同期</span>}
+                {scene.narrationDirty && <span className="scene-edit-form__dirty">{t("narrationDirty")}</span>}
               </button>
               {expandedScenesResolved[scene.id] && (
                 <SceneEditForm
