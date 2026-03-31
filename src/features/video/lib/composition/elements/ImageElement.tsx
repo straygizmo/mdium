@@ -73,12 +73,8 @@ export function ImageElement({
     borderRadius: scaled(8, s),
     transform: `scale(${imgScale}) translateX(${imgTranslateX}px)`,
     display: "block",
-    margin: element.position === "center" ? "0 auto" : undefined,
-    marginLeft: element.position === "left" ? "0" : undefined,
-    marginRight: element.position === "right" ? "0" : undefined,
-    alignSelf:
-      element.position === "left" ? "flex-start" :
-      element.position === "right" ? "flex-end" : undefined,
+    marginLeft: element.position === "center" || element.position === "right" ? "auto" : undefined,
+    marginRight: element.position === "center" ? "auto" : undefined,
   };
 
   if (element.animation === "none") {
