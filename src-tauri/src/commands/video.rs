@@ -430,6 +430,18 @@ pub async fn video_export(
                 .map_err(|e| format!("Failed to spawn render process: {}", e))?
         };
 
+        // Read stderr in a background thread for diagnostics
+        let stderr_handle = child.stderr.take().map(|stderr| {
+            std::thread::spawn(move || {
+                let reader = BufReader::new(stderr);
+                let mut lines = Vec::new();
+                for line in reader.lines().flatten() {
+                    lines.push(line);
+                }
+                lines
+            })
+        });
+
         // Read stdout for progress JSON lines
         if let Some(stdout) = child.stdout.take() {
             let reader = BufReader::new(stdout);
@@ -460,7 +472,22 @@ pub async fn video_export(
 
         let status = child.wait().map_err(|e| format!("Render process error: {}", e))?;
         if !status.success() {
-            return Err("Video render process failed".to_string());
+            let stderr_output = stderr_handle
+                .and_then(|h| h.join().ok())
+                .unwrap_or_default()
+                .join("\n");
+            let detail = if stderr_output.is_empty() {
+                String::new()
+            } else {
+                // Take last 500 chars of stderr for the error message
+                let tail = if stderr_output.len() > 500 {
+                    &stderr_output[stderr_output.len() - 500..]
+                } else {
+                    &stderr_output
+                };
+                format!(": {}", tail.trim())
+            };
+            return Err(format!("Video render process failed{}", detail));
         }
         Ok(())
     })

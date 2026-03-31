@@ -159,12 +159,27 @@ export const renderFrames = async ({ url, config, outputDir, compositionId, inpu
   let totalFramesRendered = 0;
 
   const renderBatch = async (startFrame: number, endFrame: number, workerId: number) => {
+    console.log(`[open-motion] Worker ${workerId}: launching browser...`);
     const browser = await chromium.launch({
       executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined,
       args: ['--disable-dev-shm-usage', '--disable-setuid-sandbox', '--no-sandbox']
     });
+    console.log(`[open-motion] Worker ${workerId}: browser launched`);
     const page = await browser.newPage({
       viewport: { width: config.width, height: config.height }
+    });
+
+    // Capture browser console/errors for diagnostics
+    const pageErrors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error' || msg.type() === 'warning') {
+        console.error(`[open-motion] Worker ${workerId} browser ${msg.type()}: ${msg.text()}`);
+      }
+    });
+    page.on('pageerror', (err) => {
+      const errMsg = err.message || String(err);
+      pageErrors.push(errMsg);
+      console.error(`[open-motion] Worker ${workerId} page error: ${errMsg}`);
     });
 
     if (timeout) {
@@ -261,7 +276,9 @@ export const renderFrames = async ({ url, config, outputDir, compositionId, inpu
           fontPayloads,
         });
 
+        console.log(`[open-motion] Worker ${workerId}: navigating to ${url}`);
         await page.goto(url);
+        console.log(`[open-motion] Worker ${workerId}: page loaded`);
       } else {
         // Update frame for subsequent renders
         await page.evaluate(({ frame, fps, hijackScript }) => {
@@ -279,11 +296,39 @@ export const renderFrames = async ({ url, config, outputDir, compositionId, inpu
       }
 
       // Wait for content to be ready (use explicit polling to avoid rAF hijack issues)
-      await page.waitForFunction(() => {
-        const ready = (window as any).__OPEN_MOTION_READY__ === true;
-        const delayCount = (window as any).__OPEN_MOTION_DELAY_RENDER_COUNT__ || 0;
-        return ready && delayCount === 0;
-      }, { timeout, polling: 100 });
+      const frameTimeout = i === startFrame ? timeout : Math.min(timeout, 60000);
+      try {
+        await page.waitForFunction(() => {
+          const ready = (window as any).__OPEN_MOTION_READY__ === true;
+          const delayCount = (window as any).__OPEN_MOTION_DELAY_RENDER_COUNT__ || 0;
+          return ready && delayCount === 0;
+        }, { timeout: frameTimeout, polling: 100 });
+      } catch (waitErr: any) {
+        // Collect diagnostic info on timeout
+        const diag = await page.evaluate(() => {
+          const root = document.getElementById('root');
+          return {
+            ready: (window as any).__OPEN_MOTION_READY__,
+            delayCount: (window as any).__OPEN_MOTION_DELAY_RENDER_COUNT__,
+            error: (window as any).__OPEN_MOTION_ERROR__,
+            hasRoot: !!root,
+            rootEmpty: root ? root.innerHTML.length === 0 : true,
+            rootSnippet: root ? root.innerHTML.substring(0, 200) : '(no #root)',
+            title: document.title,
+            bodyLen: document.body ? document.body.innerHTML.length : 0,
+          };
+        }).catch(() => ({ ready: 'unknown', delayCount: 'unknown', error: 'failed to evaluate' }));
+        console.error(`[open-motion] Worker ${workerId} frame ${i} timeout. Page state:`, JSON.stringify(diag));
+        if (pageErrors.length > 0) {
+          console.error(`[open-motion] Collected page errors:`, pageErrors.join('; '));
+        }
+        throw new Error(
+          `Frame ${i} timed out after ${frameTimeout}ms. ` +
+          `ready=${(diag as any).ready}, delayCount=${(diag as any).delayCount}, ` +
+          `rootEmpty=${(diag as any).rootEmpty}, error=${(diag as any).error}` +
+          (pageErrors.length > 0 ? `. Page errors: ${pageErrors.join('; ')}` : '')
+        );
+      }
 
       // Check if the page reported an error
       const pageError = await page.evaluate(() => (window as any).__OPEN_MOTION_ERROR__);

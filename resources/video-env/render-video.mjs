@@ -62,6 +62,14 @@ async function startViteServer(projectDir, port) {
     ...(isWin ? { windowsHide: true } : {}),
   });
 
+  // Forward Vite stderr for diagnostics
+  if (vite.stderr) {
+    vite.stderr.on("data", (data) => {
+      const text = data.toString().trim();
+      if (text) console.error(`[vite] ${text}`);
+    });
+  }
+
   // Wait for server to be ready
   const maxWait = 60000;
   const start = Date.now();
@@ -78,9 +86,47 @@ async function startViteServer(projectDir, port) {
   throw new Error("Vite server failed to start within 60s");
 }
 
+async function verifyPlaywrightBrowser() {
+  try {
+    const { chromium } = await import(
+      pathToFileURL(path.join(tempDir, "node_modules", "playwright/index.mjs")).href
+    ).catch(() => import("playwright"));
+
+    const execPath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || chromium.executablePath();
+    if (!existsSync(execPath)) {
+      throw new Error(
+        `Chromium not found at: ${execPath}. ` +
+        `Run 'npx playwright install chromium' to install it.`
+      );
+    }
+    log({ type: "status", message: `Chromium found: ${execPath}` });
+  } catch (e) {
+    if (e.message && e.message.includes("Chromium not found")) throw e;
+    // If we can't check, continue and let launch() fail with a better error
+    log({ type: "status", message: `Browser check skipped: ${e.message}` });
+  }
+}
+
 async function renderFrames(url, config, framesDir, concurrencyCount) {
   log({ type: "status", message: "Rendering frames..." });
   mkdirSync(framesDir, { recursive: true });
+
+  // Verify Playwright browser is available
+  await verifyPlaywrightBrowser();
+
+  // Verify critical files exist in temp dir
+  const mainTsx = path.join(tempDir, "src", "main.tsx");
+  const compositionDir = path.join(tempDir, "src", "composition");
+  const typesTs = path.join(tempDir, "types.ts");
+  if (!existsSync(mainTsx)) {
+    throw new Error(`Template main.tsx not found: ${mainTsx}`);
+  }
+  if (!existsSync(compositionDir)) {
+    throw new Error(`Composition directory not found: ${compositionDir}`);
+  }
+  if (!existsSync(typesTs)) {
+    throw new Error(`types.ts not found: ${typesTs}`);
+  }
 
   // Dynamic import of renderer (uses playwright)
   const { renderFrames: render } = await import(
