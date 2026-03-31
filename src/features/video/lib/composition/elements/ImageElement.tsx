@@ -5,7 +5,7 @@ import {
   interpolate,
 } from "@open-motion/core";
 import { Transition } from "@open-motion/components";
-import { ANIM, scaled } from "../constants";
+import { ANIM, scaled, toPlayableSrc } from "../constants";
 
 export function ImageElement({
   element,
@@ -55,12 +55,12 @@ export function ImageElement({
   };
 
   if (element.animation === "none") {
-    return <img src={element.src} alt={element.alt ?? ""} style={imgStyle} />;
+    return <img src={toPlayableSrc(element.src)} alt={element.alt ?? ""} style={imgStyle} />;
   }
 
   return (
     <Transition type="fade">
-      <img src={element.src} alt={element.alt ?? ""} style={imgStyle} />
+      <img src={toPlayableSrc(element.src)} alt={element.alt ?? ""} style={imgStyle} />
     </Transition>
   );
 }
