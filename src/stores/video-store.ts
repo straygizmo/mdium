@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { VideoProject, Scene } from "@/features/video/types";
+import type { VideoProject, Scene, SceneElement } from "@/features/video/types";
 
 interface VideoState {
   videoProject: VideoProject | null;
@@ -12,6 +12,7 @@ interface VideoState {
 
   setVideoProject: (project: VideoProject | null, sourceFilePath?: string | null) => void;
   updateScene: (sceneId: string, partial: Partial<Scene>) => void;
+  updateElement: (sceneId: string, elementIndex: number, updates: Partial<SceneElement>) => void;
   setSelectedSceneId: (id: string | null) => void;
   setAudioGenerated: (generated: boolean) => void;
   setRenderProgress: (progress: number) => void;
@@ -64,6 +65,26 @@ export const useVideoStore = create<VideoState>()((set) => ({
           scenes: s.videoProject.scenes.map((scene) =>
             scene.id === sceneId ? { ...scene, ...partial } : scene
           ),
+        },
+      };
+    }),
+
+  updateElement: (sceneId, elementIndex, updates) =>
+    set((s) => {
+      if (!s.videoProject) return s;
+      return {
+        videoProject: {
+          ...s.videoProject,
+          scenes: s.videoProject.scenes.map((scene) => {
+            if (scene.id !== sceneId) return scene;
+            return {
+              ...scene,
+              elements: scene.elements.map((el, i) => {
+                if (i !== elementIndex) return el;
+                return { ...el, ...updates } as SceneElement;
+              }),
+            };
+          }),
         },
       };
     }),

@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -154,6 +154,24 @@ export function VideoPanel() {
     [videoProject, setRenderProgress],
   );
 
+  const [expandedScenes, setExpandedScenes] = useState<Record<string, boolean>>({});
+
+  // Auto-expand first scene on load
+  const firstSceneId = scenes[0]?.id;
+  const expandedScenesResolved = useMemo(() => {
+    if (firstSceneId && Object.keys(expandedScenes).length === 0) {
+      return { [firstSceneId]: true };
+    }
+    return expandedScenes;
+  }, [expandedScenes, firstSceneId]);
+
+  const toggleScene = useCallback((sceneId: string) => {
+    setExpandedScenes((prev) => {
+      const base = Object.keys(prev).length === 0 && firstSceneId ? { [firstSceneId]: true } : prev;
+      return { ...base, [sceneId]: !base[sceneId] };
+    });
+  }, [firstSceneId]);
+
   return (
     <div className="video-panel">
       <div className="video-panel__left" style={{ width: leftWidth }}>
@@ -165,13 +183,25 @@ export function VideoPanel() {
             onDecorateWithLLM={handleDecorate}
             decorating={decorating}
           />
-          {scenes.map((scene) => (
-            <SceneEditForm
-              key={scene.id}
-              scene={scene}
-              onRegenerateAudio={generateAudioForScene}
-              audioGenerating={generating}
-            />
+          {scenes.map((scene, idx) => (
+            <div key={scene.id} className="video-panel__scene-block">
+              <button
+                className={`video-panel__scene-header${expandedScenesResolved[scene.id] ? " video-panel__scene-header--expanded" : ""}`}
+                onClick={() => toggleScene(scene.id)}
+              >
+                <span className="video-panel__scene-arrow">{expandedScenesResolved[scene.id] ? "▼" : "▶"}</span>
+                <span className="video-panel__scene-number">{idx + 1}</span>
+                <span className="video-panel__scene-title">{scene.title ?? `Scene ${idx + 1}`}</span>
+                {scene.narrationDirty && <span className="scene-edit-form__dirty">未同期</span>}
+              </button>
+              {expandedScenesResolved[scene.id] && (
+                <SceneEditForm
+                  scene={scene}
+                  onRegenerateAudio={generateAudioForScene}
+                  audioGenerating={generating}
+                />
+              )}
+            </div>
           ))}
         </div>
       </div>

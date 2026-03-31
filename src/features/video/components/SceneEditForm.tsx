@@ -5,6 +5,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
 import { useVideoStore } from "@/stores/video-store";
 import { splitNarration } from "@/features/video/lib/narration-splitter";
+import { SceneContentEditor } from "./SceneContentEditor";
 import type { Scene, TransitionType, ImageElement } from "@/features/video/types";
 import type { BackgroundEffect } from "../types";
 
@@ -190,13 +191,6 @@ export function SceneEditForm({ scene, onRegenerateAudio, audioGenerating }: Sce
 
   return (
     <div className="scene-edit-form">
-      <div className="scene-edit-form__header">
-        <span>{scene.title ?? t("sceneUntitled")}</span>
-        {scene.narrationDirty && (
-          <span className="scene-edit-form__dirty">{t("narrationDirty")}</span>
-        )}
-      </div>
-
       <div className="scene-edit-form__field">
         <div className="scene-edit-form__label-row">
           <label>{t("narration")}</label>
@@ -249,6 +243,8 @@ export function SceneEditForm({ scene, onRegenerateAudio, audioGenerating }: Sce
           </div>
         )}
       </div>
+
+      <SceneContentEditor scene={scene} />
 
       {imageElements.length > 0 && (
         <div className="scene-edit-form__images">
