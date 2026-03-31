@@ -268,7 +268,10 @@ export const getTimeHijackScript = (frame: number, fps: number) => {
       const timeMs = ${timeMs};
       const frame = ${frame};
 
-      const OriginalDate = window.Date;
+      // Preserve the real Date constructor to avoid creating an O(N) call chain
+      // when eval'd on every frame
+      var OriginalDate = window.__OPEN_MOTION_REAL_DATE__ || window.Date;
+      window.__OPEN_MOTION_REAL_DATE__ = OriginalDate;
       function MockDate() {
         return new OriginalDate(timeMs);
       }

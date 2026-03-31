@@ -204,6 +204,19 @@ export const renderFrames = async ({ url, config, outputDir, compositionId, inpu
           (window as any).__OPEN_MOTION_INPUT_PROPS__ = inputProps;
           (window as any).__OPEN_MOTION_READY__ = false;
           (window as any).__OPEN_MOTION_VIDEO_FRAMES__ = {};
+          (window as any).__OPEN_MOTION_ERROR__ = null;
+
+          // Catch unhandled errors so waitForFunction doesn't hang for 300s
+          window.addEventListener('error', (e) => {
+            (window as any).__OPEN_MOTION_ERROR__ = e.message || 'Unknown error';
+            (window as any).__OPEN_MOTION_READY__ = true;
+            (window as any).__OPEN_MOTION_DELAY_RENDER_COUNT__ = 0;
+          });
+          window.addEventListener('unhandledrejection', (e) => {
+            (window as any).__OPEN_MOTION_ERROR__ = (e.reason && e.reason.message) || String(e.reason) || 'Unhandled rejection';
+            (window as any).__OPEN_MOTION_READY__ = true;
+            (window as any).__OPEN_MOTION_DELAY_RENDER_COUNT__ = 0;
+          });
 
           (window as any).__OPEN_MOTION_FONTS_READY__ = Promise.resolve();
           if (fontPayloads && Array.isArray(fontPayloads) && 'fonts' in document) {
@@ -253,6 +266,7 @@ export const renderFrames = async ({ url, config, outputDir, compositionId, inpu
         // Update frame for subsequent renders
         await page.evaluate(({ frame, fps, hijackScript }) => {
           (window as any).__OPEN_MOTION_READY__ = false;
+          (window as any).__OPEN_MOTION_ERROR__ = null;
           (window as any).__OPEN_MOTION_FRAME__ = frame;
           (window as any).__OPEN_MOTION_VIDEO_ASSETS__ = []; // Reset for this frame
           eval(hijackScript);
@@ -264,12 +278,20 @@ export const renderFrames = async ({ url, config, outputDir, compositionId, inpu
         });
       }
 
-      // Wait for content to be ready
+      // Wait for content to be ready (use explicit polling to avoid rAF hijack issues)
       await page.waitForFunction(() => {
         const ready = (window as any).__OPEN_MOTION_READY__ === true;
         const delayCount = (window as any).__OPEN_MOTION_DELAY_RENDER_COUNT__ || 0;
         return ready && delayCount === 0;
-      }, { timeout });
+      }, { timeout, polling: 100 });
+
+      // Check if the page reported an error
+      const pageError = await page.evaluate(() => (window as any).__OPEN_MOTION_ERROR__);
+      if (pageError) {
+        console.error(`[open-motion] Page error on frame ${i}: ${pageError}`);
+        // Reset error flag and continue - best effort rendering
+        await page.evaluate(() => { (window as any).__OPEN_MOTION_ERROR__ = null; });
+      }
 
       // Only wait for networkidle on the first frame to avoid hanging on persistent requests
       if (i === startFrame) {

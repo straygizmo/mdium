@@ -67,15 +67,32 @@ export const Lottie: React.FC<{
 
   useEffect(() => {
     const handle = delayRender(`Loading Lottie: ${url}`);
+    let continued = false;
+    const safeContine = () => {
+      if (!continued) {
+        continued = true;
+        continueRender(handle);
+      }
+    };
+
+    // Safety timeout: don't let a failed Lottie load hang the whole render
+    const safetyTimer = setTimeout(safeContine, 10000);
 
     const loadLottie = async () => {
       if (!(window as any).lottie) {
-        await new Promise((resolve) => {
-          const script = document.createElement('script');
-          script.src = 'https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.12.2/lottie.min.js';
-          script.onload = resolve;
-          document.head.appendChild(script);
-        });
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = 'https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.12.2/lottie.min.js';
+            script.onload = () => resolve();
+            script.onerror = () => reject(new Error('Failed to load lottie-web'));
+            document.head.appendChild(script);
+          });
+        } catch (e) {
+          console.warn('[Lottie] Failed to load lottie-web library:', e);
+          safeContine();
+          return;
+        }
       }
 
       if (containerRef.current) {
@@ -88,14 +105,22 @@ export const Lottie: React.FC<{
         });
 
         animationRef.current.addEventListener('DOMLoaded', () => {
-          continueRender(handle);
+          safeContine();
         });
+        animationRef.current.addEventListener('error', () => {
+          console.warn(`[Lottie] Failed to load animation: ${url}`);
+          safeContine();
+        });
+      } else {
+        safeContine();
       }
     };
 
     loadLottie();
 
     return () => {
+      clearTimeout(safetyTimer);
+      safeContine();
       if (animationRef.current) {
         animationRef.current.destroy();
       }
