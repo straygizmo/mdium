@@ -160,6 +160,12 @@ export const encodeVideo = ({ framesDir, fps, outputFile, audioAssets = [], dura
       '-crf 18'
     ];
 
+    // Select audio codec based on output container format
+    const ext = path.extname(outputFile).toLowerCase();
+    const audioCodecOptions = ext === '.webm'
+      ? ['-c:a libvorbis', '-b:a 192k']
+      : ['-c:a aac', '-b:a 192k'];
+
     if (audioAssets.length > 0) {
       const durationSec = durationInFrames ? (durationInFrames / fps) : undefined;
 
@@ -187,8 +193,7 @@ export const encodeVideo = ({ framesDir, fps, outputFile, audioAssets = [], dura
         ...videoOptions,
         '-map 0:v',
         '-map [a]',
-        '-c:a libvorbis',
-        '-b:a 192k',
+        ...audioCodecOptions,
         '-ac 2',
       ]);
     } else {
