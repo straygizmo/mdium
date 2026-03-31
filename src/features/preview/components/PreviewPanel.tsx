@@ -16,6 +16,7 @@ import { SlidevPreviewPanel } from "./SlidevPreviewPanel";
 import { VideoPanel } from "@/features/video/components/VideoPanel";
 import { VideoOverwriteDialog, type OverwriteChoice } from "@/features/video/components/VideoOverwriteDialog";
 import { useVideoStore } from "@/stores/video-store";
+import { DEFAULT_META, DEFAULT_TTS_CONFIG } from "@/features/video/types";
 import { invoke } from "@tauri-apps/api/core";
 import { useChatUIStore, consumePendingVideoOutput } from "@/features/opencode-config/hooks/useOpencodeChat";
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
@@ -388,7 +389,14 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   useEffect(() => {
     if (!isVideoJson || !content || !filePath) return;
     try {
-      const project = JSON.parse(content);
+      const parsed = JSON.parse(content);
+      // Normalize: ensure meta and audio exist with defaults
+      const project = {
+        ...parsed,
+        meta: { ...DEFAULT_META, ...parsed.meta },
+        audio: { tts: { ...DEFAULT_TTS_CONFIG }, ...parsed.audio },
+        scenes: Array.isArray(parsed.scenes) ? parsed.scenes : [],
+      };
       // Derive source MD path from .video.json path
       const mdPath = filePath.replace(/\.video\.json$/i, ".md");
       setVideoProject(project, mdPath);

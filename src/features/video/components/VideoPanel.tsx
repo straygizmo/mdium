@@ -180,7 +180,7 @@ export function VideoPanel() {
 
       <div className="video-panel__right">
         <div className="video-panel__player">
-          {videoProject && (
+          {videoProject?.meta && (
             <Player
               component={() => <VideoComposition project={videoProject} />}
               config={{
