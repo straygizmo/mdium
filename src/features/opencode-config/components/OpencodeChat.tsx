@@ -35,8 +35,9 @@ export function OpencodeChat() {
     loadSession,
     deleteSession,
     getSessionHistory,
-    usePlanAgent,
-    setUsePlanAgent,
+    selectedAgent,
+    setSelectedAgent,
+    availableAgents,
     useMdContext,
     setUseMdContext,
   } = useOpencodeChat(activeFolderPath ?? undefined);
@@ -291,15 +292,28 @@ export function OpencodeChat() {
             <polyline points="12 6 12 12 16 14" />
           </svg>
         </button>
-        <label className="oc-chat__plan-toggle" title="Plan Agent">
-          <input
-            type="checkbox"
-            checked={usePlanAgent}
-            onChange={(e) => setUsePlanAgent(e.target.checked)}
-          />
-          <span className="oc-chat__plan-toggle-slider" />
-          <span className="oc-chat__plan-toggle-label">Plan</span>
-        </label>
+        <select
+          className="oc-chat__agent-select"
+          value={selectedAgent ?? ""}
+          onChange={(e) => setSelectedAgent(e.target.value || null)}
+          disabled={!connected}
+          title={t("ocChatAgentSelect")}
+        >
+          <option value="">Default</option>
+          {availableAgents.length > 0
+            ? availableAgents.map((a) => (
+                <option key={a.name} value={a.name}>
+                  {a.name}
+                </option>
+              ))
+            : (
+              <>
+                <option value="plan">plan</option>
+                <option value="rag">rag</option>
+              </>
+            )
+          }
+        </select>
         <button
           className="oc-chat__toolbar-btn oc-chat__toolbar-btn--right"
           onClick={createNewSession}

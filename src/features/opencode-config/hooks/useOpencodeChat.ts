@@ -33,8 +33,9 @@ interface UseOpencodeChatResult {
   loading: boolean;
   sessions: OpencodeSessionInfo[];
   currentSessionId: string | null;
-  usePlanAgent: boolean;
-  setUsePlanAgent: (value: boolean) => void;
+  selectedAgent: string | null;
+  setSelectedAgent: (value: string | null) => void;
+  availableAgents: { name: string; description: string }[];
   useMdContext: boolean;
   setUseMdContext: (value: boolean) => void;
   connect: () => Promise<void>;
@@ -84,7 +85,8 @@ interface OpencodeChatUIState {
   loading: boolean;
   sessions: OpencodeSessionInfo[];
   currentSessionId: string | null;
-  usePlanAgent: boolean;
+  selectedAgent: string | null;
+  availableAgents: { name: string; description: string }[];
   useMdContext: boolean;
   chatInput: string;
 }
@@ -97,7 +99,8 @@ export const useChatUIStore = create<OpencodeChatUIState>()(() => ({
   loading: false,
   sessions: [],
   currentSessionId: null,
-  usePlanAgent: true,
+  selectedAgent: "plan",
+  availableAgents: [],
   useMdContext: false,
   chatInput: "",
 }));
@@ -400,6 +403,21 @@ export async function doConnect(folderPath?: string) {
     const testRes = await client.session.list();
     console.log("[opencode] session.list test:", testRes.data);
     useChatUIStore.setState({ connected: true });
+
+    // Fetch available agents
+    try {
+      const agentsRes = await client.app.agents();
+      const agents = (agentsRes.data as any) ?? [];
+      useChatUIStore.setState({
+        availableAgents: agents.map((a: any) => ({
+          name: a.name,
+          description: a.description ?? "",
+        })),
+      });
+    } catch {
+      // Non-critical — dropdown will show default options
+    }
+
     console.log("[opencode] connected to", baseUrl, "for folder:", folderPath);
 
     // Subscribe to SSE events (await ensures connection is ready before returning)
@@ -487,7 +505,7 @@ export async function doSendMessage(text: string, agentOverride?: string) {
   }));
 
   try {
-    const agent = agentOverride ?? (useChatUIStore.getState().usePlanAgent ? "plan" : undefined);
+    const agent = agentOverride ?? useChatUIStore.getState().selectedAgent ?? undefined;
     const res = await _client.session.promptAsync({
       path: { id: sessionId },
       body: {
@@ -691,7 +709,8 @@ export function useOpencodeChat(folderPath?: string): UseOpencodeChatResult {
     loading,
     sessions,
     currentSessionId,
-    usePlanAgent,
+    selectedAgent,
+    availableAgents,
     useMdContext,
   } = useChatUIStore();
 
@@ -730,8 +749,8 @@ export function useOpencodeChat(folderPath?: string): UseOpencodeChatResult {
     await doGetSessionHistory();
   }, []);
 
-  const setUsePlanAgent = useCallback((value: boolean) => {
-    useChatUIStore.setState({ usePlanAgent: value });
+  const setSelectedAgent = useCallback((value: string | null) => {
+    useChatUIStore.setState({ selectedAgent: value });
   }, []);
 
   const setUseMdContext = useCallback((value: boolean) => {
@@ -755,8 +774,9 @@ export function useOpencodeChat(folderPath?: string): UseOpencodeChatResult {
     loading,
     sessions,
     currentSessionId,
-    usePlanAgent,
-    setUsePlanAgent,
+    selectedAgent,
+    setSelectedAgent,
+    availableAgents,
     useMdContext,
     setUseMdContext,
     connect,

@@ -415,8 +415,8 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
       outputPath = dir + baseName + "_" + ts + ".video.json";
     }
 
-    // Disable Plan mode
-    useChatUIStore.setState({ usePlanAgent: false });
+    // Clear agent selection (use Default mode)
+    useChatUIStore.setState({ selectedAgent: null });
 
     // Switch UI to chat panel
     useUiStore.getState().setLeftPanel("opencode-config");

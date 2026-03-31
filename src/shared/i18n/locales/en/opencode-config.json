@@ -165,5 +165,6 @@
   "ocChatThinking": "Thinking...",
   "ocChatDone": "Done",
   "ocChatDoneError": "Done (with errors)",
-  "commandBuiltinSelect": "Select a built-in command..."
+  "commandBuiltinSelect": "Select a built-in command...",
+  "ocChatAgentSelect": "Agent"
 }
