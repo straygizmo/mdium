@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useVideoStore } from "@/stores/video-store";
 import { splitNarration } from "@/features/video/lib/narration-splitter";
-import { toPlayableSrc } from "@/features/video/lib/composition/constants";
 import type { Scene, TransitionType, ImageElement } from "@/features/video/types";
 import type { BackgroundEffect } from "../types";
 
@@ -27,6 +26,7 @@ export function SceneEditForm({ scene, onRegenerateAudio, audioGenerating }: Sce
   const updateScene = useVideoStore((s) => s.updateScene);
   const markNarrationDirty = useVideoStore((s) => s.markNarrationDirty);
   const updateImageElement = useVideoStore((s) => s.updateImageElement);
+  const sourceFilePath = useVideoStore((s) => s.sourceFilePath);
 
   // Extract image elements with their original indices
   const imageElements = useMemo(
@@ -60,15 +60,19 @@ export function SceneEditForm({ scene, onRegenerateAudio, audioGenerating }: Sce
 
   const handleImageReplace = useCallback(
     async (elementIndex: number) => {
+      const defaultPath = sourceFilePath
+        ? sourceFilePath.replace(/[\\/][^\\/]+$/, "")
+        : undefined;
       const path = await open({
         multiple: false,
+        defaultPath,
         filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp", "svg"] }],
       });
       if (typeof path === "string") {
         updateImageElement(scene.id, elementIndex, { src: path });
       }
     },
-    [scene.id, updateImageElement]
+    [scene.id, updateImageElement, sourceFilePath]
   );
 
   const handleNarrationChange = useCallback(
@@ -208,7 +212,7 @@ export function SceneEditForm({ scene, onRegenerateAudio, audioGenerating }: Sce
               >
                 <img
                   className="scene-edit-form__image-thumb"
-                  src={toPlayableSrc(el.src)}
+                  src={convertFileSrc(el.src)}
                   alt={el.alt ?? ""}
                 />
                 <div className="scene-edit-form__image-controls">
