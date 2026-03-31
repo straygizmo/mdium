@@ -186,7 +186,7 @@ export const encodeVideo = ({ framesDir, fps, outputFile, audioAssets = [], dura
 
       const mixInput = audioAssets.map((_, i) => `[a${i}]`).join('');
       // Use dropout_transition=1000 to ensure audio doesn't cut off abruptly
-      filters.push(`${mixInput}amix=inputs=${audioAssets.length}:duration=longest:dropout_transition=1000[a]`);
+      filters.push(`${mixInput}amix=inputs=${audioAssets.length}:duration=longest:dropout_transition=1000:normalize=0[a]`);
 
       command.complexFilter(filters);
       command.outputOptions([
