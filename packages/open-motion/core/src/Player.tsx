@@ -134,18 +134,29 @@ export const Player: React.FC<PlayerProps> = ({
         <div style={{ padding: '10px', background: 'var(--bg-surface, #f0f0f0)', display: 'flex', alignItems: 'center', gap: '10px', position: 'relative', zIndex: 10, borderTop: '1px solid var(--border, #ccc)' }}>
           <button
             onClick={togglePlay}
+            title={isPlaying ? 'Pause' : 'Play'}
             style={{
-              padding: '4px 14px',
+              padding: '4px 8px',
               background: 'var(--primary, #6366f1)',
               border: '1px solid var(--primary, #6366f1)',
               color: 'var(--bg-base, #fff)',
               borderRadius: '4px',
-              fontSize: '12px',
-              fontWeight: 600,
               cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
             }}
           >
-            {isPlaying ? 'Pause' : 'Play'}
+            {isPlaying ? (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <rect x="6" y="4" width="4" height="16" rx="1" />
+                <rect x="14" y="4" width="4" height="16" rx="1" />
+              </svg>
+            ) : (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M8 5v14l11-7z" />
+              </svg>
+            )}
           </button>
           <input
             type="range"
