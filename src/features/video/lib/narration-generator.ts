@@ -1,12 +1,14 @@
-import { invoke } from "@tauri-apps/api/core";
+import { callAI } from "@/shared/lib/callAI";
+import { useSettingsStore } from "@/stores/settings-store";
 import type { Scene, SceneElement } from "../types";
 
-const SYSTEM_PROMPT = `あなたはプレゼンテーションのナレーション作成者です。
-スライドの内容から、聴衆に語りかける自然な話し言葉のナレーションを生成してください。
-- 丁寧語で、聴衆に語りかける口調
-- 箇条書きの内容を自然な文章に変換
-- 30秒〜1分程度で読み上げられる長さ
-- ナレーションテキストのみを返してください（説明や注釈は不要）`;
+const SYSTEM_PROMPT = `You are a presentation narration writer.
+Generate natural, spoken narration from the slide content, as if addressing an audience.
+- Use polite, audience-facing tone
+- Convert bullet points into natural sentences
+- Keep the length readable in 30 seconds to 1 minute
+- Return ONLY the narration text (no explanations or annotations)
+- Write the narration in the SAME LANGUAGE as the input content`;
 
 function buildContentText(elements: SceneElement[]): string {
   const parts: string[] = [];
@@ -65,10 +67,8 @@ export async function generateNarrationForScene(scene: Scene): Promise<string> {
   const prompt = contentText.trim() || scene.title || "";
 
   try {
-    const response = await invoke<string>("ai_chat", {
-      systemPrompt: SYSTEM_PROMPT,
-      userMessage: prompt,
-    });
+    const aiSettings = useSettingsStore.getState().aiSettings;
+    const response = await callAI(aiSettings, SYSTEM_PROMPT, prompt);
     return response;
   } catch {
     return buildFallback(scene.elements);

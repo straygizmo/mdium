@@ -141,17 +141,9 @@ export function VideoSettingsBar({ onGenerateAudio, generating, generatingStatus
       </button>
 
       <button
+        className="video-settings-bar__decorate-btn"
         onClick={onDecorateWithLLM}
         disabled={decorating || generating}
-        style={{
-          padding: "4px 12px",
-          borderRadius: 4,
-          border: "1px solid var(--border)",
-          background: decorating ? "var(--background-muted)" : "var(--accent)",
-          color: decorating ? "var(--foreground-muted)" : "var(--accent-foreground, #fff)",
-          cursor: decorating ? "not-allowed" : "pointer",
-          fontSize: 13,
-        }}
       >
         {decorating ? "設定中..." : "LLMで自動設定"}
       </button>

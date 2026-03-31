@@ -1,24 +1,25 @@
-import { invoke } from "@tauri-apps/api/core";
+import { callAI } from "@/shared/lib/callAI";
+import { useSettingsStore } from "@/stores/settings-store";
 import type {
   VideoProject,
   SceneElement,
   BackgroundEffect,
 } from "../types";
 
-const SYSTEM_PROMPT = `あなたは動画シーンのビジュアルデザイナーです。
-各シーンの内容を分析し、適切な背景エフェクトとアニメーション設定をJSON形式で返してください。
+const SYSTEM_PROMPT = `You are a video scene visual designer.
+Analyze the content of each scene and return appropriate background effects and animation settings in JSON format.
 
-利用可能な背景エフェクト:
-- gradient: グラデーション背景 (colors: string[], angle?: number)
-- gradient-animation: アニメーション付きグラデーション (colors: string[], speed?: number)
-- particles: パーティクル (preset: "stars"|"snow"|"fireflies"|"bubbles")
-- wave-visualizer: 波形 (bars?: number, color?: string)
-- three-particles: 3Dパーティクル (preset: "floating"|"galaxy"|"rain")
-- three-geometry: 3Dジオメトリ (preset: "wireframe-sphere"|"rotating-cube"|"wave-mesh")
-- lottie: Lottieアニメーション (preset: "confetti"|"checkmark"|"loading"|"arrows"|"sparkle"|"wave"|"pulse")
-- none: エフェクトなし
+Available background effects:
+- gradient: Gradient background (colors: string[], angle?: number)
+- gradient-animation: Animated gradient (colors: string[], speed?: number)
+- particles: Particle effects (preset: "stars"|"snow"|"fireflies"|"bubbles")
+- wave-visualizer: Waveform visualizer (bars?: number, color?: string)
+- three-particles: 3D particles (preset: "floating"|"galaxy"|"rain")
+- three-geometry: 3D geometry (preset: "wireframe-sphere"|"rotating-cube"|"wave-mesh")
+- lottie: Lottie animation (preset: "confetti"|"checkmark"|"loading"|"arrows"|"sparkle"|"wave"|"pulse")
+- none: No effect
 
-利用可能なエレメントアニメーション:
+Available element animations:
 - title: "fade-in"|"slide-in"|"typewriter"|"none"
 - text: "fade-in"|"none"
 - bullet-list: "sequential"|"fade-in"|"none"
@@ -26,20 +27,36 @@ const SYSTEM_PROMPT = `あなたは動画シーンのビジュアルデザイナ
 - table: "fade-in"|"row-by-row"|"none"
 - code-block: "fade-in"|"none"
 
-利用可能な字幕スタイル:
-- "default": 通常字幕
-- "tiktok": 単語ハイライト付きアニメーション字幕
+Available caption styles:
+- "default": Standard captions
+- "tiktok": Word-highlight animated captions
 
-ガイドライン:
-- 技術的な内容 → gradient(青系) + particles(stars)
-- 導入・まとめ → gradient-animation + lottie(sparkle)
-- データ・数値系 → three-geometry(wave-mesh)
-- コード解説 → gradient(暗い色) + none
-- 全体トーンに合わせてプロジェクトテーマも提案
-- 背景エフェクトはコンテンツの邪魔にならないものを選ぶ
-- 同じエフェクトを連続で使わず、シーンごとに変化をつける
+Guidelines:
+- Technical content → gradient (blue tones) + particles (stars)
+- Intro/outro → gradient-animation + lottie (sparkle)
+- Data/numerical → three-geometry (wave-mesh)
+- Code explanations → gradient (dark colors) + none
+- Suggest a project theme that matches the overall tone
+- Choose background effects that don't distract from the content
+- Vary effects across scenes; avoid using the same effect consecutively
 
-JSON形式のみを返してください（説明や注釈は不要）。`;
+Return ONLY JSON in the following format (no explanations or comments):
+{
+  "theme": {
+    "backgroundEffect": { "type": "gradient-animation", "colors": ["#1a1a2e", "#16213e", "#0f3460"] },
+    "captionStyle": "default"
+  },
+  "scenes": {
+    "scene-1": {
+      "backgroundEffect": { "type": "particles", "preset": "stars" },
+      "elementAnimations": { "0": { "animation": "typewriter" }, "1": { "animation": "fade-in" } }
+    },
+    "scene-2": {
+      "backgroundEffect": { "type": "gradient", "colors": ["#0f3460", "#533483"], "angle": 135 }
+    }
+  }
+}
+The keys in "scenes" must match the input scene IDs. The keys in "elementAnimations" are zero-based element indices.`;
 
 interface SceneSummary {
   id: string;
@@ -142,26 +159,18 @@ function applyResult(project: VideoProject, result: DecorationResult): VideoProj
 export async function decorateWithLLM(project: VideoProject): Promise<VideoProject> {
   const userMessage = buildUserMessage(project);
 
-  try {
-    const response = await invoke<string>("ai_chat", {
-      systemPrompt: SYSTEM_PROMPT,
-      userMessage,
-    });
+  const aiSettings = useSettingsStore.getState().aiSettings;
+  const response = await callAI(aiSettings, SYSTEM_PROMPT, userMessage);
 
-    let jsonStr = response.trim();
-    const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (fenceMatch) {
-      jsonStr = fenceMatch[1].trim();
-    }
-
-    const result = JSON.parse(jsonStr) as Partial<DecorationResult>;
-    if (!result.theme || !result.scenes) {
-      console.error("scene-decorator: invalid LLM response structure");
-      return project;
-    }
-    return applyResult(project, result as DecorationResult);
-  } catch (e) {
-    console.error("scene-decorator LLM call failed:", e);
-    return project;
+  let jsonStr = response.trim();
+  const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenceMatch) {
+    jsonStr = fenceMatch[1].trim();
   }
+
+  const result = JSON.parse(jsonStr) as Partial<DecorationResult>;
+  if (!result.theme || !result.scenes) {
+    throw new Error("LLM response missing 'theme' or 'scenes'");
+  }
+  return applyResult(project, result as DecorationResult);
 }

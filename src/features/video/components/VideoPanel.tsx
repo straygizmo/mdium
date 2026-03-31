@@ -35,6 +35,7 @@ export function VideoPanel() {
       setVideoProject(decorated);
     } catch (e) {
       console.error("Decoration failed:", e);
+      alert(e instanceof Error ? e.message : String(e));
     } finally {
       setDecorating(false);
     }
