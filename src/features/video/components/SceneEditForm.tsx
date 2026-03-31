@@ -191,59 +191,6 @@ export function SceneEditForm({ scene, onRegenerateAudio, audioGenerating }: Sce
 
   return (
     <div className="scene-edit-form">
-      <div className="scene-edit-form__field">
-        <div className="scene-edit-form__label-row">
-          <label>{t("narration")}</label>
-          <button
-            className="scene-edit-form__btn scene-edit-form__btn--small"
-            onClick={handleRegenerateAudio}
-            disabled={audioGenerating}
-            title={t("regenerateTtsAudio")}
-          >
-            ↻
-          </button>
-          <label className="scene-edit-form__caption-switch">
-            <span className="scene-edit-form__caption-switch-label">{t("captions")}</span>
-            <span
-              className={`scene-edit-form__switch${captionsEnabled ? " scene-edit-form__switch--on" : ""}`}
-              role="switch"
-              aria-checked={captionsEnabled}
-              tabIndex={0}
-              onClick={handleToggleCaptions}
-              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleToggleCaptions(); } }}
-            >
-              <span className="scene-edit-form__switch-thumb" />
-            </span>
-          </label>
-        </div>
-        <textarea
-          value={scene.narration}
-          onChange={handleNarrationChange}
-          rows={4}
-          placeholder={t("narrationPlaceholder")}
-        />
-        {captionsEnabled && previewSegments.length > 0 && (
-          <div className="scene-edit-form__segments">
-            <label className="scene-edit-form__segments-label">
-              {t("segmentPreview")} ({previewSegments.length})
-            </label>
-            <ol className="scene-edit-form__segments-list">
-              {previewSegments.map((seg, i) => {
-                const hasAudio = audioExists[i] ?? false;
-                return (
-                  <li key={i} className="scene-edit-form__segment-item">
-                    <span className={`scene-edit-form__segment-status${hasAudio ? " scene-edit-form__segment-status--ok" : ""}`}>
-                      {hasAudio ? "●" : "○"}
-                    </span>
-                    <span className="scene-edit-form__segment-text">{seg}</span>
-                  </li>
-                );
-              })}
-            </ol>
-          </div>
-        )}
-      </div>
-
       <SceneContentEditor scene={scene} />
 
       {imageElements.length > 0 && (
@@ -323,6 +270,59 @@ export function SceneEditForm({ scene, onRegenerateAudio, audioGenerating }: Sce
           })}
         </div>
       )}
+
+      <div className="scene-edit-form__field">
+        <div className="scene-edit-form__label-row">
+          <label>{t("narration")}</label>
+          <button
+            className="scene-edit-form__btn scene-edit-form__btn--small"
+            onClick={handleRegenerateAudio}
+            disabled={audioGenerating}
+            title={t("regenerateTtsAudio")}
+          >
+            ↻
+          </button>
+          <label className="scene-edit-form__caption-switch">
+            <span className="scene-edit-form__caption-switch-label">{t("captions")}</span>
+            <span
+              className={`scene-edit-form__switch${captionsEnabled ? " scene-edit-form__switch--on" : ""}`}
+              role="switch"
+              aria-checked={captionsEnabled}
+              tabIndex={0}
+              onClick={handleToggleCaptions}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleToggleCaptions(); } }}
+            >
+              <span className="scene-edit-form__switch-thumb" />
+            </span>
+          </label>
+        </div>
+        <textarea
+          value={scene.narration}
+          onChange={handleNarrationChange}
+          rows={4}
+          placeholder={t("narrationPlaceholder")}
+        />
+        {captionsEnabled && previewSegments.length > 0 && (
+          <div className="scene-edit-form__segments">
+            <label className="scene-edit-form__segments-label">
+              {t("segmentPreview")} ({previewSegments.length})
+            </label>
+            <ol className="scene-edit-form__segments-list">
+              {previewSegments.map((seg, i) => {
+                const hasAudio = audioExists[i] ?? false;
+                return (
+                  <li key={i} className="scene-edit-form__segment-item">
+                    <span className={`scene-edit-form__segment-status${hasAudio ? " scene-edit-form__segment-status--ok" : ""}`}>
+                      {hasAudio ? "●" : "○"}
+                    </span>
+                    <span className="scene-edit-form__segment-text">{seg}</span>
+                  </li>
+                );
+              })}
+            </ol>
+          </div>
+        )}
+      </div>
 
       <div className="scene-edit-form__row">
         <label>{t("transition")}</label>
