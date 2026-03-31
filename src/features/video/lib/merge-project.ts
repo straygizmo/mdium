@@ -47,8 +47,23 @@ export async function mergeWithSavedProject(
       }];
     }
 
+    // Merge image element settings (enabled, position, animation, src replacement)
+    const mergedElements = fresh.elements.map((el, idx) => {
+      if (el.type !== "image") return el;
+      const savedEl = savedScene.elements?.[idx];
+      if (!savedEl || savedEl.type !== "image") return el;
+      return {
+        ...el,
+        enabled: savedEl.enabled,
+        position: savedEl.position ?? el.position,
+        animation: savedEl.animation ?? el.animation,
+        src: savedEl.src ?? el.src,
+      };
+    });
+
     return {
       ...fresh,
+      elements: mergedElements,
       narration: savedScene.narration ?? fresh.narration,
       narrationAudio: savedScene.narrationAudio,
       narrationSegments: segments,
@@ -62,6 +77,7 @@ export async function mergeWithSavedProject(
   return {
     meta: { ...freshProject.meta, ...saved.meta },
     audio: { ...freshProject.audio, ...saved.audio },
+    theme: saved.theme ?? freshProject.theme,
     scenes: mergedScenes,
   };
 }
