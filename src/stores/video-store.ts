@@ -21,6 +21,7 @@ interface VideoState {
   updateAudioConfig: (partial: Partial<VideoProject["audio"]>) => void;
   markNarrationDirty: (sceneId: string) => void;
   updateImageElement: (sceneId: string, elementIndex: number, updates: Partial<{ src: string; position: "center" | "left" | "right" | "background"; animation: "fade-in" | "zoom-in" | "ken-burns" | "none"; enabled: boolean }>) => void;
+  setAllCaptions: (enabled: boolean) => void;
 }
 
 export const useVideoStore = create<VideoState>()((set) => ({
@@ -129,6 +130,20 @@ export const useVideoStore = create<VideoState>()((set) => ({
               }),
             };
           }),
+        },
+      };
+    }),
+
+  setAllCaptions: (enabled) =>
+    set((s) => {
+      if (!s.videoProject) return s;
+      return {
+        videoProject: {
+          ...s.videoProject,
+          scenes: s.videoProject.scenes.map((scene) => ({
+            ...scene,
+            captions: { ...scene.captions, enabled },
+          })),
         },
       };
     }),

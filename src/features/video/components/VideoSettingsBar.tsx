@@ -75,6 +75,28 @@ export function VideoSettingsBar({ onGenerateAudio, generating, generatingStatus
     [audio?.tts, updateAudioConfig]
   );
 
+  const handleTtsSpeedChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const speed = parseFloat(e.target.value);
+      updateAudioConfig({
+        tts: {
+          provider: audio?.tts?.provider ?? "voicevox",
+          volume: audio?.tts?.volume ?? 1.0,
+          speaker: audio?.tts?.speaker,
+          speed,
+        },
+      });
+    },
+    [audio?.tts, updateAudioConfig]
+  );
+
+  const setAllCaptions = useVideoStore((s) => s.setAllCaptions);
+  const allCaptionsEnabled = videoProject?.scenes.every((s) => s.captions?.enabled) ?? false;
+
+  const handleToggleAllCaptions = useCallback(() => {
+    setAllCaptions(!allCaptionsEnabled);
+  }, [allCaptionsEnabled, setAllCaptions]);
+
   if (!videoProject) return null;
 
   return (
@@ -128,6 +150,38 @@ export function VideoSettingsBar({ onGenerateAudio, generating, generatingStatus
           onChange={handleTtsSpeakerChange}
           placeholder={t("ttsSpeakerPlaceholder")}
         />
+      </div>
+
+      <div className="video-settings-bar__row">
+        <label>速度</label>
+        <input
+          type="range"
+          min={0.7}
+          max={1.5}
+          step={0.1}
+          value={audio?.tts?.speed ?? 1.0}
+          onChange={handleTtsSpeedChange}
+        />
+        <span style={{ fontSize: 11, minWidth: 28, textAlign: "right" }}>{(audio?.tts?.speed ?? 1.0).toFixed(1)}</span>
+      </div>
+
+      <div className="video-settings-bar__row">
+        <label>字幕</label>
+        <span
+          className={`scene-edit-form__switch${allCaptionsEnabled ? " scene-edit-form__switch--on" : ""}`}
+          role="switch"
+          aria-checked={allCaptionsEnabled}
+          tabIndex={0}
+          onClick={handleToggleAllCaptions}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              handleToggleAllCaptions();
+            }
+          }}
+        >
+          <span className="scene-edit-form__switch-thumb" />
+        </span>
       </div>
 
       <button
