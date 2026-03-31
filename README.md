@@ -2,11 +2,10 @@
 
 **A Markdown-centric document foundation designed for the AI era.**
 
-MDium is built on the premise that Markdown — the format most naturally understood by AI — should be at the heart of every document workflow. By converting traditional Office documents (Word, Excel, PDF) into Markdown and providing rich editing capabilities on top of it, MDium aims to become the first choice for document editing and the central tool in day-to-day business operations.
+MDium is built on the premise that Markdown — the format most naturally understood by AI — should be at the heart of every document workflow. By converting traditional Office documents (Word, Excel, PDF) into Markdown and providing rich editing capabilities on top of it, MDium achieves an "AI & human-friendly" document experience.
+Furthermore, by converting Markdown back to DOCX, PDF, and other formats, it ensures seamless interoperability with existing workflows, aiming to become the central tool in day-to-day business operations.
 
-It also converts Markdown back to DOCX, PDF, and other formats, ensuring seamless interoperability with existing workflows.
-
-Each workspace folder runs its own opencode-sdk instance, enabling not only conventional RAG (Retrieval-Augmented Generation) but also **Agentic RAG** — an AI agent that reads, reasons over, and references all data within a folder to generate documents contextually grounded in your project's knowledge.
+Each workspace (folder) runs its own opencode-sdk instance, enabling not only conventional RAG (Retrieval-Augmented Generation) but also **Agentic RAG** — an AI agent that reads, reasons over, and references all data within a folder to generate documents contextually grounded in your project's knowledge.
 
 ```mermaid
 graph LR
