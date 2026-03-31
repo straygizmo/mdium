@@ -23,7 +23,7 @@ Available element animations:
 - title: "fade-in"|"slide-in"|"typewriter"|"none"
 - text: "fade-in"|"none"
 - bullet-list: "sequential"|"fade-in"|"none"
-- image: "fade-in"|"zoom-in"|"ken-burns"|"none"
+- image: "fade-in"|"zoom-in"|"ken-burns"|"none" (also supports position: "center"|"left"|"right"|"background")
 - table: "fade-in"|"row-by-row"|"none"
 - code-block: "fade-in"|"none"
 
@@ -39,6 +39,11 @@ Guidelines:
 - Suggest a project theme that matches the overall tone
 - Choose background effects that don't distract from the content
 - Vary effects across scenes; avoid using the same effect consecutively
+- For image elements, also set "position" in elementAnimations
+- Use "background" position for atmospheric/decorative images
+- Use "ken-burns" animation for photos to add visual interest
+- Use "zoom-in" for diagrams or screenshots to draw attention
+- Use "center" position + "fade-in" animation as safe defaults for images
 
 Return ONLY JSON in the following format (no explanations or comments):
 {
@@ -49,7 +54,7 @@ Return ONLY JSON in the following format (no explanations or comments):
   "scenes": {
     "scene-1": {
       "backgroundEffect": { "type": "particles", "preset": "stars" },
-      "elementAnimations": { "0": { "animation": "typewriter" }, "1": { "animation": "fade-in" } }
+      "elementAnimations": { "0": { "animation": "typewriter" }, "1": { "animation": "fade-in" }, "2": { "animation": "ken-burns", "position": "center" } }
     },
     "scene-2": {
       "backgroundEffect": { "type": "gradient", "colors": ["#0f3460", "#533483"], "angle": 135 }
@@ -74,7 +79,7 @@ interface DecorationResult {
     string,
     {
       backgroundEffect?: BackgroundEffect;
-      elementAnimations?: Record<string, { animation: string }>;
+      elementAnimations?: Record<string, { animation: string; position?: string }>;
     }
   >;
 }
@@ -90,7 +95,7 @@ function buildElementSummary(elements: SceneElement[]): string {
         case "bullet-list":
           return `[箇条書き] ${el.items.length}項目`;
         case "image":
-          return `[画像] ${el.alt ?? ""}`;
+          return `[画像: ${el.src.split(/[\\/]/).pop() ?? ""}] ${el.alt ?? ""}`;
         case "table":
           return `[表] ${el.headers.join(", ")}`;
         case "code-block":
@@ -146,7 +151,11 @@ function applyResult(project: VideoProject, result: DecorationResult): VideoProj
       updatedScene.elements = scene.elements.map((el, i) => {
         const anim = sceneDecor.elementAnimations?.[String(i)];
         if (!anim) return el;
-        return { ...el, animation: anim.animation } as typeof el;
+        const updates: Record<string, unknown> = { animation: anim.animation };
+        if (el.type === "image" && anim.position) {
+          updates.position = anim.position;
+        }
+        return { ...el, ...updates } as typeof el;
       });
     }
 
@@ -167,6 +176,12 @@ export async function decorateWithLLM(project: VideoProject): Promise<VideoProje
   if (fenceMatch) {
     jsonStr = fenceMatch[1].trim();
   }
+
+  // Clean up common LLM JSON issues: comments and trailing commas
+  jsonStr = jsonStr
+    .replace(/\/\/.*$/gm, "")          // single-line comments
+    .replace(/\/\*[\s\S]*?\*\//g, "")  // multi-line comments
+    .replace(/,\s*([}\]])/g, "$1");    // trailing commas
 
   const result = JSON.parse(jsonStr) as Partial<DecorationResult>;
   if (!result.theme || !result.scenes) {
