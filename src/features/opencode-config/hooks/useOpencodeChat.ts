@@ -9,6 +9,7 @@ import type {
 import { invoke } from "@tauri-apps/api/core";
 import { marked } from "marked";
 import { useOpencodeServerStore } from "@/stores/opencode-server-store";
+import { BUILTIN_AGENTS } from "../lib/builtin-registry";
 
 export interface OpencodeMessage {
   role: "user" | "assistant";
@@ -299,6 +300,72 @@ function doDisconnect() {
   });
 }
 
+// ─── Auto-register builtin agents in project config ───
+async function ensureBuiltinAgents(folderPath: string): Promise<void> {
+  const sep = folderPath.includes("\\") ? "\\" : "/";
+  const configPath = `${folderPath}${sep}opencode.jsonc`;
+
+  // Read existing project config
+  let config: Record<string, any> = {};
+  try {
+    const raw = await invoke<string>("read_text_file", { path: configPath });
+    // Strip single-line comments for JSONC parsing
+    const json = raw.replace(/^\s*\/\/.*$/gm, "").replace(/,\s*([\]}])/g, "$1");
+    config = JSON.parse(json);
+  } catch {
+    // File doesn't exist or is invalid — start fresh
+  }
+
+  let changed = false;
+
+  // Ensure agents section exists
+  if (!config.agents) config.agents = {};
+
+  // Add missing builtin agents
+  for (const [name, entry] of Object.entries(BUILTIN_AGENTS)) {
+    if (!(name in config.agents)) {
+      config.agents[name] = entry.agent;
+      changed = true;
+    }
+  }
+
+  // Write config if changed
+  if (changed) {
+    try {
+      await invoke("write_text_file_with_dirs", {
+        path: configPath,
+        content: JSON.stringify(config, null, 2),
+      });
+    } catch (e) {
+      console.warn("[opencode] failed to write project config:", e);
+    }
+  }
+
+  // Ensure tool and prompt files exist
+  for (const entry of Object.values(BUILTIN_AGENTS)) {
+    if (entry.toolFiles) {
+      for (const relPath of Object.keys(entry.toolFiles)) {
+        const fullPath = `${folderPath}${sep}${relPath.replace(/\//g, sep)}`;
+        try {
+          await invoke<string>("read_text_file", { path: fullPath });
+        } catch {
+          console.warn(`[opencode] builtin tool file missing: ${fullPath}`);
+        }
+      }
+    }
+    if (entry.promptFiles) {
+      for (const relPath of Object.keys(entry.promptFiles)) {
+        const fullPath = `${folderPath}${sep}${relPath.replace(/\//g, sep)}`;
+        try {
+          await invoke<string>("read_text_file", { path: fullPath });
+        } catch {
+          console.warn(`[opencode] builtin prompt file missing: ${fullPath}`);
+        }
+      }
+    }
+  }
+}
+
 export async function doConnect(folderPath?: string) {
   if (_connectLock) {
     // Save the latest requested folder so we can reconnect after the current attempt
@@ -320,6 +387,11 @@ export async function doConnect(folderPath?: string) {
   useChatUIStore.setState({ connecting: true, error: null });
 
   try {
+    // Auto-register builtin agents before starting the server
+    if (folderPath) {
+      await ensureBuiltinAgents(folderPath);
+    }
+
     const baseUrl = await ensureOpencodeServer(folderPath);
     const client = createOpencodeClient({ baseUrl });
     _client = client;
