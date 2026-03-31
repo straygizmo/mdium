@@ -157,6 +157,7 @@ export interface ImageElement {
   alt?: string;
   position: "center" | "left" | "right" | "background";
   animation: "fade-in" | "zoom-in" | "ken-burns" | "none";
+  enabled?: boolean;
 }
 
 export interface TableElement {
