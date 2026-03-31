@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { readFile } from "@tauri-apps/plugin-fs";
 import { useVideoStore } from "@/stores/video-store";
 import { splitNarration } from "@/features/video/lib/narration-splitter";
 import type { Scene, TransitionType, ImageElement } from "@/features/video/types";
@@ -36,6 +37,56 @@ export function SceneEditForm({ scene, onRegenerateAudio, audioGenerating }: Sce
         .filter((item): item is { el: ImageElement; i: number } => item.el.type === "image"),
     [scene.elements]
   );
+
+  // Load image files as blob URLs for thumbnail display
+  const [imageBlobUrls, setImageBlobUrls] = useState<Record<number, string>>({});
+  const blobUrlsRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const newUrls: Record<number, string> = {};
+    const newBlobUrls: string[] = [];
+
+    (async () => {
+      for (const { el, i } of imageElements) {
+        if (/^(https?:|data:|blob:)/i.test(el.src)) {
+          newUrls[i] = el.src;
+          continue;
+        }
+        try {
+          const data = await readFile(el.src);
+          const ext = el.src.split(".").pop()?.toLowerCase() ?? "";
+          const mime =
+            ext === "svg" ? "image/svg+xml" :
+            ext === "png" ? "image/png" :
+            ext === "gif" ? "image/gif" :
+            ext === "webp" ? "image/webp" :
+            "image/jpeg";
+          const blob = new Blob([data], { type: mime });
+          const url = URL.createObjectURL(blob);
+          newBlobUrls.push(url);
+          newUrls[i] = url;
+        } catch {
+          // skip if file not found
+        }
+      }
+      if (!cancelled) {
+        // Revoke old blob URLs
+        for (const u of blobUrlsRef.current) URL.revokeObjectURL(u);
+        blobUrlsRef.current = newBlobUrls;
+        setImageBlobUrls(newUrls);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [imageElements]);
+
+  // Cleanup blob URLs on unmount
+  useEffect(() => {
+    return () => {
+      for (const u of blobUrlsRef.current) URL.revokeObjectURL(u);
+    };
+  }, []);
 
   const handleImageToggle = useCallback(
     (elementIndex: number, currentEnabled: boolean) => {
@@ -212,7 +263,7 @@ export function SceneEditForm({ scene, onRegenerateAudio, audioGenerating }: Sce
               >
                 <img
                   className="scene-edit-form__image-thumb"
-                  src={convertFileSrc(el.src)}
+                  src={imageBlobUrls[i] ?? ""}
                   alt={el.alt ?? ""}
                 />
                 <div className="scene-edit-form__image-controls">
