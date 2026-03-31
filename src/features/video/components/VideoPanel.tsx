@@ -10,6 +10,7 @@ import { ExportPanel } from "./ExportPanel";
 import { Player } from "@open-motion/core";
 import { VideoComposition, calculateTotalDuration } from "../lib/composition";
 import { decorateWithLLM } from "../lib/scene-decorator";
+import { useImageBlobUrls } from "../hooks/useImageBlobUrls";
 import type { ExportOptions } from "./ExportPanel";
 import "./VideoPanel.css";
 
@@ -17,6 +18,7 @@ export function VideoPanel() {
   const { t } = useTranslation("video");
 
   const videoProject = useVideoStore((s) => s.videoProject);
+  const playerProject = useImageBlobUrls(videoProject);
   const scenes = videoProject?.scenes ?? [];
   const audioGenerated = useVideoStore((s) => s.audioGenerated);
 
@@ -181,14 +183,14 @@ export function VideoPanel() {
 
       <div className="video-panel__right">
         <div className="video-panel__player">
-          {videoProject?.meta && (
+          {playerProject?.meta && (
             <Player
-              component={() => <VideoComposition project={videoProject} />}
+              component={() => <VideoComposition project={playerProject} />}
               config={{
-                width: videoProject.meta.width,
-                height: videoProject.meta.height,
-                fps: videoProject.meta.fps,
-                durationInFrames: calculateTotalDuration(videoProject),
+                width: playerProject.meta.width,
+                height: playerProject.meta.height,
+                fps: playerProject.meta.fps,
+                durationInFrames: calculateTotalDuration(playerProject),
               }}
             />
           )}
