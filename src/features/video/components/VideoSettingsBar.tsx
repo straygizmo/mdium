@@ -230,6 +230,7 @@ export function VideoSettingsBar({ onGenerateAudio, generating, generatingStatus
         className="video-settings-bar__decorate-btn"
         onClick={onDecorateWithLLM}
         disabled={decorating || generating}
+        title={t("autoConfigWithLLMTooltip")}
       >
         {decorating ? t("autoConfiguring") : t("autoConfigWithLLM")}
       </button>

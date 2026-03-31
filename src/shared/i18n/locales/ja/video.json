@@ -71,6 +71,7 @@
   "narrationSettings": "ナレーション設定",
   "ttsVolume": "音量",
   "autoConfigWithLLM": "LLMで自動設定",
+  "autoConfigWithLLMTooltip": "LLMがシーン内容を分析し、背景エフェクト・要素アニメーション・字幕スタイル・テーマを自動設定します",
   "autoConfiguring": "設定中...",
   "contents": "コンテンツ",
   "images": "画像",

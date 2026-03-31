@@ -71,6 +71,7 @@
   "narrationSettings": "Narration Settings",
   "ttsVolume": "Volume",
   "autoConfigWithLLM": "Auto-configure with LLM",
+  "autoConfigWithLLMTooltip": "LLM analyzes scene content and automatically sets background effects, element animations, caption styles, and theme",
   "autoConfiguring": "Configuring...",
   "contents": "Contents",
   "images": "Images",
