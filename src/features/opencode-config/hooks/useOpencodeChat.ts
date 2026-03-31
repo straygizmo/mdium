@@ -294,7 +294,7 @@ function doDisconnect() {
   });
 }
 
-async function doConnect(folderPath?: string) {
+export async function doConnect(folderPath?: string) {
   if (_connectLock) {
     // Save the latest requested folder so we can reconnect after the current attempt
     _pendingFolder = { path: folderPath };
@@ -435,7 +435,7 @@ async function doSendMessage(text: string, agentOverride?: string) {
   }
 }
 
-async function doExecuteCommand(commandName: string, args?: string) {
+export async function doExecuteCommand(commandName: string, args?: string) {
   if (!_client) return;
 
   useChatUIStore.setState({ error: null });
