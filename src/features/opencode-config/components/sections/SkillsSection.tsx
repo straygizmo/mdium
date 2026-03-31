@@ -7,7 +7,6 @@ import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 import type { OpencodeSkill } from "@/shared/types";
 import { marked } from "marked";
 import { useOpencodeConfigContext, toRelativeProjectPath } from "../OpencodeConfigContext";
-import { BUILTIN_SKILLS } from "../../lib/builtin-skills";
 import {
   BUILTIN_SKILLS as REGISTRY_SKILLS,
   getMissingBuiltinSkills,
@@ -302,29 +301,6 @@ export function SkillsSection() {
 
       {!noProject && !loading && isEditing && (
         <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
-          {/* Built-In Skill selector */}
-          <div style={{ marginBottom: 8 }}>
-            <select
-              className="oc-section__builtin-select"
-              value=""
-              onChange={(e) => {
-                const key = e.target.value;
-                if (!key) return;
-                const builtin = BUILTIN_SKILLS[key];
-                if (!builtin) return;
-                const parsed = parseSkillMd(builtin.content);
-                setFormName(builtin.name);
-                setFormDesc(builtin.description);
-                setFormBody(parsed.body);
-              }}
-            >
-              <option value="">{t("skillBuiltinSelect")}</option>
-              {Object.keys(BUILTIN_SKILLS).map((key) => (
-                <option key={key} value={key}>{key}</option>
-              ))}
-            </select>
-          </div>
-
           <div className="oc-section__field">
             <label className="oc-section__label">{t("skillName")}</label>
             <input
@@ -457,7 +433,7 @@ export function SkillsSection() {
                         className="oc-section__builtin-dropdown-item"
                         onClick={() => handleAddBuiltin(name)}
                       >
-                        {name}
+                        {name} — {REGISTRY_SKILLS[name]?.description ?? ""}
                       </button>
                     ))}
                   </div>

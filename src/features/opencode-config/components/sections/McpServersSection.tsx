@@ -7,7 +7,7 @@ import { useTabStore } from "@/stores/tab-store";
 import type { OpencodeMcpServer } from "@/shared/types";
 import { useOpencodeConfigContext, toRelativeProjectPath } from "../OpencodeConfigContext";
 import { getOpencodeClient } from "../../hooks/useOpencodeChat";
-import { BUILTIN_MCP_SERVERS, resolveBuiltinCommand } from "../../lib/builtin-mcp-servers";
+import { resolveBuiltinCommand } from "../../lib/builtin-mcp-servers";
 import {
   BUILTIN_MCP as REGISTRY_MCP,
   getMissingBuiltinMcp,
@@ -175,10 +175,14 @@ export function McpServersSection() {
   const handleAddBuiltin = async (name: string) => {
     const entry = REGISTRY_MCP[name];
     if (!entry) return;
+    const resolved = { ...entry };
+    if (Array.isArray(resolved.command) && mcpServersPath) {
+      resolved.command = resolveBuiltinCommand(resolved.command, mcpServersPath);
+    }
     if (scope === "global") {
-      await saveMcpServer(name, { ...entry });
+      await saveMcpServer(name, resolved);
     } else if (activeFolderPath) {
-      await saveProjectMcpServer(activeFolderPath, name, { ...entry });
+      await saveProjectMcpServer(activeFolderPath, name, resolved);
     }
     setShowBuiltinMenu(false);
   };
@@ -529,36 +533,6 @@ export function McpServersSection() {
               </div>
             </div>
           )}
-
-          {/* Built-In MCP Server selector */}
-          <div style={{ marginTop: 6, marginBottom: 8 }}>
-            <select
-              className="oc-section__builtin-select"
-              value=""
-              onChange={(e) => {
-                const key = e.target.value;
-                if (!key) return;
-                const builtin = BUILTIN_MCP_SERVERS[key];
-                if (!builtin) return;
-                const resolved = resolveBuiltinCommand(builtin.command, mcpServersPath);
-                setFormName(builtin.serverName);
-                setFormType(builtin.type);
-                setFormEnabled(builtin.enabled);
-                setFormCommand(resolved[0] ?? "");
-                setFormArgs(resolved.slice(1).join(" "));
-                setFormEnv(
-                  Object.entries(builtin.environment)
-                    .map(([k, v]) => `${k}=${v}`)
-                    .join("\n")
-                );
-              }}
-            >
-              <option value="">{t("mcpBuiltinSelect")}</option>
-              {Object.keys(BUILTIN_MCP_SERVERS).map((key) => (
-                <option key={key} value={key}>{key}</option>
-              ))}
-            </select>
-          </div>
 
           <div className="oc-section__field">
             <label className="oc-section__label">{t("mcpName")}</label>
