@@ -976,7 +976,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
         <button
           className="preview-panel__tab preview-panel__tab--icon"
           onClick={handleEnterVideoMode}
-          title="Video"
+          title={t("generateVideoScenario")}
         >
           &#9655;
         </button>

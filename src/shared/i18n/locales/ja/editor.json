@@ -166,5 +166,6 @@
   "macroDirNotFound": "マクロフォルダが見つかりません",
   "macroImportSkipped": "{{name}} はスキップされました：対応するモジュールが見つかりません",
   "macroNoFiles": "インポート対象のファイルがありません",
-  "commandNotRegistered": "ビルトインコマンド「generate-video-scenario」が登録されていません。\n設定 > コマンド でビルトインテンプレートから追加してください。"
+  "commandNotRegistered": "ビルトインコマンド「generate-video-scenario」が登録されていません。\n設定 > コマンド でビルトインテンプレートから追加してください。",
+  "generateVideoScenario": "動画シナリオ生成コマンドを実行"
 }
