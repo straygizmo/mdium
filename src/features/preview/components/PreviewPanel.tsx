@@ -388,6 +388,15 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   );
   useEffect(() => {
     if (!isVideoJson || !content || !filePath) return;
+    // Don't re-initialize if the store already has a project for this source file
+    // (tab content is stale — the video panel auto-saves to disk but doesn't update
+    // the tab, so re-parsing would overwrite live state like captions and audio)
+    const mdPath = filePath.replace(/\.video\.json$/i, ".md");
+    const { videoProject: existing, sourceFilePath: existingSource } = useVideoStore.getState();
+    if (existing && existingSource === mdPath) {
+      setIsVideoMode(true);
+      return;
+    }
     try {
       const parsed = JSON.parse(content);
       // Normalize: ensure meta and audio exist with defaults
@@ -403,8 +412,6 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
           elements: Array.isArray(s.elements) ? s.elements : [],
         })),
       };
-      // Derive source MD path from .video.json path
-      const mdPath = filePath.replace(/\.video\.json$/i, ".md");
       setVideoProject(project, mdPath);
       setIsVideoMode(true);
     } catch { /* ignore parse errors */ }
