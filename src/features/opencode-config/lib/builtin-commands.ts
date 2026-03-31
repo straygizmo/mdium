@@ -1,8 +1,8 @@
 import type { BuiltinCommand } from "@/shared/types";
 
 export const BUILTIN_COMMANDS: Record<string, BuiltinCommand> = {
-  "generate-video": {
-    name: "generate-video",
+  "generate-video-scenario": {
+    name: "generate-video-scenario",
     description:
       "Convert Markdown to VideoProject JSON with AI-powered scene splitting and narration",
     template: `# Video Scenario Generator

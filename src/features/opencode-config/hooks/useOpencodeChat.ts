@@ -66,7 +66,7 @@ let _connectLock = false;
 let _currentSessionId: string | null = null;
 /** Pending folder path requested while a connection was in progress */
 let _pendingFolder: { path: string | undefined } | null = null;
-/** Output path to auto-open when a generate-video command completes */
+/** Output path to auto-open when a generate-video-scenario command completes */
 let _pendingVideoOutput: string | null = null;
 
 // ─── Zustand store for UI state (persists across mount/unmount) ───
@@ -444,8 +444,8 @@ async function doExecuteCommand(commandName: string, args?: string) {
 
   const displayText = `/${commandName}${args ? ` ${args}` : ""}`;
 
-  // Track generate-video output path for auto-open
-  if (commandName === "generate-video" && args) {
+  // Track generate-video-scenario output path for auto-open
+  if (commandName === "generate-video-scenario" && args) {
     // Extract quoted paths or whitespace-separated tokens
     const quoted = [...args.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
     if (quoted.length >= 2) {

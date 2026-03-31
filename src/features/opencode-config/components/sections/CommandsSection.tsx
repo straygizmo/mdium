@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
@@ -7,8 +7,10 @@ import { useTabStore } from "@/stores/tab-store";
 import type { OpencodeCommand } from "@/shared/types";
 import { useOpencodeConfigContext, toRelativeProjectPath } from "../OpencodeConfigContext";
 import { BUILTIN_COMMANDS } from "../../lib/builtin-commands";
+import { marked } from "marked";
 
 type Scope = "global" | "project";
+type ViewTab = "editor" | "preview";
 
 const EMPTY_COMMANDS: Record<string, OpencodeCommand> = {};
 
@@ -33,6 +35,34 @@ export function CommandsSection() {
   const [formTemplate, setFormTemplate] = useState("");
   const [formAgent, setFormAgent] = useState("");
   const [formModel, setFormModel] = useState("");
+  const [viewTab, setViewTab] = useState<ViewTab>("editor");
+
+  const previewHtml = useMemo(() => {
+    if (!formTemplate) return "";
+    try {
+      return marked(formTemplate, { async: false, gfm: true, breaks: true }) as string;
+    } catch {
+      return "<p>Markdown rendering error</p>";
+    }
+  }, [formTemplate]);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.key === "Tab") {
+        e.preventDefault();
+        const textarea = e.currentTarget;
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const newContent =
+          formTemplate.substring(0, start) + "  " + formTemplate.substring(end);
+        setFormTemplate(newContent);
+        setTimeout(() => {
+          textarea.selectionStart = textarea.selectionEnd = start + 2;
+        }, 0);
+      }
+    },
+    [formTemplate]
+  );
 
   useEffect(() => {
     invoke<string>("get_home_dir").then((home) => {
@@ -58,6 +88,7 @@ export function CommandsSection() {
     setFormTemplate(cmd.template);
     setFormAgent(cmd.agent ?? "");
     setFormModel(cmd.model ?? "");
+    setViewTab("editor");
   };
 
   const startAdd = () => {
@@ -67,6 +98,7 @@ export function CommandsSection() {
     setFormTemplate("");
     setFormAgent("");
     setFormModel("");
+    setViewTab("editor");
   };
 
   const handleSave = async () => {
@@ -195,7 +227,47 @@ export function CommandsSection() {
           </div>
           <div className="oc-section__field">
             <label className="oc-section__label">{t("commandTemplate")} <span className="oc-section__label-hint">{t("commandTemplateHint")}</span></label>
-            <textarea className="oc-section__textarea" value={formTemplate} onChange={(e) => setFormTemplate(e.target.value)} />
+            <div className="oc-rules__editor-panel" style={{ minHeight: 180 }}>
+              <div className="oc-rules__panel-tabs">
+                <button
+                  className={`oc-rules__panel-tab${viewTab === "editor" ? " oc-rules__panel-tab--active" : ""}`}
+                  onClick={() => setViewTab("editor")}
+                >
+                  {t("commandTabEditor")}
+                </button>
+                <button
+                  className={`oc-rules__panel-tab${viewTab === "preview" ? " oc-rules__panel-tab--active" : ""}`}
+                  onClick={() => setViewTab("preview")}
+                >
+                  {t("commandTabPreview")}
+                </button>
+              </div>
+              {viewTab === "editor" ? (
+                <textarea
+                  className="oc-rules__editor-textarea"
+                  style={{ minHeight: 180 }}
+                  value={formTemplate}
+                  onChange={(e) => setFormTemplate(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder={t("commandTemplatePlaceholder")}
+                  spellCheck={false}
+                />
+              ) : (
+                formTemplate ? (
+                  <div
+                    className="oc-rules__preview"
+                    style={{ minHeight: 180 }}
+                    dangerouslySetInnerHTML={{ __html: previewHtml }}
+                  />
+                ) : (
+                  <div className="oc-rules__preview" style={{ minHeight: 180 }}>
+                    <div className="oc-rules__preview-empty">
+                      {t("commandTemplatePlaceholder")}
+                    </div>
+                  </div>
+                )
+              )}
+            </div>
           </div>
           <div className="oc-section__field">
             <label className="oc-section__label">{t("commandAgent")} <span className="oc-section__label-hint">{t("commandAgentHint")}</span></label>

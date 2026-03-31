@@ -302,10 +302,10 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   const handleEnterVideoMode = useCallback(async () => {
     if (!filePath) return;
 
-    // Check if generate-video command is registered
+    // Check if generate-video-scenario command is registered
     const { config, projectCommands } = useOpencodeConfigStore.getState();
     const globalCommands = config.command ?? {};
-    if (!globalCommands["generate-video"] && !projectCommands["generate-video"]) {
+    if (!globalCommands["generate-video-scenario"] && !projectCommands["generate-video-scenario"]) {
       alert(t("commandNotRegistered"));
       return;
     }
@@ -329,14 +329,14 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   }, [filePath, t]);
 
   const setChatCommandAndFocus = useCallback((mdPath: string, outputPath: string) => {
-    const command = `/generate-video "${mdPath}" "${outputPath}"`;
+    const command = `/generate-video-scenario "${mdPath}" "${outputPath}"`;
     useChatUIStore.setState({ chatInput: command });
     // Switch to chat panel and focus
     useUiStore.getState().setLeftPanel("opencode-config");
     useUiStore.getState().setOpencodeTopTab("chat");
   }, []);
 
-  // Auto-open .video.json when generate-video command completes
+  // Auto-open .video.json when generate-video-scenario command completes
   const chatLoading = useChatUIStore((s) => s.loading);
   const prevChatLoadingRef = useRef(true);
 
