@@ -9,6 +9,7 @@ export async function callAI(
   settings: AiSettings,
   systemPrompt: string,
   userContent: string,
+  maxTokens?: number,
 ): Promise<string> {
   return invoke<string>("ai_chat", {
     req: {
@@ -19,6 +20,7 @@ export async function callAI(
       azureApiVersion: settings.azureApiVersion ?? "",
       systemPrompt,
       userMessage: userContent,
+      maxTokens: maxTokens ?? 2048,
     },
   });
 }

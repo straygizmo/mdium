@@ -184,7 +184,7 @@ export async function decorateWithLLM(project: VideoProject): Promise<VideoProje
   const userMessage = buildUserMessage(project);
 
   const aiSettings = useSettingsStore.getState().aiSettings;
-  const response = await callAI(aiSettings, SYSTEM_PROMPT, userMessage);
+  const response = await callAI(aiSettings, SYSTEM_PROMPT, userMessage, 4096);
 
   let jsonStr = response.trim();
   const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);

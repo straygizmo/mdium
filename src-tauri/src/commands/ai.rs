@@ -22,6 +22,12 @@ pub struct AiChatRequest {
     pub azure_api_version: String,
     pub system_prompt: String,
     pub user_message: String,
+    #[serde(default = "default_max_tokens")]
+    pub max_tokens: u32,
+}
+
+fn default_max_tokens() -> u32 {
+    2048
 }
 
 #[derive(Deserialize)]
@@ -216,10 +222,11 @@ pub async fn ai_chat(req: AiChatRequest) -> Result<String, String> {
     let client = build_client(60)?;
     let endpoint = build_endpoint(&req.base_url, &req.api_format, &req.azure_api_version);
 
+    let max_tokens = req.max_tokens;
     let body = match req.api_format.as_str() {
         "anthropic" => serde_json::json!({
             "model": req.model,
-            "max_tokens": 2048,
+            "max_tokens": max_tokens,
             "system": req.system_prompt,
             "messages": [{"role": "user", "content": req.user_message}]
         }),
@@ -228,7 +235,7 @@ pub async fn ai_chat(req: AiChatRequest) -> Result<String, String> {
                 {"role": "system", "content": req.system_prompt},
                 {"role": "user", "content": req.user_message}
             ],
-            "max_completion_tokens": 2048
+            "max_completion_tokens": max_tokens
         }),
         _ => serde_json::json!({
             "model": req.model,
@@ -236,7 +243,7 @@ pub async fn ai_chat(req: AiChatRequest) -> Result<String, String> {
                 {"role": "system", "content": req.system_prompt},
                 {"role": "user", "content": req.user_message}
             ],
-            "max_tokens": 2048
+            "max_tokens": max_tokens
         }),
     };
 
