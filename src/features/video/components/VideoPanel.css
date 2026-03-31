@@ -414,6 +414,100 @@
   opacity: 1;
 }
 
+/* ─── Image section ──────────────────────────────────────────────────────────── */
+
+.scene-edit-form__images {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.scene-edit-form__images-title {
+  font-size: 11px;
+  color: var(--text);
+  opacity: 0.7;
+  font-weight: 600;
+}
+
+.scene-edit-form__image-item {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 8px;
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.scene-edit-form__image-item--disabled {
+  opacity: 0.5;
+}
+
+.scene-edit-form__image-thumb {
+  width: 64px;
+  height: 48px;
+  object-fit: cover;
+  border-radius: 3px;
+  flex-shrink: 0;
+  background: var(--bg-overlay);
+}
+
+.scene-edit-form__image-controls {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.scene-edit-form__image-top-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.scene-edit-form__image-name {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scene-edit-form__image-name--disabled {
+  text-decoration: line-through;
+  color: var(--text-muted);
+}
+
+.scene-edit-form__image-selects {
+  display: flex;
+  gap: 6px;
+}
+
+.scene-edit-form__image-select-group {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.scene-edit-form__image-select-group label {
+  font-size: 10px;
+  color: var(--text);
+  opacity: 0.6;
+}
+
+.scene-edit-form__image-select-group select {
+  width: 100%;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
 /* ─── ExportPanel (inline, below player) ─────────────────────────────────────── */
 
 .export-panel {

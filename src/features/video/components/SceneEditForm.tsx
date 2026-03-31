@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useVideoStore } from "@/stores/video-store";
 import { splitNarration } from "@/features/video/lib/narration-splitter";
-import type { Scene, TransitionType } from "@/features/video/types";
+import { toPlayableSrc } from "@/features/video/lib/composition/constants";
+import type { Scene, TransitionType, ImageElement } from "@/features/video/types";
 import type { BackgroundEffect } from "../types";
 
 const TRANSITION_OPTIONS: { value: TransitionType; labelKey: string }[] = [
@@ -24,6 +26,50 @@ export function SceneEditForm({ scene, onRegenerateAudio, audioGenerating }: Sce
   const { t } = useTranslation("video");
   const updateScene = useVideoStore((s) => s.updateScene);
   const markNarrationDirty = useVideoStore((s) => s.markNarrationDirty);
+  const updateImageElement = useVideoStore((s) => s.updateImageElement);
+
+  // Extract image elements with their original indices
+  const imageElements = useMemo(
+    () =>
+      scene.elements
+        .map((el, i) => ({ el, i }))
+        .filter((item): item is { el: ImageElement; i: number } => item.el.type === "image"),
+    [scene.elements]
+  );
+
+  const handleImageToggle = useCallback(
+    (elementIndex: number, currentEnabled: boolean) => {
+      updateImageElement(scene.id, elementIndex, { enabled: !currentEnabled });
+    },
+    [scene.id, updateImageElement]
+  );
+
+  const handleImagePositionChange = useCallback(
+    (elementIndex: number, position: string) => {
+      updateImageElement(scene.id, elementIndex, { position: position as ImageElement["position"] });
+    },
+    [scene.id, updateImageElement]
+  );
+
+  const handleImageAnimationChange = useCallback(
+    (elementIndex: number, animation: string) => {
+      updateImageElement(scene.id, elementIndex, { animation: animation as ImageElement["animation"] });
+    },
+    [scene.id, updateImageElement]
+  );
+
+  const handleImageReplace = useCallback(
+    async (elementIndex: number) => {
+      const path = await open({
+        multiple: false,
+        filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp", "svg"] }],
+      });
+      if (typeof path === "string") {
+        updateImageElement(scene.id, elementIndex, { src: path });
+      }
+    },
+    [scene.id, updateImageElement]
+  );
 
   const handleNarrationChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -148,6 +194,84 @@ export function SceneEditForm({ scene, onRegenerateAudio, audioGenerating }: Sce
           </div>
         )}
       </div>
+
+      {imageElements.length > 0 && (
+        <div className="scene-edit-form__images">
+          <label className="scene-edit-form__images-title">画像 ({imageElements.length})</label>
+          {imageElements.map(({ el, i }) => {
+            const enabled = el.enabled !== false;
+            const fileName = el.src.split(/[\\/]/).pop() ?? el.src;
+            return (
+              <div
+                key={i}
+                className={`scene-edit-form__image-item${enabled ? "" : " scene-edit-form__image-item--disabled"}`}
+              >
+                <img
+                  className="scene-edit-form__image-thumb"
+                  src={toPlayableSrc(el.src)}
+                  alt={el.alt ?? ""}
+                />
+                <div className="scene-edit-form__image-controls">
+                  <div className="scene-edit-form__image-top-row">
+                    <span
+                      className={`scene-edit-form__switch${enabled ? " scene-edit-form__switch--on" : ""}`}
+                      role="switch"
+                      aria-checked={enabled}
+                      tabIndex={0}
+                      onClick={() => handleImageToggle(i, enabled)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          handleImageToggle(i, enabled);
+                        }
+                      }}
+                    >
+                      <span className="scene-edit-form__switch-thumb" />
+                    </span>
+                    <span className={`scene-edit-form__image-name${enabled ? "" : " scene-edit-form__image-name--disabled"}`}>
+                      {fileName}
+                    </span>
+                    <button
+                      className="scene-edit-form__btn scene-edit-form__btn--small"
+                      onClick={() => handleImageReplace(i)}
+                    >
+                      入替
+                    </button>
+                  </div>
+                  {enabled && (
+                    <div className="scene-edit-form__image-selects">
+                      <div className="scene-edit-form__image-select-group">
+                        <label>配置</label>
+                        <select
+                          value={el.position}
+                          onChange={(e) => handleImagePositionChange(i, e.target.value)}
+                        >
+                          <option value="center">center</option>
+                          <option value="left">left</option>
+                          <option value="right">right</option>
+                          <option value="background">background</option>
+                        </select>
+                      </div>
+                      <div className="scene-edit-form__image-select-group">
+                        <label>アニメーション</label>
+                        <select
+                          value={el.animation}
+                          onChange={(e) => handleImageAnimationChange(i, e.target.value)}
+                        >
+                          <option value="fade-in">fade-in</option>
+                          <option value="zoom-in">zoom-in</option>
+                          <option value="ken-burns">ken-burns</option>
+                          <option value="none">none</option>
+                        </select>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       <div className="scene-edit-form__row">
         <label>{t("transition")}</label>
