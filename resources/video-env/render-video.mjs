@@ -16,7 +16,7 @@
  */
 
 import { execSync, spawn } from "child_process";
-import { existsSync, readFileSync, mkdirSync, realpathSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, copyFileSync, realpathSync } from "fs";
 import path from "path";
 import { pathToFileURL } from "url";
 import http from "http";
@@ -51,61 +51,97 @@ async function findAvailablePort() {
   });
 }
 
+function copyDirRecursive(src, dest) {
+  mkdirSync(dest, { recursive: true });
+  for (const entry of readdirSync(src)) {
+    const srcPath = path.join(src, entry);
+    const destPath = path.join(dest, entry);
+    if (statSync(srcPath).isDirectory()) {
+      copyDirRecursive(srcPath, destPath);
+    } else {
+      copyFileSync(srcPath, destPath);
+    }
+  }
+}
+
 async function buildProject(projectDir) {
-  log({ type: "status", message: "Building project with Vite..." });
+  log({ type: "status", message: "Bundling project with esbuild..." });
 
-  const isWin = process.platform === "win32";
-  const npxCmd = isWin ? "npx.cmd" : "npx";
+  const distDir = path.join(projectDir, "dist");
+  mkdirSync(distDir, { recursive: true });
 
-  try {
-    execSync(`${npxCmd} vite build`, {
-      cwd: projectDir,
-      stdio: "pipe",
-      ...(isWin ? { shell: true } : {}),
-    });
-  } catch (e) {
-    const stderr = e.stderr ? e.stderr.toString().trim() : "";
-    throw new Error(`Vite build failed: ${stderr || e.message}`);
+  // Use esbuild (bundled with Vite) to compile TypeScript+JSX into plain JS.
+  // This avoids Vite/Rollup path-handling bugs on Windows temp directories.
+  const esbuildMjs = path.join(projectDir, "node_modules", "esbuild", "lib", "main.mjs");
+  const { build } = await import(pathToFileURL(esbuildMjs).href).catch(() => import("esbuild"));
+
+  await build({
+    entryPoints: [path.join(projectDir, "src", "main.tsx")],
+    bundle: true,
+    outfile: path.join(distDir, "bundle.js"),
+    format: "esm",
+    jsx: "automatic",
+    alias: {
+      "@open-motion/core": path.join(projectDir, "open-motion", "core", "src"),
+      "@open-motion/components": path.join(projectDir, "open-motion", "components", "src"),
+    },
+    resolveExtensions: [".tsx", ".ts", ".jsx", ".js", ".json"],
+    logLevel: "warning",
+  });
+
+  // Write a minimal index.html that loads the bundle
+  writeFileSync(
+    path.join(distDir, "index.html"),
+    [
+      "<!DOCTYPE html>",
+      '<html lang="en"><head><meta charset="UTF-8" />',
+      "<style>* { margin: 0; padding: 0; box-sizing: border-box; }",
+      "html, body, #root { width: 100%; height: 100%; overflow: hidden; }</style>",
+      '</head><body><div id="root"></div>',
+      '<script type="module" src="/bundle.js"></script>',
+      "</body></html>",
+    ].join("\n")
+  );
+
+  // Copy public/ assets (lottie presets etc.) into dist/
+  const publicDir = path.join(projectDir, "public");
+  if (existsSync(publicDir)) {
+    copyDirRecursive(publicDir, distDir);
   }
 
   log({ type: "status", message: "Build complete" });
+  return distDir;
 }
 
-async function startPreviewServer(projectDir, port) {
-  log({ type: "status", message: "Starting preview server..." });
+async function startStaticServer(serveDir, port) {
+  const MIME = {
+    ".html": "text/html", ".js": "application/javascript",
+    ".css": "text/css", ".json": "application/json",
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".svg": "image/svg+xml", ".gif": "image/gif", ".webp": "image/webp",
+    ".woff": "font/woff", ".woff2": "font/woff2", ".ttf": "font/ttf",
+    ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg",
+  };
 
-  const isWin = process.platform === "win32";
-  const npxCmd = isWin ? "npx.cmd" : "npx";
-
-  const server = spawn(npxCmd, ["vite", "preview", "--port", String(port), "--host", "127.0.0.1"], {
-    cwd: projectDir,
-    stdio: ["ignore", "pipe", "pipe"],
-    shell: isWin,
-    ...(isWin ? { windowsHide: true } : {}),
-  });
-
-  // Forward stderr for diagnostics
-  if (server.stderr) {
-    server.stderr.on("data", (data) => {
-      const text = data.toString().trim();
-      if (text) console.error(`[vite-preview] ${text}`);
+  return new Promise((resolve) => {
+    const server = http.createServer((req, res) => {
+      const urlPath = decodeURIComponent(req.url.split("?")[0]);
+      const filePath = path.join(serveDir, urlPath === "/" ? "index.html" : urlPath);
+      try {
+        const data = readFileSync(filePath);
+        const ext = path.extname(filePath).toLowerCase();
+        res.writeHead(200, { "Content-Type": MIME[ext] || "application/octet-stream" });
+        res.end(data);
+      } catch {
+        res.writeHead(404);
+        res.end("Not found");
+      }
     });
-  }
-
-  // Wait for server to be ready
-  const maxWait = 30000;
-  const start = Date.now();
-  while (Date.now() - start < maxWait) {
-    try {
-      await fetch(`http://127.0.0.1:${port}`);
-      log({ type: "status", message: `Preview server ready on port ${port}` });
-      return server;
-    } catch {
-      await new Promise((r) => setTimeout(r, 500));
-    }
-  }
-  server.kill();
-  throw new Error("Preview server failed to start within 30s");
+    server.listen(port, "127.0.0.1", () => {
+      log({ type: "status", message: `Static server ready on port ${port}` });
+      resolve(server);
+    });
+  });
 }
 
 async function verifyPlaywrightBrowser() {
@@ -209,10 +245,10 @@ async function main() {
       durationInFrames: totalDuration,
     };
 
-    // 1. Build project and start preview server
-    await buildProject(tempDir);
+    // 1. Bundle with esbuild and start static server
+    const distDir = await buildProject(tempDir);
     const port = await findAvailablePort();
-    const viteProcess = await startPreviewServer(tempDir, port);
+    const staticServer = await startStaticServer(distDir, port);
 
     try {
       const url = `http://127.0.0.1:${port}`;
@@ -288,7 +324,7 @@ async function main() {
 
       log({ type: "done", outputPath });
     } finally {
-      viteProcess.kill();
+      staticServer.close();
     }
   } catch (err) {
     log({ type: "error", message: err.message || String(err) });
