@@ -14,12 +14,13 @@ import { DocxPreviewPanel } from "./DocxPreviewPanel";
 import { HtmlPreviewPanel } from "./HtmlPreviewPanel";
 import { SlidevPreviewPanel } from "./SlidevPreviewPanel";
 import { VideoPanel } from "@/features/video/components/VideoPanel";
-import { VideoOverwriteDialog, type OverwriteChoice } from "@/features/video/components/VideoOverwriteDialog";
+import { VideoScenarioDialog, type VideoScenarioParams } from "@/features/video/components/VideoScenarioDialog";
 import { useVideoStore } from "@/stores/video-store";
 import { DEFAULT_META, DEFAULT_TTS_CONFIG, DEFAULT_TRANSITION, type NarrationSegment } from "@/features/video/types";
 import { splitNarration } from "@/features/video/lib/narration-splitter";
 import { invoke } from "@tauri-apps/api/core";
-import { useChatUIStore, consumePendingVideoOutput } from "@/features/opencode-config/hooks/useOpencodeChat";
+import { useChatUIStore, consumePendingVideoOutput, doConnect, doExecuteCommand } from "@/features/opencode-config/hooks/useOpencodeChat";
+import { BUILTIN_COMMANDS } from "@/features/opencode-config/lib/builtin-commands";
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 import { docxToMarkdown } from "@/features/export/lib/docxToMarkdown";
 import { marked } from "marked";
@@ -346,7 +347,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   const [macroImporting, setMacroImporting] = useState(false);
   const [macroError, setMacroError] = useState<string | null>(null);
   const [macroSuccess, setMacroSuccess] = useState<string | null>(null);
-  const [overwriteDialog, setOverwriteDialog] = useState<{ videoJsonName: string; mdPath: string; baseName: string } | null>(null);
+  const [scenarioDialog, setScenarioDialog] = useState<{ videoJsonName: string; mdPath: string; baseName: string; hasExisting: boolean } | null>(null);
 
   const content = activeTab?.content ?? "";
   const filePath = activeTab?.filePath ?? null;
@@ -354,43 +355,22 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
 
   const setIsVideoMode = useVideoStore((s) => s.setIsVideoMode);
   const setVideoProject = useVideoStore((s) => s.setVideoProject);
+  const activeFolderPath = useTabStore((s) => s.activeFolderPath);
 
   const handleEnterVideoMode = useCallback(async () => {
     if (!filePath) return;
-
-    // Check if generate-video-scenario command is registered
-    const { config, projectCommands } = useOpencodeConfigStore.getState();
-    const globalCommands = config.command ?? {};
-    if (!globalCommands["generate-video-scenario"] && !projectCommands["generate-video-scenario"]) {
-      alert(t("commandNotRegistered"));
-      return;
-    }
 
     // Derive paths
     const lastDot = filePath.lastIndexOf(".");
     const basePath = lastDot > 0 ? filePath.slice(0, lastDot) : filePath;
     const baseName = basePath.split(/[/\\]/).pop() ?? basePath;
-    const videoJsonPath = basePath + ".video.json";
     const videoJsonName = baseName + ".video.json";
 
     // Check if .video.json already exists
     const existing = await invoke<string | null>("video_load_project", { mdPath: filePath });
-    if (existing) {
-      setOverwriteDialog({ videoJsonName, mdPath: filePath, baseName });
-      return;
-    }
 
-    // No existing file — set command directly
-    setChatCommandAndFocus(filePath, videoJsonPath);
-  }, [filePath, t]);
-
-  const setChatCommandAndFocus = useCallback((mdPath: string, outputPath: string) => {
-    const command = `/generate-video-scenario "${mdPath}" "${outputPath}"`;
-    useChatUIStore.setState({ chatInput: command });
-    // Switch to chat panel and focus
-    useUiStore.getState().setLeftPanel("opencode-config");
-    useUiStore.getState().setOpencodeTopTab("chat");
-  }, []);
+    setScenarioDialog({ videoJsonName, mdPath: filePath, baseName, hasExisting: !!existing });
+  }, [filePath]);
 
   // Auto-open .video.json when generate-video-scenario command completes
   const chatLoading = useChatUIStore((s) => s.loading);
@@ -408,21 +388,20 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
     prevChatLoadingRef.current = chatLoading;
   }, [chatLoading, onOpenFile]);
 
-  const handleOverwriteChoice = useCallback((choice: OverwriteChoice) => {
-    if (!overwriteDialog) return;
-    setOverwriteDialog(null);
+  const handleScenarioSubmit = useCallback(async (params: VideoScenarioParams) => {
+    if (!scenarioDialog) return;
+    const { mdPath, baseName } = scenarioDialog;
+    setScenarioDialog(null);
 
-    if (choice === "cancel") return;
-
-    const { mdPath, baseName } = overwriteDialog;
+    // Determine output path
     const lastDot = mdPath.lastIndexOf(".");
     const basePath = lastDot > 0 ? mdPath.slice(0, lastDot) : mdPath;
     const dir = mdPath.substring(0, Math.max(mdPath.lastIndexOf("/"), mdPath.lastIndexOf("\\")) + 1);
 
-    if (choice === "overwrite") {
-      setChatCommandAndFocus(mdPath, basePath + ".video.json");
+    let outputPath: string;
+    if (params.overwriteChoice === "overwrite") {
+      outputPath = basePath + ".video.json";
     } else {
-      // "new" — add timestamp
       const now = new Date();
       const ts = [
         now.getFullYear(),
@@ -432,9 +411,38 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
         String(now.getMinutes()).padStart(2, "0"),
         String(now.getSeconds()).padStart(2, "0"),
       ].join("");
-      setChatCommandAndFocus(mdPath, dir + baseName + "_" + ts + ".video.json");
+      outputPath = dir + baseName + "_" + ts + ".video.json";
     }
-  }, [overwriteDialog, setChatCommandAndFocus]);
+
+    // Auto-register command if not registered
+    const { config, projectCommands } = useOpencodeConfigStore.getState();
+    const globalCommands = config.command ?? {};
+    if (!globalCommands["generate-video-scenario"] && !projectCommands["generate-video-scenario"]) {
+      const builtin = BUILTIN_COMMANDS["generate-video-scenario"];
+      await useOpencodeConfigStore.getState().saveCommand("generate-video-scenario", {
+        template: builtin.template,
+        description: builtin.description,
+      });
+    }
+
+    // Disable Plan mode
+    useChatUIStore.setState({ usePlanAgent: false });
+
+    // Switch UI to chat panel
+    useUiStore.getState().setLeftPanel("opencode-config");
+    useUiStore.getState().setOpencodeTopTab("chat");
+
+    // Build command arguments
+    const args = `"${mdPath}" "${outputPath}" "${params.resolution}" "${params.aspectRatio}" "${params.sceneCount}" "${params.videoLength}" "${params.ttsSpeed}"`;
+
+    // Ensure connection and execute
+    await doConnect(activeFolderPath ?? undefined);
+    doExecuteCommand("generate-video-scenario", args);
+  }, [scenarioDialog, activeFolderPath]);
+
+  const handleScenarioCancel = useCallback(() => {
+    setScenarioDialog(null);
+  }, []);
 
   // When a .video.json file is opened, load its content as a VideoProject
   const isVideoJson = useMemo(
@@ -1170,10 +1178,12 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
         </div>
       )}
 
-      {overwriteDialog && (
-        <VideoOverwriteDialog
-          fileName={overwriteDialog.videoJsonName}
-          onChoice={handleOverwriteChoice}
+      {scenarioDialog && (
+        <VideoScenarioDialog
+          hasExisting={scenarioDialog.hasExisting}
+          fileName={scenarioDialog.videoJsonName}
+          onSubmit={handleScenarioSubmit}
+          onCancel={handleScenarioCancel}
         />
       )}
     </div>
