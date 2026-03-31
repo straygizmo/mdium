@@ -58,7 +58,7 @@ interface SearchResult {
   file: string;
   heading: string;
   content: string;
-  line: number;
+  line_number: number;
   score: number;
   db_source: string;
 }
@@ -98,7 +98,7 @@ function searchDb(
           file: row.file,
           heading: row.heading,
           content: row.text,
-          line: row.line,
+          line_number: row.line,
           score: Math.round(score * 1000) / 1000,
           db_source: dbPath,
         });
