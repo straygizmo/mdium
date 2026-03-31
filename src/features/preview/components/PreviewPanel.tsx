@@ -19,9 +19,8 @@ import { useVideoStore } from "@/stores/video-store";
 import { DEFAULT_META, DEFAULT_TTS_CONFIG, DEFAULT_TRANSITION, type NarrationSegment } from "@/features/video/types";
 import { splitNarration } from "@/features/video/lib/narration-splitter";
 import { invoke } from "@tauri-apps/api/core";
-import { useChatUIStore, consumePendingVideoOutput, doConnect, doExecuteCommand } from "@/features/opencode-config/hooks/useOpencodeChat";
+import { useChatUIStore, consumePendingVideoOutput, doConnect, doSendMessage, setPendingVideoOutput } from "@/features/opencode-config/hooks/useOpencodeChat";
 import { BUILTIN_COMMANDS } from "@/features/opencode-config/lib/builtin-commands";
-import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 import { docxToMarkdown } from "@/features/export/lib/docxToMarkdown";
 import { marked } from "marked";
 import { readFile } from "@tauri-apps/plugin-fs";
@@ -414,17 +413,6 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
       outputPath = dir + baseName + "_" + ts + ".video.json";
     }
 
-    // Auto-register command if not registered
-    const { config, projectCommands } = useOpencodeConfigStore.getState();
-    const globalCommands = config.command ?? {};
-    if (!globalCommands["generate-video-scenario"] && !projectCommands["generate-video-scenario"]) {
-      const builtin = BUILTIN_COMMANDS["generate-video-scenario"];
-      await useOpencodeConfigStore.getState().saveCommand("generate-video-scenario", {
-        template: builtin.template,
-        description: builtin.description,
-      });
-    }
-
     // Disable Plan mode
     useChatUIStore.setState({ usePlanAgent: false });
 
@@ -432,12 +420,23 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
     useUiStore.getState().setLeftPanel("opencode-config");
     useUiStore.getState().setOpencodeTopTab("chat");
 
-    // Build command arguments
-    const args = `"${mdPath}" "${outputPath}" "${params.resolution}" "${params.aspectRatio}" "${params.sceneCount}" "${params.videoLength}" "${params.ttsSpeed}"`;
+    // Expand the template with actual parameter values
+    const builtin = BUILTIN_COMMANDS["generate-video-scenario"];
+    const prompt = builtin.template
+      .replace(/\$1/g, mdPath)
+      .replace(/\$2/g, outputPath)
+      .replace(/\$3/g, params.resolution)
+      .replace(/\$4/g, params.aspectRatio)
+      .replace(/\$5/g, String(params.sceneCount))
+      .replace(/\$6/g, String(params.videoLength))
+      .replace(/\$7/g, String(params.ttsSpeed));
 
-    // Ensure connection and execute
+    // Track output path for auto-open when generation completes
+    setPendingVideoOutput(outputPath);
+
+    // Ensure connection and send expanded prompt directly
     await doConnect(activeFolderPath ?? undefined);
-    doExecuteCommand("generate-video-scenario", args);
+    doSendMessage(prompt);
   }, [scenarioDialog, activeFolderPath]);
 
   const handleScenarioCancel = useCallback(() => {

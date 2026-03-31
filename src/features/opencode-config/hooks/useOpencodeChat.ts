@@ -58,6 +58,11 @@ export function consumePendingVideoOutput(): string | null {
   return path;
 }
 
+/** Set the pending video output path (for auto-open after generation) */
+export function setPendingVideoOutput(path: string | null) {
+  _pendingVideoOutput = path;
+}
+
 // ─── Module-level connection state (persists across mount/unmount) ───
 let _client: OpencodeClient | null = null;
 let _abort: AbortController | null = null;
@@ -393,7 +398,7 @@ async function ensureSessionId(title: string): Promise<string | null> {
   }
 }
 
-async function doSendMessage(text: string, agentOverride?: string) {
+export async function doSendMessage(text: string, agentOverride?: string) {
   if (!_client || !text.trim()) return;
 
   useChatUIStore.setState({ error: null });
