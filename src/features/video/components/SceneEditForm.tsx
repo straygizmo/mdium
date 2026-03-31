@@ -1,5 +1,6 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { invoke } from "@tauri-apps/api/core";
 import { useVideoStore } from "@/stores/video-store";
 import { splitNarration } from "@/features/video/lib/narration-splitter";
 import type { Scene, TransitionType } from "@/features/video/types";
@@ -65,6 +66,27 @@ export function SceneEditForm({ scene, onRegenerateAudio, audioGenerating }: Sce
     [scene.narration]
   );
 
+  // Check which segments have audio files on disk
+  const [audioExists, setAudioExists] = useState<boolean[]>([]);
+  useEffect(() => {
+    const segments = scene.narrationSegments;
+    if (!segments?.length) {
+      setAudioExists([]);
+      return;
+    }
+    let cancelled = false;
+    Promise.all(
+      segments.map((seg) =>
+        seg.audioPath
+          ? invoke<boolean>("video_file_exists", { path: seg.audioPath }).catch(() => false)
+          : Promise.resolve(false),
+      ),
+    ).then((results) => {
+      if (!cancelled) setAudioExists(results);
+    });
+    return () => { cancelled = true; };
+  }, [scene.narrationSegments]);
+
   return (
     <div className="scene-edit-form">
       <div className="scene-edit-form__header">
@@ -85,6 +107,19 @@ export function SceneEditForm({ scene, onRegenerateAudio, audioGenerating }: Sce
           >
             ↻
           </button>
+          <label className="scene-edit-form__caption-switch">
+            <span className="scene-edit-form__caption-switch-label">{t("captions")}</span>
+            <span
+              className={`scene-edit-form__switch${captionsEnabled ? " scene-edit-form__switch--on" : ""}`}
+              role="switch"
+              aria-checked={captionsEnabled}
+              tabIndex={0}
+              onClick={handleToggleCaptions}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleToggleCaptions(); } }}
+            >
+              <span className="scene-edit-form__switch-thumb" />
+            </span>
+          </label>
         </div>
         <textarea
           value={scene.narration}
@@ -92,15 +127,14 @@ export function SceneEditForm({ scene, onRegenerateAudio, audioGenerating }: Sce
           rows={4}
           placeholder={t("narrationPlaceholder")}
         />
-        {previewSegments.length > 0 && (
+        {captionsEnabled && previewSegments.length > 0 && (
           <div className="scene-edit-form__segments">
             <label className="scene-edit-form__segments-label">
               {t("segmentPreview")} ({previewSegments.length})
             </label>
             <ol className="scene-edit-form__segments-list">
               {previewSegments.map((seg, i) => {
-                const generated = scene.narrationSegments?.[i];
-                const hasAudio = !!generated?.audioPath && generated.text === seg;
+                const hasAudio = audioExists[i] ?? false;
                 return (
                   <li key={i} className="scene-edit-form__segment-item">
                     <span className={`scene-edit-form__segment-status${hasAudio ? " scene-edit-form__segment-status--ok" : ""}`}>
@@ -113,16 +147,6 @@ export function SceneEditForm({ scene, onRegenerateAudio, audioGenerating }: Sce
             </ol>
           </div>
         )}
-      </div>
-
-      <div className="scene-edit-form__row">
-        <label>{t("captions")}</label>
-        <button
-          className={`scene-edit-form__toggle${captionsEnabled ? " scene-edit-form__toggle--on" : ""}`}
-          onClick={handleToggleCaptions}
-        >
-          {captionsEnabled ? t("captionsOn") : t("captionsOff")}
-        </button>
       </div>
 
       <div className="scene-edit-form__row">

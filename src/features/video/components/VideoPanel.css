@@ -315,6 +315,55 @@
   background: color-mix(in srgb, var(--accent-green) 30%, transparent);
 }
 
+/* ─── Caption toggle switch ──────────────────────────────────────────────────── */
+
+.scene-edit-form__caption-switch {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.scene-edit-form__caption-switch-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.scene-edit-form__switch {
+  position: relative;
+  display: inline-block;
+  width: 28px;
+  height: 16px;
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.scene-edit-form__switch--on {
+  background: var(--accent-green);
+  border-color: var(--accent-green);
+}
+
+.scene-edit-form__switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  background: var(--text-muted);
+  border-radius: 50%;
+  transition: transform 0.15s, background 0.15s;
+}
+
+.scene-edit-form__switch--on .scene-edit-form__switch-thumb {
+  transform: translateX(12px);
+  background: #fff;
+}
+
 /* ─── Segment preview ─────────────────────────────────────────────────────────── */
 
 .scene-edit-form__segments {

@@ -16,7 +16,8 @@ import { SlidevPreviewPanel } from "./SlidevPreviewPanel";
 import { VideoPanel } from "@/features/video/components/VideoPanel";
 import { VideoOverwriteDialog, type OverwriteChoice } from "@/features/video/components/VideoOverwriteDialog";
 import { useVideoStore } from "@/stores/video-store";
-import { DEFAULT_META, DEFAULT_TTS_CONFIG, DEFAULT_TRANSITION } from "@/features/video/types";
+import { DEFAULT_META, DEFAULT_TTS_CONFIG, DEFAULT_TRANSITION, type NarrationSegment } from "@/features/video/types";
+import { splitNarration } from "@/features/video/lib/narration-splitter";
 import { invoke } from "@tauri-apps/api/core";
 import { useChatUIStore, consumePendingVideoOutput } from "@/features/opencode-config/hooks/useOpencodeChat";
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
@@ -271,6 +272,60 @@ function isSlidevMarkdown(content: string): boolean {
   return (separators?.length ?? 0) >= 2;
 }
 
+/**
+ * Restore narrationSegments from audio files on disk for scenes that lost them
+ * (e.g. due to stale tab content overwriting the project).
+ */
+async function restoreNarrationSegments(
+  project: { scenes: any[] },
+  mdPath: string,
+): Promise<void> {
+  const mdDir = mdPath.replace(/\\/g, "/").replace(/\/[^/]+$/, "");
+  const updateScene = useVideoStore.getState().updateScene;
+
+  for (let i = 0; i < project.scenes.length; i++) {
+    const scene = project.scenes[i];
+    if (scene.narrationSegments?.length) continue;
+    if (!scene.narration?.trim()) continue;
+
+    const texts = splitNarration(scene.narration);
+    const sceneNum = String(i + 1).padStart(2, "0");
+    const segments: NarrationSegment[] = [];
+    let hasAny = false;
+
+    for (let j = 0; j < texts.length; j++) {
+      const segNum = String(j + 1).padStart(2, "0");
+      const audioPath = `${mdDir}/audio/scene_${sceneNum}_${segNum}.wav`;
+      const exists = await invoke<boolean>("video_file_exists", { path: audioPath }).catch(() => false);
+      segments.push({ text: texts[j], audioPath: exists ? audioPath : undefined });
+      if (exists) hasAny = true;
+    }
+
+    if (hasAny) {
+      updateScene(scene.id, {
+        narrationSegments: segments,
+        narrationAudio: segments.find((s) => s.audioPath)?.audioPath,
+        narrationDirty: false,
+      });
+    }
+  }
+
+  // Recalculate audioGenerated after restoration
+  const { videoProject: updated } = useVideoStore.getState();
+  if (updated) {
+    const allReady = updated.scenes.every((sc) => {
+      if (sc.narrationDirty) return false;
+      if (sc.narrationSegments?.length) {
+        return sc.narrationSegments.every((seg: NarrationSegment) => seg.audioPath);
+      }
+      return false;
+    });
+    if (allReady) {
+      useVideoStore.getState().setAudioGenerated(true);
+    }
+  }
+}
+
 interface PreviewPanelProps {
   previewRef: React.RefObject<HTMLDivElement | null>;
   onOpenFile?: (path: string) => void;
@@ -414,6 +469,8 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
       };
       setVideoProject(project, mdPath);
       setIsVideoMode(true);
+      // Restore narrationSegments from audio files on disk for scenes that lost them
+      restoreNarrationSegments(project, mdPath);
     } catch { /* ignore parse errors */ }
   }, [isVideoJson, content, filePath, setVideoProject, setIsVideoMode]);
 
