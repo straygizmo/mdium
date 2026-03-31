@@ -21,7 +21,10 @@ and generate a VideoProject JSON file at the path specified in the second argume
 
 - If \`<!-- pagebreak -->\` markers exist in the Markdown, use them as scene boundaries.
 - If no markers exist, split based on heading structure (h1/h2) and topic changes.
-- Target 30–60 seconds of narration per scene.
+- Target scene count: $5 (if "auto", determine based on content structure).
+- Target total video duration: $6 seconds (if "auto", use 30–60 seconds per scene as a guideline).
+- When scene count is specified, aim for exactly that many scenes by merging or splitting as needed.
+- When total duration is specified, distribute narration so the sum of all scenes approximates the target.
 - Split scenes that are too information-dense; merge scenes that are too thin.
 
 ## Narration Rules
@@ -53,8 +56,7 @@ and generate a VideoProject JSON file at the path specified in the second argume
 ## Meta Settings
 
 - \`title\`: Extract from the document's main heading.
-- Default: \`1920×1080\`, \`16:9\`, \`30 fps\`.
-- For vertical/mobile content, consider \`1080×1920\`, \`9:16\`.
+- Resolution: $3, aspect ratio $4, 30 fps.
 
 ## VideoProject JSON Schema
 
@@ -149,7 +151,7 @@ type SceneElement =
 ## Output
 
 Write ONLY valid JSON (no markdown fences, no comments) to the output path.
-Include \`tts\` in \`audio\` with provider \`"voicevox"\`, speaker \`"1"\`, volume \`1.0\`, speed \`1.0\` as defaults.
+Include \`tts\` in \`audio\` with provider \`"voicevox"\`, speaker \`"1"\`, volume \`1.0\`, speed $7 as defaults.
 `,
   },
 };
