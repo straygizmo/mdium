@@ -43,6 +43,9 @@ export const AudioSyncManager: React.FC<AudioSyncManagerProps> = ({
         audio.src = asset.src;
         audio.volume = asset.volume ?? 1;
         audio.preload = 'auto';
+        if (asset.loop) {
+          audio.loop = true;
+        }
 
         const entry: AudioEntry = { audio, loaded: false, pendingPlay: false };
 
@@ -90,7 +93,12 @@ export const AudioSyncManager: React.FC<AudioSyncManagerProps> = ({
       }
 
       const relativeFrame = frame - startFrame;
-      const targetTime = relativeFrame / fps + startFrom;
+      let targetTime = relativeFrame / fps + startFrom;
+
+      // For looped audio, wrap targetTime within the audio duration.
+      if (asset.loop && audio.duration && Number.isFinite(audio.duration)) {
+        targetTime = targetTime % audio.duration;
+      }
 
       if (!isPlaying) {
         // Intentionally paused — seek to keep position in sync with scrubbing.

@@ -6,6 +6,7 @@ export interface AudioProps {
   startFrom?: number;
   startFrame?: number;
   volume?: number;
+  loop?: boolean;
 }
 
 export const Audio: React.FC<AudioProps> = (props) => {

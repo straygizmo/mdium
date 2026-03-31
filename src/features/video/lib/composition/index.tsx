@@ -45,7 +45,7 @@ export function VideoComposition({
 
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>
-      {bgm && <Audio src={toPlayableSrc(bgm.src)} volume={bgm.volume} />}
+      {bgm && <Audio src={toPlayableSrc(bgm.src)} volume={bgm.volume} loop />}
 
       {project.scenes.map((scene, i) => {
         const duration = scene.durationInFrames ?? 150;
