@@ -24,6 +24,7 @@ export function ElementRenderer({
     case "bullet-list":
       return <BulletListElement element={element} index={index} scale={scale} />;
     case "image":
+      if (element.enabled === false) return null;
       return <ImageElement element={element} index={index} scale={scale} />;
     case "table":
       return <TableElement element={element} index={index} scale={scale} />;
