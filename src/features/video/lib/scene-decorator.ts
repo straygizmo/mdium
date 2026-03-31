@@ -151,10 +151,25 @@ function applyResult(project: VideoProject, result: DecorationResult): VideoProj
       updatedScene.elements = scene.elements.map((el, i) => {
         const anim = sceneDecor.elementAnimations?.[String(i)];
         if (!anim) return el;
-        const updates: Record<string, unknown> = { animation: anim.animation };
-        if (el.type === "image" && anim.position) {
-          updates.position = anim.position;
+        const validAnimations: Record<string, Set<string>> = {
+          title: new Set(["fade-in", "slide-in", "typewriter", "none"]),
+          text: new Set(["fade-in", "none"]),
+          "bullet-list": new Set(["sequential", "fade-in", "none"]),
+          image: new Set(["fade-in", "zoom-in", "ken-burns", "none"]),
+          table: new Set(["fade-in", "row-by-row", "none"]),
+          "code-block": new Set(["fade-in", "none"]),
+        };
+        const updates: Record<string, unknown> = {};
+        if (validAnimations[el.type]?.has(anim.animation)) {
+          updates.animation = anim.animation;
         }
+        if (el.type === "image" && anim.position) {
+          const validPositions = new Set(["center", "left", "right", "background"]);
+          if (validPositions.has(anim.position)) {
+            updates.position = anim.position;
+          }
+        }
+        if (Object.keys(updates).length === 0) return el;
         return { ...el, ...updates } as typeof el;
       });
     }

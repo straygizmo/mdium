@@ -54,7 +54,7 @@ export async function mergeWithSavedProject(
       if (!savedEl || savedEl.type !== "image") return el;
       return {
         ...el,
-        enabled: savedEl.enabled,
+        enabled: savedEl.enabled ?? el.enabled,
         position: savedEl.position ?? el.position,
         animation: savedEl.animation ?? el.animation,
         src: savedEl.src ?? el.src,
