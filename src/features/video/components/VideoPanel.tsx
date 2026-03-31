@@ -26,6 +26,7 @@ export function VideoPanel() {
     useVideoGeneration();
 
   const setVideoProject = useVideoStore((s) => s.setVideoProject);
+  const pushSnapshot = useVideoStore((s) => s.pushSnapshot);
 
   const [decorating, setDecorating] = useState(false);
 
@@ -33,6 +34,7 @@ export function VideoPanel() {
     if (!videoProject) return;
     setDecorating(true);
     try {
+      pushSnapshot();
       const decorated = await decorateWithLLM(videoProject);
       setVideoProject(decorated);
     } catch (e) {
@@ -41,7 +43,7 @@ export function VideoPanel() {
     } finally {
       setDecorating(false);
     }
-  }, [videoProject, setVideoProject]);
+  }, [videoProject, setVideoProject, pushSnapshot]);
 
   // Splitter drag logic
   const [leftWidth, setLeftWidth] = useState(300);
@@ -101,6 +103,23 @@ export function VideoPanel() {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
   }, [videoProject, sourceFilePath]);
+
+  // Undo / Redo keyboard shortcuts (Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y)
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const mod = e.ctrlKey || e.metaKey;
+      if (!mod) return;
+      if (e.key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        useVideoStore.getState().undo();
+      } else if ((e.key === "z" && e.shiftKey) || e.key === "y") {
+        e.preventDefault();
+        useVideoStore.getState().redo();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
 
   // Listen for render progress events from Rust backend
   useEffect(() => {

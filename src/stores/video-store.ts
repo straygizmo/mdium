@@ -1,6 +1,9 @@
 import { create } from "zustand";
 import type { VideoProject, Scene, SceneElement } from "@/features/video/types";
 
+const HISTORY_LIMIT = 50;
+const HISTORY_DEBOUNCE_MS = 1000;
+
 interface VideoState {
   videoProject: VideoProject | null;
   sourceFilePath: string | null;
@@ -9,6 +12,9 @@ interface VideoState {
   exportPhase: string | null;
   selectedSceneId: string | null;
   isVideoMode: boolean;
+  _undoStack: VideoProject[];
+  _redoStack: VideoProject[];
+  _lastPushTime: number;
 
   setVideoProject: (project: VideoProject | null, sourceFilePath?: string | null) => void;
   updateScene: (sceneId: string, partial: Partial<Scene>) => void;
@@ -23,9 +29,26 @@ interface VideoState {
   markNarrationDirty: (sceneId: string) => void;
   updateImageElement: (sceneId: string, elementIndex: number, updates: Partial<{ src: string; position: "center" | "left" | "right" | "background"; animation: "fade-in" | "zoom-in" | "ken-burns" | "none"; enabled: boolean }>) => void;
   setAllCaptions: (enabled: boolean) => void;
+  undo: () => void;
+  redo: () => void;
+  pushSnapshot: () => void;
 }
 
-export const useVideoStore = create<VideoState>()((set) => ({
+/** Build history-push fields. Debounces rapid changes (e.g. typing) into one undo step. */
+function historyPush(s: VideoState): Pick<VideoState, "_undoStack" | "_redoStack" | "_lastPushTime"> {
+  if (!s.videoProject) return { _undoStack: s._undoStack, _redoStack: s._redoStack, _lastPushTime: s._lastPushTime };
+  const now = Date.now();
+  if (now - s._lastPushTime < HISTORY_DEBOUNCE_MS && s._undoStack.length > 0) {
+    return { _undoStack: s._undoStack, _redoStack: [], _lastPushTime: now };
+  }
+  return {
+    _undoStack: [...s._undoStack, structuredClone(s.videoProject)].slice(-HISTORY_LIMIT),
+    _redoStack: [],
+    _lastPushTime: now,
+  };
+}
+
+export const useVideoStore = create<VideoState>()((set, get) => ({
   videoProject: null,
   sourceFilePath: null,
   audioGenerated: false,
@@ -33,9 +56,13 @@ export const useVideoStore = create<VideoState>()((set) => ({
   exportPhase: null,
   selectedSceneId: null,
   isVideoMode: false,
+  _undoStack: [],
+  _redoStack: [],
+  _lastPushTime: 0,
 
   setVideoProject: (project, sourceFilePath) =>
     set((s) => {
+      const isNewFile = sourceFilePath != null && sourceFilePath !== s.sourceFilePath;
       // If all scenes already have audio and none are dirty, mark as generated
       const allAudioReady =
         !!project &&
@@ -53,6 +80,7 @@ export const useVideoStore = create<VideoState>()((set) => ({
         audioGenerated: allAudioReady,
         renderProgress: 0,
         exportPhase: null,
+        ...(isNewFile ? { _undoStack: [] as VideoProject[], _redoStack: [] as VideoProject[], _lastPushTime: 0 } : {}),
       };
     }),
 
@@ -60,6 +88,7 @@ export const useVideoStore = create<VideoState>()((set) => ({
     set((s) => {
       if (!s.videoProject) return s;
       return {
+        ...historyPush(s),
         videoProject: {
           ...s.videoProject,
           scenes: s.videoProject.scenes.map((scene) =>
@@ -73,6 +102,7 @@ export const useVideoStore = create<VideoState>()((set) => ({
     set((s) => {
       if (!s.videoProject) return s;
       return {
+        ...historyPush(s),
         videoProject: {
           ...s.videoProject,
           scenes: s.videoProject.scenes.map((scene) => {
@@ -103,6 +133,7 @@ export const useVideoStore = create<VideoState>()((set) => ({
     set((s) => {
       if (!s.videoProject) return s;
       return {
+        ...historyPush(s),
         videoProject: {
           ...s.videoProject,
           meta: { ...s.videoProject.meta, ...partial },
@@ -114,6 +145,7 @@ export const useVideoStore = create<VideoState>()((set) => ({
     set((s) => {
       if (!s.videoProject) return s;
       return {
+        ...historyPush(s),
         videoProject: {
           ...s.videoProject,
           audio: { ...s.videoProject.audio, ...partial },
@@ -139,6 +171,7 @@ export const useVideoStore = create<VideoState>()((set) => ({
     set((s) => {
       if (!s.videoProject) return s;
       return {
+        ...historyPush(s),
         videoProject: {
           ...s.videoProject,
           scenes: s.videoProject.scenes.map((scene) => {
@@ -159,6 +192,7 @@ export const useVideoStore = create<VideoState>()((set) => ({
     set((s) => {
       if (!s.videoProject) return s;
       return {
+        ...historyPush(s),
         videoProject: {
           ...s.videoProject,
           scenes: s.videoProject.scenes.map((scene) => ({
@@ -166,6 +200,40 @@ export const useVideoStore = create<VideoState>()((set) => ({
             captions: { ...scene.captions, enabled },
           })),
         },
+      };
+    }),
+
+  undo: () => {
+    const s = get();
+    if (s._undoStack.length === 0 || !s.videoProject) return;
+    const prev = s._undoStack[s._undoStack.length - 1];
+    set({
+      videoProject: prev,
+      _undoStack: s._undoStack.slice(0, -1),
+      _redoStack: [...s._redoStack, structuredClone(s.videoProject)].slice(-HISTORY_LIMIT),
+      _lastPushTime: 0,
+    });
+  },
+
+  redo: () => {
+    const s = get();
+    if (s._redoStack.length === 0 || !s.videoProject) return;
+    const next = s._redoStack[s._redoStack.length - 1];
+    set({
+      videoProject: next,
+      _redoStack: s._redoStack.slice(0, -1),
+      _undoStack: [...s._undoStack, structuredClone(s.videoProject)].slice(-HISTORY_LIMIT),
+      _lastPushTime: 0,
+    });
+  },
+
+  pushSnapshot: () =>
+    set((s) => {
+      if (!s.videoProject) return s;
+      return {
+        _undoStack: [...s._undoStack, structuredClone(s.videoProject)].slice(-HISTORY_LIMIT),
+        _redoStack: [],
+        _lastPushTime: Date.now(),
       };
     }),
 }));
