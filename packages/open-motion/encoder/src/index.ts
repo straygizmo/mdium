@@ -197,7 +197,7 @@ export const encodeVideo = ({ framesDir, fps, outputFile, audioAssets = [], dura
 
     command
       .on('start', (cmd) => {
-        // console.log('FFmpeg started with command:', cmd)
+        console.log('FFmpeg command:', cmd);
       })
       .on('progress', (progress) => {
         if (progress.percent && onProgress) {
@@ -205,11 +205,11 @@ export const encodeVideo = ({ framesDir, fps, outputFile, audioAssets = [], dura
         }
       })
       .on('end', () => {
-        // console.log('Encoding finished.');
         resolve(outputFile);
       })
-      .on('error', (err) => {
-        console.error('FFmpeg error:', err);
+      .on('error', (err, stdout, stderr) => {
+        console.error('FFmpeg error:', err.message);
+        if (stderr) console.error('FFmpeg stderr:', stderr);
         reject(err);
       })
       .save(outputFile);

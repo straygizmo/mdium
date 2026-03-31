@@ -196,10 +196,13 @@ async function main() {
       const framesDir = path.join(tempDir, "frames");
 
       // 2. Render frames with Playwright
-      const audioAssets = await renderFrames(url, config, framesDir, concurrency);
+      // Note: page-level Audio components also collect audio assets, but we
+      // build the audio list solely from the project JSON to avoid duplicates
+      // and to use reliable local file paths (not Tauri asset:// URLs).
+      await renderFrames(url, config, framesDir, concurrency);
 
-      // 3. Add narration and BGM audio assets from project
-      const allAudioAssets = [...audioAssets];
+      // 3. Build audio assets from project data
+      const allAudioAssets = [];
 
       // Add narration audio from each scene
       let frameOffset = 0;
@@ -210,12 +213,14 @@ async function main() {
           // Segment-based audio: each segment placed sequentially within the scene
           let segFrameOffset = frameOffset;
           for (const seg of scene.narrationSegments) {
-            if (seg.audioPath) {
+            if (seg.audioPath && existsSync(seg.audioPath)) {
               allAudioAssets.push({
                 src: seg.audioPath,
                 startFrame: segFrameOffset,
                 volume: ttsVolume,
               });
+            } else if (seg.audioPath) {
+              log({ type: "status", message: `Warning: audio file not found: ${seg.audioPath}` });
             }
             const segFrames = seg.durationMs
               ? Math.ceil((seg.durationMs / 1000) * fps)
@@ -223,12 +228,15 @@ async function main() {
             segFrameOffset += segFrames;
           }
         } else if (scene.narrationAudio) {
-          // Legacy: single narration audio per scene
-          allAudioAssets.push({
-            src: scene.narrationAudio,
-            startFrame: frameOffset,
-            volume: ttsVolume,
-          });
+          if (existsSync(scene.narrationAudio)) {
+            allAudioAssets.push({
+              src: scene.narrationAudio,
+              startFrame: frameOffset,
+              volume: ttsVolume,
+            });
+          } else {
+            log({ type: "status", message: `Warning: audio file not found: ${scene.narrationAudio}` });
+          }
         }
 
         const sceneDuration = scene.durationInFrames || 150;
@@ -238,13 +246,19 @@ async function main() {
 
       // Add BGM
       if (projectJson.audio?.bgm?.src) {
-        allAudioAssets.push({
-          src: projectJson.audio.bgm.src,
-          startFrame: 0,
-          volume: projectJson.audio.bgm.volume ?? 0.3,
-          isBgm: true,
-        });
+        if (existsSync(projectJson.audio.bgm.src)) {
+          allAudioAssets.push({
+            src: projectJson.audio.bgm.src,
+            startFrame: 0,
+            volume: projectJson.audio.bgm.volume ?? 0.3,
+            isBgm: true,
+          });
+        } else {
+          log({ type: "status", message: `Warning: BGM file not found: ${projectJson.audio.bgm.src}` });
+        }
       }
+
+      log({ type: "status", message: `Audio assets: ${allAudioAssets.length} files` });
 
       // 4. Encode video
       await encodeVideo(framesDir, outputPath, fps, allAudioAssets, totalDuration);
