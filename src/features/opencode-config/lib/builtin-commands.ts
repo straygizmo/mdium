@@ -7,15 +7,15 @@ export const BUILTIN_COMMANDS: Record<string, BuiltinCommand> = {
       "Convert Markdown to VideoProject JSON with AI-powered scene splitting and narration",
     template: `# Video Scenario Generator
 
-Read the Markdown file specified in the first argument, analyze its content,
-and generate a VideoProject JSON file at the path specified in the second argument.
+Read the Markdown file at \`$1\`, analyze its content,
+and generate a VideoProject JSON file at \`$2\`.
 
 ## Instructions
 
-1. Read the Markdown file at the first argument path.
+1. Read the Markdown file at \`$1\`.
 2. Analyze the content structure, topics, and flow.
 3. Generate a complete VideoProject JSON following the schema below.
-4. Write the JSON to the second argument path.
+4. Write the JSON to \`$2\`.
 
 ## Scene Splitting Rules
 
