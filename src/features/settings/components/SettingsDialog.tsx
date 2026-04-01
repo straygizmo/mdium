@@ -2,7 +2,7 @@ import { useState, useCallback, useMemo, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { ask, message } from "@tauri-apps/plugin-dialog";
+import { ask, message, open } from "@tauri-apps/plugin-dialog";
 import { useSettingsStore } from "@/stores/settings-store";
 import type { SpeechModel } from "@/stores/settings-store";
 import type { AiSettings } from "@/shared/types";
@@ -61,7 +61,7 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
     language,
   } = useSettingsStore();
 
-  const [activeTab, setActiveTab] = useState<"general" | "ai" | "display">("general");
+  const [activeTab, setActiveTab] = useState<"general" | "ai" | "display" | "other">("general");
 
   // --- Local state (deferred until Save) ---
   const [localAutoSave, setLocalAutoSave] = useState(autoSave);
@@ -150,6 +150,53 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
       setSpeechDownloading(false);
     }
   }, [localSpeechModel]);
+
+  // --- Zenn initialization handler ---
+  const handleZennInit = useCallback(async () => {
+    const selected = await open({ directory: true, multiple: false });
+    if (!selected) return;
+    const folderPath = selected as string;
+
+    // Check if folder is empty
+    try {
+      const entries = await invoke<Array<unknown>>("get_file_tree", {
+        dirPath: folderPath,
+        showAll: true,
+        includeDocx: false,
+        includeXls: false,
+        includeKm: false,
+        includeImages: false,
+        includePdf: false,
+        includeEmptyDirs: false,
+      });
+      if (entries.length > 0) {
+        await message(t("zennInitNotEmpty"), { kind: "warning" });
+        return;
+      }
+    } catch {
+      // If get_file_tree fails, try to proceed
+    }
+
+    try {
+      await invoke("git_init", { path: folderPath });
+      await invoke("create_folder", { path: `${folderPath}/articles` });
+      await invoke("create_folder", { path: `${folderPath}/books` });
+      await invoke("create_folder", { path: `${folderPath}/images` });
+      await invoke("create_folder", { path: `${folderPath}/work` });
+      await invoke("write_text_file", {
+        path: `${folderPath}/.gitignore`,
+        content: "work/\n",
+      });
+      await message(t("zennInitSuccess"), { kind: "info" });
+      setShowSettings(false);
+
+      // Open the initialized folder as a workspace
+      const { useTabStore } = await import("@/stores/tab-store");
+      useTabStore.getState().openFolder(folderPath);
+    } catch (e) {
+      await message(`${t("zennInitFailed")}: ${e}`, { kind: "error" });
+    }
+  }, [t, setShowSettings]);
 
   // --- Save / Cancel ---
   const handleSave = async () => {
@@ -278,6 +325,12 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
             onClick={() => setActiveTab("display")}
           >
             {t("tabDisplay")}
+          </button>
+          <button
+            className={`settings-dialog__tab ${activeTab === "other" ? "settings-dialog__tab--active" : ""}`}
+            onClick={() => setActiveTab("other")}
+          >
+            {t("tabOther")}
           </button>
         </div>
 
@@ -563,6 +616,21 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
                 </label>
               </div>
 
+            </>
+          )}
+
+          {activeTab === "other" && (
+            <>
+              <div className="settings-dialog__section-title">Zenn</div>
+              <span className="settings-dialog__description">
+                {t("zennInitDescription")}
+              </span>
+              <button
+                className="settings-dialog__test-btn"
+                onClick={handleZennInit}
+              >
+                {t("zennInit")}
+              </button>
             </>
           )}
 
