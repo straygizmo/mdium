@@ -166,6 +166,6 @@
   "macroDirNotFound": "Macro folder not found",
   "macroImportSkipped": "{{name}} was skipped: no matching module found",
   "macroNoFiles": "No files to import",
-  "commandNotRegistered": "The built-in command \"generate-video-scenario\" is not registered.\nPlease add it from the built-in template in Settings > Commands.",
-  "generateVideoScenario": "Run generate-video-scenario command"
+  "commandNotRegistered": "The command \"{{name}}\" is not registered.\nPlease add it from Settings > Commands.",
+  "executeCommand": "Execute command"
 }
