@@ -6,6 +6,7 @@ import { ask, message, open } from "@tauri-apps/plugin-dialog";
 import { useSettingsStore } from "@/stores/settings-store";
 import type { SpeechModel } from "@/stores/settings-store";
 import type { AiSettings } from "@/shared/types";
+import { useTabStore } from "@/stores/tab-store";
 import { ThemeSelector } from "./ThemeSelector";
 import { LanguageSelector } from "./LanguageSelector";
 
@@ -191,7 +192,6 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
       setShowSettings(false);
 
       // Open the initialized folder as a workspace
-      const { useTabStore } = await import("@/stores/tab-store");
       useTabStore.getState().openFolder(folderPath);
     } catch (e) {
       await message(`${t("zennInitFailed")}: ${e}`, { kind: "error" });

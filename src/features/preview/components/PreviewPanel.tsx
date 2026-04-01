@@ -560,11 +560,12 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
       const tab = useTabStore.getState().getActiveTab();
       if (!tab) return;
       const { body } = extractFrontMatter(tab.content);
-      const topicsStr = fm.topics.map((t) => `"${t}"`).join(", ");
+      const escapeYaml = (s: string) => s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+      const topicsStr = fm.topics.map((t) => `"${escapeYaml(t)}"`).join(", ");
       const newFrontmatter = [
         "---",
-        `title: "${fm.title}"`,
-        `emoji: "${fm.emoji}"`,
+        `title: "${escapeYaml(fm.title)}"`,
+        `emoji: "${escapeYaml(fm.emoji)}"`,
         `type: "${fm.type}"`,
         `topics: [${topicsStr}]`,
         `published: ${fm.published}`,
