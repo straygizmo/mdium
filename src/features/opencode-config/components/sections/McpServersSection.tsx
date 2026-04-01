@@ -148,11 +148,13 @@ export function McpServersSection() {
   const [mcpServersPath, setMcpServersPath] = useState("");
 
   // Test state: keyed by server name
-  const [testingServer, setTestingServer] = useState<string | null>(null);
   const [serverTools, setServerTools] = useState<Record<string, McpToolInfo[]>>({});
   const [testErrors, setTestErrors] = useState<Record<string, string>>({});
   const [toolsDialogServer, setToolsDialogServer] = useState<string | null>(null);
   const [showBuiltinMenu, setShowBuiltinMenu] = useState(false);
+  const [formTesting, setFormTesting] = useState(false);
+  const [formTestTools, setFormTestTools] = useState<McpToolInfo[] | null>(null);
+  const [formTestError, setFormTestError] = useState<string | null>(null);
 
   useEffect(() => {
     invoke<string>("get_home_dir").then((home) => {
@@ -169,6 +171,42 @@ export function McpServersSection() {
 
   useEffect(() => {
     invoke<string>("resolve_mcp_servers_path").then(setMcpServersPath).catch(() => {});
+  }, []);
+
+  // Auto-test all enabled servers when the MCP tab is displayed
+  useEffect(() => {
+    let cancelled = false;
+    const entries = [
+      ...Object.entries(config.mcp ?? {}).map(([name, server]) => ({ name, server })),
+      ...Object.entries(projectMcpServers).map(([name, server]) => ({ name, server })),
+    ];
+    // Deduplicate by name (project overrides global)
+    const seen = new Set<string>();
+    const unique = entries.filter(({ name }) => {
+      if (seen.has(name)) return false;
+      seen.add(name);
+      return true;
+    });
+    for (const { name, server } of unique) {
+      if (server.enabled === false) continue;
+      const serverType = server.type ?? "local";
+      const cmdArr = normalizeCommand(server);
+      invoke<McpTestResult>("mcp_test_server", {
+        serverType,
+        command: cmdArr[0] ?? null,
+        args: cmdArr.length > 1 ? cmdArr.slice(1) : null,
+        env: server.environment ?? null,
+        url: server.url ?? null,
+        headers: server.headers ?? null,
+      }).then((result) => {
+        if (cancelled) return;
+        if (result.success) {
+          setServerTools((prev) => ({ ...prev, [name]: result.tools }));
+        }
+      }).catch(() => {});
+    }
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const globalEntries = useMemo(
@@ -221,6 +259,9 @@ export function McpServersSection() {
         : ""
     );
     setFormTimeout(String(server.timeout ?? 10000));
+    setFormTesting(false);
+    setFormTestTools(null);
+    setFormTestError(null);
   };
 
   const startAdd = () => {
@@ -239,6 +280,9 @@ export function McpServersSection() {
     setJsonImportOpen(false);
     setJsonInput("");
     setJsonError("");
+    setFormTesting(false);
+    setFormTestTools(null);
+    setFormTestError(null);
   };
 
   const applyJsonImport = () => {
@@ -431,34 +475,53 @@ export function McpServersSection() {
     setEditingScope(null);
   };
 
-  const handleTest = async (name: string, server: OpencodeMcpServer) => {
-    setTestingServer(name);
-    setTestErrors((prev) => { const next = { ...prev }; delete next[name]; return next; });
+  const handleFormTest = async () => {
+    setFormTesting(true);
+    setFormTestError(null);
+    setFormTestTools(null);
 
     try {
-      const serverType = server.type ?? "local";
-      const cmdArr = normalizeCommand(server);
+      const cmdParts = formType === "local"
+        ? [formCommand.trim(), ...formArgs.trim().split(/\s+/).filter(Boolean)]
+        : [];
+      const envObj: Record<string, string> = {};
+      if (formType === "local") {
+        for (const line of formEnv.trim().split("\n").filter(Boolean)) {
+          const idx = line.indexOf("=");
+          if (idx > 0) envObj[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+        }
+      }
+      const headersObj: Record<string, string> = {};
+      if (formType === "remote") {
+        for (const line of formHeaders.trim().split("\n").filter(Boolean)) {
+          const idx = line.indexOf(":");
+          if (idx > 0) headersObj[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+        }
+      }
+
       const result = await invoke<McpTestResult>("mcp_test_server", {
-        serverType,
-        command: cmdArr[0] ?? null,
-        args: cmdArr.length > 1 ? cmdArr.slice(1) : null,
-        env: server.environment ?? null,
-        url: server.url ?? null,
-        headers: server.headers ?? null,
+        serverType: formType,
+        command: formType === "local" ? (cmdParts[0] ?? null) : null,
+        args: formType === "local" && cmdParts.length > 1 ? cmdParts.slice(1) : null,
+        env: formType === "local" && Object.keys(envObj).length > 0 ? envObj : null,
+        url: formType === "remote" ? (formUrl.trim() || null) : null,
+        headers: formType === "remote" && Object.keys(headersObj).length > 0 ? headersObj : null,
       });
 
       if (result.success) {
-        setServerTools((prev) => ({ ...prev, [name]: result.tools }));
-        setTestErrors((prev) => { const next = { ...prev }; delete next[name]; return next; });
+        setFormTestTools(result.tools);
+        // Also update serverTools so the badge shows in list after save
+        const name = formName.trim();
+        if (name) {
+          setServerTools((prev) => ({ ...prev, [name]: result.tools }));
+        }
       } else {
-        setServerTools((prev) => { const next = { ...prev }; delete next[name]; return next; });
-        setTestErrors((prev) => ({ ...prev, [name]: result.error ?? t("mcpTestFailed") }));
+        setFormTestError(result.error ?? t("mcpTestFailed"));
       }
     } catch (e) {
-      setServerTools((prev) => { const next = { ...prev }; delete next[name]; return next; });
-      setTestErrors((prev) => ({ ...prev, [name]: String(e) }));
+      setFormTestError(String(e));
     } finally {
-      setTestingServer(null);
+      setFormTesting(false);
     }
   };
 
@@ -611,7 +674,33 @@ export function McpServersSection() {
                 : displayPath}
             </div>
           )}
+          {/* Form test results */}
+          {formTestTools && formTestTools.length > 0 && (
+            <div
+              className="oc-section__tools-badge"
+              style={{ display: "inline-block", marginTop: 8, cursor: "pointer" }}
+              onClick={() => {
+                const name = formName.trim();
+                if (name && serverTools[name]) setToolsDialogServer(name);
+              }}
+              title={t("mcpTools", { count: formTestTools.length })}
+            >
+              {t("mcpTools", { count: formTestTools.length })}
+            </div>
+          )}
+          {formTestError && (
+            <div className="oc-section__test-status oc-section__test-status--error" style={{ marginTop: 4 }}>
+              {formTestError}
+            </div>
+          )}
           <div className="oc-section__form-actions" style={{ marginTop: 8 }}>
+            <button
+              className="oc-section__test-btn"
+              onClick={handleFormTest}
+              disabled={formTesting || (formType === "local" ? !formCommand.trim() : !formUrl.trim())}
+            >
+              {formTesting ? t("mcpTesting") : t("mcpTest")}
+            </button>
             <button className="oc-section__save-btn" onClick={handleSave}>{t("save")}</button>
             <button className="oc-section__cancel-btn" onClick={handleCancel}>{t("cancel")}</button>
           </div>
@@ -622,7 +711,6 @@ export function McpServersSection() {
           {scopedEntries.map(({ scope: itemScope, data: { name, server } }) => {
             const serverType = server.type ?? "local";
             const isEnabled = server.enabled !== false;
-            const isTesting = testingServer === name;
             const tools = serverTools[name];
             const testError = testErrors[name];
             return (
@@ -652,13 +740,6 @@ export function McpServersSection() {
                   )}
                 </div>
                 <div className="oc-section__item-actions">
-                  <button
-                    className="oc-section__test-btn"
-                    onClick={() => handleTest(name, server)}
-                    disabled={isTesting}
-                  >
-                    {isTesting ? t("mcpTesting") : t("mcpTest")}
-                  </button>
                   <label className="oc-section__toggle" style={{ padding: 0 }}>
                     <input
                       type="checkbox"
