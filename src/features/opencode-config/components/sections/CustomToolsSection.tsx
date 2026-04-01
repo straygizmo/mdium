@@ -4,8 +4,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { useTabStore } from "@/stores/tab-store";
 import { useOpencodeConfigContext, toRelativeProjectPath } from "../OpencodeConfigContext";
-
-type Scope = "global" | "project";
+import { ScopeToggle, type Scope } from "../shared/ScopeToggle";
+import { ScopeFormWrapper } from "../shared/ScopeFormWrapper";
+import { useScopeItems } from "../../hooks/useScopeItems";
 
 interface ToolFileEntry {
   file_name: string;
@@ -18,10 +19,13 @@ export function CustomToolsSection() {
   const activeFolderPath = useTabStore((s) => s.activeFolderPath);
   const { useRelativePaths } = useOpencodeConfigContext();
 
-  const [scope, setScope] = useState<Scope>("global");
-  const [tools, setTools] = useState<ToolFileEntry[]>([]);
+  const [globalToolFiles, setGlobalToolFiles] = useState<ToolFileEntry[]>([]);
+  const [projectToolFiles, setProjectToolFiles] = useState<ToolFileEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [displayPath, setDisplayPath] = useState("");
+
+  const [formScope, setFormScope] = useState<Scope>("project");
+  const [editingScope, setEditingScope] = useState<Scope | null>(null);
 
   const [editing, setEditing] = useState<string | null>(null); // file_name
   const [adding, setAdding] = useState(false);
@@ -29,54 +33,80 @@ export function CustomToolsSection() {
   const [formExt, setFormExt] = useState(".ts");
   const [formContent, setFormContent] = useState("");
 
-  const getBaseDir = useCallback(async (): Promise<string | null> => {
-    if (scope === "global") {
-      const home = await invoke<string>("get_home_dir");
-      const sep = home.includes("\\") ? "\\" : "/";
-      return `${home}${sep}.config${sep}opencode`;
-    }
-    if (activeFolderPath) {
-      const sep = activeFolderPath.includes("\\") ? "\\" : "/";
-      return `${activeFolderPath}${sep}.opencode`;
-    }
-    return null;
-  }, [scope, activeFolderPath]);
+  const getToolsDir = useCallback(
+    async (targetScope: Scope): Promise<string | null> => {
+      if (targetScope === "global") {
+        const home = await invoke<string>("get_home_dir");
+        const sep = home.includes("\\") ? "\\" : "/";
+        return `${home}${sep}.config${sep}opencode${sep}tools`;
+      }
+      if (activeFolderPath) {
+        const sep = activeFolderPath.includes("\\") ? "\\" : "/";
+        return `${activeFolderPath}${sep}.opencode${sep}tools`;
+      }
+      return null;
+    },
+    [activeFolderPath]
+  );
 
-  const loadTools = useCallback(async () => {
-    const base = await getBaseDir();
-    if (!base) {
-      setTools([]);
-      setDisplayPath("");
-      return;
-    }
-    const sep = base.includes("\\") ? "\\" : "/";
-    setDisplayPath(`${base}${sep}tools${sep}`);
+  const loadAllToolFiles = useCallback(async () => {
     setLoading(true);
     try {
-      const entries = await invoke<ToolFileEntry[]>("list_tool_files", { baseDir: base });
-      setTools(entries);
+      const globalDir = await getToolsDir("global");
+      if (globalDir) {
+        const files = await invoke<ToolFileEntry[]>("list_tool_files", { baseDir: globalDir });
+        setGlobalToolFiles(files);
+      } else {
+        setGlobalToolFiles([]);
+      }
+      const projectDir = await getToolsDir("project");
+      if (projectDir) {
+        const files = await invoke<ToolFileEntry[]>("list_tool_files", { baseDir: projectDir });
+        setProjectToolFiles(files);
+      } else {
+        setProjectToolFiles([]);
+      }
     } catch {
-      setTools([]);
+      setGlobalToolFiles([]);
+      setProjectToolFiles([]);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
-  }, [getBaseDir]);
+  }, [getToolsDir]);
 
   useEffect(() => {
-    setEditing(null);
-    setAdding(false);
-    loadTools();
-  }, [loadTools]);
+    loadAllToolFiles();
+  }, [loadAllToolFiles]);
+
+  // Derive displayPath from formScope
+  useEffect(() => {
+    (async () => {
+      const dir = await getToolsDir(formScope);
+      if (dir) {
+        const sep = dir.includes("\\") ? "\\" : "/";
+        setDisplayPath(`${dir}${sep}`);
+      } else {
+        setDisplayPath("");
+      }
+    })();
+  }, [formScope, getToolsDir]);
+
+  const scopedTools = useScopeItems(globalToolFiles, projectToolFiles);
 
   const startAdd = () => {
     setAdding(true);
     setEditing(null);
+    setEditingScope(null);
+    setFormScope("project");
     setFormName("");
     setFormExt(".ts");
     setFormContent("");
   };
 
-  const startEdit = (entry: ToolFileEntry) => {
+  const startEdit = (entry: ToolFileEntry, entryScope: Scope) => {
     setEditing(entry.file_name);
+    setEditingScope(entryScope);
+    setFormScope(entryScope);
     setAdding(false);
     // split filename into name + extension
     const dotIdx = entry.file_name.lastIndexOf(".");
@@ -92,35 +122,40 @@ export function CustomToolsSection() {
 
   const handleCancel = () => {
     setEditing(null);
+    setEditingScope(null);
     setAdding(false);
   };
 
   const handleSave = async () => {
     const name = formName.trim();
     if (!name) return;
-    const base = await getBaseDir();
-    if (!base) return;
 
     const fileName = editing ?? `${name}${formExt}`;
-    await invoke("write_tool_file", { baseDir: base, fileName, content: formContent });
+
+    // If editing and scope changed, delete from old scope first (move)
+    if (editing && editingScope && editingScope !== formScope) {
+      const oldDir = await getToolsDir(editingScope);
+      if (oldDir) {
+        await invoke("delete_tool_file", { baseDir: oldDir, fileName });
+      }
+    }
+
+    const dir = await getToolsDir(formScope);
+    if (!dir) return;
+    await invoke("write_tool_file", { baseDir: dir, fileName, content: formContent });
     setEditing(null);
+    setEditingScope(null);
     setAdding(false);
-    await loadTools();
+    await loadAllToolFiles();
   };
 
-  const handleDelete = async (fileName: string) => {
+  const handleDelete = async (fileName: string, targetScope: Scope) => {
     const confirmed = await ask(t("customToolDeleteConfirm", { name: fileName }), { kind: "warning" });
     if (!confirmed) return;
-    const base = await getBaseDir();
-    if (!base) return;
-    await invoke("delete_tool_file", { baseDir: base, fileName });
-    await loadTools();
-  };
-
-  const handleScopeChange = (newScope: Scope) => {
-    setScope(newScope);
-    setEditing(null);
-    setAdding(false);
+    const dir = await getToolsDir(targetScope);
+    if (!dir) return;
+    await invoke("delete_tool_file", { baseDir: dir, fileName });
+    await loadAllToolFiles();
   };
 
   const handleKeyDown = useCallback(
@@ -141,7 +176,6 @@ export function CustomToolsSection() {
     [formContent]
   );
 
-  const noProject = scope === "project" && !activeFolderPath;
   const isEditing = adding || editing !== null;
 
   return (
@@ -162,74 +196,58 @@ export function CustomToolsSection() {
         </a>
       </div>
 
-      <div className="oc-section__scope-tabs">
-        <button
-          className={`oc-section__scope-tab${scope === "global" ? " oc-section__scope-tab--active" : ""}`}
-          onClick={() => handleScopeChange("global")}
-        >
-          {t("customToolScopeGlobal")}
-        </button>
-        <button
-          className={`oc-section__scope-tab${scope === "project" ? " oc-section__scope-tab--active" : ""}`}
-          onClick={() => handleScopeChange("project")}
-        >
-          {t("customToolScopeProject")}
-        </button>
-      </div>
-
-      {displayPath && (
+      {displayPath && isEditing && (
         <div className="oc-section__path-hint">
-          {useRelativePaths && scope === "project" && activeFolderPath
+          {useRelativePaths && formScope === "project" && activeFolderPath
             ? toRelativeProjectPath(activeFolderPath, displayPath)
             : displayPath}
         </div>
       )}
 
-      {noProject && (
-        <div className="oc-section__empty">{t("customToolNoProject")}</div>
-      )}
-
-      {!noProject && loading && (
+      {loading && (
         <div className="oc-section__empty">...</div>
       )}
 
-      {!noProject && !loading && isEditing && (
+      {!loading && isEditing && (
         <>
-          <div className="oc-section__field">
-            <label className="oc-section__label">{t("customToolFileName")}</label>
-            <div style={{ display: "flex", gap: 4 }}>
-              <input
-                className="oc-section__input"
-                style={{ flex: 1 }}
-                value={formName}
-                onChange={(e) => setFormName(e.target.value)}
-                disabled={editing !== null}
-                placeholder="my-tool"
-              />
-              {adding && (
-                <select
+          <ScopeToggle value={formScope} onChange={setFormScope} />
+          <ScopeFormWrapper scope={formScope}>
+            <div className="oc-section__field">
+              <label className="oc-section__label">{t("customToolFileName")}</label>
+              <div style={{ display: "flex", gap: 4 }}>
+                <input
                   className="oc-section__input"
-                  style={{ width: 70 }}
-                  value={formExt}
-                  onChange={(e) => setFormExt(e.target.value)}
-                >
-                  <option value=".ts">.ts</option>
-                  <option value=".js">.js</option>
-                </select>
-              )}
+                  style={{ flex: 1 }}
+                  value={formName}
+                  onChange={(e) => setFormName(e.target.value)}
+                  disabled={editing !== null}
+                  placeholder="my-tool"
+                />
+                {adding && (
+                  <select
+                    className="oc-section__input"
+                    style={{ width: 70 }}
+                    value={formExt}
+                    onChange={(e) => setFormExt(e.target.value)}
+                  >
+                    <option value=".ts">.ts</option>
+                    <option value=".js">.js</option>
+                  </select>
+                )}
+              </div>
             </div>
-          </div>
-          <div className="oc-section__field">
-            <label className="oc-section__label">{t("customToolContent")}</label>
-            <textarea
-              className="oc-section__textarea--agent"
-              value={formContent}
-              onChange={(e) => setFormContent(e.target.value)}
-              onKeyDown={handleKeyDown}
-              spellCheck={false}
-              style={{ minHeight: 200 }}
-            />
-          </div>
+            <div className="oc-section__field">
+              <label className="oc-section__label">{t("customToolContent")}</label>
+              <textarea
+                className="oc-section__textarea--agent"
+                value={formContent}
+                onChange={(e) => setFormContent(e.target.value)}
+                onKeyDown={handleKeyDown}
+                spellCheck={false}
+                style={{ minHeight: 200 }}
+              />
+            </div>
+          </ScopeFormWrapper>
           <div className="oc-section__form-actions" style={{ marginTop: 8 }}>
             <button
               className="oc-section__save-btn"
@@ -246,22 +264,26 @@ export function CustomToolsSection() {
         </>
       )}
 
-      {!noProject && !loading && !isEditing && (
+      {!loading && !isEditing && (
         <>
-          {tools.length === 0 && (
+          {scopedTools.length === 0 && (
             <div className="oc-section__empty">{t("customToolsEmpty")}</div>
           )}
-          {tools.map((entry) => (
-            <div key={entry.file_name} className="oc-section__item" style={{ marginBottom: 4 }}>
+          {scopedTools.map(({ scope: itemScope, data: entry }) => (
+            <div
+              key={`${itemScope}-${entry.file_name}`}
+              className={`oc-section__item oc-section__item--${itemScope}`}
+              style={{ marginBottom: 4 }}
+            >
               <div className="oc-section__item-info">
                 <span className="oc-section__item-name">{entry.file_name}</span>
                 <span className="oc-section__item-detail">{entry.tool_name}</span>
               </div>
               <div className="oc-section__item-actions">
-                <button className="oc-section__edit-btn" onClick={() => startEdit(entry)}>
+                <button className="oc-section__edit-btn" onClick={() => startEdit(entry, itemScope)}>
                   {t("edit")}
                 </button>
-                <button className="oc-section__delete-btn" onClick={() => handleDelete(entry.file_name)}>
+                <button className="oc-section__delete-btn" onClick={() => handleDelete(entry.file_name, itemScope)}>
                   ×
                 </button>
               </div>
