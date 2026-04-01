@@ -61,12 +61,12 @@ function useScopeItems<T>(
 #### CSS変数追加
 
 ```css
-/* 一覧アイテム・フォーム背景 */
---scope-global-bg: rgba(var(--primary-rgb), 0.25);
+/* 一覧アイテム・フォーム背景 (color-mix for theme-aware primary) */
+--scope-global-bg: color-mix(in srgb, var(--primary) 25%, transparent);
 --scope-project-bg: rgba(234, 179, 8, 0.15);
 
 /* フォーム枠線 */
---scope-global-border: rgba(var(--primary-rgb), 0.5);
+--scope-global-border: color-mix(in srgb, var(--primary) 50%, transparent);
 --scope-project-border: rgba(234, 179, 8, 0.5);
 ```
 
