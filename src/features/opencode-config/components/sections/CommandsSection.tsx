@@ -212,14 +212,6 @@ export function CommandsSection() {
       {isEditing ? (
         <ScopeFormWrapper scope={formScope}>
           <ScopeToggle value={formScope} onChange={setFormScope} />
-          {displayPath && (
-            <div className="oc-section__path-hint">
-              {t("commandSavePath")}:{" "}
-              {useRelativePaths && formScope === "project" && activeFolderPath
-                ? toRelativeProjectPath(activeFolderPath, displayPath)
-                : displayPath}
-            </div>
-          )}
           <div className="oc-section__field">
             <label className="oc-section__label">{t("commandName")} <span className="oc-section__label-hint">{t("commandNameHint")}</span></label>
             <input className="oc-section__input" value={formName} onChange={(e) => setFormName(e.target.value)} disabled={editing !== null} />
@@ -280,6 +272,14 @@ export function CommandsSection() {
             <label className="oc-section__label">{t("commandModel")} <span className="oc-section__label-hint">{t("commandModelHint")}</span></label>
             <input className="oc-section__input" value={formModel} onChange={(e) => setFormModel(e.target.value)} />
           </div>
+          {displayPath && (
+            <div className="oc-section__path-hint">
+              {t("commandSavePath")}:{" "}
+              {useRelativePaths && formScope === "project" && activeFolderPath
+                ? toRelativeProjectPath(activeFolderPath, displayPath)
+                : displayPath}
+            </div>
+          )}
           <div className="oc-section__form-actions" style={{ marginTop: 8 }}>
             <button className="oc-section__save-btn" onClick={handleSave}>{t("save")}</button>
             <button className="oc-section__cancel-btn" onClick={handleCancel}>{t("cancel")}</button>

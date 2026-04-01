@@ -504,15 +504,6 @@ export function McpServersSection() {
         <>
           <ScopeToggle value={formScope} onChange={setFormScope} />
 
-          {displayPath && (
-            <div className="oc-section__path-hint">
-              {t("mcpSavePath")}:{" "}
-              {useRelativePaths && formScope === "project" && activeFolderPath
-                ? toRelativeProjectPath(activeFolderPath, displayPath)
-                : displayPath}
-            </div>
-          )}
-
           <ScopeFormWrapper scope={formScope}>
             {/* JSON Import */}
             <button
@@ -612,6 +603,14 @@ export function McpServersSection() {
             </label>
           </ScopeFormWrapper>
 
+          {displayPath && (
+            <div className="oc-section__path-hint">
+              {t("mcpSavePath")}:{" "}
+              {useRelativePaths && formScope === "project" && activeFolderPath
+                ? toRelativeProjectPath(activeFolderPath, displayPath)
+                : displayPath}
+            </div>
+          )}
           <div className="oc-section__form-actions" style={{ marginTop: 8 }}>
             <button className="oc-section__save-btn" onClick={handleSave}>{t("save")}</button>
             <button className="oc-section__cancel-btn" onClick={handleCancel}>{t("cancel")}</button>

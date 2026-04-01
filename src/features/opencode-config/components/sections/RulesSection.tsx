@@ -115,14 +115,6 @@ export function RulesSection() {
 
       <ScopeToggle value={scope} onChange={setScope} />
 
-      {displayPath && (
-        <div className="oc-section__path-hint">
-          {useRelativePaths && scope === "project" && activeFolderPath
-            ? toRelativeProjectPath(activeFolderPath, displayPath)
-            : displayPath}
-        </div>
-      )}
-
       {noProject && (
         <div className="oc-section__empty">{t("agentNoProject")}</div>
       )}
@@ -175,6 +167,13 @@ export function RulesSection() {
             )}
           </div>
 
+          {displayPath && (
+            <div className="oc-section__path-hint">
+              {useRelativePaths && scope === "project" && activeFolderPath
+                ? toRelativeProjectPath(activeFolderPath, displayPath)
+                : displayPath}
+            </div>
+          )}
           <div className="oc-section__form-actions" style={{ marginTop: 8, flexShrink: 0 }}>
             <button
               className="oc-section__save-btn"

@@ -308,14 +308,6 @@ export function SkillsSection() {
         </a>
       </div>
 
-      {displayPath && isEditing && (
-        <div className="oc-section__path-hint">
-          {useRelativePaths && formScope === "project" && activeFolderPath
-            ? toRelativeProjectPath(activeFolderPath, displayPath)
-            : displayPath}
-        </div>
-      )}
-
       {loading && (
         <div className="oc-section__empty">...</div>
       )}
@@ -395,6 +387,13 @@ export function SkillsSection() {
             </div>
           </ScopeFormWrapper>
 
+          {displayPath && (
+            <div className="oc-section__path-hint">
+              {useRelativePaths && formScope === "project" && activeFolderPath
+                ? toRelativeProjectPath(activeFolderPath, displayPath)
+                : displayPath}
+            </div>
+          )}
           <div className="oc-section__form-actions" style={{ marginTop: 8, flexShrink: 0 }}>
             <button
               className="oc-section__save-btn"

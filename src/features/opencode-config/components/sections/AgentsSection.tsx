@@ -295,14 +295,6 @@ export function AgentsSection() {
         </a>
       </div>
 
-      {displayPath && isEditingFile && (
-        <div className="oc-section__path-hint">
-          {useRelativePaths && formScope === "project" && activeFolderPath
-            ? toRelativeProjectPath(activeFolderPath, displayPath)
-            : displayPath}
-        </div>
-      )}
-
       {loading && <div className="oc-section__empty">...</div>}
 
       {/* File-based agent MD editor */}
@@ -350,6 +342,13 @@ export function AgentsSection() {
               </div>
             </div>
           </ScopeFormWrapper>
+          {displayPath && (
+            <div className="oc-section__path-hint">
+              {useRelativePaths && formScope === "project" && activeFolderPath
+                ? toRelativeProjectPath(activeFolderPath, displayPath)
+                : displayPath}
+            </div>
+          )}
           <div className="oc-section__form-actions" style={{ marginTop: 8, flexShrink: 0 }}>
             <button
               className="oc-section__save-btn"
