@@ -12,8 +12,10 @@ import {
   isBuiltinCommand,
 } from "../../lib/builtin-registry";
 import { marked } from "marked";
+import { ScopeToggle, type Scope } from "../shared/ScopeToggle";
+import { ScopeFormWrapper } from "../shared/ScopeFormWrapper";
+import { useScopeItems } from "../../hooks/useScopeItems";
 
-type Scope = "global" | "project";
 type ViewTab = "editor" | "preview";
 
 const EMPTY_COMMANDS: Record<string, OpencodeCommand> = {};
@@ -24,13 +26,15 @@ export function CommandsSection() {
   const projectCommands = useOpencodeConfigStore((s) => s.projectCommands);
   const saveCommand = useOpencodeConfigStore((s) => s.saveCommand);
   const deleteCommand = useOpencodeConfigStore((s) => s.deleteCommand);
+  const loadConfig = useOpencodeConfigStore((s) => s.loadConfig);
   const loadProjectCommands = useOpencodeConfigStore((s) => s.loadProjectCommands);
   const saveProjectCommand = useOpencodeConfigStore((s) => s.saveProjectCommand);
   const deleteProjectCommand = useOpencodeConfigStore((s) => s.deleteProjectCommand);
   const activeFolderPath = useTabStore((s) => s.activeFolderPath);
   const { useRelativePaths } = useOpencodeConfigContext();
 
-  const [scope, setScope] = useState<Scope>("global");
+  const [formScope, setFormScope] = useState<Scope>("project");
+  const [editingScope, setEditingScope] = useState<Scope | null>(null);
   const [globalConfigPath, setGlobalConfigPath] = useState("");
   const [editing, setEditing] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -76,26 +80,40 @@ export function CommandsSection() {
     });
   }, []);
 
-  useEffect(() => {
-    if (scope === "project" && activeFolderPath) {
-      loadProjectCommands(activeFolderPath);
-    }
-  }, [scope, activeFolderPath, loadProjectCommands]);
+  useEffect(() => { loadConfig(); }, [loadConfig]);
 
-  const globalCommands = config.command ?? EMPTY_COMMANDS;
-  const commands = scope === "global" ? globalCommands : projectCommands;
-  const entries = Object.entries(commands);
-  const missingBuiltins = getMissingBuiltinCommands(commands);
+  useEffect(() => {
+    if (activeFolderPath) loadProjectCommands(activeFolderPath);
+  }, [activeFolderPath, loadProjectCommands]);
+
+  const globalEntries = useMemo(
+    () => Object.entries(config.command ?? EMPTY_COMMANDS).map(([name, cmd]) => ({ name, cmd })),
+    [config.command]
+  );
+  const projectCmdEntries = useMemo(
+    () => Object.entries(projectCommands).map(([name, cmd]) => ({ name, cmd })),
+    [projectCommands]
+  );
+  const scopedEntries = useScopeItems(globalEntries, projectCmdEntries);
+
+  const allCommands = useMemo(
+    () => ({ ...config.command, ...projectCommands }),
+    [config.command, projectCommands]
+  );
+  const missingBuiltins = getMissingBuiltinCommands(allCommands);
 
   const handleAddBuiltin = async (name: string) => {
     const entry = REGISTRY_COMMANDS[name];
     if (!entry) return;
+    setFormScope("global");
     await saveCommand(name, { ...entry });
     setShowBuiltinMenu(false);
   };
 
-  const startEdit = (name: string, cmd: OpencodeCommand) => {
+  const startEdit = (name: string, cmd: OpencodeCommand, itemScope: Scope) => {
     setEditing(name);
+    setEditingScope(itemScope);
+    setFormScope(itemScope);
     setFormName(name);
     setFormDesc(cmd.description ?? "");
     setFormTemplate(cmd.template);
@@ -106,6 +124,8 @@ export function CommandsSection() {
 
   const startAdd = () => {
     setAdding(true);
+    setFormScope("project");
+    setEditingScope(null);
     setFormName("");
     setFormDesc("");
     setFormTemplate("");
@@ -117,25 +137,40 @@ export function CommandsSection() {
   const handleSave = async () => {
     const name = formName.trim();
     if (!name || !formTemplate.trim()) return;
-    const cmd: OpencodeCommand = {
+    const cmdObj: OpencodeCommand = {
       template: formTemplate.trim(),
       description: formDesc.trim() || undefined,
       agent: formAgent.trim() || undefined,
       model: formModel.trim() || undefined,
     };
-    if (scope === "global") {
-      await saveCommand(name, cmd);
-    } else if (activeFolderPath) {
-      await saveProjectCommand(activeFolderPath, name, cmd);
+
+    // Handle scope move when editing
+    if (editing && editingScope && editingScope !== formScope) {
+      if (editingScope === "global") {
+        await deleteCommand(editing);
+      } else {
+        await deleteProjectCommand(activeFolderPath!, editing);
+      }
     }
+
+    if (formScope === "global") {
+      await saveCommand(name, cmdObj);
+    } else if (activeFolderPath) {
+      await saveProjectCommand(activeFolderPath, name, cmdObj);
+    }
+
+    await loadConfig();
+    if (activeFolderPath) await loadProjectCommands(activeFolderPath);
+
     setEditing(null);
     setAdding(false);
+    setEditingScope(null);
   };
 
-  const handleDelete = async (name: string) => {
+  const handleDelete = async (name: string, itemScope: Scope) => {
     const confirmed = await ask(t("commandDeleteConfirm", { name }), { kind: "warning" });
     if (!confirmed) return;
-    if (scope === "global") {
+    if (itemScope === "global") {
       await deleteCommand(name);
     } else if (activeFolderPath) {
       await deleteProjectCommand(activeFolderPath, name);
@@ -145,17 +180,12 @@ export function CommandsSection() {
   const handleCancel = () => {
     setEditing(null);
     setAdding(false);
-  };
-
-  const handleScopeChange = (newScope: Scope) => {
-    setScope(newScope);
-    setEditing(null);
-    setAdding(false);
+    setEditingScope(null);
   };
 
   const isEditing = adding || editing !== null;
 
-  const savePath = scope === "global"
+  const displayPath = formScope === "global"
     ? globalConfigPath
     : activeFolderPath
       ? `${activeFolderPath}${activeFolderPath.includes("\\") ? "\\" : "/"}opencode.jsonc`
@@ -179,34 +209,17 @@ export function CommandsSection() {
         </a>
       </div>
 
-      <div className="oc-section__scope-tabs">
-        <button
-          className={`oc-section__scope-tab${scope === "global" ? " oc-section__scope-tab--active" : ""}`}
-          onClick={() => handleScopeChange("global")}
-        >
-          {t("commandScopeGlobal")}
-        </button>
-        <button
-          className={`oc-section__scope-tab${scope === "project" ? " oc-section__scope-tab--active" : ""}`}
-          onClick={() => handleScopeChange("project")}
-        >
-          {t("commandScopeProject")}
-        </button>
-      </div>
-
-      {savePath && (
-        <div className="oc-section__path-hint">
-          {t("commandSavePath")}:{" "}
-          {useRelativePaths && scope === "project" && activeFolderPath
-            ? toRelativeProjectPath(activeFolderPath, savePath)
-            : savePath}
-        </div>
-      )}
-
-      {scope === "project" && !activeFolderPath ? (
-        <div className="oc-section__empty">{t("commandNoProject")}</div>
-      ) : isEditing ? (
-        <>
+      {isEditing ? (
+        <ScopeFormWrapper scope={formScope}>
+          <ScopeToggle value={formScope} onChange={setFormScope} />
+          {displayPath && (
+            <div className="oc-section__path-hint">
+              {t("commandSavePath")}:{" "}
+              {useRelativePaths && formScope === "project" && activeFolderPath
+                ? toRelativeProjectPath(activeFolderPath, displayPath)
+                : displayPath}
+            </div>
+          )}
           <div className="oc-section__field">
             <label className="oc-section__label">{t("commandName")} <span className="oc-section__label-hint">{t("commandNameHint")}</span></label>
             <input className="oc-section__input" value={formName} onChange={(e) => setFormName(e.target.value)} disabled={editing !== null} />
@@ -271,12 +284,12 @@ export function CommandsSection() {
             <button className="oc-section__save-btn" onClick={handleSave}>{t("save")}</button>
             <button className="oc-section__cancel-btn" onClick={handleCancel}>{t("cancel")}</button>
           </div>
-        </>
+        </ScopeFormWrapper>
       ) : (
         <>
-          {entries.length === 0 && <div className="oc-section__empty">{t("commandsEmpty")}</div>}
-          {entries.map(([name, cmd]) => (
-            <div key={name} className="oc-section__item" style={{ marginBottom: 4 }}>
+          {scopedEntries.length === 0 && <div className="oc-section__empty">{t("commandsEmpty")}</div>}
+          {scopedEntries.map(({ scope: itemScope, data: { name, cmd } }) => (
+            <div key={`${itemScope}:${name}`} className={`oc-section__item oc-section__item--${itemScope}`} style={{ marginBottom: 4 }}>
               <div className="oc-section__item-info">
                 <span className="oc-section__item-name">
                   {name}
@@ -287,8 +300,8 @@ export function CommandsSection() {
                 <span className="oc-section__item-detail">{cmd.description ?? cmd.template}</span>
               </div>
               <div className="oc-section__item-actions">
-                <button className="oc-section__edit-btn" onClick={() => startEdit(name, cmd)}>{t("edit")}</button>
-                <button className="oc-section__delete-btn" onClick={() => handleDelete(name)}>×</button>
+                <button className="oc-section__edit-btn" onClick={() => startEdit(name, cmd, itemScope)}>{t("edit")}</button>
+                <button className="oc-section__delete-btn" onClick={() => handleDelete(name, itemScope)}>×</button>
               </div>
             </div>
           ))}
