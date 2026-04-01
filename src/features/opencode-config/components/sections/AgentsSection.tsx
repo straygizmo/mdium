@@ -10,8 +10,10 @@ import {
   BUILTIN_AGENTS,
   isBuiltinAgent,
 } from "../../lib/builtin-registry";
+import { ScopeToggle, type Scope } from "../shared/ScopeToggle";
+import { ScopeFormWrapper } from "../shared/ScopeFormWrapper";
+import { useScopeItems } from "../../hooks/useScopeItems";
 
-type AgentScope = "global" | "project";
 type AgentViewTab = "editor" | "preview";
 
 const EMPTY_AGENTS: Record<string, OpencodeAgent> = {};
@@ -25,10 +27,13 @@ export function AgentsSection() {
   const saveAgent = useOpencodeConfigStore((s) => s.saveAgent);
   const deleteAgent = useOpencodeConfigStore((s) => s.deleteAgent);
 
-  const [scope, setScope] = useState<AgentScope>("global");
-  const [agentFiles, setAgentFiles] = useState<AgentFileEntry[]>([]);
+  const [globalAgentFiles, setGlobalAgentFiles] = useState<AgentFileEntry[]>([]);
+  const [projectAgentFiles, setProjectAgentFiles] = useState<AgentFileEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [displayPath, setDisplayPath] = useState("");
+
+  const [formScope, setFormScope] = useState<Scope>("project");
+  const [editingFileScope, setEditingFileScope] = useState<Scope | null>(null);
 
   // File-based agent editing state
   const [editingFile, setEditingFile] = useState<string | null>(null);
@@ -56,58 +61,81 @@ export function AgentsSection() {
   const [showBuiltinMenu, setShowBuiltinMenu] = useState(false);
 
   // --- Scope-aware directory ---
-  const getAgentsDir = useCallback(async (): Promise<string | null> => {
-    if (scope === "global") {
-      const home = await invoke<string>("get_home_dir");
-      const sep = home.includes("\\") ? "\\" : "/";
-      return `${home}${sep}.config${sep}opencode${sep}agents`;
-    }
-    if (activeFolderPath) {
-      const sep = activeFolderPath.includes("\\") ? "\\" : "/";
-      return `${activeFolderPath}${sep}.opencode${sep}agents`;
-    }
-    return null;
-  }, [scope, activeFolderPath]);
+  const getAgentsDir = useCallback(
+    async (targetScope: Scope): Promise<string | null> => {
+      if (targetScope === "global") {
+        const home = await invoke<string>("get_home_dir");
+        const sep = home.includes("\\") ? "\\" : "/";
+        return `${home}${sep}.config${sep}opencode${sep}agents`;
+      }
+      if (activeFolderPath) {
+        const sep = activeFolderPath.includes("\\") ? "\\" : "/";
+        return `${activeFolderPath}${sep}.opencode${sep}agents`;
+      }
+      return null;
+    },
+    [activeFolderPath]
+  );
 
-  const loadAgentFiles = useCallback(async () => {
-    const dir = await getAgentsDir();
-    if (!dir) {
-      setAgentFiles([]);
-      setDisplayPath("");
-      return;
-    }
-    setDisplayPath(`${dir}${dir.includes("\\") ? "\\" : "/"}<name>.md`);
+  const loadAllAgentFiles = useCallback(async () => {
     setLoading(true);
     try {
-      const entries = await invoke<AgentFileEntry[]>("list_agent_files", { agentsDir: dir });
-      setAgentFiles(entries);
+      const globalDir = await getAgentsDir("global");
+      if (globalDir) {
+        const files = await invoke<AgentFileEntry[]>("list_agent_files", { agentsDir: globalDir });
+        setGlobalAgentFiles(files);
+      } else {
+        setGlobalAgentFiles([]);
+      }
+      const projectDir = await getAgentsDir("project");
+      if (projectDir) {
+        const files = await invoke<AgentFileEntry[]>("list_agent_files", { agentsDir: projectDir });
+        setProjectAgentFiles(files);
+      } else {
+        setProjectAgentFiles([]);
+      }
     } catch {
-      setAgentFiles([]);
+      setGlobalAgentFiles([]);
+      setProjectAgentFiles([]);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }, [getAgentsDir]);
 
   useEffect(() => {
-    setEditingFile(null);
-    setAddingFile(false);
-    setEditing(null);
-    setAdding(false);
-    loadAgentFiles();
-  }, [loadAgentFiles]);
+    loadAllAgentFiles();
+  }, [loadAllAgentFiles]);
+
+  // Derive displayPath from formScope
+  useEffect(() => {
+    (async () => {
+      const dir = await getAgentsDir(formScope);
+      if (dir) {
+        setDisplayPath(`${dir}${dir.includes("\\") ? "\\" : "/"}<name>.md`);
+      } else {
+        setDisplayPath("");
+      }
+    })();
+  }, [formScope, getAgentsDir]);
 
   // Also update global store when global agents change
   const loadGlobalAgentFiles = useOpencodeConfigStore((s) => s.loadGlobalAgentFiles);
 
-  const fileAgentNames = new Set(agentFiles.map((f) => f.agent_name));
+  const allAgentFiles = [...globalAgentFiles, ...projectAgentFiles];
+  const fileAgentNames = new Set(allAgentFiles.map((f) => f.agent_name));
   const missingBuiltins = Object.keys(BUILTIN_AGENTS).filter(
     (name) => !(name in agents) && !fileAgentNames.has(name)
   );
   const entries = Object.entries(agents);
 
+  const scopedFileAgents = useScopeItems(globalAgentFiles, projectAgentFiles);
+
   // --- File-based agent actions ---
   const startAddFile = () => {
     setAddingFile(true);
+    setFormScope("project");
     setEditingFile(null);
+    setEditingFileScope(null);
     setEditing(null);
     setAdding(false);
     setFileFormName("");
@@ -116,40 +144,54 @@ export function AgentsSection() {
     setFileViewTab("editor");
   };
 
-  const startEditFile = (agentName: string, content: string) => {
-    setEditingFile(agentName);
+  const startEditFile = (entry: AgentFileEntry, entryScope: Scope) => {
+    setEditingFile(entry.file_name);
+    setEditingFileScope(entryScope);
+    setFormScope(entryScope);
     setAddingFile(false);
     setEditing(null);
     setAdding(false);
-    setFileFormName(agentName);
-    setFileFormContent(content);
-    setFileSavedContent(content);
+    setFileFormName(entry.agent_name);
+    setFileFormContent(entry.content);
+    setFileSavedContent(entry.content);
     setFileViewTab("editor");
   };
 
   const handleSaveFile = async () => {
-    const name = (editingFile ?? fileFormName).trim();
+    const name = fileFormName.trim();
     if (!name) return;
-    const dir = await getAgentsDir();
+    const fileName = editingFile ?? `${name}.md`;
+
+    // If editing and scope changed, delete from old scope first
+    if (editingFile && editingFileScope && editingFileScope !== formScope) {
+      const oldDir = await getAgentsDir(editingFileScope);
+      if (oldDir) {
+        await invoke("delete_agent_file", { agentsDir: oldDir, fileName });
+      }
+    }
+
+    const dir = await getAgentsDir(formScope);
     if (!dir) return;
-    await invoke("write_agent_file", { agentsDir: dir, fileName: `${name}.md`, content: fileFormContent });
+    await invoke("write_agent_file", { agentsDir: dir, fileName, content: fileFormContent });
     setFileSavedContent(fileFormContent);
     setEditingFile(null);
+    setEditingFileScope(null);
     setAddingFile(false);
-    await loadAgentFiles();
-    if (scope === "global") loadGlobalAgentFiles();
+    await loadAllAgentFiles();
+    loadGlobalAgentFiles();
   };
 
-  const handleDeleteFile = async (agentName: string) => {
-    const dir = await getAgentsDir();
+  const handleDeleteFile = async (fileName: string, targetScope: Scope) => {
+    const dir = await getAgentsDir(targetScope);
     if (!dir) return;
-    await invoke("delete_agent_file", { agentsDir: dir, fileName: `${agentName}.md` });
-    await loadAgentFiles();
-    if (scope === "global") loadGlobalAgentFiles();
+    await invoke("delete_agent_file", { agentsDir: dir, fileName });
+    await loadAllAgentFiles();
+    loadGlobalAgentFiles();
   };
 
   const handleCancelFile = () => {
     setEditingFile(null);
+    setEditingFileScope(null);
     setAddingFile(false);
   };
 
@@ -203,12 +245,13 @@ export function AgentsSection() {
   const handleAddBuiltin = async (name: string) => {
     const entry = BUILTIN_AGENTS[name];
     if (!entry || !entry.agentMd) return;
-    const dir = await getAgentsDir();
+    setFormScope("global");
+    const dir = await getAgentsDir("global");
     if (!dir) return;
     await invoke("write_agent_file", { agentsDir: dir, fileName: `${name}.md`, content: entry.agentMd });
     setShowBuiltinMenu(false);
-    await loadAgentFiles();
-    if (scope === "global") loadGlobalAgentFiles();
+    await loadAllAgentFiles();
+    loadGlobalAgentFiles();
   };
 
   const handleCancel = () => { setEditing(null); setAdding(false); };
@@ -246,7 +289,6 @@ export function AgentsSection() {
   const isEditingFile = addingFile || editingFile !== null;
   const isEditing = isEditingConfig || isEditingFile;
   const fileDirty = fileFormContent !== fileSavedContent || addingFile;
-  const noProject = scope === "project" && !activeFolderPath;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
@@ -263,76 +305,61 @@ export function AgentsSection() {
         </a>
       </div>
 
-      {/* Scope tabs */}
-      <div className="oc-section__scope-tabs">
-        <button
-          className={`oc-section__scope-tab${scope === "global" ? " oc-section__scope-tab--active" : ""}`}
-          onClick={() => setScope("global")}
-        >
-          Global
-        </button>
-        <button
-          className={`oc-section__scope-tab${scope === "project" ? " oc-section__scope-tab--active" : ""}`}
-          onClick={() => setScope("project")}
-        >
-          Project
-        </button>
-      </div>
-
-      {displayPath && (
+      {displayPath && isEditingFile && (
         <div className="oc-section__path-hint">
-          {useRelativePaths && scope === "project" && activeFolderPath
+          {useRelativePaths && formScope === "project" && activeFolderPath
             ? toRelativeProjectPath(activeFolderPath, displayPath)
             : displayPath}
         </div>
       )}
 
-      {noProject && <div className="oc-section__empty">{t("agentNoProject", t("skillNoProject"))}</div>}
-
-      {!noProject && loading && <div className="oc-section__empty">...</div>}
+      {loading && <div className="oc-section__empty">...</div>}
 
       {/* File-based agent MD editor */}
-      {!noProject && !loading && isEditingFile && (
+      {!loading && isEditingFile && (
         <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
-          <div className="oc-section__field">
-            <label className="oc-section__label">{t("agentName")}</label>
-            <input
-              className="oc-section__input"
-              value={fileFormName}
-              onChange={(e) => setFileFormName(e.target.value)}
-              disabled={editingFile !== null}
-              placeholder="e.g. rag"
-            />
-          </div>
-          <div className="oc-section__field" style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
-            <label className="oc-section__label">Content (YAML frontmatter + Markdown prompt)</label>
-            <div className="oc-rules__editor-panel">
-              <div className="oc-rules__panel-tabs">
-                <button
-                  className={`oc-rules__panel-tab${fileViewTab === "editor" ? " oc-rules__panel-tab--active" : ""}`}
-                  onClick={() => setFileViewTab("editor")}
-                >{t("skillTabEditor")}</button>
-                <button
-                  className={`oc-rules__panel-tab${fileViewTab === "preview" ? " oc-rules__panel-tab--active" : ""}`}
-                  onClick={() => setFileViewTab("preview")}
-                >{t("skillTabPreview")}</button>
-              </div>
-              {fileViewTab === "editor" ? (
-                <textarea
-                  className="oc-rules__editor-textarea"
-                  value={fileFormContent}
-                  onChange={(e) => setFileFormContent(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder={"---\ndescription: My agent\nmode: all\n---\n\nYour system prompt here..."}
-                  spellCheck={false}
-                />
-              ) : previewHtml ? (
-                <div className="oc-rules__preview" dangerouslySetInnerHTML={{ __html: previewHtml }} />
-              ) : (
-                <div className="oc-rules__preview"><div className="oc-rules__preview-empty">No content</div></div>
-              )}
+          <ScopeToggle value={formScope} onChange={setFormScope} />
+          <ScopeFormWrapper scope={formScope}>
+            <div className="oc-section__field">
+              <label className="oc-section__label">{t("agentName")}</label>
+              <input
+                className="oc-section__input"
+                value={fileFormName}
+                onChange={(e) => setFileFormName(e.target.value)}
+                disabled={editingFile !== null}
+                placeholder="e.g. rag"
+              />
             </div>
-          </div>
+            <div className="oc-section__field" style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+              <label className="oc-section__label">Content (YAML frontmatter + Markdown prompt)</label>
+              <div className="oc-rules__editor-panel">
+                <div className="oc-rules__panel-tabs">
+                  <button
+                    className={`oc-rules__panel-tab${fileViewTab === "editor" ? " oc-rules__panel-tab--active" : ""}`}
+                    onClick={() => setFileViewTab("editor")}
+                  >{t("skillTabEditor")}</button>
+                  <button
+                    className={`oc-rules__panel-tab${fileViewTab === "preview" ? " oc-rules__panel-tab--active" : ""}`}
+                    onClick={() => setFileViewTab("preview")}
+                  >{t("skillTabPreview")}</button>
+                </div>
+                {fileViewTab === "editor" ? (
+                  <textarea
+                    className="oc-rules__editor-textarea"
+                    value={fileFormContent}
+                    onChange={(e) => setFileFormContent(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder={"---\ndescription: My agent\nmode: all\n---\n\nYour system prompt here..."}
+                    spellCheck={false}
+                  />
+                ) : previewHtml ? (
+                  <div className="oc-rules__preview" dangerouslySetInnerHTML={{ __html: previewHtml }} />
+                ) : (
+                  <div className="oc-rules__preview"><div className="oc-rules__preview-empty">No content</div></div>
+                )}
+              </div>
+            </div>
+          </ScopeFormWrapper>
           <div className="oc-section__form-actions" style={{ marginTop: 8, flexShrink: 0 }}>
             <button
               className="oc-section__save-btn"
@@ -346,7 +373,7 @@ export function AgentsSection() {
       )}
 
       {/* Config-based agent form (global scope only, for opencode.jsonc agents) */}
-      {!noProject && !loading && isEditingConfig && (
+      {!loading && isEditingConfig && (
         <>
           <div className="oc-section__field">
             <label className="oc-section__label">{t("agentName")}</label>
@@ -406,32 +433,36 @@ export function AgentsSection() {
       )}
 
       {/* Agent list */}
-      {!noProject && !loading && !isEditing && (
+      {!loading && !isEditing && (
         <>
-          {agentFiles.length === 0 && (scope !== "global" || entries.length === 0) && (
+          {scopedFileAgents.length === 0 && entries.length === 0 && (
             <div className="oc-section__empty">{t("agentsEmpty")}</div>
           )}
           {/* File-based agents */}
-          {agentFiles.map((af) => (
-            <div key={`file:${af.agent_name}`} className="oc-section__item" style={{ marginBottom: 4 }}>
+          {scopedFileAgents.map(({ scope: itemScope, data: entry }) => (
+            <div
+              key={`${itemScope}-${entry.file_name}`}
+              className={`oc-section__item oc-section__item--${itemScope}`}
+              style={{ marginBottom: 4 }}
+            >
               <div className="oc-section__item-info">
                 <span className="oc-section__item-name">
-                  {af.agent_name}
-                  {isBuiltinAgent(af.agent_name) && (
+                  {entry.agent_name}
+                  {isBuiltinAgent(entry.agent_name) && (
                     <span className="oc-section__builtin-badge">Built-in</span>
                   )}
                 </span>
-                <span className="oc-section__item-detail">{af.description}</span>
+                <span className="oc-section__item-detail">{entry.description}</span>
               </div>
               <div className="oc-section__item-actions">
-                <button className="oc-section__edit-btn" onClick={() => startEditFile(af.agent_name, af.content)}>{t("edit")}</button>
-                <button className="oc-section__delete-btn" onClick={() => handleDeleteFile(af.agent_name)}>×</button>
+                <button className="oc-section__edit-btn" onClick={() => startEditFile(entry, itemScope)}>{t("edit")}</button>
+                <button className="oc-section__delete-btn" onClick={() => handleDeleteFile(entry.file_name, itemScope)}>×</button>
               </div>
             </div>
           ))}
-          {/* Config-based agents (global scope only) */}
-          {scope === "global" && entries.map(([name, agent]) => (
-            <div key={name} className="oc-section__item" style={{ marginBottom: 4 }}>
+          {/* Config-based agents (global only) */}
+          {entries.map(([name, agent]) => (
+            <div key={name} className={`oc-section__item oc-section__item--global`} style={{ marginBottom: 4 }}>
               <div className="oc-section__item-info">
                 <span className="oc-section__item-name">{name}</span>
                 <span className="oc-section__item-detail">{agent.description ?? agent.model ?? ""}</span>
