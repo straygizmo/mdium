@@ -24,6 +24,7 @@ interface UiState {
   bottomTerminalOpenTabs: BottomTerminalTab[];
   opencodeConfigTab: OpencodeConfigTab;
   opencodeTopTab: OpencodeTopTab;
+  isZennMode: boolean;
 
   toggleEditor: () => void;
   setActiveViewTab: (tab: ViewTab) => void;
@@ -45,6 +46,7 @@ interface UiState {
   setRagChatInput: (text: string) => void;
   setOpencodeConfigTab: (tab: OpencodeConfigTab) => void;
   setOpencodeTopTab: (tab: OpencodeTopTab) => void;
+  setZennMode: (mode: boolean) => void;
 }
 
 export const useUiStore = create<UiState>()((set) => ({
@@ -64,6 +66,7 @@ export const useUiStore = create<UiState>()((set) => ({
   bottomTerminalOpenTabs: ["terminal"],
   opencodeConfigTab: "rules" as OpencodeConfigTab,
   opencodeTopTab: "chat" as OpencodeTopTab,
+  isZennMode: false,
 
   toggleEditor: () => set((s) => ({ editorVisible: !s.editorVisible })),
   setEditorVisible: (visible) => set({ editorVisible: visible }),
@@ -105,4 +108,5 @@ export const useUiStore = create<UiState>()((set) => ({
   setRagChatInput: (text) => set({ ragChatInput: text }),
   setOpencodeConfigTab: (tab) => set({ opencodeConfigTab: tab }),
   setOpencodeTopTab: (tab) => set({ opencodeTopTab: tab }),
+  setZennMode: (mode) => set({ isZennMode: mode }),
 }));

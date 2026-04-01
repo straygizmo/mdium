@@ -298,6 +298,17 @@ export function App() {
     return () => clearTimeout(timer);
   }, [activeFolderPath]);
 
+  // Detect Zenn project when folder changes
+  useEffect(() => {
+    if (!activeFolderPath) {
+      useUiStore.getState().setZennMode(false);
+      return;
+    }
+    invoke<{ is_zenn_project: boolean }>("detect_zenn_project", { dirPath: activeFolderPath })
+      .then((info) => useUiStore.getState().setZennMode(info.is_zenn_project))
+      .catch(() => useUiStore.getState().setZennMode(false));
+  }, [activeFolderPath]);
+
   // Open folder
   const handleOpenFolder = useCallback(async () => {
     const selected = await open({ directory: true });
