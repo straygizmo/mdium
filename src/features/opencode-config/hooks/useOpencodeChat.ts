@@ -303,52 +303,28 @@ function doDisconnect() {
   });
 }
 
-// ─── Auto-register builtin agents in global config ───
+// ─── Auto-register builtin agents as markdown files + copy tool files ───
 async function ensureBuiltinAgents(_folderPath: string): Promise<void> {
   const home = await invoke<string>("get_home_dir");
   const sep = home.includes("\\") ? "\\" : "/";
-  const configPath = `${home}${sep}.config${sep}opencode${sep}opencode.jsonc`;
-
-  // Read existing global config
-  let config: Record<string, any> = {};
-  try {
-    const raw = await invoke<string>("read_text_file", { path: configPath });
-    // Strip single-line comments for JSONC parsing
-    const json = raw.replace(/^\s*\/\/.*$/gm, "").replace(/,\s*([\]}])/g, "$1");
-    config = JSON.parse(json);
-  } catch {
-    // File doesn't exist or is invalid — start fresh
-  }
-
-  let changed = false;
-
-  // Ensure agents section exists
-  if (!config.agents) config.agents = {};
-
-  // Add missing builtin agents
-  for (const [name, entry] of Object.entries(BUILTIN_AGENTS)) {
-    if (!(name in config.agents)) {
-      config.agents[name] = entry.agent;
-      changed = true;
-    }
-  }
-
-  // Write config if changed
-  if (changed) {
-    try {
-      await invoke("write_text_file_with_dirs", {
-        path: configPath,
-        content: JSON.stringify(config, null, 2),
-      });
-    } catch (e) {
-      console.warn("[opencode] failed to write project config:", e);
-    }
-  }
-
-  // Ensure tool and prompt files exist in global config dir
   const configDir = `${home}${sep}.config${sep}opencode`;
 
-  for (const entry of Object.values(BUILTIN_AGENTS)) {
+  for (const [name, entry] of Object.entries(BUILTIN_AGENTS)) {
+    // Write agent markdown file to ~/.config/opencode/agents/<name>.md
+    if (entry.agentMd) {
+      const agentPath = `${configDir}${sep}agents${sep}${name}.md`;
+      try {
+        await invoke<string>("read_text_file", { path: agentPath });
+      } catch {
+        try {
+          await invoke("write_text_file_with_dirs", { path: agentPath, content: entry.agentMd });
+          console.log(`[opencode] created builtin agent file: ${agentPath}`);
+        } catch (e) {
+          console.warn(`[opencode] failed to create agent file ${name}.md:`, e);
+        }
+      }
+    }
+
     // Copy tool files from project source to global config
     if (entry.sourceToolFiles) {
       for (const [srcRel, destRel] of Object.entries(entry.sourceToolFiles)) {
@@ -356,7 +332,6 @@ async function ensureBuiltinAgents(_folderPath: string): Promise<void> {
         try {
           await invoke<string>("read_text_file", { path: destPath });
         } catch {
-          // File doesn't exist at global location — copy from project source
           const srcPath = `${_folderPath}${sep}${srcRel.replace(/\//g, sep)}`;
           try {
             const content = await invoke<string>("read_text_file", { path: srcPath });
@@ -364,24 +339,6 @@ async function ensureBuiltinAgents(_folderPath: string): Promise<void> {
             console.log(`[opencode] copied builtin tool to ${destPath}`);
           } catch (e) {
             console.warn(`[opencode] failed to copy builtin tool ${srcRel}:`, e);
-          }
-        }
-      }
-    }
-    // Copy prompt files from project source to global config
-    if (entry.sourcePromptFiles) {
-      for (const [srcRel, destRel] of Object.entries(entry.sourcePromptFiles)) {
-        const destPath = `${configDir}${sep}${destRel.replace(/\//g, sep)}`;
-        try {
-          await invoke<string>("read_text_file", { path: destPath });
-        } catch {
-          const srcPath = `${_folderPath}${sep}${srcRel.replace(/\//g, sep)}`;
-          try {
-            const content = await invoke<string>("read_text_file", { path: srcPath });
-            await invoke("write_text_file_with_dirs", { path: destPath, content });
-            console.log(`[opencode] copied builtin prompt to ${destPath}`);
-          } catch (e) {
-            console.warn(`[opencode] failed to copy builtin prompt ${srcRel}:`, e);
           }
         }
       }

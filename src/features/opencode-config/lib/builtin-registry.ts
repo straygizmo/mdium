@@ -9,39 +9,64 @@ import { BUILTIN_MCP_SERVERS as SRC_MCP } from "./builtin-mcp-servers";
 import { BUILTIN_SKILLS as SRC_SKILLS } from "./builtin-skills";
 
 export interface BuiltinAgentEntry {
-  agent: OpencodeAgent;
-  /** Tool file paths relative to ~/.config/opencode/ (created during auto-registration) */
-  toolFiles?: Record<string, string>;
-  /** Prompt file paths relative to ~/.config/opencode/ (created during auto-registration) */
-  promptFiles?: Record<string, string>;
-  /** Source file paths relative to project root (templates to copy from) */
+  /** Agent description (used by UI badges and dropdown) */
+  description: string;
+  /** Full content for ~/.config/opencode/agents/<name>.md (frontmatter + prompt) */
+  agentMd: string;
+  /** Source tool files to copy: project-relative path → global-relative path under ~/.config/opencode/ */
   sourceToolFiles?: Record<string, string>;
-  /** Source prompt file paths relative to project root (templates to copy from) */
-  sourcePromptFiles?: Record<string, string>;
 }
 
 export const BUILTIN_AGENTS: Record<string, BuiltinAgentEntry> = {
   rag: {
-    agent: {
-      description: "RAG - Document search agent powered by vector database",
-      mode: "all",
-      prompt: "{file:prompts/rag.md}",
-      tools: {
-        rag_search: true,
-        bash: false,
-      },
-    },
-    toolFiles: {
-      "tools/rag_search.ts": "rag_search",
-    },
-    promptFiles: {
-      "prompts/rag.md": "rag",
-    },
+    description: "RAG - Document search agent powered by vector database",
+    agentMd: `---
+description: RAG - Document search agent powered by vector database
+mode: all
+tools:
+  rag_search: true
+  bash: false
+---
+
+You are a RAG (Retrieval-Augmented Generation) document search agent.
+Gather necessary information from the vector DB and documents within the folder to comprehensively answer user questions.
+
+## Basic Behavior
+
+1. First, use the \`rag_search\` tool to perform vector search for relevant information
+2. As needed, use \`glob\`, \`grep\`, \`read\` tools to directly inspect files
+3. Combine multiple searches and reads to make comprehensive judgments
+4. Always cite sources (file name and line number) in your answers
+
+## Tool Usage Guidelines
+
+- **rag_search**: Use first. Vector search for relevant documents
+- **glob**: Understand file structure, search for specific file patterns
+- **grep**: Full-text search for specific keywords or patterns
+- **read**: Read full file content, understand details
+- **MCP tools (web search, etc.)**: Use when local search doesn't provide sufficient information
+- **write / edit**: Use only when the user explicitly requests it (e.g., creating summaries, generating reports)
+
+## Mode
+
+[mode:faithful]
+
+### faithful mode (currently active)
+- Answer accurately based on search results
+- If information is not found, honestly respond "not found"
+- Do not supplement with guesses or general knowledge
+- Always cite sources that support your answer
+
+<!-- To use advisor mode, change [mode:faithful] to [mode:advisor]
+### advisor mode
+- Use search results as a foundation while supplementing with general knowledge
+- Clearly distinguish between information from search results and general knowledge
+  - Search results: Information with source citations
+  - Supplementary: Additional information based on general knowledge
+-->
+`,
     sourceToolFiles: {
       ".opencode/tools/rag_search.ts": "tools/rag_search.ts",
-    },
-    sourcePromptFiles: {
-      ".opencode/prompts/rag.md": "prompts/rag.md",
     },
   },
 };

@@ -120,8 +120,16 @@ export function AgentsSection() {
 
   const handleAddBuiltin = async (name: string) => {
     const entry = BUILTIN_AGENTS[name];
-    if (!entry) return;
-    await saveAgent(name, { ...entry.agent });
+    if (!entry || !entry.agentMd) return;
+    // Write agent markdown file to ~/.config/opencode/agents/<name>.md
+    try {
+      const home = await invoke<string>("get_home_dir");
+      const sep = home.includes("\\") ? "\\" : "/";
+      const agentPath = `${home}${sep}.config${sep}opencode${sep}agents${sep}${name}.md`;
+      await invoke("write_text_file_with_dirs", { path: agentPath, content: entry.agentMd });
+    } catch (e) {
+      console.warn(`[opencode] failed to write builtin agent ${name}:`, e);
+    }
     setShowBuiltinMenu(false);
   };
 
@@ -309,7 +317,7 @@ export function AgentsSection() {
                         className="oc-section__builtin-dropdown-item"
                         onClick={() => handleAddBuiltin(name)}
                       >
-                        {name} — {BUILTIN_AGENTS[name].agent.description ?? ""}
+                        {name} — {BUILTIN_AGENTS[name].description ?? ""}
                       </button>
                     ))}
                   </div>
