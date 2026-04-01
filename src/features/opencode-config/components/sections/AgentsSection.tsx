@@ -1,12 +1,15 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 import type { OpencodeAgent } from "@/shared/types";
+import { marked } from "marked";
 import {
   BUILTIN_AGENTS,
   isBuiltinAgent,
 } from "../../lib/builtin-registry";
+
+type AgentViewTab = "editor" | "preview";
 
 const EMPTY_AGENTS: Record<string, OpencodeAgent> = {};
 
@@ -25,6 +28,15 @@ export function AgentsSection() {
     loadGlobalAgentFiles();
   }, [loadGlobalAgentFiles]);
 
+  // --- File-based agent editing state (MD editor, like Skills) ---
+  const [editingFile, setEditingFile] = useState<string | null>(null); // agent_name or null
+  const [addingFile, setAddingFile] = useState(false);
+  const [fileFormName, setFileFormName] = useState("");
+  const [fileFormContent, setFileFormContent] = useState("");
+  const [fileSavedContent, setFileSavedContent] = useState("");
+  const [fileViewTab, setFileViewTab] = useState<AgentViewTab>("editor");
+
+  // --- Config-based agent editing state (form fields, for opencode.jsonc) ---
   const [editing, setEditing] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [formName, setFormName] = useState("");
@@ -38,15 +50,53 @@ export function AgentsSection() {
   const [formTools, setFormTools] = useState("");
   const [formHidden, setFormHidden] = useState(false);
   const [formDisable, setFormDisable] = useState(false);
+
   const [showBuiltinMenu, setShowBuiltinMenu] = useState(false);
 
   const entries = Object.entries(agents);
-  // Builtin agents are "missing" if not in config AND not in agent files
   const fileAgentNames = new Set(globalAgentFiles.map((f) => f.agent_name));
   const missingBuiltins = Object.keys(BUILTIN_AGENTS).filter(
     (name) => !(name in agents) && !fileAgentNames.has(name)
   );
 
+  // --- File-based agent actions ---
+  const startAddFile = () => {
+    setAddingFile(true);
+    setEditingFile(null);
+    setEditing(null);
+    setAdding(false);
+    setFileFormName("");
+    setFileFormContent("---\ndescription: \nmode: all\n---\n\n");
+    setFileSavedContent("");
+    setFileViewTab("editor");
+  };
+
+  const startEditFile = (agentName: string, content: string) => {
+    setEditingFile(agentName);
+    setAddingFile(false);
+    setEditing(null);
+    setAdding(false);
+    setFileFormName(agentName);
+    setFileFormContent(content);
+    setFileSavedContent(content);
+    setFileViewTab("editor");
+  };
+
+  const handleSaveFile = async () => {
+    const name = (editingFile ?? fileFormName).trim();
+    if (!name) return;
+    await writeAgentFile(name, fileFormContent);
+    setFileSavedContent(fileFormContent);
+    setEditingFile(null);
+    setAddingFile(false);
+  };
+
+  const handleCancelFile = () => {
+    setEditingFile(null);
+    setAddingFile(false);
+  };
+
+  // --- Config-based agent actions ---
   const resetForm = () => {
     setFormName("");
     setFormDesc("");
@@ -64,12 +114,16 @@ export function AgentsSection() {
   const startAdd = () => {
     setAdding(true);
     setEditing(null);
+    setEditingFile(null);
+    setAddingFile(false);
     resetForm();
   };
 
   const startEdit = (name: string, agent: OpencodeAgent) => {
     setEditing(name);
     setAdding(false);
+    setEditingFile(null);
+    setAddingFile(false);
     setFormName(name);
     setFormDesc(agent.description ?? "");
     setFormMode(agent.mode ?? "all");
@@ -141,10 +195,50 @@ export function AgentsSection() {
     setAdding(false);
   };
 
-  const isEditing = adding || editing !== null;
+  // --- Preview ---
+  const previewHtml = useMemo(() => {
+    if (!fileFormContent) return "";
+    // Strip frontmatter for preview
+    let body = fileFormContent;
+    if (body.startsWith("---\n") || body.startsWith("---\r\n")) {
+      const endIdx = body.indexOf("\n---", 4);
+      if (endIdx !== -1) {
+        const afterFm = body.indexOf("\n", endIdx + 4);
+        body = afterFm !== -1 ? body.substring(afterFm + 1) : "";
+      }
+    }
+    try {
+      return marked(body, { async: false, gfm: true, breaks: true }) as string;
+    } catch {
+      return "<p>Markdown rendering error</p>";
+    }
+  }, [fileFormContent]);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.key === "Tab") {
+        e.preventDefault();
+        const textarea = e.currentTarget;
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const newContent =
+          fileFormContent.substring(0, start) + "  " + fileFormContent.substring(end);
+        setFileFormContent(newContent);
+        setTimeout(() => {
+          textarea.selectionStart = textarea.selectionEnd = start + 2;
+        }, 0);
+      }
+    },
+    [fileFormContent]
+  );
+
+  const isEditingConfig = adding || editing !== null;
+  const isEditingFile = addingFile || editingFile !== null;
+  const isEditing = isEditingConfig || isEditingFile;
+  const fileDirty = fileFormContent !== fileSavedContent || addingFile;
 
   return (
-    <div>
+    <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
       <div className="oc-section__hint">
         {t("agentsDescription")}
         {" "}
@@ -161,7 +255,80 @@ export function AgentsSection() {
         </a>
       </div>
 
-      {isEditing ? (
+      {/* File-based agent MD editor (like Skills) */}
+      {isEditingFile && (
+        <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
+          <div className="oc-section__field">
+            <label className="oc-section__label">{t("agentName")}</label>
+            <input
+              className="oc-section__input"
+              value={fileFormName}
+              onChange={(e) => setFileFormName(e.target.value)}
+              disabled={editingFile !== null}
+              placeholder="e.g. rag"
+            />
+          </div>
+
+          <div className="oc-section__field" style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+            <label className="oc-section__label">Content (YAML frontmatter + Markdown prompt)</label>
+            <div className="oc-rules__editor-panel">
+              <div className="oc-rules__panel-tabs">
+                <button
+                  className={`oc-rules__panel-tab${fileViewTab === "editor" ? " oc-rules__panel-tab--active" : ""}`}
+                  onClick={() => setFileViewTab("editor")}
+                >
+                  {t("skillTabEditor")}
+                </button>
+                <button
+                  className={`oc-rules__panel-tab${fileViewTab === "preview" ? " oc-rules__panel-tab--active" : ""}`}
+                  onClick={() => setFileViewTab("preview")}
+                >
+                  {t("skillTabPreview")}
+                </button>
+              </div>
+
+              {fileViewTab === "editor" ? (
+                <textarea
+                  className="oc-rules__editor-textarea"
+                  value={fileFormContent}
+                  onChange={(e) => setFileFormContent(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder={"---\ndescription: My agent\nmode: all\n---\n\nYour system prompt here..."}
+                  spellCheck={false}
+                />
+              ) : (
+                previewHtml ? (
+                  <div
+                    className="oc-rules__preview"
+                    dangerouslySetInnerHTML={{ __html: previewHtml }}
+                  />
+                ) : (
+                  <div className="oc-rules__preview">
+                    <div className="oc-rules__preview-empty">No content</div>
+                  </div>
+                )
+              )}
+            </div>
+          </div>
+
+          <div className="oc-section__form-actions" style={{ marginTop: 8, flexShrink: 0 }}>
+            <button
+              className="oc-section__save-btn"
+              onClick={handleSaveFile}
+              disabled={!(editingFile ?? fileFormName).trim() || (!fileDirty && editingFile !== null)}
+              style={{ opacity: (editingFile ?? fileFormName).trim() && (fileDirty || editingFile === null) ? 1 : 0.5 }}
+            >
+              {t("save")}
+            </button>
+            <button className="oc-section__cancel-btn" onClick={handleCancelFile}>
+              {t("cancel")}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Config-based agent form (for opencode.jsonc agents) */}
+      {isEditingConfig && (
         <>
           <div className="oc-section__field">
             <label className="oc-section__label">{t("agentName")}</label>
@@ -282,7 +449,10 @@ export function AgentsSection() {
             <button className="oc-section__cancel-btn" onClick={handleCancel}>{t("cancel")}</button>
           </div>
         </>
-      ) : (
+      )}
+
+      {/* Agent list */}
+      {!isEditing && (
         <>
           {entries.length === 0 && globalAgentFiles.length === 0 && <div className="oc-section__empty">{t("agentsEmpty")}</div>}
           {/* File-based agents (from ~/.config/opencode/agents/*.md) */}
@@ -298,6 +468,7 @@ export function AgentsSection() {
                 <span className="oc-section__item-detail">{af.description}</span>
               </div>
               <div className="oc-section__item-actions">
+                <button className="oc-section__edit-btn" onClick={() => startEditFile(af.agent_name, af.content)}>{t("edit")}</button>
                 <button className="oc-section__delete-btn" onClick={() => deleteAgentFile(af.agent_name)}>×</button>
               </div>
             </div>
@@ -318,7 +489,7 @@ export function AgentsSection() {
             </div>
           ))}
           <div style={{ display: "flex", alignItems: "center", marginTop: 4, position: "relative" }}>
-            <button className="oc-section__add-btn" onClick={startAdd}>+ {t("add")}</button>
+            <button className="oc-section__add-btn" onClick={startAddFile}>+ {t("add")}</button>
             {missingBuiltins.length > 0 && (
               <>
                 <button
