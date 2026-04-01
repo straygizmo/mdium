@@ -23,6 +23,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { useChatUIStore, consumePendingVideoOutput, doConnect, doSendMessage, setPendingVideoOutput } from "@/features/opencode-config/hooks/useOpencodeChat";
 import { BUILTIN_COMMANDS } from "@/features/opencode-config/lib/builtin-commands";
+import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 import { docxToMarkdown } from "@/features/export/lib/docxToMarkdown";
 import { marked } from "marked";
 import { readFile } from "@tauri-apps/plugin-fs";
@@ -358,6 +359,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   const setIsVideoMode = useVideoStore((s) => s.setIsVideoMode);
   const setVideoProject = useVideoStore((s) => s.setVideoProject);
   const activeFolderPath = useTabStore((s) => s.activeFolderPath);
+  const globalCommands = useOpencodeConfigStore((s) => s.config.command ?? {});
 
   const handleEnterVideoMode = useCallback(async () => {
     if (!filePath) return;
@@ -373,6 +375,31 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
 
     setScenarioDialog({ videoJsonName, mdPath: filePath, baseName, hasExisting: !!existing });
   }, [filePath]);
+
+  const handleCommandSelect = useCallback(async (commandName: string) => {
+    if (!filePath) return;
+
+    if (commandName === "generate-video-scenario") {
+      handleEnterVideoMode();
+      return;
+    }
+
+    const cmd = globalCommands[commandName];
+    if (!cmd) return;
+
+    const prompt = cmd.template.replace(/\$ARGUMENTS/g, filePath);
+
+    // Clear agent selection (use Default mode)
+    useChatUIStore.setState({ selectedAgent: null });
+
+    // Switch UI to chat panel
+    useUiStore.getState().setLeftPanel("opencode-config");
+    useUiStore.getState().setOpencodeTopTab("chat");
+
+    // Ensure connection and send expanded prompt directly
+    await doConnect(activeFolderPath ?? undefined);
+    doSendMessage(prompt);
+  }, [filePath, globalCommands, handleEnterVideoMode, activeFolderPath]);
 
   // Auto-open .video.json when generate-video-scenario command completes
   const chatLoading = useChatUIStore((s) => s.loading);
@@ -1091,13 +1118,26 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
             </svg>
           </button>
         )}
-        <button
-          className="preview-panel__tab preview-panel__tab--icon"
-          onClick={handleEnterVideoMode}
-          title={t("generateVideoScenario")}
-        >
-          &#9655;
-        </button>
+        <div className="preview-panel__command-group">
+          <span className="preview-panel__command-label">{t("executeCommand")}</span>
+          <select
+            className="preview-panel__command-select"
+            value=""
+            onChange={(e) => {
+              if (e.target.value) {
+                handleCommandSelect(e.target.value);
+                e.target.value = "";
+              }
+            }}
+          >
+            <option value="" disabled />
+            {Object.keys(globalCommands).map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       <div className="preview-panel__body">
