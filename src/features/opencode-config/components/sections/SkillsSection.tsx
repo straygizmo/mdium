@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
@@ -91,6 +91,7 @@ export function SkillsSection() {
   const [viewTab, setViewTab] = useState<SkillViewTab>("editor");
   const [nameError, setNameError] = useState("");
   const [showBuiltinMenu, setShowBuiltinMenu] = useState(false);
+  const builtinMenuRef = useRef<HTMLDivElement>(null);
 
   const getSkillsDir = useCallback(
     async (targetScope: Scope): Promise<string | null> => {
@@ -246,6 +247,13 @@ export function SkillsSection() {
     }
   }, [formBody]);
 
+  const skillFrontMatter = useMemo(() => {
+    const entries: [string, string][] = [];
+    if (formName.trim()) entries.push(["name", formName.trim()]);
+    if (formDesc.trim()) entries.push(["description", formDesc.trim()]);
+    return entries.length > 0 ? entries : null;
+  }, [formName, formDesc]);
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === "Tab") {
@@ -286,6 +294,18 @@ export function SkillsSection() {
       loadProjectSkills(activeFolderPath);
     }
   };
+
+  // Close builtin dropdown on outside click
+  useEffect(() => {
+    if (!showBuiltinMenu) return;
+    const handleClick = (e: MouseEvent) => {
+      if (builtinMenuRef.current && !builtinMenuRef.current.contains(e.target as Node)) {
+        setShowBuiltinMenu(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [showBuiltinMenu]);
 
   const isEditing = adding || editing !== null;
   const isDirty = formBody !== savedBody || formDesc !== savedDesc || adding;
@@ -370,11 +390,20 @@ export function SkillsSection() {
                     spellCheck={false}
                   />
                 ) : (
-                  formBody ? (
-                    <div
-                      className="oc-rules__preview"
-                      dangerouslySetInnerHTML={{ __html: previewHtml }}
-                    />
+                  (formBody || skillFrontMatter) ? (
+                    <div className="oc-rules__preview">
+                      {skillFrontMatter && (
+                        <div className="oc-yaml-front-matter">
+                          {skillFrontMatter.map(([k, v]) => (
+                            <div key={k} className="oc-yaml-entry">
+                              <span className="oc-yaml-key">{k}</span>
+                              <span className="oc-yaml-value">{v}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div dangerouslySetInnerHTML={{ __html: previewHtml }} />
+                    </div>
                   ) : (
                     <div className="oc-rules__preview">
                       <div className="oc-rules__preview-empty">
@@ -446,7 +475,7 @@ export function SkillsSection() {
               + {t("add")}
             </button>
             {missingBuiltins.length > 0 && (
-              <>
+              <div ref={builtinMenuRef} style={{ position: "relative" }}>
                 <button
                   className="oc-section__builtin-btn"
                   onClick={() => setShowBuiltinMenu((v) => !v)}
@@ -466,7 +495,7 @@ export function SkillsSection() {
                     ))}
                   </div>
                 )}
-              </>
+              </div>
             )}
           </div>
         </>
