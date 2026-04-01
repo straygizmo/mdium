@@ -196,16 +196,6 @@ export function AgentsSection() {
   };
 
   // --- Config-based agent actions ---
-  const resetForm = () => {
-    setFormName(""); setFormDesc(""); setFormMode("all"); setFormModel("");
-    setFormPrompt(""); setFormTemperature(""); setFormTopP(""); setFormSteps("");
-    setFormTools(""); setFormHidden(false); setFormDisable(false);
-  };
-
-  const startAdd = () => {
-    setAdding(true); setEditing(null); setEditingFile(null); setAddingFile(false);
-    resetForm();
-  };
 
   const startEdit = (name: string, agent: OpencodeAgent) => {
     setEditing(name); setAdding(false); setEditingFile(null); setAddingFile(false);
