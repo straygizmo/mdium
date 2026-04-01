@@ -21,7 +21,7 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    include: ["mermaid", "highlight.js", "docx", "marked", "katex"],
+    include: ["mermaid", "highlight.js", "docx", "marked", "katex", "monaco-editor"],
     exclude: [
       "@tauri-apps/api",
       "@tauri-apps/plugin-dialog",
