@@ -289,9 +289,11 @@ export function CustomToolsSection() {
               </div>
             </div>
           ))}
-          <button className="oc-section__add-btn" onClick={startAdd} style={{ marginTop: 4 }}>
-            + {t("add")}
-          </button>
+          <div style={{ display: "flex", alignItems: "center", marginTop: 4 }}>
+            <button className="oc-section__add-btn" onClick={startAdd}>
+              + {t("add")}
+            </button>
+          </div>
         </>
       )}
     </div>
