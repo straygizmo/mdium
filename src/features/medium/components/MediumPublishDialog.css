@@ -1,0 +1,123 @@
+.medium-publish-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.medium-publish-dialog {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px 24px;
+  min-width: 420px;
+  max-width: 520px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.medium-publish-dialog__title {
+  margin: 0 0 16px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.medium-publish-dialog__field {
+  margin: 0 0 12px;
+}
+
+.medium-publish-dialog__field-label {
+  display: block;
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  opacity: 0.7;
+}
+
+.medium-publish-dialog__input {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg-base);
+  color: var(--text);
+  font-size: 12px;
+  box-sizing: border-box;
+}
+
+.medium-publish-dialog__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.medium-publish-dialog__tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 11px;
+}
+
+.medium-publish-dialog__tag-remove {
+  cursor: pointer;
+  opacity: 0.7;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.medium-publish-dialog__tag-remove:hover {
+  opacity: 1;
+}
+
+.medium-publish-dialog__status {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--text);
+  opacity: 0.7;
+}
+
+.medium-publish-dialog__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.medium-publish-dialog__btn {
+  padding: 6px 14px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  font-size: 12px;
+  cursor: pointer;
+  background: var(--bg-base);
+  color: var(--text);
+  transition: opacity 0.15s;
+}
+
+.medium-publish-dialog__btn:hover {
+  opacity: 0.8;
+}
+
+.medium-publish-dialog__btn--primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.medium-publish-dialog__btn--primary:hover {
+  opacity: 0.9;
+}
+
+.medium-publish-dialog__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
