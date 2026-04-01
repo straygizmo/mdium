@@ -21,7 +21,7 @@ export async function xlsxToMarkdown(
   const dir = xlsxPath.replace(/[\\/][^\\/]*$/, "");
   const baseName = xlsxPath
     .replace(/^.*[\\/]/, "")
-    .replace(/\.(?:xlsx|xlsm)$/i, "");
+    .replace(/\.(?:xlsx|xlsm|xls)$/i, "");
   const assetsDir = `${dir}/${baseName}_assets`;
   const imagesDir = `${assetsDir}/images`;
   const mdPath = `${dir}/${baseName}.md`;

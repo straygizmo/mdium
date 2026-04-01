@@ -58,8 +58,8 @@
   "claudeCodeNotInstalled": "Claude Codeがインストールされていません。インストールしますか？",
   "claudeCodeInstallSuccess": "Claude Codeのインストールが完了しました。",
   "claudeCodeInstallFailed": "Claude Codeのインストールに失敗しました。",
-  "batchConvert": "DOCX/PDF → Markdown 一括変換",
-  "batchConvertTitle": "DOCX/PDF → Markdown 一括変換",
+  "batchConvert": "Office/PDF → Markdown 一括変換",
+  "batchConvertTitle": "Office/PDF → Markdown 一括変換",
   "batchConvertSelectAll": "全選択",
   "batchConvertDeselectAll": "全解除",
   "batchConvertStart": "変換",
@@ -67,10 +67,11 @@
   "batchConvertProgress": "{{current}} / {{total}}",
   "batchConvertComplete": "変換完了: {{success}}件成功, {{failed}}件失敗, {{skipped}}件スキップ",
   "batchConvertSkipExisting": "既存.mdをスキップ",
-  "batchConvertNoFiles": "変換対象のDOCX/PDFファイルがありません",
+  "batchConvertNoFiles": "変換対象のOffice/PDFファイルがありません",
   "batchConvertCurrentFile": "変換中: {{file}}",
   "batchConvertFilterAll": "すべて",
   "batchConvertFilterDocx": "DOCX",
+  "batchConvertFilterXlsx": "Excel",
   "batchConvertFilterPdf": "PDF",
   "closeUnsavedConfirm": "「{{name}}」の変更は保存されていません。閉じますか？"
 }

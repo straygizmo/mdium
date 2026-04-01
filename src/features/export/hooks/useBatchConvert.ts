@@ -68,6 +68,10 @@ export function useBatchConvert() {
             const { docxToMarkdown } = await import("../lib/docxToMarkdown");
             const result = await docxToMarkdown(data, file.path);
             results.push({ file, status: "success", mdPath: result.mdPath });
+          } else if (file.type === "xlsx") {
+            const { xlsxToMarkdown } = await import("../lib/xlsxToMarkdown");
+            const result = await xlsxToMarkdown(data, file.path);
+            results.push({ file, status: "success", mdPath: result.mdPath });
           } else {
             const { pdfToMarkdown } = await import("../lib/pdfToMarkdown");
             const result = await pdfToMarkdown(data, file.path);

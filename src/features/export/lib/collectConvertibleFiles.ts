@@ -3,7 +3,7 @@ import type { FileEntry } from "@/shared/types";
 export interface ConvertibleFile {
   name: string;
   path: string;
-  type: "docx" | "pdf";
+  type: "docx" | "pdf" | "xlsx";
   hasExistingMd: boolean;
 }
 
@@ -32,9 +32,10 @@ function walkTree(entries: FileEntry[], results: ConvertibleFile[]): void {
     }
 
     const lower = entry.name.toLowerCase();
-    let type: "docx" | "pdf" | null = null;
+    let type: "docx" | "pdf" | "xlsx" | null = null;
     if (lower.endsWith(".docx")) type = "docx";
     else if (lower.endsWith(".pdf")) type = "pdf";
+    else if (lower.endsWith(".xlsx") || lower.endsWith(".xlsm") || lower.endsWith(".xls")) type = "xlsx";
 
     if (!type) continue;
 

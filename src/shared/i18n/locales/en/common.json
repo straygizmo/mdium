@@ -58,8 +58,8 @@
   "claudeCodeNotInstalled": "Claude Code is not installed. Would you like to install it?",
   "claudeCodeInstallSuccess": "Claude Code has been installed successfully.",
   "claudeCodeInstallFailed": "Failed to install Claude Code.",
-  "batchConvert": "Batch convert DOCX/PDF → Markdown",
-  "batchConvertTitle": "Batch Convert DOCX/PDF → Markdown",
+  "batchConvert": "Batch convert Office/PDF → Markdown",
+  "batchConvertTitle": "Batch Convert Office/PDF → Markdown",
   "batchConvertSelectAll": "Select All",
   "batchConvertDeselectAll": "Deselect All",
   "batchConvertStart": "Convert",
@@ -67,10 +67,11 @@
   "batchConvertProgress": "{{current}} / {{total}}",
   "batchConvertComplete": "Conversion complete: {{success}} succeeded, {{failed}} failed, {{skipped}} skipped",
   "batchConvertSkipExisting": "Skip existing .md files",
-  "batchConvertNoFiles": "No DOCX/PDF files found to convert",
+  "batchConvertNoFiles": "No Office/PDF files found to convert",
   "batchConvertCurrentFile": "Converting: {{file}}",
   "batchConvertFilterAll": "All",
   "batchConvertFilterDocx": "DOCX",
+  "batchConvertFilterXlsx": "Excel",
   "batchConvertFilterPdf": "PDF",
   "closeUnsavedConfirm": "\"{{name}}\" has unsaved changes. Close anyway?"
 }

@@ -4,7 +4,7 @@ import type { ConvertibleFile } from "../lib/collectConvertibleFiles";
 import { useBatchConvert } from "../hooks/useBatchConvert";
 import "./BatchConvertModal.css";
 
-type FilterTab = "all" | "docx" | "pdf";
+type FilterTab = "all" | "docx" | "pdf" | "xlsx";
 
 interface BatchConvertModalProps {
   files: ConvertibleFile[];
@@ -176,13 +176,13 @@ export function BatchConvertModal({ files, onClose, onComplete }: BatchConvertMo
           <button className="batch-convert__close" onClick={handleClose}>×</button>
         </div>
         <div className="batch-convert__toolbar">
-          {(["all", "docx", "pdf"] as FilterTab[]).map((tab) => (
+          {(["all", "docx", "xlsx", "pdf"] as FilterTab[]).map((tab) => (
             <button
               key={tab}
               className={`batch-convert__filter-btn ${filter === tab ? "batch-convert__filter-btn--active" : ""}`}
               onClick={() => setFilter(tab)}
             >
-              {tab === "all" ? t("batchConvertFilterAll") : tab === "docx" ? t("batchConvertFilterDocx") : t("batchConvertFilterPdf")}
+              {tab === "all" ? t("batchConvertFilterAll") : tab === "docx" ? t("batchConvertFilterDocx") : tab === "xlsx" ? t("batchConvertFilterXlsx") : t("batchConvertFilterPdf")}
             </button>
           ))}
           <span className="batch-convert__toolbar-sep" />
