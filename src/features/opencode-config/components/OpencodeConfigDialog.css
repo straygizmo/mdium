@@ -378,6 +378,54 @@
   background: var(--bg-surface);
 }
 
+/* Scope color variables */
+.oc-dialog__body {
+  --scope-global-bg: color-mix(in srgb, var(--primary) 25%, transparent);
+  --scope-global-border: color-mix(in srgb, var(--primary) 50%, transparent);
+  --scope-project-bg: rgba(234, 179, 8, 0.15);
+  --scope-project-border: rgba(234, 179, 8, 0.5);
+}
+
+/* Scope-colored item backgrounds */
+.oc-section__item--global {
+  background: var(--scope-global-bg);
+}
+
+.oc-section__item--project {
+  background: var(--scope-project-bg);
+}
+
+/* Scope form wrapper */
+.oc-section__scope-form {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.oc-section__scope-form--global {
+  border-color: var(--scope-global-border);
+  background: var(--scope-global-bg);
+}
+
+.oc-section__scope-form--project {
+  border-color: var(--scope-project-border);
+  background: var(--scope-project-bg);
+}
+
+/* Scope toggle */
+.oc-section__scope-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.oc-section__scope-toggle-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
 /* Type tabs (Local / Remote) */
 .oc-section__type-tabs {
   display: flex;
