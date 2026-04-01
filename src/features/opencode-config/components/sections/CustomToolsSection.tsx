@@ -228,7 +228,7 @@ export function CustomToolsSection() {
                 )}
               </div>
             </div>
-            <div className="oc-section__field">
+            <div className="oc-section__field" style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
               <label className="oc-section__label">{t("customToolContent")}</label>
               <textarea
                 className="oc-section__textarea--agent"
@@ -236,7 +236,7 @@ export function CustomToolsSection() {
                 onChange={(e) => setFormContent(e.target.value)}
                 onKeyDown={handleKeyDown}
                 spellCheck={false}
-                style={{ minHeight: 200 }}
+                style={{ flex: 1, minHeight: 200 }}
               />
             </div>
           </ScopeFormWrapper>
