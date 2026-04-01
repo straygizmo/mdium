@@ -27,6 +27,8 @@ import { BUILTIN_COMMANDS } from "@/features/opencode-config/lib/builtin-command
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 import { docxToMarkdown } from "@/features/export/lib/docxToMarkdown";
 import { marked } from "marked";
+import { MediumPublishDialog } from "@/features/medium/components/MediumPublishDialog";
+import type { MediumPublishParams } from "@/features/medium/components/MediumPublishDialog";
 import { readFile } from "@tauri-apps/plugin-fs";
 import hljs from "highlight.js";
 import "highlight.js/styles/atom-one-dark.css";
@@ -353,6 +355,13 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   const [macroError, setMacroError] = useState<string | null>(null);
   const [macroSuccess, setMacroSuccess] = useState<string | null>(null);
   const [scenarioDialog, setScenarioDialog] = useState<{ videoJsonName: string; mdPath: string; baseName: string; hasExisting: boolean } | null>(null);
+  const [mediumDialog, setMediumDialog] = useState<{
+    title: string;
+    tags: string[];
+    canonicalUrl: string;
+    body: string;
+    filePath: string;
+  } | null>(null);
 
   const content = activeTab?.content ?? "";
   const filePath = activeTab?.filePath ?? null;
@@ -379,11 +388,122 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
     setScenarioDialog({ videoJsonName, mdPath: filePath, baseName, hasExisting: !!existing });
   }, [filePath]);
 
+  const handlePublishToMedium = useCallback(() => {
+    if (!filePath) return;
+
+    const token = useSettingsStore.getState().mediumSettings.apiToken;
+    if (!token) {
+      alert(t("mediumTokenNotSet"));
+      return;
+    }
+
+    const raw = activeTab?.content ?? "";
+    const { meta, body } = extractFrontMatter(raw);
+
+    // Parse title: frontmatter > first h1 > filename
+    let title = meta?.["medium_title"] ?? "";
+    if (!title) {
+      const h1Match = body.match(/^#\s+(.+)$/m);
+      title = h1Match ? h1Match[1] : filePath.split(/[/\\]/).pop()?.replace(/\.md$/, "") ?? "";
+    }
+
+    // Parse tags (frontmatter value is a string like "[\"tag1\", \"tag2\"]")
+    let tags: string[] = [];
+    const tagsRaw = meta?.["medium_tags"] ?? "";
+    if (tagsRaw) {
+      try {
+        const parsed = JSON.parse(tagsRaw);
+        if (Array.isArray(parsed)) tags = parsed.slice(0, 5);
+      } catch {
+        // Try comma-separated fallback
+        tags = tagsRaw
+          .replace(/^\[|\]$/g, "")
+          .split(",")
+          .map((s) => s.trim().replace(/^["']|["']$/g, ""))
+          .filter(Boolean)
+          .slice(0, 5);
+      }
+    }
+
+    const canonicalUrl = meta?.["medium_canonical_url"] ?? "";
+
+    setMediumDialog({ title, tags, canonicalUrl, body, filePath });
+  }, [filePath, activeTab?.content, t]);
+
+  const handleMediumSubmit = useCallback(
+    async (params: MediumPublishParams) => {
+      if (!mediumDialog) return;
+      const { body, filePath: mdFilePath } = mediumDialog;
+      setMediumDialog(null);
+
+      const token = useSettingsStore.getState().mediumSettings.apiToken;
+
+      try {
+        // Convert Markdown to HTML
+        let html = marked(body) as string;
+
+        // Extract local image paths and upload them
+        const imgRegex = /<img\s+[^>]*src=["']([^"']+)["'][^>]*>/gi;
+        const localImages: { original: string; absPath: string }[] = [];
+        let match: RegExpExecArray | null;
+
+        while ((match = imgRegex.exec(html)) !== null) {
+          const src = match[1];
+          // Skip already-hosted URLs
+          if (/^https?:\/\//i.test(src)) continue;
+
+          // Resolve relative path against the file's directory
+          const fileDir = mdFilePath.replace(/\\/g, "/").replace(/\/[^/]+$/, "");
+          const absPath = src.startsWith("/") || /^[a-zA-Z]:/.test(src)
+            ? src
+            : `${fileDir}/${src}`;
+          localImages.push({ original: src, absPath });
+        }
+
+        // Upload images sequentially
+        for (let i = 0; i < localImages.length; i++) {
+          const img = localImages[i];
+          const result = await invoke<string>("medium_upload_image", {
+            token,
+            filePath: img.absPath,
+          });
+          const parsed = JSON.parse(result);
+          if (parsed.url) {
+            html = html.split(img.original).join(parsed.url);
+          }
+        }
+
+        // Create the post
+        const result = await invoke<string>("medium_create_post", {
+          req: {
+            token,
+            title: params.title,
+            content: html,
+            tags: params.tags,
+            canonicalUrl: params.canonicalUrl,
+          },
+        });
+
+        const post = JSON.parse(result);
+        alert(`${t("mediumPublishSuccess")}\n${post.url}`);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        alert(`${t("mediumPublishFailed")}: ${msg}`);
+      }
+    },
+    [mediumDialog, t],
+  );
+
   const handleCommandSelect = useCallback(async (commandName: string) => {
     if (!filePath) return;
 
     if (commandName === "generate-video-scenario") {
       handleEnterVideoMode();
+      return;
+    }
+
+    if (commandName === "publish-to-medium") {
+      handlePublishToMedium();
       return;
     }
 
@@ -402,7 +522,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
     // Ensure connection and send expanded prompt directly
     await doConnect(activeFolderPath ?? undefined);
     doSendMessage(prompt);
-  }, [filePath, globalCommands, handleEnterVideoMode, activeFolderPath]);
+  }, [filePath, globalCommands, handleEnterVideoMode, handlePublishToMedium, activeFolderPath]);
 
   // Auto-open .video.json when generate-video-scenario command completes
   const chatLoading = useChatUIStore((s) => s.loading);
@@ -1333,6 +1453,16 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
             </button>
           </div>
         </div>
+      )}
+
+      {mediumDialog && (
+        <MediumPublishDialog
+          defaultTitle={mediumDialog.title}
+          defaultTags={mediumDialog.tags}
+          defaultCanonicalUrl={mediumDialog.canonicalUrl}
+          onSubmit={handleMediumSubmit}
+          onCancel={() => setMediumDialog(null)}
+        />
       )}
 
       {scenarioDialog && (
