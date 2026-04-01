@@ -20,6 +20,7 @@ import { DEFAULT_META, DEFAULT_TTS_CONFIG, DEFAULT_TRANSITION, type NarrationSeg
 import { splitNarration } from "@/features/video/lib/narration-splitter";
 import { videoFilePrefix } from "@/features/video/lib/audio-filename";
 import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 import { useChatUIStore, consumePendingVideoOutput, doConnect, doSendMessage, setPendingVideoOutput } from "@/features/opencode-config/hooks/useOpencodeChat";
 import { BUILTIN_COMMANDS } from "@/features/opencode-config/lib/builtin-commands";
 import { docxToMarkdown } from "@/features/export/lib/docxToMarkdown";
@@ -503,6 +504,50 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
     addColumn,
     deleteColumn,
   } = usePreviewTableEdit(contentRef, content, html);
+
+  const exportTableCsv = useCallback(async (tableIndex: number) => {
+    const div = contentRef.current;
+    if (!div || !filePath) return;
+
+    try {
+      const tables = div.querySelectorAll("table");
+      const table = tables[tableIndex];
+      if (!table) return;
+
+      // Extract cell data from DOM
+      const csvRows: string[] = [];
+      const rows = table.querySelectorAll("tr");
+      for (const tr of Array.from(rows)) {
+        const cells = tr.querySelectorAll("th, td");
+        const values = Array.from(cells).map((cell) => {
+          const text = (cell as HTMLElement).innerText.trim();
+          return `"${text.replace(/"/g, '""')}"`;
+        });
+        csvRows.push(values.join(","));
+      }
+
+      if (csvRows.length === 0) return;
+
+      // Build default file name: {basename}_Table{N}.csv
+      const fileName = filePath.replace(/[\\/]/g, "/").split("/").pop() ?? "document.md";
+      const baseName = fileName.replace(/\.\w+$/, "");
+      const defaultDir = filePath.replace(/[\\/][^\\/]+$/, "");
+      const tableNum = tableIndex + 1;
+      const defaultPath = `${defaultDir}/${baseName}_Table${tableNum}.csv`;
+
+      const savePath = await save({
+        defaultPath,
+        filters: [{ name: "CSV", extensions: ["csv"] }],
+      });
+      if (!savePath) return;
+
+      // UTF-8 with BOM
+      const csvContent = "\uFEFF" + csvRows.join("\n");
+      await invoke("write_text_file", { path: savePath, content: csvContent });
+    } catch (error) {
+      console.error("CSV export error:", error);
+    }
+  }, [filePath]);
 
   // Markdown rendering (YAML front matter → Zenn preprocessing → math preprocessing → table normalization → marked)
   useEffect(() => {
@@ -1174,6 +1219,16 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
               }
             >
               {t("deleteCol", { defaultValue: "Delete column" })}
+            </button>
+          </div>
+          <div className="preview-table-ctx-divider" />
+          <div className="preview-table-ctx-group">
+            <button
+              onClick={() =>
+                exportTableCsv(contextMenu.tableIndex)
+              }
+            >
+              {t("exportTableCsv", { defaultValue: "Export to CSV" })}
             </button>
           </div>
         </div>
