@@ -344,6 +344,7 @@ export function AgentsSection() {
           </ScopeFormWrapper>
           {displayPath && (
             <div className="oc-section__path-hint">
+              {t("agentSavePath")}:{" "}
               {useRelativePaths && formScope === "project" && activeFolderPath
                 ? toRelativeProjectPath(activeFolderPath, displayPath)
                 : displayPath}

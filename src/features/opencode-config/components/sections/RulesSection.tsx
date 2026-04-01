@@ -170,6 +170,7 @@ export function RulesSection() {
 
           {displayPath && (
             <div className="oc-section__path-hint">
+              {t("rulesSavePath")}:{" "}
               {useRelativePaths && scope === "project" && activeFolderPath
                 ? toRelativeProjectPath(activeFolderPath, displayPath)
                 : displayPath}

@@ -389,6 +389,7 @@ export function SkillsSection() {
 
           {displayPath && (
             <div className="oc-section__path-hint">
+              {t("skillSavePath")}:{" "}
               {useRelativePaths && formScope === "project" && activeFolderPath
                 ? toRelativeProjectPath(activeFolderPath, displayPath)
                 : displayPath}

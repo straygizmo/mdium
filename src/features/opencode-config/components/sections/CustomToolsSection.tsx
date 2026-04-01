@@ -242,6 +242,7 @@ export function CustomToolsSection() {
           </ScopeFormWrapper>
           {displayPath && (
             <div className="oc-section__path-hint">
+              {t("customToolSavePath")}:{" "}
               {useRelativePaths && formScope === "project" && activeFolderPath
                 ? toRelativeProjectPath(activeFolderPath, displayPath)
                 : displayPath}
