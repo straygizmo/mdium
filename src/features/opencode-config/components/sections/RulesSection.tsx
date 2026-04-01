@@ -4,8 +4,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { useTabStore } from "@/stores/tab-store";
 import { marked } from "marked";
 import { useOpencodeConfigContext, toRelativeProjectPath } from "../OpencodeConfigContext";
+import { ScopeToggle, type Scope } from "../shared/ScopeToggle";
+import { ScopeFormWrapper } from "../shared/ScopeFormWrapper";
 
-type RulesScope = "global" | "project";
 type RulesViewTab = "editor" | "preview";
 
 export function RulesSection() {
@@ -13,7 +14,7 @@ export function RulesSection() {
   const activeFolderPath = useTabStore((s) => s.activeFolderPath);
   const { useRelativePaths } = useOpencodeConfigContext();
 
-  const [scope, setScope] = useState<RulesScope>("global");
+  const [scope, setScope] = useState<Scope>("global");
   const [displayPath, setDisplayPath] = useState("");
   const [content, setContent] = useState("");
   const [savedContent, setSavedContent] = useState("");
@@ -112,20 +113,7 @@ export function RulesSection() {
         </a>
       </div>
 
-      <div className="oc-section__scope-tabs">
-        <button
-          className={`oc-section__scope-tab${scope === "global" ? " oc-section__scope-tab--active" : ""}`}
-          onClick={() => setScope("global")}
-        >
-          {t("agentScopeGlobal")}
-        </button>
-        <button
-          className={`oc-section__scope-tab${scope === "project" ? " oc-section__scope-tab--active" : ""}`}
-          onClick={() => setScope("project")}
-        >
-          {t("agentScopeProject")}
-        </button>
-      </div>
+      <ScopeToggle value={scope} onChange={setScope} />
 
       {displayPath && (
         <div className="oc-section__path-hint">
@@ -144,6 +132,7 @@ export function RulesSection() {
       )}
 
       {!noProject && !loading && (
+        <ScopeFormWrapper scope={scope}>
         <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
           <div className="oc-rules__editor-panel">
             <div className="oc-rules__panel-tabs">
@@ -197,6 +186,7 @@ export function RulesSection() {
             </button>
           </div>
         </div>
+        </ScopeFormWrapper>
       )}
     </div>
   );
