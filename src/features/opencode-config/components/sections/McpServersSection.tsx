@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
@@ -13,8 +13,10 @@ import {
   getMissingBuiltinMcp,
   isBuiltinMcp,
 } from "../../lib/builtin-registry";
+import { ScopeToggle, type Scope } from "../shared/ScopeToggle";
+import { ScopeFormWrapper } from "../shared/ScopeFormWrapper";
+import { useScopeItems } from "../../hooks/useScopeItems";
 
-type Scope = "global" | "project";
 type McpType = "local" | "remote";
 
 interface McpToolInfo {
@@ -119,13 +121,15 @@ export function McpServersSection() {
   const projectMcpServers = useOpencodeConfigStore((s) => s.projectMcpServers);
   const saveMcpServer = useOpencodeConfigStore((s) => s.saveMcpServer);
   const deleteMcpServer = useOpencodeConfigStore((s) => s.deleteMcpServer);
+  const loadConfig = useOpencodeConfigStore((s) => s.loadConfig);
   const loadProjectMcpServers = useOpencodeConfigStore((s) => s.loadProjectMcpServers);
   const saveProjectMcpServer = useOpencodeConfigStore((s) => s.saveProjectMcpServer);
   const deleteProjectMcpServer = useOpencodeConfigStore((s) => s.deleteProjectMcpServer);
   const activeFolderPath = useTabStore((s) => s.activeFolderPath);
   const { useRelativePaths } = useOpencodeConfigContext();
 
-  const [scope, setScope] = useState<Scope>("global");
+  const [formScope, setFormScope] = useState<Scope>("project");
+  const [editingScope, setEditingScope] = useState<Scope | null>(null);
   const [globalConfigPath, setGlobalConfigPath] = useState("");
   const [editing, setEditing] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -157,20 +161,30 @@ export function McpServersSection() {
     });
   }, []);
 
+  useEffect(() => { loadConfig(); }, [loadConfig]);
+
   useEffect(() => {
-    if (scope === "project" && activeFolderPath) {
-      loadProjectMcpServers(activeFolderPath);
-    }
-  }, [scope, activeFolderPath, loadProjectMcpServers]);
+    if (activeFolderPath) loadProjectMcpServers(activeFolderPath);
+  }, [activeFolderPath, loadProjectMcpServers]);
 
   useEffect(() => {
     invoke<string>("resolve_mcp_servers_path").then(setMcpServersPath).catch(() => {});
   }, []);
 
-  const globalServers = config.mcp ?? EMPTY_SERVERS;
-  const servers = scope === "global" ? globalServers : projectMcpServers;
-  const entries = Object.entries(servers);
-  const missingBuiltins = getMissingBuiltinMcp(servers);
+  const globalEntries = useMemo(
+    () => Object.entries(config.mcp ?? {}).map(([name, server]) => ({ name, server })),
+    [config.mcp]
+  );
+  const projectEntries = useMemo(
+    () => Object.entries(projectMcpServers).map(([name, server]) => ({ name, server })),
+    [projectMcpServers]
+  );
+  const scopedEntries = useScopeItems(globalEntries, projectEntries);
+
+  const allServers = formScope === "global"
+    ? (config.mcp ?? EMPTY_SERVERS)
+    : projectMcpServers;
+  const missingBuiltins = getMissingBuiltinMcp(allServers);
 
   const handleAddBuiltin = async (name: string) => {
     const entry = REGISTRY_MCP[name];
@@ -179,17 +193,16 @@ export function McpServersSection() {
     if (Array.isArray(resolved.command) && mcpServersPath) {
       resolved.command = resolveBuiltinCommand(resolved.command, mcpServersPath);
     }
-    if (scope === "global") {
-      await saveMcpServer(name, resolved);
-    } else if (activeFolderPath) {
-      await saveProjectMcpServer(activeFolderPath, name, resolved);
-    }
+    setFormScope("global");
+    await saveMcpServer(name, resolved);
     setShowBuiltinMenu(false);
   };
 
-  const startEdit = (name: string, server: OpencodeMcpServer) => {
+  const startEdit = (name: string, server: OpencodeMcpServer, itemScope: Scope) => {
     const serverType = server.type ?? "local";
     setEditing(name);
+    setEditingScope(itemScope);
+    setFormScope(itemScope);
     setFormName(name);
     setFormType(serverType);
     setFormEnabled(server.enabled !== false);
@@ -212,6 +225,8 @@ export function McpServersSection() {
 
   const startAdd = () => {
     setAdding(true);
+    setFormScope("project");
+    setEditingScope(null);
     setFormName("");
     setFormType("local");
     setFormEnabled(true);
@@ -327,7 +342,7 @@ export function McpServersSection() {
     const name = formName.trim();
     if (!name) return;
 
-    const server: OpencodeMcpServer = {
+    const serverObj: OpencodeMcpServer = {
       type: formType,
       enabled: formEnabled,
     };
@@ -337,27 +352,27 @@ export function McpServersSection() {
       const cmdParts = [formCommand.trim()];
       const args = formArgs.trim().split(/\s+/).filter(Boolean);
       if (args.length) cmdParts.push(...args);
-      server.command = cmdParts;
+      serverObj.command = cmdParts;
       const envLines = formEnv.trim().split("\n").filter(Boolean);
       if (envLines.length) {
-        server.environment = {};
+        serverObj.environment = {};
         for (const line of envLines) {
           const idx = line.indexOf("=");
           if (idx > 0) {
-            server.environment[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+            serverObj.environment[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
           }
         }
       }
     } else {
       if (!formUrl.trim()) return;
-      server.url = formUrl.trim();
+      serverObj.url = formUrl.trim();
       const headerLines = formHeaders.trim().split("\n").filter(Boolean);
       if (headerLines.length) {
-        server.headers = {};
+        serverObj.headers = {};
         for (const line of headerLines) {
           const idx = line.indexOf(":");
           if (idx > 0) {
-            server.headers[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+            serverObj.headers[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
           }
         }
       }
@@ -365,24 +380,40 @@ export function McpServersSection() {
 
     const timeoutVal = parseInt(formTimeout, 10);
     if (!isNaN(timeoutVal) && timeoutVal > 0) {
-      server.timeout = timeoutVal;
+      serverObj.timeout = timeoutVal;
     }
 
-    if (scope === "global") {
-      await saveMcpServer(name, server);
-    } else if (activeFolderPath) {
-      await saveProjectMcpServer(activeFolderPath, name, server);
+    // If scope changed during edit, delete from old scope
+    if (editing && editingScope && editingScope !== formScope) {
+      if (editingScope === "global") {
+        await deleteMcpServer(editing);
+      } else {
+        await deleteProjectMcpServer(activeFolderPath!, editing);
+      }
     }
+
+    // Save to target scope
+    if (formScope === "global") {
+      await saveMcpServer(name, serverObj);
+    } else {
+      await saveProjectMcpServer(activeFolderPath!, name, serverObj);
+    }
+
     // Sync to running opencode serve instance
-    await syncMcpToServer(name, server);
+    await syncMcpToServer(name, serverObj);
+
+    // Reload both
+    await loadConfig();
+    if (activeFolderPath) await loadProjectMcpServers(activeFolderPath);
+
     setEditing(null);
     setAdding(false);
   };
 
-  const handleDelete = async (name: string) => {
+  const handleDelete = async (name: string, itemScope: Scope) => {
     const confirmed = await ask(t("mcpDeleteConfirm", { name }), { kind: "warning" });
     if (!confirmed) return;
-    if (scope === "global") {
+    if (itemScope === "global") {
       await deleteMcpServer(name);
     } else if (activeFolderPath) {
       await deleteProjectMcpServer(activeFolderPath, name);
@@ -397,15 +428,7 @@ export function McpServersSection() {
   const handleCancel = () => {
     setEditing(null);
     setAdding(false);
-  };
-
-  const handleScopeChange = (newScope: Scope) => {
-    setScope(newScope);
-    setEditing(null);
-    setAdding(false);
-    setServerTools({});
-    setTestErrors({});
-    setToolsDialogServer(null);
+    setEditingScope(null);
   };
 
   const handleTest = async (name: string, server: OpencodeMcpServer) => {
@@ -445,7 +468,7 @@ export function McpServersSection() {
 
   const isEditing = adding || editing !== null;
 
-  const savePath = scope === "global"
+  const displayPath = formScope === "global"
     ? globalConfigPath
     : activeFolderPath
       ? `${activeFolderPath}${activeFolderPath.includes("\\") ? "\\" : "/"}opencode.jsonc`
@@ -477,130 +500,117 @@ export function McpServersSection() {
         </a>
       </div>
 
-      <div className="oc-section__scope-tabs">
-        <button
-          className={`oc-section__scope-tab${scope === "global" ? " oc-section__scope-tab--active" : ""}`}
-          onClick={() => handleScopeChange("global")}
-        >
-          {t("mcpScopeGlobal")}
-        </button>
-        <button
-          className={`oc-section__scope-tab${scope === "project" ? " oc-section__scope-tab--active" : ""}`}
-          onClick={() => handleScopeChange("project")}
-        >
-          {t("mcpScopeProject")}
-        </button>
-      </div>
-
-      {savePath && (
-        <div className="oc-section__path-hint">
-          {t("mcpSavePath")}:{" "}
-          {useRelativePaths && scope === "project" && activeFolderPath
-            ? toRelativeProjectPath(activeFolderPath, savePath)
-            : savePath}
-        </div>
-      )}
-
-      {scope === "project" && !activeFolderPath ? (
-        <div className="oc-section__empty">{t("mcpNoProject")}</div>
-      ) : isEditing ? (
+      {isEditing ? (
         <>
-          {/* JSON Import */}
-          <button
-            className="oc-section__json-toggle"
-            type="button"
-            onClick={() => { setJsonImportOpen((v) => !v); setJsonError(""); }}
-          >
-            {jsonImportOpen ? "▼" : "▶"} {t("mcpJsonImport")}
-          </button>
-          {jsonImportOpen && (
-            <div className="oc-section__json-area">
-              <textarea
-                className="oc-section__textarea"
-                value={jsonInput}
-                onChange={(e) => setJsonInput(e.target.value)}
-                placeholder={t("mcpJsonPlaceholder")}
-              />
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <ScopeToggle value={formScope} onChange={setFormScope} />
+
+          {displayPath && (
+            <div className="oc-section__path-hint">
+              {t("mcpSavePath")}:{" "}
+              {useRelativePaths && formScope === "project" && activeFolderPath
+                ? toRelativeProjectPath(activeFolderPath, displayPath)
+                : displayPath}
+            </div>
+          )}
+
+          <ScopeFormWrapper scope={formScope}>
+            {/* JSON Import */}
+            <button
+              className="oc-section__json-toggle"
+              type="button"
+              onClick={() => { setJsonImportOpen((v) => !v); setJsonError(""); }}
+            >
+              {jsonImportOpen ? "▼" : "▶"} {t("mcpJsonImport")}
+            </button>
+            {jsonImportOpen && (
+              <div className="oc-section__json-area">
+                <textarea
+                  className="oc-section__textarea"
+                  value={jsonInput}
+                  onChange={(e) => setJsonInput(e.target.value)}
+                  placeholder={t("mcpJsonPlaceholder")}
+                />
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <button
+                    className="oc-section__json-apply-btn"
+                    type="button"
+                    onClick={applyJsonImport}
+                  >
+                    {t("mcpJsonApply")}
+                  </button>
+                  {jsonError && <span className="oc-section__json-error">{jsonError}</span>}
+                </div>
+              </div>
+            )}
+
+            <div className="oc-section__field">
+              <label className="oc-section__label">{t("mcpName")}</label>
+              <input className="oc-section__input" value={formName} onChange={(e) => setFormName(e.target.value)} disabled={editing !== null} />
+            </div>
+
+            {/* Type selector: local / remote */}
+            <div className="oc-section__field">
+              <label className="oc-section__label">{t("mcpType")}</label>
+              <div className="oc-section__type-tabs">
                 <button
-                  className="oc-section__json-apply-btn"
+                  className={`oc-section__type-tab${formType === "local" ? " oc-section__type-tab--active" : ""}`}
+                  onClick={() => setFormType("local")}
                   type="button"
-                  onClick={applyJsonImport}
                 >
-                  {t("mcpJsonApply")}
+                  {t("mcpTypeLocal")}
                 </button>
-                {jsonError && <span className="oc-section__json-error">{jsonError}</span>}
+                <button
+                  className={`oc-section__type-tab${formType === "remote" ? " oc-section__type-tab--active" : ""}`}
+                  onClick={() => setFormType("remote")}
+                  type="button"
+                >
+                  {t("mcpTypeRemote")}
+                </button>
               </div>
             </div>
-          )}
 
-          <div className="oc-section__field">
-            <label className="oc-section__label">{t("mcpName")}</label>
-            <input className="oc-section__input" value={formName} onChange={(e) => setFormName(e.target.value)} disabled={editing !== null} />
-          </div>
+            {formType === "local" ? (
+              <>
+                <div className="oc-section__field">
+                  <label className="oc-section__label">{t("mcpCommand")}</label>
+                  <input className="oc-section__input" value={formCommand} onChange={(e) => setFormCommand(e.target.value)} placeholder="npx" />
+                </div>
+                <div className="oc-section__field">
+                  <label className="oc-section__label">{t("mcpArgs")}</label>
+                  <input className="oc-section__input" value={formArgs} onChange={(e) => setFormArgs(e.target.value)} placeholder="-y @modelcontextprotocol/server-github" />
+                </div>
+                <div className="oc-section__field">
+                  <label className="oc-section__label">{t("mcpEnv")}</label>
+                  <textarea className="oc-section__textarea" value={formEnv} onChange={(e) => setFormEnv(e.target.value)} placeholder="KEY=value" />
+                </div>
+                <div className="oc-section__field">
+                  <label className="oc-section__label">{t("mcpTimeout")}</label>
+                  <input className="oc-section__input" type="number" min="1000" step="1000" value={formTimeout} onChange={(e) => setFormTimeout(e.target.value)} placeholder="10000" />
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="oc-section__field">
+                  <label className="oc-section__label">{t("mcpUrl")}</label>
+                  <input className="oc-section__input" value={formUrl} onChange={(e) => setFormUrl(e.target.value)} placeholder="https://mcp.example.com/mcp" />
+                </div>
+                <div className="oc-section__field">
+                  <label className="oc-section__label">{t("mcpHeaders")}</label>
+                  <textarea className="oc-section__textarea" value={formHeaders} onChange={(e) => setFormHeaders(e.target.value)} placeholder="Authorization: Bearer TOKEN" />
+                </div>
+                <div className="oc-section__field">
+                  <label className="oc-section__label">{t("mcpTimeout")}</label>
+                  <input className="oc-section__input" type="number" min="1000" step="1000" value={formTimeout} onChange={(e) => setFormTimeout(e.target.value)} placeholder="10000" />
+                </div>
+              </>
+            )}
 
-          {/* Type selector: local / remote */}
-          <div className="oc-section__field">
-            <label className="oc-section__label">{t("mcpType")}</label>
-            <div className="oc-section__type-tabs">
-              <button
-                className={`oc-section__type-tab${formType === "local" ? " oc-section__type-tab--active" : ""}`}
-                onClick={() => setFormType("local")}
-                type="button"
-              >
-                {t("mcpTypeLocal")}
-              </button>
-              <button
-                className={`oc-section__type-tab${formType === "remote" ? " oc-section__type-tab--active" : ""}`}
-                onClick={() => setFormType("remote")}
-                type="button"
-              >
-                {t("mcpTypeRemote")}
-              </button>
-            </div>
-          </div>
-
-          {formType === "local" ? (
-            <>
-              <div className="oc-section__field">
-                <label className="oc-section__label">{t("mcpCommand")}</label>
-                <input className="oc-section__input" value={formCommand} onChange={(e) => setFormCommand(e.target.value)} placeholder="npx" />
-              </div>
-              <div className="oc-section__field">
-                <label className="oc-section__label">{t("mcpArgs")}</label>
-                <input className="oc-section__input" value={formArgs} onChange={(e) => setFormArgs(e.target.value)} placeholder="-y @modelcontextprotocol/server-github" />
-              </div>
-              <div className="oc-section__field">
-                <label className="oc-section__label">{t("mcpEnv")}</label>
-                <textarea className="oc-section__textarea" value={formEnv} onChange={(e) => setFormEnv(e.target.value)} placeholder="KEY=value" />
-              </div>
-              <div className="oc-section__field">
-                <label className="oc-section__label">{t("mcpTimeout")}</label>
-                <input className="oc-section__input" type="number" min="1000" step="1000" value={formTimeout} onChange={(e) => setFormTimeout(e.target.value)} placeholder="10000" />
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="oc-section__field">
-                <label className="oc-section__label">{t("mcpUrl")}</label>
-                <input className="oc-section__input" value={formUrl} onChange={(e) => setFormUrl(e.target.value)} placeholder="https://mcp.example.com/mcp" />
-              </div>
-              <div className="oc-section__field">
-                <label className="oc-section__label">{t("mcpHeaders")}</label>
-                <textarea className="oc-section__textarea" value={formHeaders} onChange={(e) => setFormHeaders(e.target.value)} placeholder="Authorization: Bearer TOKEN" />
-              </div>
-              <div className="oc-section__field">
-                <label className="oc-section__label">{t("mcpTimeout")}</label>
-                <input className="oc-section__input" type="number" min="1000" step="1000" value={formTimeout} onChange={(e) => setFormTimeout(e.target.value)} placeholder="10000" />
-              </div>
-            </>
-          )}
-
-          {/* Enabled toggle */}
-          <label className="oc-section__toggle oc-section__toggle--inline">
-            <span>{t("mcpEnabled")}</span>
-            <input type="checkbox" checked={formEnabled} onChange={(e) => setFormEnabled(e.target.checked)} />
-          </label>
+            {/* Enabled toggle */}
+            <label className="oc-section__toggle oc-section__toggle--inline">
+              <span>{t("mcpEnabled")}</span>
+              <input type="checkbox" checked={formEnabled} onChange={(e) => setFormEnabled(e.target.checked)} />
+            </label>
+          </ScopeFormWrapper>
 
           <div className="oc-section__form-actions" style={{ marginTop: 8 }}>
             <button className="oc-section__save-btn" onClick={handleSave}>{t("save")}</button>
@@ -609,15 +619,15 @@ export function McpServersSection() {
         </>
       ) : (
         <>
-          {entries.length === 0 && <div className="oc-section__empty">{t("mcpEmpty")}</div>}
-          {entries.map(([name, server]) => {
+          {scopedEntries.length === 0 && <div className="oc-section__empty">{t("mcpEmpty")}</div>}
+          {scopedEntries.map(({ scope: itemScope, data: { name, server } }) => {
             const serverType = server.type ?? "local";
             const isEnabled = server.enabled !== false;
             const isTesting = testingServer === name;
             const tools = serverTools[name];
             const testError = testErrors[name];
             return (
-              <div key={name} className={`oc-section__item${!isEnabled ? " oc-section__item--disabled" : ""}`} style={{ marginBottom: 4 }}>
+              <div key={`${itemScope}-${name}`} className={`oc-section__item oc-section__item--${itemScope}${!isEnabled ? " oc-section__item--disabled" : ""}`} style={{ marginBottom: 4 }}>
                 <div className="oc-section__item-info">
                   <span className="oc-section__item-name">
                     {name}
@@ -656,7 +666,7 @@ export function McpServersSection() {
                       checked={isEnabled}
                       onChange={async (e) => {
                         const updated = { ...server, enabled: e.target.checked };
-                        if (scope === "global") {
+                        if (itemScope === "global") {
                           await saveMcpServer(name, updated);
                         } else if (activeFolderPath) {
                           await saveProjectMcpServer(activeFolderPath, name, updated);
@@ -666,8 +676,8 @@ export function McpServersSection() {
                       }}
                     />
                   </label>
-                  <button className="oc-section__edit-btn" onClick={() => startEdit(name, server)}>{t("edit")}</button>
-                  <button className="oc-section__delete-btn" onClick={() => handleDelete(name)}>×</button>
+                  <button className="oc-section__edit-btn" onClick={() => startEdit(name, server, itemScope)}>{t("edit")}</button>
+                  <button className="oc-section__delete-btn" onClick={() => handleDelete(name, itemScope)}>×</button>
                 </div>
               </div>
             );
