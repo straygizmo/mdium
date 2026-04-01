@@ -72,6 +72,29 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
   const [localAi, setLocalAi] = useState<AiSettings>(aiSettings);
   const [localVisibility, setLocalVisibility] = useState(filterVisibility ?? DEFAULT_VISIBILITY);
 
+  const [localMedium, setLocalMedium] = useState(
+    useSettingsStore.getState().mediumSettings
+  );
+  const [mediumTestStatus, setMediumTestStatus] = useState<
+    "idle" | "testing" | "success" | "error"
+  >("idle");
+  const [mediumUsername, setMediumUsername] = useState("");
+
+  const handleMediumTest = async () => {
+    if (!localMedium.apiToken) return;
+    setMediumTestStatus("testing");
+    try {
+      const result = await invoke<string>("medium_test_connection", {
+        token: localMedium.apiToken,
+      });
+      const parsed = JSON.parse(result);
+      setMediumUsername(parsed.username);
+      setMediumTestStatus("success");
+    } catch {
+      setMediumTestStatus("error");
+    }
+  };
+
   const [testing, setTesting] = useState(false);
   const [testMsg, setTestMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const [manualModelInput, setManualModelInput] = useState(false);
@@ -205,6 +228,7 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
     setSpeechEnabled(localSpeechEnabled);
     setSpeechModel(localSpeechModel);
     setAiSettings(localAi);
+    useSettingsStore.getState().setMediumSettings(localMedium);
     onSaveFilterVisibility?.(localVisibility);
     setShowSettings(false);
 
@@ -631,6 +655,41 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
               >
                 {t("zennInit")}
               </button>
+              <div className="settings-dialog__divider" />
+              <div className="settings-dialog__section-title">
+                {t("mediumSection")}
+              </div>
+              <div className="settings-dialog__field">
+                <label className="settings-dialog__label">
+                  {t("mediumApiToken")}
+                </label>
+                <input
+                  type="password"
+                  className="settings-dialog__input"
+                  value={localMedium.apiToken}
+                  onChange={(e) =>
+                    setLocalMedium({ ...localMedium, apiToken: e.target.value })
+                  }
+                />
+              </div>
+              <div className="settings-dialog__test-row">
+                <button
+                  className="settings-dialog__test-btn"
+                  onClick={handleMediumTest}
+                  disabled={!localMedium.apiToken || mediumTestStatus === "testing"}
+                >
+                  {mediumTestStatus === "testing"
+                    ? t("mediumTestTesting")
+                    : t("mediumTestConnection")}
+                </button>
+                {mediumTestStatus !== "idle" && mediumTestStatus !== "testing" && (
+                  <span className={`settings-dialog__test-msg ${mediumTestStatus === "success" ? "settings-dialog__test-msg--ok" : "settings-dialog__test-msg--err"}`}>
+                    {mediumTestStatus === "success"
+                      ? t("mediumConnectionSuccess", { username: mediumUsername })
+                      : t("mediumConnectionFailed")}
+                  </span>
+                )}
+              </div>
             </>
           )}
 
