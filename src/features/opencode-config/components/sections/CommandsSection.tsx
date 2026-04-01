@@ -221,9 +221,9 @@ export function CommandsSection() {
             <label className="oc-section__label">{t("commandDescription")} <span className="oc-section__label-hint">{t("commandDescriptionHint")}</span></label>
             <input className="oc-section__input" value={formDesc} onChange={(e) => setFormDesc(e.target.value)} />
           </div>
-          <div className="oc-section__field" style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+          <div className="oc-section__field" style={{ display: "flex", flexDirection: "column" }}>
             <label className="oc-section__label">{t("commandTemplate")} <span className="oc-section__label-hint">{t("commandTemplateHint")}</span></label>
-            <div className="oc-rules__editor-panel" style={{ minHeight: 180 }}>
+            <div className="oc-rules__editor-panel" style={{ minHeight: 180, flex: "none" }}>
               <div className="oc-rules__panel-tabs">
                 <button
                   className={`oc-rules__panel-tab${viewTab === "editor" ? " oc-rules__panel-tab--active" : ""}`}
