@@ -96,6 +96,11 @@ export interface RagSettings {
   retrieveMinScore: number;
 }
 
+/** Medium publishing settings */
+export interface MediumSettings {
+  apiToken: string;
+}
+
 /** Opencode agent definition */
 export interface OpencodeAgent {
   description?: string;

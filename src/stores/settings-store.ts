@@ -5,7 +5,7 @@ import { applyTheme } from "@/shared/themes/apply-theme";
 import { getThemeById, DEFAULT_THEME_ID } from "@/shared/themes";
 import { syncOpencodeTheme } from "@/shared/themes/opencode-theme-sync";
 import { syncProviderToOpencode } from "@/shared/lib/opencode-auth-sync";
-import type { AiSettings, RagSettings } from "@/shared/types";
+import type { AiSettings, MediumSettings, RagSettings } from "@/shared/types";
 
 export type Language = "ja" | "en";
 
@@ -26,6 +26,10 @@ const DEFAULT_RAG_SETTINGS: RagSettings = {
   retrieveMinScore: 0.1,
 };
 
+const DEFAULT_MEDIUM_SETTINGS: MediumSettings = {
+  apiToken: "",
+};
+
 export type SpeechModel = "Xenova/whisper-small" | "onnx-community/whisper-large-v3-turbo" | "onnx-community/moonshine-base-ONNX";
 
 interface SettingsState {
@@ -42,6 +46,7 @@ interface SettingsState {
   ragSettings: RagSettings;
   speechEnabled: boolean;
   speechModel: SpeechModel;
+  mediumSettings: MediumSettings;
 
   setThemeId: (id: string) => void;
   setLanguage: (lang: Language) => void;
@@ -57,6 +62,7 @@ interface SettingsState {
   setRagSettings: (settings: RagSettings) => void;
   setSpeechEnabled: (enabled: boolean) => void;
   setSpeechModel: (model: SpeechModel) => void;
+  setMediumSettings: (settings: MediumSettings) => void;
   initializeTheme: () => void;
 }
 
@@ -76,6 +82,7 @@ export const useSettingsStore = create<SettingsState>()(
       ragSettings: DEFAULT_RAG_SETTINGS,
       speechEnabled: false,
       speechModel: "Xenova/whisper-small" as SpeechModel,
+      mediumSettings: DEFAULT_MEDIUM_SETTINGS,
 
       setThemeId: (id) => {
         const theme = getThemeById(id);
@@ -115,6 +122,7 @@ export const useSettingsStore = create<SettingsState>()(
       setRagSettings: (settings) => set({ ragSettings: settings }),
       setSpeechEnabled: (enabled) => set({ speechEnabled: enabled }),
       setSpeechModel: (model) => set({ speechModel: model }),
+      setMediumSettings: (settings) => set({ mediumSettings: settings }),
 
       initializeTheme: () => {
         const theme = getThemeById(get().themeId);
@@ -138,6 +146,7 @@ export const useSettingsStore = create<SettingsState>()(
         ragSettings: state.ragSettings,
         speechEnabled: state.speechEnabled,
         speechModel: state.speechModel,
+        mediumSettings: state.mediumSettings,
       }),
     }
   )
