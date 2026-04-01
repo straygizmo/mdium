@@ -346,4 +346,99 @@ For data storage, we use SQLite.
 Write the complete Slidev Markdown to the output path.
 `,
   },
+  "create-zenn-article": {
+    name: "create-zenn-article",
+    description: "Create a new Zenn article with frontmatter in the work/ directory",
+    template: `# Create Zenn Article
+
+You are creating a new Zenn article in this workspace.
+
+## Instructions
+
+1. Ask the user for the following information interactively:
+   - **slug**: URL-friendly identifier (12-50 chars, only lowercase alphanumeric, hyphens, underscores). Suggest a slug based on the topic if the user doesn't provide one.
+   - **title**: Article title
+   - **emoji**: A single emoji for the article
+   - **type**: "tech" (technical article) or "idea" (opinion/essay)
+   - **topics**: Up to 5 topic tags (lowercase alphanumeric + hyphens)
+
+2. Create the directory \`work/{slug}/images/\` (the images subdirectory ensures the parent directory is also created).
+
+3. Create the file \`work/{slug}/index.md\` with this frontmatter and a brief outline:
+
+\\\`\\\`\\\`markdown
+---
+title: "{title}"
+emoji: "{emoji}"
+type: "{type}"
+topics: [{topics as comma-separated quoted strings}]
+published: false
+---
+
+{A brief article outline or starting template based on the title and type}
+\\\`\\\`\\\`
+
+4. After creating the file, inform the user of the created path and suggest they open it.
+
+## Important Notes
+
+- The \`work/\` directory is for drafting — it's excluded from git via .gitignore.
+- Images should be placed in \`work/{slug}/images/\`.
+- When ready to publish, the user will use the "deploy-zenn-article" command.
+`,
+  },
+  "proofread-zenn-article": {
+    name: "proofread-zenn-article",
+    description: "Proofread and improve a Zenn article",
+    template: `# Proofread Zenn Article
+
+Read the Zenn article at \`$ARGUMENTS\` and provide proofreading feedback.
+
+## Instructions
+
+1. Read the entire article content at \`$ARGUMENTS\`.
+2. Analyze the article for:
+   - **Grammar and spelling** errors
+   - **Technical accuracy** of code examples and explanations
+   - **Readability** — sentence structure, paragraph flow, logical progression
+   - **Zenn-specific formatting** — proper use of \`:::message\`, \`:::details\`, code blocks with filenames (\\\`\\\`\\\`lang:filename\\\`\\\`\\\`), image sizing syntax
+   - **Frontmatter completeness** — title, emoji, type, topics (max 5), published flag
+   - **Article structure** — introduction, main content, conclusion/summary
+
+3. Present findings organized by category (errors, suggestions, style improvements).
+4. For each issue, show the original text and your suggested revision.
+5. Ask the user if they want you to apply the changes directly to the file.
+
+## Important Notes
+
+- Match the language of the article (write feedback in Japanese if the article is in Japanese).
+- Preserve Zenn-specific syntax — do not convert \`:::\` blocks to standard Markdown.
+- Be constructive and specific — explain why each change improves the article.
+`,
+  },
+  "deploy-zenn-article": {
+    name: "deploy-zenn-article",
+    description: "Deploy article from work/ to articles/ and images/ for Zenn publishing",
+    template: `# Deploy Zenn Article
+
+Deploy the work-in-progress article to the Zenn publishing directories.
+
+## Instructions
+
+1. Read the article at \`$ARGUMENTS\`.
+2. Determine the slug from the file path. The file should be at \`work/{slug}/index.md\`.
+3. Copy the article content to \`articles/{slug}.md\`.
+4. Copy all image files from \`work/{slug}/images/\` to \`images/\` (flat copy, no subdirectories).
+5. In the copied \`articles/{slug}.md\`, rewrite image paths:
+   - Replace relative paths like \`images/img1.png\` or \`./images/img1.png\` with \`/images/img1.png\`
+6. Report what was copied and any path transformations made.
+
+## Important Notes
+
+- The \`work/\` directory is excluded from git. Only files in \`articles/\` and \`images/\` will be committed and pushed.
+- If \`articles/{slug}.md\` already exists, overwrite it (this is a re-deploy).
+- If there are no images in \`work/{slug}/images/\`, skip the image copy step.
+- Preserve the frontmatter exactly as-is.
+`,
+  },
 };
