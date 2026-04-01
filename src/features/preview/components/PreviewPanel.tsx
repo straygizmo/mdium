@@ -359,7 +359,8 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   const setIsVideoMode = useVideoStore((s) => s.setIsVideoMode);
   const setVideoProject = useVideoStore((s) => s.setVideoProject);
   const activeFolderPath = useTabStore((s) => s.activeFolderPath);
-  const globalCommands = useOpencodeConfigStore((s) => s.config.command ?? {});
+  const configCommands = useOpencodeConfigStore((s) => s.config.command);
+  const globalCommands = useMemo(() => configCommands ?? {}, [configCommands]);
 
   const handleEnterVideoMode = useCallback(async () => {
     if (!filePath) return;
