@@ -242,6 +242,7 @@ pub struct ZennProjectInfo {
     pub project_root: String,
     pub has_articles: bool,
     pub has_books: bool,
+    pub has_images: bool,
 }
 
 /// Zenn article front matter metadata
@@ -263,25 +264,20 @@ pub fn detect_zenn_project(dir_path: String) -> Result<ZennProjectInfo, String> 
 
     let articles_path = path.join("articles");
     let books_path = path.join("books");
+    let images_path = path.join("images");
     let has_articles = articles_path.exists() && articles_path.is_dir();
     let has_books = books_path.exists() && books_path.is_dir();
+    let has_images = images_path.exists() && images_path.is_dir();
 
-    // Also check if zenn-cli is in package.json
-    let mut is_zenn = has_articles || has_books;
-    if !is_zenn {
-        let pkg_path = path.join("package.json");
-        if pkg_path.exists() {
-            if let Ok(content) = fs::read_to_string(&pkg_path) {
-                is_zenn = content.contains("zenn-cli");
-            }
-        }
-    }
+    // All three directories must exist to be considered a Zenn project
+    let is_zenn = has_articles && has_books && has_images;
 
     Ok(ZennProjectInfo {
         is_zenn_project: is_zenn,
         project_root: dir_path,
         has_articles,
         has_books,
+        has_images,
     })
 }
 
