@@ -76,6 +76,10 @@
   min-height: 0;
 }
 
+.oc-panel__body:has(.oc-section__scope-form) {
+  overflow-y: hidden;
+}
+
 /* Disabled state (no folder) */
 .oc-panel--disabled {
 }
