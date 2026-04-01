@@ -13,6 +13,7 @@ import { PdfPreviewPanel } from "./PdfPreviewPanel";
 import { DocxPreviewPanel } from "./DocxPreviewPanel";
 import { HtmlPreviewPanel } from "./HtmlPreviewPanel";
 import { SlidevPreviewPanel } from "./SlidevPreviewPanel";
+import { ZennFrontmatterForm } from "@/features/zenn/components/ZennFrontmatterForm";
 import { VideoPanel } from "@/features/video/components/VideoPanel";
 import { VideoScenarioDialog, type VideoScenarioParams } from "@/features/video/components/VideoScenarioDialog";
 import { useVideoStore } from "@/stores/video-store";
@@ -343,6 +344,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   const themeType = getThemeById(themeId).type;
   const activeViewTab = useUiStore((s) => s.activeViewTab);
   const setActiveViewTab = useUiStore((s) => s.setActiveViewTab);
+  const isZennMode = useUiStore((s) => s.isZennMode);
   const contentRef = useRef<HTMLDivElement>(null);
   const [converting, setConverting] = useState(false);
   const [convertError, setConvertError] = useState<string | null>(null);
@@ -522,6 +524,56 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   // Markdown rendered HTML
   const [html, setHtml] = useState("");
   const [frontMatter, setFrontMatter] = useState<Record<string, string> | null>(null);
+
+  // Determine if the current file is a Zenn article (articles/ or work/ directory)
+  const isZennArticleFile = useMemo(() => {
+    if (!isZennMode || !filePath || !filePath.endsWith(".md")) return false;
+    const normalized = filePath.replace(/\\/g, "/");
+    return normalized.includes("/work/") || normalized.includes("/articles/");
+  }, [isZennMode, filePath]);
+
+  // Parse frontmatter fields into typed values for the Zenn form
+  // (extractFrontMatter returns topics as a raw string like ["react", "typescript"])
+  const parsedZennFrontmatter = useMemo(() => {
+    if (!frontMatter) return null;
+    const topicsStr = frontMatter.topics ?? "";
+    let topics: string[] = [];
+    const match = topicsStr.match(/\[([^\]]*)\]/);
+    if (match) {
+      topics = match[1]
+        .split(",")
+        .map((t) => t.trim().replace(/^["']|["']$/g, ""))
+        .filter(Boolean);
+    }
+    return {
+      title: frontMatter.title ?? "",
+      emoji: frontMatter.emoji ?? "",
+      type: (frontMatter.type === "idea" ? "idea" : "tech") as "tech" | "idea",
+      topics,
+      published: frontMatter.published === "true",
+    };
+  }, [frontMatter]);
+
+  // Rebuild YAML frontmatter from form values and update editor content
+  const handleZennFrontmatterChange = useCallback(
+    (fm: { title: string; emoji: string; type: "tech" | "idea"; topics: string[]; published: boolean }) => {
+      const tab = useTabStore.getState().getActiveTab();
+      if (!tab) return;
+      const { body } = extractFrontMatter(tab.content);
+      const topicsStr = fm.topics.map((t) => `"${t}"`).join(", ");
+      const newFrontmatter = [
+        "---",
+        `title: "${fm.title}"`,
+        `emoji: "${fm.emoji}"`,
+        `type: "${fm.type}"`,
+        `topics: [${topicsStr}]`,
+        `published: ${fm.published}`,
+        "---",
+      ].join("\n");
+      useTabStore.getState().updateTabContent(tab.id, `${newFrontmatter}\n${body}`);
+    },
+    []
+  );
 
   // Preview table editing
   const {
@@ -1147,15 +1199,22 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
           ref={previewRef}
           onClick={() => setContextMenu(null)}
         >
-          {frontMatter && (
-            <div className="yaml-front-matter">
-              {Object.entries(frontMatter).map(([k, v]) => (
-                <div key={k} className="yaml-entry">
-                  <span className="yaml-key">{k}</span>
-                  <span className="yaml-value">{v}</span>
-                </div>
-              ))}
-            </div>
+          {isZennArticleFile && parsedZennFrontmatter ? (
+            <ZennFrontmatterForm
+              frontmatter={parsedZennFrontmatter}
+              onChange={handleZennFrontmatterChange}
+            />
+          ) : (
+            frontMatter && (
+              <div className="yaml-front-matter">
+                {Object.entries(frontMatter).map(([k, v]) => (
+                  <div key={k} className="yaml-entry">
+                    <span className="yaml-key">{k}</span>
+                    <span className="yaml-value">{v}</span>
+                  </div>
+                ))}
+              </div>
+            )
           )}
           <div ref={contentRef} />
         </div>
