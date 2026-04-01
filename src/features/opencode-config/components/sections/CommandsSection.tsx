@@ -40,7 +40,7 @@ export function CommandsSection() {
   const [adding, setAdding] = useState(false);
   const [formName, setFormName] = useState("");
   const [formContent, setFormContent] = useState("");
-  const [savedContent, setSavedContent] = useState("");
+  const [, setSavedContent] = useState("");
   const [viewTab, setViewTab] = useState<ViewTab>("editor");
   const [showBuiltinMenu, setShowBuiltinMenu] = useState(false);
 
