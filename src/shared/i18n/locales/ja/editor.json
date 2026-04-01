@@ -167,5 +167,19 @@
   "macroImportSkipped": "{{name}} はスキップされました：対応するモジュールが見つかりません",
   "macroNoFiles": "インポート対象のファイルがありません",
   "commandNotRegistered": "コマンド「{{name}}」が登録されていません。\n設定 > コマンド で追加してください。",
-  "executeCommand": "コマンドを実行"
+  "executeCommand": "コマンドを実行",
+  "publishToMedium": "Mediumに投稿",
+  "mediumPublishTitle": "Mediumに投稿",
+  "mediumTitle": "タイトル",
+  "mediumTags": "タグ（最大5つ）",
+  "mediumTagsPlaceholder": "タグを入力してEnter",
+  "mediumCanonicalUrl": "Canonical URL",
+  "mediumPublish": "投稿",
+  "mediumCancel": "キャンセル",
+  "mediumPublishing": "投稿中...",
+  "mediumUploadingImages": "画像をアップロード中... ({{current}}/{{total}})",
+  "mediumPublishSuccess": "ドラフトを作成しました",
+  "mediumPublishFailed": "投稿に失敗しました",
+  "mediumTokenNotSet": "Medium APIトークンが設定されていません",
+  "mediumImageUploadFailed": "画像のアップロードに失敗しました: {{name}}"
 }

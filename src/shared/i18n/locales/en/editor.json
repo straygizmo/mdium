@@ -167,5 +167,19 @@
   "macroImportSkipped": "{{name}} was skipped: no matching module found",
   "macroNoFiles": "No files to import",
   "commandNotRegistered": "The command \"{{name}}\" is not registered.\nPlease add it from Settings > Commands.",
-  "executeCommand": "Execute command"
+  "executeCommand": "Execute command",
+  "publishToMedium": "Publish to Medium",
+  "mediumPublishTitle": "Publish to Medium",
+  "mediumTitle": "Title",
+  "mediumTags": "Tags (max 5)",
+  "mediumTagsPlaceholder": "Type a tag and press Enter",
+  "mediumCanonicalUrl": "Canonical URL",
+  "mediumPublish": "Publish",
+  "mediumCancel": "Cancel",
+  "mediumPublishing": "Publishing...",
+  "mediumUploadingImages": "Uploading images... ({{current}}/{{total}})",
+  "mediumPublishSuccess": "Draft created",
+  "mediumPublishFailed": "Publish failed",
+  "mediumTokenNotSet": "Medium API token not set",
+  "mediumImageUploadFailed": "Image upload failed: {{name}}"
 }

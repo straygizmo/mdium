@@ -88,5 +88,11 @@
   "zennInitDescription": "空のフォルダを選択してZenn記事用リポジトリとして初期化します（git init、articles/、books/、images/、work/ ディレクトリを作成）",
   "zennInitSuccess": "Zennフォルダを初期化しました",
   "zennInitNotEmpty": "選択したフォルダが空ではありません。空のフォルダを選択してください。",
-  "zennInitFailed": "Zennフォルダの初期化に失敗しました"
+  "zennInitFailed": "Zennフォルダの初期化に失敗しました",
+  "mediumSection": "Medium",
+  "mediumApiToken": "APIトークン",
+  "mediumTestConnection": "接続テスト",
+  "mediumTestTesting": "テスト中...",
+  "mediumConnectionSuccess": "認証済み: @{{username}}",
+  "mediumConnectionFailed": "接続に失敗しました"
 }

@@ -88,5 +88,11 @@
   "zennInitDescription": "Select an empty folder to set up as a Zenn article repository (git init, articles/, books/, images/, work/ directories)",
   "zennInitSuccess": "Zenn folder initialized successfully",
   "zennInitNotEmpty": "The selected folder is not empty. Please choose an empty folder.",
-  "zennInitFailed": "Failed to initialize Zenn folder"
+  "zennInitFailed": "Failed to initialize Zenn folder",
+  "mediumSection": "Medium",
+  "mediumApiToken": "API Token",
+  "mediumTestConnection": "Test Connection",
+  "mediumTestTesting": "Testing...",
+  "mediumConnectionSuccess": "Authenticated: @{{username}}",
+  "mediumConnectionFailed": "Connection failed"
 }
