@@ -65,6 +65,7 @@ export function App() {
   const bottomTerminalOpenTabs = useUiStore((s) => s.bottomTerminalOpenTabs);
   const setBottomTerminalTab = useUiStore((s) => s.setBottomTerminalTab);
   const closeBottomTerminalTab = useUiStore((s) => s.closeBottomTerminalTab);
+  const isZennMode = useUiStore((s) => s.isZennMode);
   const { autoSave, themeId, aiSettings } = useSettingsStore();
   const themeType = getThemeById(themeId).type;
 
@@ -185,7 +186,7 @@ export function App() {
     showDocxBtn, showXlsBtn, showKmBtn, showImagesBtn, showPdfBtn,
     handleSaveFilterVisibility,
     refreshFileTree: loadFileTree,
-  } = useFileFilters(activeFolderPath, setFileTree);
+  } = useFileFilters(activeFolderPath, setFileTree, isZennMode);
 
   // Auto-save timer
   const autoSaveTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
