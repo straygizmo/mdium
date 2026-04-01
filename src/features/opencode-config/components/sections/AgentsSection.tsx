@@ -247,18 +247,30 @@ export function AgentsSection() {
   const handleCancel = () => { setEditing(null); setAdding(false); };
 
   // --- Preview ---
-  const previewHtml = useMemo(() => {
-    if (!fileFormContent) return "";
+  const { frontMatter, previewHtml } = useMemo(() => {
+    if (!fileFormContent) return { frontMatter: null, previewHtml: "" };
     let body = fileFormContent;
+    let meta: Record<string, string> | null = null;
     if (body.startsWith("---\n") || body.startsWith("---\r\n")) {
       const endIdx = body.indexOf("\n---", 4);
       if (endIdx !== -1) {
+        const yaml = body.slice(4, endIdx).trim();
+        const parsed: Record<string, string> = {};
+        for (const line of yaml.split("\n")) {
+          const colon = line.indexOf(":");
+          if (colon > 0) {
+            const key = line.slice(0, colon).trim();
+            const value = line.slice(colon + 1).trim().replace(/^["']|["']$/g, "");
+            if (key) parsed[key] = value;
+          }
+        }
+        if (Object.keys(parsed).length > 0) meta = parsed;
         const afterFm = body.indexOf("\n", endIdx + 4);
         body = afterFm !== -1 ? body.substring(afterFm + 1) : "";
       }
     }
-    try { return marked(body, { async: false, gfm: true, breaks: true }) as string; }
-    catch { return "<p>Markdown rendering error</p>"; }
+    try { return { frontMatter: meta, previewHtml: marked(body, { async: false, gfm: true, breaks: true }) as string }; }
+    catch { return { frontMatter: meta, previewHtml: "<p>Markdown rendering error</p>" }; }
   }, [fileFormContent]);
 
   const handleKeyDown = useCallback(
@@ -334,8 +346,20 @@ export function AgentsSection() {
                     placeholder={"---\ndescription: My agent\nmode: all\n---\n\nYour system prompt here..."}
                     spellCheck={false}
                   />
-                ) : previewHtml ? (
-                  <div className="oc-rules__preview" dangerouslySetInnerHTML={{ __html: previewHtml }} />
+                ) : (previewHtml || frontMatter) ? (
+                  <div className="oc-rules__preview">
+                    {frontMatter && (
+                      <div className="oc-yaml-front-matter">
+                        {Object.entries(frontMatter).map(([k, v]) => (
+                          <div key={k} className="oc-yaml-entry">
+                            <span className="oc-yaml-key">{k}</span>
+                            <span className="oc-yaml-value">{v}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div dangerouslySetInnerHTML={{ __html: previewHtml }} />
+                  </div>
                 ) : (
                   <div className="oc-rules__preview"><div className="oc-rules__preview-empty">No content</div></div>
                 )}

@@ -84,10 +84,8 @@ export function SkillsSection() {
   const [editing, setEditing] = useState<string | null>(null); // dir_name or null
   const [adding, setAdding] = useState(false);
   const [formName, setFormName] = useState("");
-  const [formDesc, setFormDesc] = useState("");
-  const [formBody, setFormBody] = useState("");
-  const [savedBody, setSavedBody] = useState("");
-  const [savedDesc, setSavedDesc] = useState("");
+  const [formContent, setFormContent] = useState("");
+  const [savedContent, setSavedContent] = useState("");
   const [viewTab, setViewTab] = useState<SkillViewTab>("editor");
   const [nameError, setNameError] = useState("");
   const [showBuiltinMenu, setShowBuiltinMenu] = useState(false);
@@ -159,10 +157,8 @@ export function SkillsSection() {
     setEditingScope(null);
     setFormScope("project");
     setFormName("");
-    setFormDesc("");
-    setFormBody("");
-    setSavedBody("");
-    setSavedDesc("");
+    setFormContent("---\ndescription: \n---\n\n");
+    setSavedContent("");
     setViewTab("editor");
     setNameError("");
   };
@@ -174,10 +170,8 @@ export function SkillsSection() {
     setFormScope(entryScope);
     setAdding(false);
     setFormName(parsed.name || entry.dir_name);
-    setFormDesc(parsed.description);
-    setSavedDesc(parsed.description);
-    setFormBody(parsed.body);
-    setSavedBody(parsed.body);
+    setFormContent(entry.content);
+    setSavedContent(entry.content);
     setViewTab("editor");
     setNameError("");
   };
@@ -210,10 +204,8 @@ export function SkillsSection() {
     const base = await getSkillsDir(formScope);
     if (!base) return;
 
-    const md = buildSkillMd(name, formDesc.trim(), formBody);
-    await invoke("write_skill", { baseDir: base, dirName, content: md });
-    setSavedBody(formBody);
-    setSavedDesc(formDesc.trim());
+    await invoke("write_skill", { baseDir: base, dirName, content: formContent });
+    setSavedContent(formContent);
     setEditing(null);
     setEditingScope(null);
     setAdding(false);
@@ -238,21 +230,32 @@ export function SkillsSection() {
     }
   };
 
-  const previewHtml = useMemo(() => {
-    if (!formBody) return "";
-    try {
-      return marked(formBody, { async: false, gfm: true, breaks: true }) as string;
-    } catch {
-      return "<p>Markdown rendering error</p>";
+  // --- Preview (same pattern as AgentsSection) ---
+  const { frontMatter: skillFrontMatter, previewHtml } = useMemo(() => {
+    if (!formContent) return { frontMatter: null, previewHtml: "" };
+    let body = formContent;
+    let meta: Record<string, string> | null = null;
+    if (body.startsWith("---\n") || body.startsWith("---\r\n")) {
+      const endIdx = body.indexOf("\n---", 4);
+      if (endIdx !== -1) {
+        const yaml = body.slice(4, endIdx).trim();
+        const parsed: Record<string, string> = {};
+        for (const line of yaml.split("\n")) {
+          const colon = line.indexOf(":");
+          if (colon > 0) {
+            const key = line.slice(0, colon).trim();
+            const value = line.slice(colon + 1).trim().replace(/^["']|["']$/g, "");
+            if (key) parsed[key] = value;
+          }
+        }
+        if (Object.keys(parsed).length > 0) meta = parsed;
+        const afterFm = body.indexOf("\n", endIdx + 4);
+        body = afterFm !== -1 ? body.substring(afterFm + 1) : "";
+      }
     }
-  }, [formBody]);
-
-  const skillFrontMatter = useMemo(() => {
-    const entries: [string, string][] = [];
-    if (formName.trim()) entries.push(["name", formName.trim()]);
-    if (formDesc.trim()) entries.push(["description", formDesc.trim()]);
-    return entries.length > 0 ? entries : null;
-  }, [formName, formDesc]);
+    try { return { frontMatter: meta, previewHtml: marked(body, { async: false, gfm: true, breaks: true }) as string }; }
+    catch { return { frontMatter: meta, previewHtml: "<p>Markdown rendering error</p>" }; }
+  }, [formContent]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -262,14 +265,14 @@ export function SkillsSection() {
         const start = textarea.selectionStart;
         const end = textarea.selectionEnd;
         const newContent =
-          formBody.substring(0, start) + "  " + formBody.substring(end);
-        setFormBody(newContent);
+          formContent.substring(0, start) + "  " + formContent.substring(end);
+        setFormContent(newContent);
         setTimeout(() => {
           textarea.selectionStart = textarea.selectionEnd = start + 2;
         }, 0);
       }
     },
-    [formBody]
+    [formContent]
   );
 
   // Compute missing builtin skills by comparing registry keys against all loaded skill dir_names
@@ -308,7 +311,7 @@ export function SkillsSection() {
   }, [showBuiltinMenu]);
 
   const isEditing = adding || editing !== null;
-  const isDirty = formBody !== savedBody || formDesc !== savedDesc || adding;
+  const isDirty = formContent !== savedContent || adding;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
@@ -352,16 +355,6 @@ export function SkillsSection() {
                 <span style={{ fontSize: 11, color: "var(--accent-red, #ef4444)" }}>{nameError}</span>
               )}
             </div>
-            <div className="oc-section__field">
-              <label className="oc-section__label">{t("skillDescription")}</label>
-              <input
-                className="oc-section__input"
-                value={formDesc}
-                onChange={(e) => setFormDesc(e.target.value)}
-                placeholder={t("skillDescriptionHint")}
-              />
-            </div>
-
             <div className="oc-section__field" style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
               <label className="oc-section__label">{t("skillContent")}</label>
               <div className="oc-rules__editor-panel">
@@ -383,18 +376,18 @@ export function SkillsSection() {
                 {viewTab === "editor" ? (
                   <textarea
                     className="oc-rules__editor-textarea"
-                    value={formBody}
-                    onChange={(e) => setFormBody(e.target.value)}
+                    value={formContent}
+                    onChange={(e) => setFormContent(e.target.value)}
                     onKeyDown={handleKeyDown}
-                    placeholder={t("skillPlaceholder")}
+                    placeholder={"---\ndescription: \n---\n\nYour skill prompt here..."}
                     spellCheck={false}
                   />
                 ) : (
-                  (formBody || skillFrontMatter) ? (
+                  (previewHtml || skillFrontMatter) ? (
                     <div className="oc-rules__preview">
                       {skillFrontMatter && (
                         <div className="oc-yaml-front-matter">
-                          {skillFrontMatter.map(([k, v]) => (
+                          {Object.entries(skillFrontMatter).map(([k, v]) => (
                             <div key={k} className="oc-yaml-entry">
                               <span className="oc-yaml-key">{k}</span>
                               <span className="oc-yaml-value">{v}</span>

@@ -39,21 +39,37 @@ export function CommandsSection() {
   const [editing, setEditing] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [formName, setFormName] = useState("");
-  const [formDesc, setFormDesc] = useState("");
-  const [formTemplate, setFormTemplate] = useState("");
-  const [formAgent, setFormAgent] = useState("");
-  const [formModel, setFormModel] = useState("");
+  const [formContent, setFormContent] = useState("");
+  const [savedContent, setSavedContent] = useState("");
   const [viewTab, setViewTab] = useState<ViewTab>("editor");
   const [showBuiltinMenu, setShowBuiltinMenu] = useState(false);
 
-  const previewHtml = useMemo(() => {
-    if (!formTemplate) return "";
-    try {
-      return marked(formTemplate, { async: false, gfm: true, breaks: true }) as string;
-    } catch {
-      return "<p>Markdown rendering error</p>";
+  // --- Preview (same pattern as AgentsSection) ---
+  const { frontMatter: cmdFrontMatter, previewHtml } = useMemo(() => {
+    if (!formContent) return { frontMatter: null, previewHtml: "" };
+    let body = formContent;
+    let meta: Record<string, string> | null = null;
+    if (body.startsWith("---\n") || body.startsWith("---\r\n")) {
+      const endIdx = body.indexOf("\n---", 4);
+      if (endIdx !== -1) {
+        const yaml = body.slice(4, endIdx).trim();
+        const parsed: Record<string, string> = {};
+        for (const line of yaml.split("\n")) {
+          const colon = line.indexOf(":");
+          if (colon > 0) {
+            const key = line.slice(0, colon).trim();
+            const value = line.slice(colon + 1).trim().replace(/^["']|["']$/g, "");
+            if (key) parsed[key] = value;
+          }
+        }
+        if (Object.keys(parsed).length > 0) meta = parsed;
+        const afterFm = body.indexOf("\n", endIdx + 4);
+        body = afterFm !== -1 ? body.substring(afterFm + 1) : "";
+      }
     }
-  }, [formTemplate]);
+    try { return { frontMatter: meta, previewHtml: marked(body, { async: false, gfm: true, breaks: true }) as string }; }
+    catch { return { frontMatter: meta, previewHtml: "<p>Markdown rendering error</p>" }; }
+  }, [formContent]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -63,14 +79,14 @@ export function CommandsSection() {
         const start = textarea.selectionStart;
         const end = textarea.selectionEnd;
         const newContent =
-          formTemplate.substring(0, start) + "  " + formTemplate.substring(end);
-        setFormTemplate(newContent);
+          formContent.substring(0, start) + "  " + formContent.substring(end);
+        setFormContent(newContent);
         setTimeout(() => {
           textarea.selectionStart = textarea.selectionEnd = start + 2;
         }, 0);
       }
     },
-    [formTemplate]
+    [formContent]
   );
 
   useEffect(() => {
@@ -110,15 +126,53 @@ export function CommandsSection() {
     setShowBuiltinMenu(false);
   };
 
+  /** Build frontmatter + template string from command fields */
+  const buildCommandContent = (cmd: OpencodeCommand): string => {
+    const fmLines: string[] = [];
+    if (cmd.description) fmLines.push(`description: ${cmd.description}`);
+    if (cmd.agent) fmLines.push(`agent: ${cmd.agent}`);
+    if (cmd.model) fmLines.push(`model: ${cmd.model}`);
+    if (fmLines.length > 0) {
+      return `---\n${fmLines.join("\n")}\n---\n\n${cmd.template}`;
+    }
+    return cmd.template;
+  };
+
+  /** Parse content textarea back into command fields */
+  const parseCommandContent = (content: string): Omit<OpencodeCommand, "template"> & { template: string } => {
+    let body = content;
+    let description: string | undefined;
+    let agent: string | undefined;
+    let model: string | undefined;
+    if (body.startsWith("---\n") || body.startsWith("---\r\n")) {
+      const endIdx = body.indexOf("\n---", 4);
+      if (endIdx !== -1) {
+        const yaml = body.slice(4, endIdx);
+        for (const line of yaml.split("\n")) {
+          const colon = line.indexOf(":");
+          if (colon > 0) {
+            const key = line.slice(0, colon).trim();
+            const value = line.slice(colon + 1).trim().replace(/^["']|["']$/g, "");
+            if (key === "description" && value) description = value;
+            else if (key === "agent" && value) agent = value;
+            else if (key === "model" && value) model = value;
+          }
+        }
+        const afterFm = body.indexOf("\n", endIdx + 4);
+        body = afterFm !== -1 ? body.substring(afterFm + 1) : "";
+      }
+    }
+    return { template: body.trim(), description, agent, model };
+  };
+
   const startEdit = (name: string, cmd: OpencodeCommand, itemScope: Scope) => {
     setEditing(name);
     setEditingScope(itemScope);
     setFormScope(itemScope);
     setFormName(name);
-    setFormDesc(cmd.description ?? "");
-    setFormTemplate(cmd.template);
-    setFormAgent(cmd.agent ?? "");
-    setFormModel(cmd.model ?? "");
+    const content = buildCommandContent(cmd);
+    setFormContent(content);
+    setSavedContent(content);
     setViewTab("editor");
   };
 
@@ -127,21 +181,20 @@ export function CommandsSection() {
     setFormScope("project");
     setEditingScope(null);
     setFormName("");
-    setFormDesc("");
-    setFormTemplate("");
-    setFormAgent("");
-    setFormModel("");
+    setFormContent("---\ndescription: \n---\n\n");
+    setSavedContent("");
     setViewTab("editor");
   };
 
   const handleSave = async () => {
     const name = formName.trim();
-    if (!name || !formTemplate.trim()) return;
+    const parsed = parseCommandContent(formContent);
+    if (!name || !parsed.template) return;
     const cmdObj: OpencodeCommand = {
-      template: formTemplate.trim(),
-      description: formDesc.trim() || undefined,
-      agent: formAgent.trim() || undefined,
-      model: formModel.trim() || undefined,
+      template: parsed.template,
+      description: parsed.description,
+      agent: parsed.agent,
+      model: parsed.model,
     };
 
     // Handle scope move when editing
@@ -217,13 +270,9 @@ export function CommandsSection() {
             <label className="oc-section__label">{t("commandName")} <span className="oc-section__label-hint">{t("commandNameHint")}</span></label>
             <input className="oc-section__input" value={formName} onChange={(e) => setFormName(e.target.value)} disabled={editing !== null} />
           </div>
-          <div className="oc-section__field">
-            <label className="oc-section__label">{t("commandDescription")} <span className="oc-section__label-hint">{t("commandDescriptionHint")}</span></label>
-            <input className="oc-section__input" value={formDesc} onChange={(e) => setFormDesc(e.target.value)} />
-          </div>
-          <div className="oc-section__field" style={{ display: "flex", flexDirection: "column" }}>
+          <div className="oc-section__field" style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
             <label className="oc-section__label">{t("commandTemplate")} <span className="oc-section__label-hint">{t("commandTemplateHint")}</span></label>
-            <div className="oc-rules__editor-panel" style={{ minHeight: 180, flex: "none" }}>
+            <div className="oc-rules__editor-panel">
               <div className="oc-rules__panel-tabs">
                 <button
                   className={`oc-rules__panel-tab${viewTab === "editor" ? " oc-rules__panel-tab--active" : ""}`}
@@ -241,22 +290,29 @@ export function CommandsSection() {
               {viewTab === "editor" ? (
                 <textarea
                   className="oc-rules__editor-textarea"
-                  style={{ minHeight: 180 }}
-                  value={formTemplate}
-                  onChange={(e) => setFormTemplate(e.target.value)}
+                  value={formContent}
+                  onChange={(e) => setFormContent(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  placeholder={t("commandTemplatePlaceholder")}
+                  placeholder={"---\ndescription: \nagent: \nmodel: \n---\n\nYour prompt template here..."}
                   spellCheck={false}
                 />
               ) : (
-                formTemplate ? (
-                  <div
-                    className="oc-rules__preview"
-                    style={{ minHeight: 180 }}
-                    dangerouslySetInnerHTML={{ __html: previewHtml }}
-                  />
+                (previewHtml || cmdFrontMatter) ? (
+                  <div className="oc-rules__preview">
+                    {cmdFrontMatter && (
+                      <div className="oc-yaml-front-matter">
+                        {Object.entries(cmdFrontMatter).map(([k, v]) => (
+                          <div key={k} className="oc-yaml-entry">
+                            <span className="oc-yaml-key">{k}</span>
+                            <span className="oc-yaml-value">{v}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div dangerouslySetInnerHTML={{ __html: previewHtml }} />
+                  </div>
                 ) : (
-                  <div className="oc-rules__preview" style={{ minHeight: 180 }}>
+                  <div className="oc-rules__preview">
                     <div className="oc-rules__preview-empty">
                       {t("commandTemplatePlaceholder")}
                     </div>
@@ -264,14 +320,6 @@ export function CommandsSection() {
                 )
               )}
             </div>
-          </div>
-          <div className="oc-section__field">
-            <label className="oc-section__label">{t("commandAgent")} <span className="oc-section__label-hint">{t("commandAgentHint")}</span></label>
-            <input className="oc-section__input" value={formAgent} onChange={(e) => setFormAgent(e.target.value)} />
-          </div>
-          <div className="oc-section__field">
-            <label className="oc-section__label">{t("commandModel")} <span className="oc-section__label-hint">{t("commandModelHint")}</span></label>
-            <input className="oc-section__input" value={formModel} onChange={(e) => setFormModel(e.target.value)} />
           </div>
           </ScopeFormWrapper>
           {displayPath && (
