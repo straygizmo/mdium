@@ -74,6 +74,38 @@
   border-bottom-color: var(--primary);
 }
 
+.preview-panel__command-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 0 8px;
+}
+
+.preview-panel__command-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.preview-panel__command-select {
+  font-size: 11px;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  max-width: 200px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.preview-panel__command-select:hover,
+.preview-panel__command-select:focus {
+  border-color: var(--primary);
+}
+
 .preview-panel__body {
   position: relative;
   flex: 1;
