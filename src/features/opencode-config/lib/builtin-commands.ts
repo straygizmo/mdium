@@ -441,4 +441,9 @@ Deploy the work-in-progress article to the Zenn publishing directories.
 - Preserve the frontmatter exactly as-is.
 `,
   },
+  "publish-to-medium": {
+    name: "publish-to-medium",
+    description: "Publish current Markdown article as a draft to Medium",
+    template: "",
+  },
 };
