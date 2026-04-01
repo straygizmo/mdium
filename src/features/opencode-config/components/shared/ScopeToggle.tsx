@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+
 export type Scope = "global" | "project";
 
 interface ScopeToggleProps {
@@ -6,9 +8,10 @@ interface ScopeToggleProps {
 }
 
 export function ScopeToggle({ value, onChange }: ScopeToggleProps) {
+  const { t } = useTranslation("opencode-config");
   return (
     <label className="oc-section__scope-toggle">
-      <span className="oc-section__scope-toggle-label">Global</span>
+      <span className="oc-section__scope-toggle-label">{t("scopeGlobal")}</span>
       <input
         type="checkbox"
         checked={value === "global"}
