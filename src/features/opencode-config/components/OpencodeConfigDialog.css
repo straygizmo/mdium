@@ -343,7 +343,8 @@
 }
 
 /* Scope color variables */
-.oc-dialog__body {
+.oc-dialog__body,
+.oc-panel__body {
   --scope-global-bg: color-mix(in srgb, var(--primary) 25%, transparent);
   --scope-global-border: color-mix(in srgb, var(--primary) 50%, transparent);
   --scope-project-bg: rgba(234, 179, 8, 0.15);
@@ -382,12 +383,46 @@
   align-items: center;
   gap: 8px;
   margin-bottom: 12px;
+  cursor: pointer;
 }
 
 .oc-section__scope-toggle-label {
   font-size: 12px;
   font-weight: 600;
   color: var(--text);
+}
+
+.oc-section__scope-toggle input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 36px;
+  height: 20px;
+  background: var(--text-muted);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.2s;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.oc-section__scope-toggle input[type="checkbox"]::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  background: white;
+  border-radius: 50%;
+  transition: transform 0.2s;
+}
+
+.oc-section__scope-toggle input[type="checkbox"]:checked {
+  background: var(--primary);
+}
+
+.oc-section__scope-toggle input[type="checkbox"]:checked::after {
+  transform: translateX(16px);
 }
 
 /* Type tabs (Local / Remote) */
@@ -484,7 +519,7 @@
 /* Agent markdown textarea */
 .oc-section__textarea--agent {
   flex: 1;
-  min-height: 120px;
+  min-height: 204px;
   font-family: "Consolas", "Monaco", "Courier New", monospace;
   font-size: 12px;
   line-height: 1.5;
