@@ -12,8 +12,10 @@ import {
   getMissingBuiltinSkills,
   isBuiltinSkill,
 } from "../../lib/builtin-registry";
+import { ScopeToggle, type Scope } from "../shared/ScopeToggle";
+import { ScopeFormWrapper } from "../shared/ScopeFormWrapper";
+import { useScopeItems } from "../../hooks/useScopeItems";
 
-type SkillScope = "global" | "project";
 type SkillViewTab = "editor" | "preview";
 
 interface SkillEntry {
@@ -70,9 +72,13 @@ export function SkillsSection() {
   const loadGlobalSkills = useOpencodeConfigStore((s) => s.loadGlobalSkills);
   const { useRelativePaths } = useOpencodeConfigContext();
 
-  const [scope, setScope] = useState<SkillScope>("global");
-  const [skills, setSkills] = useState<SkillEntry[]>([]);
+  const [formScope, setFormScope] = useState<Scope>("project");
+  const [editingScope, setEditingScope] = useState<Scope | null>(null);
+
+  const [globalSkillEntries, setGlobalSkillEntries] = useState<SkillEntry[]>([]);
+  const [projectSkillEntries, setProjectSkillEntries] = useState<SkillEntry[]>([]);
   const [loading, setLoading] = useState(false);
+  const [displayPath, setDisplayPath] = useState("");
 
   // editing state
   const [editing, setEditing] = useState<string | null>(null); // dir_name or null
@@ -84,50 +90,73 @@ export function SkillsSection() {
   const [savedDesc, setSavedDesc] = useState("");
   const [viewTab, setViewTab] = useState<SkillViewTab>("editor");
   const [nameError, setNameError] = useState("");
-  const [displayPath, setDisplayPath] = useState("");
   const [showBuiltinMenu, setShowBuiltinMenu] = useState(false);
 
-  const getBaseDir = useCallback(async (): Promise<string | null> => {
-    if (scope === "global") {
-      const home = await invoke<string>("get_home_dir");
-      const sep = home.includes("\\") ? "\\" : "/";
-      return `${home}${sep}.config${sep}opencode`;
-    }
-    if (activeFolderPath) {
-      const sep = activeFolderPath.includes("\\") ? "\\" : "/";
-      return `${activeFolderPath}${sep}.opencode`;
-    }
-    return null;
-  }, [scope, activeFolderPath]);
+  const getSkillsDir = useCallback(
+    async (targetScope: Scope): Promise<string | null> => {
+      if (targetScope === "global") {
+        const home = await invoke<string>("get_home_dir");
+        const sep = home.includes("\\") ? "\\" : "/";
+        return `${home}${sep}.config${sep}opencode${sep}skills`;
+      }
+      if (activeFolderPath) {
+        const sep = activeFolderPath.includes("\\") ? "\\" : "/";
+        return `${activeFolderPath}${sep}.opencode${sep}skills`;
+      }
+      return null;
+    },
+    [activeFolderPath]
+  );
 
-  const loadSkills = useCallback(async () => {
-    const base = await getBaseDir();
-    if (!base) {
-      setSkills([]);
-      setDisplayPath("");
-      return;
-    }
-    const sep = base.includes("\\") ? "\\" : "/";
-    setDisplayPath(`${base}${sep}skills${sep}<name>${sep}SKILL.md`);
+  const loadAllSkills = useCallback(async () => {
     setLoading(true);
     try {
-      const entries = await invoke<SkillEntry[]>("list_skills", { baseDir: base });
-      setSkills(entries);
+      const globalDir = await getSkillsDir("global");
+      if (globalDir) {
+        const entries = await invoke<SkillEntry[]>("list_skills", { baseDir: globalDir });
+        setGlobalSkillEntries(entries);
+      } else {
+        setGlobalSkillEntries([]);
+      }
+      const projectDir = await getSkillsDir("project");
+      if (projectDir) {
+        const entries = await invoke<SkillEntry[]>("list_skills", { baseDir: projectDir });
+        setProjectSkillEntries(entries);
+      } else {
+        setProjectSkillEntries([]);
+      }
     } catch {
-      setSkills([]);
+      setGlobalSkillEntries([]);
+      setProjectSkillEntries([]);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
-  }, [getBaseDir]);
+  }, [getSkillsDir]);
 
   useEffect(() => {
-    setEditing(null);
-    setAdding(false);
-    loadSkills();
-  }, [loadSkills]);
+    loadAllSkills();
+  }, [loadAllSkills]);
+
+  // Derive displayPath from formScope
+  useEffect(() => {
+    (async () => {
+      const dir = await getSkillsDir(formScope);
+      if (dir) {
+        const sep = dir.includes("\\") ? "\\" : "/";
+        setDisplayPath(`${dir}${sep}<name>${sep}SKILL.md`);
+      } else {
+        setDisplayPath("");
+      }
+    })();
+  }, [formScope, getSkillsDir]);
+
+  const scopedSkills = useScopeItems(globalSkillEntries, projectSkillEntries);
 
   const startAdd = () => {
     setAdding(true);
     setEditing(null);
+    setEditingScope(null);
+    setFormScope("project");
     setFormName("");
     setFormDesc("");
     setFormBody("");
@@ -137,11 +166,13 @@ export function SkillsSection() {
     setNameError("");
   };
 
-  const startEdit = (skill: SkillEntry) => {
-    const parsed = parseSkillMd(skill.content);
-    setEditing(skill.dir_name);
+  const startEdit = (entry: SkillEntry, entryScope: Scope) => {
+    const parsed = parseSkillMd(entry.content);
+    setEditing(entry.dir_name);
+    setEditingScope(entryScope);
+    setFormScope(entryScope);
     setAdding(false);
-    setFormName(parsed.name || skill.dir_name);
+    setFormName(parsed.name || entry.dir_name);
     setFormDesc(parsed.description);
     setSavedDesc(parsed.description);
     setFormBody(parsed.body);
@@ -153,6 +184,7 @@ export function SkillsSection() {
   const handleCancel = () => {
     setEditing(null);
     setAdding(false);
+    setEditingScope(null);
     setNameError("");
   };
 
@@ -163,35 +195,44 @@ export function SkillsSection() {
       setNameError(t("skillNamePatternError"));
       return;
     }
-    const base = await getBaseDir();
+
+    const dirName = editing ?? name;
+
+    // If editing and scope changed, delete from old scope dir first
+    if (editing && editingScope && editingScope !== formScope) {
+      const oldDir = await getSkillsDir(editingScope);
+      if (oldDir) {
+        await invoke("delete_skill", { baseDir: oldDir, dirName });
+      }
+    }
+
+    const base = await getSkillsDir(formScope);
     if (!base) return;
 
     const md = buildSkillMd(name, formDesc.trim(), formBody);
-    const dirName = editing ?? name;
     await invoke("write_skill", { baseDir: base, dirName, content: md });
     setSavedBody(formBody);
     setSavedDesc(formDesc.trim());
     setEditing(null);
+    setEditingScope(null);
     setAdding(false);
     setNameError("");
-    await loadSkills();
-    if (scope === "global") {
-      loadGlobalSkills();
-    } else if (activeFolderPath) {
+    await loadAllSkills();
+    loadGlobalSkills();
+    if (activeFolderPath) {
       loadProjectSkills(activeFolderPath);
     }
   };
 
-  const handleDelete = async (dirName: string) => {
+  const handleDelete = async (dirName: string, targetScope: Scope) => {
     const confirmed = await ask(t("skillDeleteConfirm", { name: dirName }), { kind: "warning" });
     if (!confirmed) return;
-    const base = await getBaseDir();
+    const base = await getSkillsDir(targetScope);
     if (!base) return;
     await invoke("delete_skill", { baseDir: base, dirName });
-    await loadSkills();
-    if (scope === "global") {
-      loadGlobalSkills();
-    } else if (activeFolderPath) {
+    await loadAllSkills();
+    loadGlobalSkills();
+    if (activeFolderPath) {
       loadProjectSkills(activeFolderPath);
     }
   };
@@ -223,8 +264,9 @@ export function SkillsSection() {
     [formBody]
   );
 
-  // Compute missing builtin skills by comparing registry keys against loaded skill dir_names
-  const currentSkillNames = skills.reduce<Record<string, OpencodeSkill>>((acc, s) => {
+  // Compute missing builtin skills by comparing registry keys against all loaded skill dir_names
+  const allSkillEntries = [...globalSkillEntries, ...projectSkillEntries];
+  const currentSkillNames = allSkillEntries.reduce<Record<string, OpencodeSkill>>((acc, s) => {
     acc[s.dir_name] = { content: s.content, description: s.description };
     return acc;
   }, {});
@@ -233,20 +275,18 @@ export function SkillsSection() {
   const handleAddBuiltin = async (name: string) => {
     const entry = REGISTRY_SKILLS[name];
     if (!entry) return;
-    const base = await getBaseDir();
+    const base = await getSkillsDir("global");
     if (!base) return;
     const md = buildSkillMd(name, entry.description ?? "", entry.content);
     await invoke("write_skill", { baseDir: base, dirName: name, content: md });
     setShowBuiltinMenu(false);
-    await loadSkills();
-    if (scope === "global") {
-      loadGlobalSkills();
-    } else if (activeFolderPath) {
+    await loadAllSkills();
+    loadGlobalSkills();
+    if (activeFolderPath) {
       loadProjectSkills(activeFolderPath);
     }
   };
 
-  const noProject = scope === "project" && !activeFolderPath;
   const isEditing = adding || editing !== null;
   const isDirty = formBody !== savedBody || formDesc !== savedDesc || adding;
 
@@ -268,108 +308,92 @@ export function SkillsSection() {
         </a>
       </div>
 
-      <div className="oc-section__scope-tabs">
-        <button
-          className={`oc-section__scope-tab${scope === "global" ? " oc-section__scope-tab--active" : ""}`}
-          onClick={() => setScope("global")}
-        >
-          {t("skillScopeGlobal")}
-        </button>
-        <button
-          className={`oc-section__scope-tab${scope === "project" ? " oc-section__scope-tab--active" : ""}`}
-          onClick={() => setScope("project")}
-        >
-          {t("skillScopeProject")}
-        </button>
-      </div>
-
-      {displayPath && (
+      {displayPath && isEditing && (
         <div className="oc-section__path-hint">
-          {useRelativePaths && scope === "project" && activeFolderPath
+          {useRelativePaths && formScope === "project" && activeFolderPath
             ? toRelativeProjectPath(activeFolderPath, displayPath)
             : displayPath}
         </div>
       )}
 
-      {noProject && (
-        <div className="oc-section__empty">{t("skillNoProject")}</div>
-      )}
-
-      {!noProject && loading && (
+      {loading && (
         <div className="oc-section__empty">...</div>
       )}
 
-      {!noProject && !loading && isEditing && (
+      {!loading && isEditing && (
         <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
-          <div className="oc-section__field">
-            <label className="oc-section__label">{t("skillName")}</label>
-            <input
-              className="oc-section__input"
-              value={formName}
-              onChange={(e) => {
-                setFormName(e.target.value);
-                setNameError("");
-              }}
-              disabled={editing !== null}
-              placeholder="my-skill-name"
-            />
-            {nameError && (
-              <span style={{ fontSize: 11, color: "var(--accent-red, #ef4444)" }}>{nameError}</span>
-            )}
-          </div>
-          <div className="oc-section__field">
-            <label className="oc-section__label">{t("skillDescription")}</label>
-            <input
-              className="oc-section__input"
-              value={formDesc}
-              onChange={(e) => setFormDesc(e.target.value)}
-              placeholder={t("skillDescriptionHint")}
-            />
-          </div>
-
-          <div className="oc-section__field" style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
-            <label className="oc-section__label">{t("skillContent")}</label>
-            <div className="oc-rules__editor-panel">
-              <div className="oc-rules__panel-tabs">
-                <button
-                  className={`oc-rules__panel-tab${viewTab === "editor" ? " oc-rules__panel-tab--active" : ""}`}
-                  onClick={() => setViewTab("editor")}
-                >
-                  {t("skillTabEditor")}
-                </button>
-                <button
-                  className={`oc-rules__panel-tab${viewTab === "preview" ? " oc-rules__panel-tab--active" : ""}`}
-                  onClick={() => setViewTab("preview")}
-                >
-                  {t("skillTabPreview")}
-                </button>
-              </div>
-
-              {viewTab === "editor" ? (
-                <textarea
-                  className="oc-rules__editor-textarea"
-                  value={formBody}
-                  onChange={(e) => setFormBody(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder={t("skillPlaceholder")}
-                  spellCheck={false}
-                />
-              ) : (
-                formBody ? (
-                  <div
-                    className="oc-rules__preview"
-                    dangerouslySetInnerHTML={{ __html: previewHtml }}
-                  />
-                ) : (
-                  <div className="oc-rules__preview">
-                    <div className="oc-rules__preview-empty">
-                      {t("skillPlaceholder")}
-                    </div>
-                  </div>
-                )
+          <ScopeToggle value={formScope} onChange={setFormScope} />
+          <ScopeFormWrapper scope={formScope}>
+            <div className="oc-section__field">
+              <label className="oc-section__label">{t("skillName")}</label>
+              <input
+                className="oc-section__input"
+                value={formName}
+                onChange={(e) => {
+                  setFormName(e.target.value);
+                  setNameError("");
+                }}
+                disabled={editing !== null}
+                placeholder="my-skill-name"
+              />
+              {nameError && (
+                <span style={{ fontSize: 11, color: "var(--accent-red, #ef4444)" }}>{nameError}</span>
               )}
             </div>
-          </div>
+            <div className="oc-section__field">
+              <label className="oc-section__label">{t("skillDescription")}</label>
+              <input
+                className="oc-section__input"
+                value={formDesc}
+                onChange={(e) => setFormDesc(e.target.value)}
+                placeholder={t("skillDescriptionHint")}
+              />
+            </div>
+
+            <div className="oc-section__field" style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+              <label className="oc-section__label">{t("skillContent")}</label>
+              <div className="oc-rules__editor-panel">
+                <div className="oc-rules__panel-tabs">
+                  <button
+                    className={`oc-rules__panel-tab${viewTab === "editor" ? " oc-rules__panel-tab--active" : ""}`}
+                    onClick={() => setViewTab("editor")}
+                  >
+                    {t("skillTabEditor")}
+                  </button>
+                  <button
+                    className={`oc-rules__panel-tab${viewTab === "preview" ? " oc-rules__panel-tab--active" : ""}`}
+                    onClick={() => setViewTab("preview")}
+                  >
+                    {t("skillTabPreview")}
+                  </button>
+                </div>
+
+                {viewTab === "editor" ? (
+                  <textarea
+                    className="oc-rules__editor-textarea"
+                    value={formBody}
+                    onChange={(e) => setFormBody(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder={t("skillPlaceholder")}
+                    spellCheck={false}
+                  />
+                ) : (
+                  formBody ? (
+                    <div
+                      className="oc-rules__preview"
+                      dangerouslySetInnerHTML={{ __html: previewHtml }}
+                    />
+                  ) : (
+                    <div className="oc-rules__preview">
+                      <div className="oc-rules__preview-empty">
+                        {t("skillPlaceholder")}
+                      </div>
+                    </div>
+                  )
+                )}
+              </div>
+            </div>
+          </ScopeFormWrapper>
 
           <div className="oc-section__form-actions" style={{ marginTop: 8, flexShrink: 0 }}>
             <button
@@ -387,13 +411,17 @@ export function SkillsSection() {
         </div>
       )}
 
-      {!noProject && !loading && !isEditing && (
+      {!loading && !isEditing && (
         <>
-          {skills.length === 0 && (
+          {scopedSkills.length === 0 && (
             <div className="oc-section__empty">{t("skillsEmpty")}</div>
           )}
-          {skills.map((skill) => (
-            <div key={skill.dir_name} className="oc-section__item" style={{ marginBottom: 4 }}>
+          {scopedSkills.map(({ scope: itemScope, data: skill }) => (
+            <div
+              key={`${itemScope}-${skill.dir_name}`}
+              className={`oc-section__item oc-section__item--${itemScope}`}
+              style={{ marginBottom: 4 }}
+            >
               <div className="oc-section__item-info">
                 <span className="oc-section__item-name">
                   {skill.name || skill.dir_name}
@@ -404,10 +432,10 @@ export function SkillsSection() {
                 <span className="oc-section__item-detail">{skill.description}</span>
               </div>
               <div className="oc-section__item-actions">
-                <button className="oc-section__edit-btn" onClick={() => startEdit(skill)}>
+                <button className="oc-section__edit-btn" onClick={() => startEdit(skill, itemScope)}>
                   {t("edit")}
                 </button>
-                <button className="oc-section__delete-btn" onClick={() => handleDelete(skill.dir_name)}>
+                <button className="oc-section__delete-btn" onClick={() => handleDelete(skill.dir_name, itemScope)}>
                   ×
                 </button>
               </div>
