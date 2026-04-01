@@ -207,6 +207,10 @@ pub fn run() {
             // VBA macro operations
             commands::vba::extract_vba_modules,
             commands::vba::inject_vba_modules,
+            // Medium operations
+            commands::medium::medium_test_connection,
+            commands::medium::medium_upload_image,
+            commands::medium::medium_create_post,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

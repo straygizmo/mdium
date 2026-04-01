@@ -5,6 +5,7 @@ pub mod file;
 pub mod git;
 pub mod image_gen;
 pub mod mcp;
+pub mod medium;
 pub mod pty;
 pub mod rag;
 pub mod slidev;
