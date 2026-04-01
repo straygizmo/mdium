@@ -294,12 +294,11 @@ export function OpencodeChat() {
         </button>
         <select
           className="oc-chat__agent-select"
-          value={selectedAgent ?? ""}
-          onChange={(e) => setSelectedAgent(e.target.value || null)}
+          value={selectedAgent ?? "build"}
+          onChange={(e) => setSelectedAgent(e.target.value)}
           disabled={!connected}
           title={t("ocChatAgentSelect")}
         >
-          <option value="">Default</option>
           {availableAgents.length > 0
             ? availableAgents.map((a) => (
                 <option key={a.name} value={a.name}>
@@ -308,8 +307,8 @@ export function OpencodeChat() {
               ))
             : (
               <>
+                <option value="build">build</option>
                 <option value="plan">plan</option>
-                <option value="rag">rag</option>
               </>
             )
           }

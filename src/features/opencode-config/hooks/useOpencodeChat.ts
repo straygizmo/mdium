@@ -99,7 +99,7 @@ export const useChatUIStore = create<OpencodeChatUIState>()(() => ({
   loading: false,
   sessions: [],
   currentSessionId: null,
-  selectedAgent: "plan",
+  selectedAgent: "build",
   availableAgents: [],
   useMdContext: false,
   chatInput: "",
@@ -386,10 +386,17 @@ export async function doConnect(folderPath?: string) {
       const agentsRes = await client.app.agents();
       const agents = (agentsRes.data as any) ?? [];
       useChatUIStore.setState({
-        availableAgents: agents.map((a: any) => ({
-          name: a.name,
-          description: a.description ?? "",
-        })),
+        availableAgents: agents
+          .filter((a: any) => {
+            const mode = a.mode ?? "all";
+            if (mode === "subagent") return false;
+            if (a.hidden) return false;
+            return true;
+          })
+          .map((a: any) => ({
+            name: a.name,
+            description: a.description ?? "",
+          })),
       });
     } catch {
       // Non-critical — dropdown will show default options
