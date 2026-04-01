@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { useOpencodeServerStore } from "./opencode-server-store";
 import { useOpencodeConfigStore } from "./opencode-config-store";
+import { useUiStore } from "./ui-store";
 
 export interface Tab {
   id: string;
@@ -26,6 +27,8 @@ export interface Tab {
   imageCanvasJson?: string;
   /** Whether this tab should use the code editor (non-markdown text file) */
   isCodeFile?: boolean;
+  /** Whether the editor pane is visible for this tab (default: true) */
+  editorVisible?: boolean;
 }
 
 interface TabState {
@@ -50,6 +53,8 @@ interface TabState {
   /** Update only the tab display name (preserves dirty state) */
   updateTabFileName: (id: string, fileName: string) => void;
   getActiveTab: () => Tab | undefined;
+  /** Toggle editor visibility for the active tab and sync to UI store */
+  toggleTabEditor: () => void;
 
   /** Add folder tab when opening a folder (also creates an empty tab) */
   openFolder: (folderPath: string) => void;
@@ -80,6 +85,7 @@ export const useTabStore = create<TabState>()(
       (t) => t.filePath && t.filePath === tabData.filePath && t.folderPath === tabData.folderPath
     );
     if (existing) {
+      useUiStore.getState().setEditorVisible(existing.editorVisible ?? true);
       set({
         activeTabId: existing.id,
         activeFolderPath: existing.folderPath || get().activeFolderPath,
@@ -90,6 +96,7 @@ export const useTabStore = create<TabState>()(
       return;
     }
     const newTab: Tab = { ...tabData, id: generateId(), dirty: false, undoStack: [], redoStack: [] };
+    useUiStore.getState().setEditorVisible(newTab.editorVisible ?? true);
     set((s) => ({
       tabs: [...s.tabs, newTab],
       activeTabId: newTab.id,
@@ -133,6 +140,9 @@ export const useTabStore = create<TabState>()(
         newFolderLast[newActiveTab.folderPath] = newActiveId!;
       }
 
+      // Restore editorVisible for the new active tab
+      useUiStore.getState().setEditorVisible(newActiveTab?.editorVisible ?? true);
+
       return {
         tabs: newTabs,
         activeTabId: newActiveId,
@@ -144,6 +154,7 @@ export const useTabStore = create<TabState>()(
 
   setActiveTab: (id) => {
     const tab = get().tabs.find((t) => t.id === id);
+    useUiStore.getState().setEditorVisible(tab?.editorVisible ?? true);
     set((s) => ({
       activeTabId: id,
       activeFolderPath: tab?.folderPath ?? s.activeFolderPath,
@@ -219,6 +230,19 @@ export const useTabStore = create<TabState>()(
     return tabs.find((t) => t.id === activeTabId);
   },
 
+  toggleTabEditor: () => {
+    const activeTab = get().getActiveTab();
+    const newVisible = !useUiStore.getState().editorVisible;
+    useUiStore.getState().setEditorVisible(newVisible);
+    if (activeTab) {
+      set((s) => ({
+        tabs: s.tabs.map((t) =>
+          t.id === activeTab.id ? { ...t, editorVisible: newVisible } : t
+        ),
+      }));
+    }
+  },
+
   openFolder: (folderPath) => {
     const { tabs } = get();
     // If tabs for this folder already exist, just switch
@@ -266,6 +290,7 @@ export const useTabStore = create<TabState>()(
     ocStore.loadConfig();
     ocStore.loadProjectMcpServers(folderPath);
 
+    useUiStore.getState().setEditorVisible(target?.editorVisible ?? true);
     set({
       activeFolderPath: folderPath,
       activeTabId: target?.id ?? null,
@@ -300,6 +325,9 @@ export const useTabStore = create<TabState>()(
 
     const newFolderLast = { ...get().folderLastActiveTab };
     delete newFolderLast[folderPath];
+
+    const newActiveTab = newTabs.find((t) => t.id === newActiveId);
+    useUiStore.getState().setEditorVisible(newActiveTab?.editorVisible ?? true);
 
     set({
       tabs: newTabs,

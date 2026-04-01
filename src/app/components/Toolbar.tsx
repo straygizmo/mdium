@@ -35,7 +35,7 @@ export function Toolbar({
 }: ToolbarProps) {
   const { t } = useTranslation(["toolbar", "common"]);
 
-  const toggleEditor = useUiStore((s) => s.toggleEditor);
+  const toggleEditor = useTabStore((s) => s.toggleTabEditor);
   const setShowSearch = useUiStore((s) => s.setShowSearch);
   const showSearch = useUiStore((s) => s.showSearch);
   const bottomTerminalVisible = useUiStore((s) => s.bottomTerminalVisible);

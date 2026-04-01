@@ -261,13 +261,15 @@ export function App() {
     };
   }, []);
 
-  // Toggle editor visibility when switching tabs
+  // Force-hide editor for non-editable file types; normal files use per-tab state
   useEffect(() => {
     if (activeTab) {
       const isSpecialFile = activeTab.mindmapFileType || activeTab.imageFileType || activeTab.officeFileType;
       const isVideoJson = activeTab.filePath?.toLowerCase().endsWith(".video.json");
       const isCode = activeTab.isCodeFile;
-      useUiStore.getState().setEditorVisible(!isSpecialFile && !isVideoJson && !isCode);
+      if (isSpecialFile || isVideoJson || isCode) {
+        useUiStore.getState().setEditorVisible(false);
+      }
       if (isVideoJson) {
         useUiStore.getState().setActiveViewTab("video");
       }
@@ -878,7 +880,7 @@ export function App() {
         }
       } else if (e.ctrlKey && e.key === "\\") {
         e.preventDefault();
-        useUiStore.getState().toggleEditor();
+        useTabStore.getState().toggleTabEditor();
       } else if (e.ctrlKey && e.key === "t") {
         e.preventDefault();
         const ui = useUiStore.getState();
