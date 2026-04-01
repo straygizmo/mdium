@@ -10,16 +10,25 @@ import type {
   OpencodeWebUi,
 } from "@/shared/types";
 
+export interface AgentFileEntry {
+  file_name: string;
+  agent_name: string;
+  description: string;
+  content: string;
+}
+
 interface OpencodeConfigState {
   config: OpencodeConfig;
   projectCommands: Record<string, OpencodeCommand>;
   projectMcpServers: Record<string, OpencodeMcpServer>;
   projectSkillNames: string[];
   globalSkillNames: string[];
+  globalAgentFiles: AgentFileEntry[];
   loading: boolean;
 
   loadConfig: () => Promise<void>;
   loadGlobalSkills: () => Promise<void>;
+  loadGlobalAgentFiles: () => Promise<void>;
   // Rules
   setRules: (rules: string[]) => Promise<void>;
   // Tools
@@ -27,6 +36,9 @@ interface OpencodeConfigState {
   // Agents
   saveAgent: (name: string, agent: OpencodeAgent) => Promise<void>;
   deleteAgent: (name: string) => Promise<void>;
+  // Agent Files (markdown-based)
+  writeAgentFile: (name: string, content: string) => Promise<void>;
+  deleteAgentFile: (name: string) => Promise<void>;
   // Commands (Global)
   saveCommand: (name: string, cmd: OpencodeCommand) => Promise<void>;
   deleteCommand: (name: string) => Promise<void>;
@@ -130,6 +142,7 @@ export const useOpencodeConfigStore = create<OpencodeConfigState>()((set) => ({
   projectMcpServers: {},
   projectSkillNames: [],
   globalSkillNames: [],
+  globalAgentFiles: [],
   loading: false,
 
   loadConfig: async () => {
@@ -148,6 +161,37 @@ export const useOpencodeConfigStore = create<OpencodeConfigState>()((set) => ({
     } catch {
       set({ globalSkillNames: [] });
     }
+  },
+
+  loadGlobalAgentFiles: async () => {
+    try {
+      const home = await invoke<string>("get_home_dir");
+      const sep = home.includes("\\") ? "\\" : "/";
+      const agentsDir = `${home}${sep}.config${sep}opencode${sep}agents`;
+      const entries = await invoke<AgentFileEntry[]>("list_agent_files", { agentsDir });
+      set({ globalAgentFiles: entries });
+    } catch {
+      set({ globalAgentFiles: [] });
+    }
+  },
+
+  writeAgentFile: async (name, content) => {
+    const home = await invoke<string>("get_home_dir");
+    const sep = home.includes("\\") ? "\\" : "/";
+    const agentsDir = `${home}${sep}.config${sep}opencode${sep}agents`;
+    await invoke("write_agent_file", { agentsDir, fileName: `${name}.md`, content });
+    // Reload agent files
+    const entries = await invoke<AgentFileEntry[]>("list_agent_files", { agentsDir });
+    set({ globalAgentFiles: entries });
+  },
+
+  deleteAgentFile: async (name) => {
+    const home = await invoke<string>("get_home_dir");
+    const sep = home.includes("\\") ? "\\" : "/";
+    const agentsDir = `${home}${sep}.config${sep}opencode${sep}agents`;
+    await invoke("delete_agent_file", { agentsDir, fileName: `${name}.md` });
+    const entries = await invoke<AgentFileEntry[]>("list_agent_files", { agentsDir });
+    set({ globalAgentFiles: entries });
   },
 
   setRules: async (rules) => {

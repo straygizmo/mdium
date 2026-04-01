@@ -1,11 +1,10 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 import type { OpencodeAgent } from "@/shared/types";
 import {
   BUILTIN_AGENTS,
-  getMissingBuiltinAgents,
   isBuiltinAgent,
 } from "../../lib/builtin-registry";
 
@@ -17,6 +16,14 @@ export function AgentsSection() {
   const agents = config.agents ?? EMPTY_AGENTS;
   const saveAgent = useOpencodeConfigStore((s) => s.saveAgent);
   const deleteAgent = useOpencodeConfigStore((s) => s.deleteAgent);
+  const globalAgentFiles = useOpencodeConfigStore((s) => s.globalAgentFiles);
+  const loadGlobalAgentFiles = useOpencodeConfigStore((s) => s.loadGlobalAgentFiles);
+  const writeAgentFile = useOpencodeConfigStore((s) => s.writeAgentFile);
+  const deleteAgentFile = useOpencodeConfigStore((s) => s.deleteAgentFile);
+
+  useEffect(() => {
+    loadGlobalAgentFiles();
+  }, [loadGlobalAgentFiles]);
 
   const [editing, setEditing] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -34,7 +41,11 @@ export function AgentsSection() {
   const [showBuiltinMenu, setShowBuiltinMenu] = useState(false);
 
   const entries = Object.entries(agents);
-  const missingBuiltins = getMissingBuiltinAgents(agents);
+  // Builtin agents are "missing" if not in config AND not in agent files
+  const fileAgentNames = new Set(globalAgentFiles.map((f) => f.agent_name));
+  const missingBuiltins = Object.keys(BUILTIN_AGENTS).filter(
+    (name) => !(name in agents) && !fileAgentNames.has(name)
+  );
 
   const resetForm = () => {
     setFormName("");
@@ -121,15 +132,7 @@ export function AgentsSection() {
   const handleAddBuiltin = async (name: string) => {
     const entry = BUILTIN_AGENTS[name];
     if (!entry || !entry.agentMd) return;
-    // Write agent markdown file to ~/.config/opencode/agents/<name>.md
-    try {
-      const home = await invoke<string>("get_home_dir");
-      const sep = home.includes("\\") ? "\\" : "/";
-      const agentPath = `${home}${sep}.config${sep}opencode${sep}agents${sep}${name}.md`;
-      await invoke("write_text_file_with_dirs", { path: agentPath, content: entry.agentMd });
-    } catch (e) {
-      console.warn(`[opencode] failed to write builtin agent ${name}:`, e);
-    }
+    await writeAgentFile(name, entry.agentMd);
     setShowBuiltinMenu(false);
   };
 
@@ -281,15 +284,30 @@ export function AgentsSection() {
         </>
       ) : (
         <>
-          {entries.length === 0 && <div className="oc-section__empty">{t("agentsEmpty")}</div>}
+          {entries.length === 0 && globalAgentFiles.length === 0 && <div className="oc-section__empty">{t("agentsEmpty")}</div>}
+          {/* File-based agents (from ~/.config/opencode/agents/*.md) */}
+          {globalAgentFiles.map((af) => (
+            <div key={`file:${af.agent_name}`} className="oc-section__item" style={{ marginBottom: 4 }}>
+              <div className="oc-section__item-info">
+                <span className="oc-section__item-name">
+                  {af.agent_name}
+                  {isBuiltinAgent(af.agent_name) && (
+                    <span className="oc-section__builtin-badge">Built-in</span>
+                  )}
+                </span>
+                <span className="oc-section__item-detail">{af.description}</span>
+              </div>
+              <div className="oc-section__item-actions">
+                <button className="oc-section__delete-btn" onClick={() => deleteAgentFile(af.agent_name)}>×</button>
+              </div>
+            </div>
+          ))}
+          {/* Config-based agents (from opencode.jsonc) */}
           {entries.map(([name, agent]) => (
             <div key={name} className="oc-section__item" style={{ marginBottom: 4 }}>
               <div className="oc-section__item-info">
                 <span className="oc-section__item-name">
                   {name}
-                  {isBuiltinAgent(name) && (
-                    <span className="oc-section__builtin-badge">Built-in</span>
-                  )}
                 </span>
                 <span className="oc-section__item-detail">{agent.description ?? agent.model ?? ""}</span>
               </div>

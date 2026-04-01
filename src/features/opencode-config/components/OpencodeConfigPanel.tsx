@@ -40,18 +40,20 @@ export function OpencodeConfigPanel() {
   const loadProjectMcpServers = useOpencodeConfigStore((s) => s.loadProjectMcpServers);
   const loadProjectSkills = useOpencodeConfigStore((s) => s.loadProjectSkills);
   const loadGlobalSkills = useOpencodeConfigStore((s) => s.loadGlobalSkills);
+  const loadGlobalAgentFiles = useOpencodeConfigStore((s) => s.loadGlobalAgentFiles);
 
   useEffect(() => {
     if (!activeFolderPath) return;
     const timer = setTimeout(() => {
       loadConfig();
       loadGlobalSkills();
+      loadGlobalAgentFiles();
       loadProjectCommands(activeFolderPath);
       loadProjectMcpServers(activeFolderPath);
       loadProjectSkills(activeFolderPath);
     }, 200);
     return () => clearTimeout(timer);
-  }, [loadConfig, loadGlobalSkills, loadProjectCommands, loadProjectMcpServers, loadProjectSkills, activeFolderPath]);
+  }, [loadConfig, loadGlobalSkills, loadGlobalAgentFiles, loadProjectCommands, loadProjectMcpServers, loadProjectSkills, activeFolderPath]);
 
   const contextValue = useMemo(() => ({ useRelativePaths: true }), []);
 
