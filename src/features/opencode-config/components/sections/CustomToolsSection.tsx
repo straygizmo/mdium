@@ -201,7 +201,7 @@ export function CustomToolsSection() {
       )}
 
       {!loading && isEditing && (
-        <>
+        <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
           <ScopeToggle value={formScope} onChange={setFormScope} />
           <ScopeFormWrapper scope={formScope}>
             <div className="oc-section__field">
@@ -260,7 +260,7 @@ export function CustomToolsSection() {
               {t("cancel")}
             </button>
           </div>
-        </>
+        </div>
       )}
 
       {!loading && !isEditing && (

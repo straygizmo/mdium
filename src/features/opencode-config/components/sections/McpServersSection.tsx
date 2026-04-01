@@ -501,7 +501,7 @@ export function McpServersSection() {
       </div>
 
       {isEditing ? (
-        <>
+        <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
           <ScopeToggle value={formScope} onChange={setFormScope} />
 
           <ScopeFormWrapper scope={formScope}>
@@ -615,7 +615,7 @@ export function McpServersSection() {
             <button className="oc-section__save-btn" onClick={handleSave}>{t("save")}</button>
             <button className="oc-section__cancel-btn" onClick={handleCancel}>{t("cancel")}</button>
           </div>
-        </>
+        </div>
       ) : (
         <>
           {scopedEntries.length === 0 && <div className="oc-section__empty">{t("mcpEmpty")}</div>}

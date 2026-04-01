@@ -124,8 +124,8 @@ export function RulesSection() {
       )}
 
       {!noProject && !loading && (
-        <ScopeFormWrapper scope={scope}>
         <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
+        <ScopeFormWrapper scope={scope}>
           <div className="oc-rules__editor-panel">
             <div className="oc-rules__panel-tabs">
               <button
@@ -166,6 +166,7 @@ export function RulesSection() {
               )
             )}
           </div>
+        </ScopeFormWrapper>
 
           {displayPath && (
             <div className="oc-section__path-hint">
@@ -185,7 +186,6 @@ export function RulesSection() {
             </button>
           </div>
         </div>
-        </ScopeFormWrapper>
       )}
     </div>
   );
