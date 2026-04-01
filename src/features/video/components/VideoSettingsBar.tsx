@@ -207,8 +207,17 @@ export function VideoSettingsBar({ onGenerateAudio, generating, generatingStatus
         </button>
       </fieldset>
 
-      <div className="video-settings-bar__row">
-        <label>{t("captions")}</label>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <button
+          className="video-settings-bar__decorate-btn"
+          onClick={onDecorateWithLLM}
+          disabled={decorating || generating}
+          title={t("autoConfigWithLLMTooltip")}
+          style={{ flex: 1 }}
+        >
+          {decorating ? t("autoConfiguring") : t("autoConfigWithLLM")}
+        </button>
+        <label style={{ fontSize: 12, color: "var(--text)", whiteSpace: "nowrap" }}>{t("captions")}</label>
         <span
           className={`scene-edit-form__switch${allCaptionsEnabled ? " scene-edit-form__switch--on" : ""}`}
           role="switch"
@@ -225,15 +234,6 @@ export function VideoSettingsBar({ onGenerateAudio, generating, generatingStatus
           <span className="scene-edit-form__switch-thumb" />
         </span>
       </div>
-
-      <button
-        className="video-settings-bar__decorate-btn"
-        onClick={onDecorateWithLLM}
-        disabled={decorating || generating}
-        title={t("autoConfigWithLLMTooltip")}
-      >
-        {decorating ? t("autoConfiguring") : t("autoConfigWithLLM")}
-      </button>
     </div>
   );
 }
