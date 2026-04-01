@@ -82,5 +82,11 @@
   "azureEnvConfirm": "opencode用に環境変数'AZURE_RESOURCE_NAME'を設定しますか？",
   "azureEnvPrompt": "AZURE_RESOURCE_NAME の値を入力してください:",
   "azureEnvAlreadySet": "環境変数 AZURE_RESOURCE_NAME はすでに設定済みです。上書きしますか？",
-  "azureEnvSet": "環境変数 AZURE_RESOURCE_NAME を設定しました。"
+  "azureEnvSet": "環境変数 AZURE_RESOURCE_NAME を設定しました。",
+  "tabOther": "その他",
+  "zennInit": "Zennフォルダとして初期化",
+  "zennInitDescription": "空のフォルダを選択してZenn記事用リポジトリとして初期化します（git init、articles/、books/、images/、work/ ディレクトリを作成）",
+  "zennInitSuccess": "Zennフォルダを初期化しました",
+  "zennInitNotEmpty": "選択したフォルダが空ではありません。空のフォルダを選択してください。",
+  "zennInitFailed": "Zennフォルダの初期化に失敗しました"
 }

@@ -82,5 +82,11 @@
   "azureEnvConfirm": "Set the environment variable 'AZURE_RESOURCE_NAME' for opencode?",
   "azureEnvPrompt": "Enter the value for AZURE_RESOURCE_NAME:",
   "azureEnvAlreadySet": "Environment variable AZURE_RESOURCE_NAME is already set. Overwrite?",
-  "azureEnvSet": "Environment variable AZURE_RESOURCE_NAME has been set."
+  "azureEnvSet": "Environment variable AZURE_RESOURCE_NAME has been set.",
+  "tabOther": "Other",
+  "zennInit": "Initialize as Zenn folder",
+  "zennInitDescription": "Select an empty folder to set up as a Zenn article repository (git init, articles/, books/, images/, work/ directories)",
+  "zennInitSuccess": "Zenn folder initialized successfully",
+  "zennInitNotEmpty": "The selected folder is not empty. Please choose an empty folder.",
+  "zennInitFailed": "Failed to initialize Zenn folder"
 }
