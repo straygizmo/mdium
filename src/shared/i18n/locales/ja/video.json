@@ -87,5 +87,6 @@
   "bgEffectWaveVisualizer": "波形ビジュアライザー",
   "bgEffectThreeParticles": "3Dパーティクル",
   "bgEffectThreeGeometry": "3Dジオメトリ",
-  "bgEffectLottie": "Lottieアニメーション"
+  "bgEffectLottie": "Lottieアニメーション",
+  "exportFileExistsWarning": "「{{fileName}}」は既に存在します。上書きしますか？"
 }

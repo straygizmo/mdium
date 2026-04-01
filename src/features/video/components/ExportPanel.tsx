@@ -1,6 +1,7 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { save } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@tauri-apps/api/core";
 import { useVideoStore } from "@/stores/video-store";
 
 export interface ExportOptions {
@@ -35,9 +36,15 @@ export function ExportPanel({ disabled, onExport }: ExportPanelProps) {
   const [format, setFormat] = useState<"mp4" | "webm">("mp4");
   const [fps, setFps] = useState(meta?.fps ?? 30);
   const [concurrency, setConcurrency] = useState(2);
-  const [outputPath, setOutputPath] = useState("");
-
   const sourceFilePath = useVideoStore((s) => s.sourceFilePath);
+
+  const defaultOutputPath = useMemo(() => {
+    if (!sourceFilePath) return "";
+    return sourceFilePath.replace(/\.video\.json$/i, `.${format}`).replace(/\.md$/i, `.${format}`);
+  }, [sourceFilePath, format]);
+
+  const [outputPath, setOutputPath] = useState("");
+  const effectiveOutputPath = outputPath || defaultOutputPath;
 
   const handleSelectOutputPath = useCallback(async () => {
     // Default: same directory, filename = {stem}.video.json → {stem}.mp4/webm
@@ -59,17 +66,23 @@ export function ExportPanel({ disabled, onExport }: ExportPanelProps) {
     }
   }, [format, sourceFilePath]);
 
-  const handleExport = useCallback(() => {
-    if (!outputPath || !meta) return;
+  const handleExport = useCallback(async () => {
+    if (!effectiveOutputPath || !meta) return;
+    const fileExists = await invoke<boolean>("video_file_exists", { path: effectiveOutputPath }).catch(() => false);
+    if (fileExists) {
+      const fileName = effectiveOutputPath.split(/[\\/]/).pop() ?? effectiveOutputPath;
+      const confirmed = window.confirm(t("exportFileExistsWarning", { fileName }));
+      if (!confirmed) return;
+    }
     onExport({
       format,
       width: meta.width,
       height: meta.height,
       fps,
       concurrency,
-      outputPath,
+      outputPath: effectiveOutputPath,
     });
-  }, [format, fps, concurrency, outputPath, meta, onExport]);
+  }, [format, fps, concurrency, effectiveOutputPath, meta, onExport, t]);
 
   const isExporting = exportPhase != null && exportPhase !== "done";
   const isDone = exportPhase === "done";
@@ -145,7 +158,7 @@ export function ExportPanel({ disabled, onExport }: ExportPanelProps) {
             onClick={handleSelectOutputPath}
             disabled={disabled}
           >
-            {outputPath ? outputPath.split(/[\\/]/).pop() : t("selectOutput")}
+            {effectiveOutputPath ? effectiveOutputPath.split(/[\\/]/).pop() : t("selectOutput")}
           </button>
         </div>
 
@@ -169,7 +182,7 @@ export function ExportPanel({ disabled, onExport }: ExportPanelProps) {
         <button
           className="export-panel__export-btn"
           onClick={handleExport}
-          disabled={disabled || !outputPath || isExporting}
+          disabled={disabled || !effectiveOutputPath || isExporting}
         >
           {isExporting ? t("exporting") : t("startExport")}
         </button>

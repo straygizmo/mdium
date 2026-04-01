@@ -87,5 +87,6 @@
   "bgEffectWaveVisualizer": "Wave Visualizer",
   "bgEffectThreeParticles": "3D Particles",
   "bgEffectThreeGeometry": "3D Geometry",
-  "bgEffectLottie": "Lottie Animation"
+  "bgEffectLottie": "Lottie Animation",
+  "exportFileExistsWarning": "\"{{fileName}}\" already exists. Overwrite?"
 }
