@@ -192,7 +192,7 @@ export function CommandsSection() {
       : "";
 
   return (
-    <div>
+    <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
       <div className="oc-section__hint">
         {t("commandsDescription")}
         {" "}
