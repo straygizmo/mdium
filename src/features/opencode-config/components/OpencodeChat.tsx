@@ -7,6 +7,7 @@ import { useTabStore } from "@/stores/tab-store";
 import { useEditorContextStore } from "@/stores/editor-context-store";
 import { OpencodeConfigBadges } from "./OpencodeConfigBadges";
 import { CompletionPopup } from "./CompletionPopup";
+import { QuestionsCard } from "./QuestionsCard";
 import { useCompletion } from "../hooks/useCompletion";
 import "./OpencodeChat.css";
 
@@ -26,6 +27,7 @@ export function OpencodeChat() {
     error,
     messages,
     loading,
+    pendingQuestions,
     sessions,
     currentSessionId,
     connect,
@@ -117,6 +119,13 @@ export function OpencodeChat() {
     sendMessage(textToSend, agent);
     setInput("");
   }, [input, loading, sendMessage, useMdContext]);
+
+  const handleQuestionsSubmit = useCallback(
+    (answers: string) => {
+      sendMessage(answers);
+    },
+    [sendMessage]
+  );
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -398,10 +407,18 @@ export function OpencodeChat() {
             </Fragment>
           );
         })}
-        {loading && (
+        {loading && !pendingQuestions && (
           <div className="oc-chat__loading">
             <div className="oc-chat__loading-bar" />
             <span className="oc-chat__loading-label">{t("ocChatThinking", "Thinking...")}</span>
+          </div>
+        )}
+        {pendingQuestions && (
+          <div className="oc-chat__msg oc-chat__msg--assistant">
+            <QuestionsCard
+              questions={pendingQuestions}
+              onSubmit={handleQuestionsSubmit}
+            />
           </div>
         )}
         <div ref={messagesEndRef} />
