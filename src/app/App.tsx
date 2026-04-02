@@ -468,7 +468,11 @@ export function App() {
       const ext = activeTab.filePath
         ? (activeTab.filePath.split(".").pop() ?? "txt")
         : "txt";
+      const defaultPath = activeTab.filePath
+        ? activeTab.filePath
+        : activeFolderPath ?? undefined;
       const selected = await save({
+        defaultPath,
         filters: isMindmap
           ? [{ name: "Mindmap", extensions: ["km"] }]
           : isCode
@@ -495,7 +499,7 @@ export function App() {
     } catch (e) {
       console.error("Failed to save as:", e);
     }
-  }, [activeTab, updateTabFilePath, setActiveFile, addRecentFile, loadFileTree]);
+  }, [activeTab, activeFolderPath, updateTabFilePath, setActiveFile, addRecentFile, loadFileTree]);
 
   // Save
   const handleSave = useCallback(async () => {
