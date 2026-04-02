@@ -1016,6 +1016,7 @@ export function App() {
                     imageSrc={activeTab.imageBlobUrl}
                     canvasJson={activeTab.imageCanvasJson}
                     onCanvasModified={handleImageCanvasModified}
+                    imageFileType={activeTab.imageFileType}
                   />
                 </div>
               ) : activeTab.isCodeFile ? (

@@ -14,10 +14,11 @@ interface ImageCanvasProps {
   imageSrc: string;
   canvasJson?: string;
   onCanvasModified?: () => void;
+  imageFileType?: string;
 }
 
 export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(function ImageCanvas(
-  { imageSrc, canvasJson, onCanvasModified },
+  { imageSrc, canvasJson, onCanvasModified, imageFileType },
   ref
 ) {
   const canvasElRef = useRef<HTMLCanvasElement | null>(null);
@@ -165,6 +166,7 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(funct
       <ImagePreviewToolbar
         activeTool={activeTool}
         onToolChange={setActiveTool}
+        isSvg={imageFileType?.toLowerCase() === ".svg"}
         canUndo={canUndo}
         canRedo={canRedo}
         onUndo={undo}

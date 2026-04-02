@@ -27,6 +27,7 @@ interface Props {
   onFontFamilyChange: (family: string) => void;
   strokeWidth: number;
   onStrokeWidthChange: (width: number) => void;
+  isSvg?: boolean;
 }
 
 const TOOL_IDS: ImageTool[] = [
@@ -61,15 +62,20 @@ const ImagePreviewToolbar: FC<Props> = ({
   onFontFamilyChange,
   strokeWidth,
   onStrokeWidthChange,
+  isSvg,
 }) => {
   const { t } = useTranslation("imageEditor");
-  const showTextOptions = activeTool === "text";
-  const showShapeOptions = ["rect", "circle"].includes(activeTool);
-  const showStrokeOptions = ["rect", "circle", "arrow", "line", "pen", "text"].includes(activeTool);
+
+  const DRAWING_TOOLS: ImageTool[] = ["text", "rect", "circle", "arrow", "line", "pen"];
+  const visibleTools = isSvg ? TOOL_IDS.filter((id) => !DRAWING_TOOLS.includes(id)) : TOOL_IDS;
+
+  const showTextOptions = !isSvg && activeTool === "text";
+  const showShapeOptions = !isSvg && ["rect", "circle"].includes(activeTool);
+  const showStrokeOptions = !isSvg && ["rect", "circle", "arrow", "line", "pen", "text"].includes(activeTool);
 
   return (
     <div className="image-preview-toolbar">
-      {TOOL_IDS.map((id) => {
+      {visibleTools.map((id) => {
         const label = t(`tools.${id}`);
         return (
           <button
@@ -184,14 +190,18 @@ const ImagePreviewToolbar: FC<Props> = ({
         +
       </button>
 
-      <span className="im-tb-sep" />
+      {!isSvg && (
+        <>
+          <span className="im-tb-sep" />
 
-      <button className="im-tb-btn" onClick={onUndo} disabled={!canUndo} title={t("undo")}>
-        {t("undoLabel")}
-      </button>
-      <button className="im-tb-btn" onClick={onRedo} disabled={!canRedo} title={t("redo")}>
-        {t("redoLabel")}
-      </button>
+          <button className="im-tb-btn" onClick={onUndo} disabled={!canUndo} title={t("undo")}>
+            {t("undoLabel")}
+          </button>
+          <button className="im-tb-btn" onClick={onRedo} disabled={!canRedo} title={t("redo")}>
+            {t("redoLabel")}
+          </button>
+        </>
+      )}
 
     </div>
   );
