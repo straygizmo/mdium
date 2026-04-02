@@ -745,7 +745,8 @@ export function McpServersSection() {
                       type="checkbox"
                       checked={isEnabled}
                       onChange={async (e) => {
-                        const updated = { ...server, enabled: e.target.checked };
+                        const nowEnabled = e.target.checked;
+                        const updated = { ...server, enabled: nowEnabled };
                         if (itemScope === "global") {
                           await saveMcpServer(name, updated);
                         } else if (activeFolderPath) {
@@ -753,6 +754,25 @@ export function McpServersSection() {
                         }
                         // Sync toggle to running opencode serve instance
                         await syncMcpToServer(name, updated);
+                        // Test server on enable to show tool count badge
+                        if (nowEnabled) {
+                          const sType = server.type ?? "local";
+                          const cmdArr = normalizeCommand(server);
+                          invoke<McpTestResult>("mcp_test_server", {
+                            serverType: sType,
+                            command: cmdArr[0] ?? null,
+                            args: cmdArr.length > 1 ? cmdArr.slice(1) : null,
+                            env: server.environment ?? null,
+                            url: server.url ?? null,
+                            headers: server.headers ?? null,
+                          }).then((result) => {
+                            if (result.success) {
+                              setServerTools((prev) => ({ ...prev, [name]: result.tools }));
+                            }
+                          }).catch(() => {});
+                        } else {
+                          setServerTools((prev) => { const next = { ...prev }; delete next[name]; return next; });
+                        }
                       }}
                     />
                   </label>
