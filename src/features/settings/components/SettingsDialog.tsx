@@ -309,6 +309,15 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
       });
       setTestMsg({ text: t("testSuccess"), ok: true });
       addVerifiedModel(localAi.provider, localAi.model);
+      // Sync into local state so handleSave won't overwrite with stale verifiedModels
+      setLocalAi((prev) => {
+        const list = prev.verifiedModels?.[prev.provider] ?? [];
+        if (list.includes(prev.model)) return prev;
+        return {
+          ...prev,
+          verifiedModels: { ...prev.verifiedModels, [prev.provider]: [...list, prev.model] },
+        };
+      });
     } catch (e) {
       setTestMsg({ text: String(e), ok: false });
     } finally {
