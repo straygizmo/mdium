@@ -5,6 +5,8 @@ import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 
+export { computeSkippableFrames, analyzeScenes, type SceneInfo, type SceneData } from './static-ranges';
+
 // Check if Playwright browsers are installed
 export const checkBrowserInstallation = async (browserType: BrowserType): Promise<boolean> => {
   try {
@@ -74,6 +76,7 @@ export interface RenderOptions {
   publicDir?: string;
   timeout?: number;
   fonts?: RenderFont[];
+  skippableFrames?: Set<number>;
 }
 
 export interface RenderFont {
@@ -150,7 +153,7 @@ const getFontMimeAndFormat = (fontPath: string): { mime: string; format?: string
   }
 };
 
-export const renderFrames = async ({ url, config, outputDir, compositionId, inputProps = {}, concurrency = 1, publicDir, onProgress, timeout = 300000, fonts = [] }: RenderOptions) => {
+export const renderFrames = async ({ url, config, outputDir, compositionId, inputProps = {}, concurrency = 1, publicDir, onProgress, timeout = 300000, fonts = [], skippableFrames }: RenderOptions) => {
   if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true });
   }
@@ -212,6 +215,21 @@ export const renderFrames = async ({ url, config, outputDir, compositionId, inpu
     });
 
     for (let i = startFrame; i <= endFrame && i < config.durationInFrames; i++) {
+      // Static frame skipping: copy previous frame instead of rendering
+      if (skippableFrames?.has(i) && i > startFrame) {
+        const prevPath = path.join(outputDir, `frame-${(i - 1).toString().padStart(5, '0')}.png`);
+        const curPath = path.join(outputDir, `frame-${i.toString().padStart(5, '0')}.png`);
+        if (fs.existsSync(prevPath)) {
+          fs.copyFileSync(prevPath, curPath);
+          totalFramesRendered++;
+          if (onProgress) {
+            onProgress(totalFramesRendered);
+          }
+          continue;
+        }
+        // If previous frame doesn't exist, fall through to normal rendering
+      }
+
       if (i === startFrame) {
         await page.addInitScript(({ frame, fps, hijackScript, compositionId, inputProps, fontPayloads }) => {
           window.__OPEN_MOTION_FRAME__ = frame;
