@@ -293,6 +293,81 @@ pub async fn video_export(
         }
     };
 
+    // Copy image assets referenced in the project into public/images/ so the
+    // static render server can serve them, and rewrite the paths in project JSON
+    // to `/images/<filename>`.  In the Tauri preview, useImageBlobUrls converts
+    // paths to blob URLs, but during Playwright-based export there is no Tauri
+    // environment, so local file paths would fail to load.
+    let project_json = {
+        let mut proj: serde_json::Value = serde_json::from_str(&project_json)
+            .map_err(|e| format!("Failed to parse project JSON: {}", e))?;
+
+        let images_dir = temp_dir.join("public").join("images");
+        fs::create_dir_all(&images_dir)
+            .map_err(|e| format!("Failed to create images dir: {}", e))?;
+
+        let mut name_counter: std::collections::HashMap<String, u32> =
+            std::collections::HashMap::new();
+
+        if let Some(scenes) = proj.get_mut("scenes").and_then(|s| s.as_array_mut()) {
+            for scene in scenes.iter_mut() {
+                if let Some(elements) = scene.get_mut("elements").and_then(|e| e.as_array_mut()) {
+                    for el in elements.iter_mut() {
+                        let is_image = el
+                            .get("type")
+                            .and_then(|t| t.as_str())
+                            .map_or(false, |t| t == "image");
+                        if !is_image {
+                            continue;
+                        }
+                        if let Some(src) = el.get("src").and_then(|s| s.as_str()).map(String::from) {
+                            if src.is_empty()
+                                || src.starts_with("http")
+                                || src.starts_with("blob:")
+                                || src.starts_with("data:")
+                            {
+                                continue;
+                            }
+                            let src_path = std::path::Path::new(&src);
+                            if !src_path.exists() {
+                                continue;
+                            }
+                            let raw_name = src_path
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .to_string();
+                            // Ensure unique filenames to avoid collisions
+                            let count = name_counter.entry(raw_name.clone()).or_insert(0);
+                            let dest_name = if *count == 0 {
+                                raw_name.clone()
+                            } else {
+                                let stem = src_path
+                                    .file_stem()
+                                    .unwrap_or_default()
+                                    .to_string_lossy();
+                                let ext = src_path
+                                    .extension()
+                                    .map(|e| format!(".{}", e.to_string_lossy()))
+                                    .unwrap_or_default();
+                                format!("{}-{}{}", stem, count, ext)
+                            };
+                            *count += 1;
+                            let dest_path = images_dir.join(&dest_name);
+                            fs::copy(src_path, &dest_path).map_err(|e| {
+                                format!("Failed to copy image {} → {}: {}", src, dest_path.display(), e)
+                            })?;
+                            el["src"] = serde_json::Value::String(format!("/images/{}", dest_name));
+                        }
+                    }
+                }
+            }
+        }
+
+        serde_json::to_string(&proj)
+            .map_err(|e| format!("Failed to serialize project JSON: {}", e))?
+    };
+
     // Write project.json
     fs::write(temp_dir.join("project.json"), &project_json)
         .map_err(|e| format!("Failed to write project.json: {}", e))?;

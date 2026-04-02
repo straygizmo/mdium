@@ -52,7 +52,8 @@ export function toPlayableSrc(filePath: string): string {
     !filePath ||
     filePath.startsWith("http") ||
     filePath.startsWith("blob:") ||
-    filePath.startsWith("data:")
+    filePath.startsWith("data:") ||
+    filePath.startsWith("/")
   ) {
     return filePath;
   }
