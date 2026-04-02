@@ -386,7 +386,10 @@ export function OpencodeChat() {
               }
             }
           }
-          const hasContent = !!displayContent;
+          // Hide raw JSON text when questions are pending for the last assistant message
+          const isLastMsg = i === messages.length - 1;
+          const hideForQuestions = isLastMsg && !!pendingQuestions;
+          const hasContent = !!displayContent && !hideForQuestions;
 
           return (
             <Fragment key={i}>
