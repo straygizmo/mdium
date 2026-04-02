@@ -7,7 +7,7 @@ export function TextElement({
   index: _index,
   scale: s,
 }: {
-  element: { content: string; animation: string };
+  element: { content: string; animation: string; color?: string };
   index: number;
   scale: number;
 }) {
@@ -15,6 +15,7 @@ export function TextElement({
     fontSize: scaled(BASE.fontText, s),
     lineHeight: BASE.lineHeightText,
     margin: 0,
+    ...(element.color ? { color: element.color } : {}),
   };
 
   if (element.animation === "none") {

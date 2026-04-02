@@ -19,6 +19,8 @@ interface VideoState {
   setVideoProject: (project: VideoProject | null, sourceFilePath?: string | null) => void;
   updateScene: (sceneId: string, partial: Partial<Scene>) => void;
   updateElement: (sceneId: string, elementIndex: number, updates: Partial<SceneElement>) => void;
+  addElement: (sceneId: string, element: SceneElement, atIndex?: number) => void;
+  removeElement: (sceneId: string, elementIndex: number) => void;
   setSelectedSceneId: (id: string | null) => void;
   setAudioGenerated: (generated: boolean) => void;
   setRenderProgress: (progress: number) => void;
@@ -113,6 +115,45 @@ export const useVideoStore = create<VideoState>()((set, get) => ({
                 if (i !== elementIndex) return el;
                 return { ...el, ...updates } as SceneElement;
               }),
+            };
+          }),
+        },
+      };
+    }),
+
+  addElement: (sceneId, element, atIndex) =>
+    set((s) => {
+      if (!s.videoProject) return s;
+      return {
+        ...historyPush(s),
+        videoProject: {
+          ...s.videoProject,
+          scenes: s.videoProject.scenes.map((scene) => {
+            if (scene.id !== sceneId) return scene;
+            const elements = [...scene.elements];
+            if (atIndex !== undefined) {
+              elements.splice(atIndex, 0, element);
+            } else {
+              elements.push(element);
+            }
+            return { ...scene, elements };
+          }),
+        },
+      };
+    }),
+
+  removeElement: (sceneId, elementIndex) =>
+    set((s) => {
+      if (!s.videoProject) return s;
+      return {
+        ...historyPush(s),
+        videoProject: {
+          ...s.videoProject,
+          scenes: s.videoProject.scenes.map((scene) => {
+            if (scene.id !== sceneId) return scene;
+            return {
+              ...scene,
+              elements: scene.elements.filter((_, i) => i !== elementIndex),
             };
           }),
         },

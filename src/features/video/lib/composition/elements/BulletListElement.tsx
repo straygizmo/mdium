@@ -6,7 +6,7 @@ export function BulletListElement({
   index,
   scale: s,
 }: {
-  element: { items: string[]; animation: string; delayPerItem: number };
+  element: { items: string[]; animation: string; delayPerItem: number; color?: string };
   index: number;
   scale: number;
 }) {
@@ -19,6 +19,7 @@ export function BulletListElement({
         lineHeight: BASE.lineHeightText,
         paddingLeft: scaled(BASE.bulletMarginLeft, s),
         margin: 0,
+        ...(element.color ? { color: element.color } : {}),
       }}
     >
       {element.items.map((item, itemIndex) => {

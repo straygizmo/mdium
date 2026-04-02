@@ -88,5 +88,10 @@
   "bgEffectThreeParticles": "3D Particles",
   "bgEffectThreeGeometry": "3D Geometry",
   "bgEffectLottie": "Lottie Animation",
-  "exportFileExistsWarning": "\"{{fileName}}\" already exists. Overwrite?"
+  "exportFileExistsWarning": "\"{{fileName}}\" already exists. Overwrite?",
+  "promptEditTitle": "Auto-configure Effects - Edit Prompt",
+  "promptEditReset": "Reset",
+  "promptEditExecute": "Execute",
+  "addElement": "Add element",
+  "addListItems": "{{count}} items"
 }

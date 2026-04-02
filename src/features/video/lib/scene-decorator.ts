@@ -6,7 +6,7 @@ import type {
   BackgroundEffect,
 } from "../types";
 
-const SYSTEM_PROMPT = `You are a video scene visual designer.
+export const DEFAULT_SYSTEM_PROMPT = `You are a video scene visual designer.
 Analyze the content of each scene and return appropriate background effects and animation settings in JSON format.
 
 Available background effects:
@@ -180,11 +180,11 @@ function applyResult(project: VideoProject, result: DecorationResult): VideoProj
   return updatedProject;
 }
 
-export async function decorateWithLLM(project: VideoProject): Promise<VideoProject> {
+export async function decorateWithLLM(project: VideoProject, systemPrompt?: string): Promise<VideoProject> {
   const userMessage = buildUserMessage(project);
 
   const aiSettings = useSettingsStore.getState().aiSettings;
-  const response = await callAI(aiSettings, SYSTEM_PROMPT, userMessage, 4096);
+  const response = await callAI(aiSettings, systemPrompt ?? DEFAULT_SYSTEM_PROMPT, userMessage, 4096);
 
   let jsonStr = response.trim();
   const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);

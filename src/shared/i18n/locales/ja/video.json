@@ -88,5 +88,10 @@
   "bgEffectThreeParticles": "3Dパーティクル",
   "bgEffectThreeGeometry": "3Dジオメトリ",
   "bgEffectLottie": "Lottieアニメーション",
-  "exportFileExistsWarning": "「{{fileName}}」は既に存在します。上書きしますか？"
+  "exportFileExistsWarning": "「{{fileName}}」は既に存在します。上書きしますか？",
+  "promptEditTitle": "エフェクト自動設定 - プロンプト編集",
+  "promptEditReset": "リセット",
+  "promptEditExecute": "実行",
+  "addElement": "要素を追加",
+  "addListItems": "{{count}}項目"
 }

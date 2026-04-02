@@ -10,6 +10,7 @@ import { ExportPanel } from "./ExportPanel";
 import { Player } from "@open-motion/core";
 import { VideoComposition, calculateTotalDuration } from "../lib/composition";
 import { decorateWithLLM } from "../lib/scene-decorator";
+import { PromptEditDialog } from "./PromptEditDialog";
 import { useImageBlobUrls } from "../hooks/useImageBlobUrls";
 import type { ExportOptions } from "./ExportPanel";
 import "./VideoPanel.css";
@@ -29,13 +30,20 @@ export function VideoPanel() {
   const pushSnapshot = useVideoStore((s) => s.pushSnapshot);
 
   const [decorating, setDecorating] = useState(false);
+  const [showPromptDialog, setShowPromptDialog] = useState(false);
 
-  const handleDecorate = useCallback(async () => {
+  const handleDecorateClick = useCallback(() => {
     if (!videoProject) return;
+    setShowPromptDialog(true);
+  }, [videoProject]);
+
+  const handleDecorateExecute = useCallback(async (prompt: string) => {
+    if (!videoProject) return;
+    setShowPromptDialog(false);
     setDecorating(true);
     try {
       pushSnapshot();
-      const decorated = await decorateWithLLM(videoProject);
+      const decorated = await decorateWithLLM(videoProject, prompt);
       setVideoProject(decorated);
     } catch (e) {
       console.error("Decoration failed:", e);
@@ -199,7 +207,7 @@ export function VideoPanel() {
             onGenerateAudio={handleGenerateAudio}
             generating={generating}
             generatingStatus={generatingStatus}
-            onDecorateWithLLM={handleDecorate}
+            onDecorateWithLLM={handleDecorateClick}
             decorating={decorating}
           />
           {scenes.map((scene, idx) => (
@@ -249,6 +257,12 @@ export function VideoPanel() {
           onExport={handleExport}
         />
       </div>
+      {showPromptDialog && (
+        <PromptEditDialog
+          onExecute={handleDecorateExecute}
+          onClose={() => setShowPromptDialog(false)}
+        />
+      )}
     </div>
   );
 }

@@ -1,0 +1,80 @@
+.prompt-edit-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 900;
+}
+
+.prompt-edit-dialog {
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+  width: 640px;
+  max-width: 90vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 32px var(--shadow-strong);
+}
+
+.prompt-edit-dialog__title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 12px;
+}
+
+.prompt-edit-dialog__textarea {
+  width: 100%;
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text);
+  font-size: 13px;
+  font-family: monospace;
+  resize: vertical;
+  outline: none;
+  min-height: 200px;
+}
+
+.prompt-edit-dialog__textarea:focus {
+  border-color: var(--primary);
+}
+
+.prompt-edit-dialog__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.prompt-edit-dialog__btn {
+  padding: 6px 16px;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.prompt-edit-dialog__btn--cancel,
+.prompt-edit-dialog__btn--reset {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.prompt-edit-dialog__btn--primary {
+  background: var(--primary);
+  border: none;
+  color: #fff;
+}
+
+.prompt-edit-dialog__btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

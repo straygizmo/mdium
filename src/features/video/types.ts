@@ -136,12 +136,14 @@ export interface TitleElement {
   text: string;
   level: 1 | 2 | 3;
   animation: "fade-in" | "slide-in" | "typewriter" | "none";
+  color?: string;
 }
 
 export interface TextElement {
   type: "text";
   content: string;
   animation: "fade-in" | "none";
+  color?: string;
 }
 
 export interface BulletListElement {
@@ -149,6 +151,7 @@ export interface BulletListElement {
   items: string[];
   animation: "sequential" | "fade-in" | "none";
   delayPerItem: number;
+  color?: string;
 }
 
 export interface ImageElement {

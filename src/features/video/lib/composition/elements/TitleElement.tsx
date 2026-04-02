@@ -7,7 +7,7 @@ export function TitleElement({
   index,
   scale: s,
 }: {
-  element: { text: string; level: 1 | 2 | 3; animation: string };
+  element: { text: string; level: 1 | 2 | 3; animation: string; color?: string };
   index: number;
   scale: number;
 }) {
@@ -19,6 +19,7 @@ export function TitleElement({
     fontSize: scaled(baseFontSize, s),
     fontWeight: "bold",
     lineHeight: BASE.lineHeightHeading,
+    ...(element.color ? { color: element.color } : {}),
   };
 
   if (element.animation === "none") {
