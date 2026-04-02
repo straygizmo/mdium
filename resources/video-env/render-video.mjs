@@ -165,7 +165,7 @@ async function verifyPlaywrightBrowser() {
   }
 }
 
-async function renderFrames(url, config, framesDir, concurrencyCount) {
+async function renderFrames(url, config, framesDir, concurrencyCount, skippableFrames) {
   log({ type: "status", message: "Rendering frames..." });
   mkdirSync(framesDir, { recursive: true });
 
@@ -200,6 +200,7 @@ async function renderFrames(url, config, framesDir, concurrencyCount) {
     outputDir: framesDir,
     compositionId: "video-project",
     concurrency: concurrencyCount,
+    skippableFrames,
     onProgress: (frame) => {
       const percent = Math.round((frame / config.durationInFrames) * 100);
       log({ type: "progress", phase: "render", percent });
@@ -245,6 +246,16 @@ async function main() {
       durationInFrames: totalDuration,
     };
 
+    // Analyze scenes to determine which frames can be skipped
+    const skippableFrames = await computeProjectSkippableFrames(projectJson, totalDuration);
+    const skippablePercent = totalDuration > 0
+      ? Math.round((skippableFrames.size / totalDuration) * 100)
+      : 0;
+    log({
+      type: "status",
+      message: `Frame analysis: ${skippableFrames.size}/${totalDuration} frames skippable (${skippablePercent}%)`,
+    });
+
     // 1. Bundle with esbuild and start static server
     const distDir = await buildProject(tempDir);
     const port = await findAvailablePort();
@@ -258,7 +269,7 @@ async function main() {
       // Note: page-level Audio components also collect audio assets, but we
       // build the audio list solely from the project JSON to avoid duplicates
       // and to use reliable local file paths (not Tauri asset:// URLs).
-      await renderFrames(url, config, framesDir, concurrency);
+      await renderFrames(url, config, framesDir, concurrency, skippableFrames);
 
       // 3. Build audio assets from project data
       const allAudioAssets = [];
@@ -343,6 +354,38 @@ function calculateTotalDuration(project) {
     }
   }
   return Math.max(total, 1);
+}
+
+async function computeProjectSkippableFrames(projectJson, totalFrames) {
+  // Import analysis functions from renderer
+  let analyzeScenes, computeSkippableFrames;
+  try {
+    const mod = await import(
+      pathToFileURL(path.join(tempDir, "node_modules", "@open-motion/renderer/src/static-ranges.ts")).href
+    ).catch(() =>
+      import(pathToFileURL(path.join(tempDir, "open-motion/renderer/src/static-ranges.ts")).href)
+    );
+    analyzeScenes = mod.analyzeScenes;
+    computeSkippableFrames = mod.computeSkippableFrames;
+  } catch (e) {
+    log({ type: "status", message: `Frame analysis unavailable: ${e.message}` });
+    return new Set();
+  }
+
+  // Map project scenes to SceneData format
+  const sceneDataList = (projectJson.scenes || []).map((scene) => ({
+    durationInFrames: scene.durationInFrames || 150,
+    transition: scene.transition || { type: "none", durationInFrames: 0 },
+    elements: scene.elements || [],
+    backgroundEffect:
+      scene.backgroundEffect ??
+      projectJson.theme?.backgroundEffect ??
+      { type: "none" },
+    captionsEnabled: !!(scene.captions?.enabled && scene.captions?.srt),
+  }));
+
+  const sceneInfos = analyzeScenes(sceneDataList, fps);
+  return computeSkippableFrames(sceneInfos, totalFrames);
 }
 
 main();
