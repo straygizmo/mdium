@@ -170,5 +170,6 @@
   "ocChatDone": "Done",
   "ocChatDoneError": "Done (with errors)",
   "commandBuiltinSelect": "Select a built-in command...",
-  "ocChatAgentSelect": "Agent"
+  "ocChatAgentSelect": "Agent",
+  "ocChatQuestionsSubmit": "Submit"
 }

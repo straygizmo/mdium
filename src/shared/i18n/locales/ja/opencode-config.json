@@ -170,5 +170,6 @@
   "ocChatDone": "完了",
   "ocChatDoneError": "完了（エラーあり）",
   "commandBuiltinSelect": "ビルトイン コマンドを選択...",
-  "ocChatAgentSelect": "エージェント"
+  "ocChatAgentSelect": "エージェント",
+  "ocChatQuestionsSubmit": "送信"
 }
