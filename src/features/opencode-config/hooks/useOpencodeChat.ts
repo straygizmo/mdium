@@ -126,6 +126,8 @@ export const useChatUIStore = create<OpencodeChatUIState>()(() => ({
 function tryParseQuestions(text: string): PendingQuestion[] | null {
   const trimmed = text.trim();
   if (!trimmed.includes('"questions"')) return null;
+  // Skip incomplete JSON during streaming (wait for closing brace)
+  if (!trimmed.endsWith('}') && !trimmed.endsWith('```')) return null;
 
   // Try to parse the whole text as JSON
   try {
@@ -619,6 +621,7 @@ export async function doExecuteCommand(commandName: string, args?: string) {
       { role: "assistant" as const, content: "", parts: [] },
     ],
     loading: true,
+    pendingQuestions: null,
   }));
 
   try {

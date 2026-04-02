@@ -416,6 +416,7 @@ export function OpencodeChat() {
         {pendingQuestions && (
           <div className="oc-chat__msg oc-chat__msg--assistant">
             <QuestionsCard
+              key={JSON.stringify(pendingQuestions)}
               questions={pendingQuestions}
               onSubmit={handleQuestionsSubmit}
             />
