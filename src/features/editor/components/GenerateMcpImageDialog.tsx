@@ -165,17 +165,17 @@ export const GenerateMcpImageDialog: FC<Props> = ({ visible, onClose, onInsert }
       // MCP generate_image returns JSON with path info
       const parsed = JSON.parse(textContent.text);
 
-      if (parsed.savedImagePath) {
-        // External MCP server saved image elsewhere — copy to images folder
+      if (!parsed.path && parsed.absolutePath) {
+        // External MCP server — copy image to images folder
         const safeName = filename.trim().replace(/[\\/:*?"<>|]/g, "_");
         const destPath = `${outputDir}/${safeName}`;
         await mkdir(outputDir, { recursive: true });
-        await copyFile(parsed.savedImagePath, destPath);
+        await copyFile(parsed.absolutePath, destPath);
         setGeneratedPath(`images/${safeName}`);
 
-        // Load preview from saved path
+        // Load preview from source path
         try {
-          const bytes = await invoke<number[]>("read_binary_file", { path: parsed.savedImagePath });
+          const bytes = await invoke<number[]>("read_binary_file", { path: parsed.absolutePath });
           const mime = parsed.mimeType || "image/png";
           const blob = new Blob([new Uint8Array(bytes)], { type: mime });
           if (previewUrl) URL.revokeObjectURL(previewUrl);
