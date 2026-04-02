@@ -18,6 +18,17 @@ export interface OpencodeMessage {
   completed?: boolean;
 }
 
+export interface QuestionOption {
+  label: string;
+  description?: string;
+}
+
+export interface PendingQuestion {
+  question: string;
+  header?: string;
+  options: QuestionOption[];
+}
+
 export interface OpencodeSessionInfo {
   id: string;
   title: string;
@@ -33,6 +44,7 @@ interface UseOpencodeChatResult {
   loading: boolean;
   sessions: OpencodeSessionInfo[];
   currentSessionId: string | null;
+  pendingQuestions: PendingQuestion[] | null;
   selectedAgent: string | null;
   setSelectedAgent: (value: string | null) => void;
   availableAgents: { name: string; description: string }[];
@@ -85,6 +97,7 @@ interface OpencodeChatUIState {
   loading: boolean;
   sessions: OpencodeSessionInfo[];
   currentSessionId: string | null;
+  pendingQuestions: PendingQuestion[] | null;
   selectedAgent: string | null;
   availableAgents: { name: string; description: string }[];
   useMdContext: boolean;
@@ -99,11 +112,60 @@ export const useChatUIStore = create<OpencodeChatUIState>()(() => ({
   loading: false,
   sessions: [],
   currentSessionId: null,
+  pendingQuestions: null,
   selectedAgent: "build",
   availableAgents: [],
   useMdContext: false,
   chatInput: "",
 }));
+
+/**
+ * Try to extract a questions array from text that contains JSON with a
+ * `"questions"` field. Returns the parsed questions or null.
+ */
+function tryParseQuestions(text: string): PendingQuestion[] | null {
+  const trimmed = text.trim();
+  if (!trimmed.includes('"questions"')) return null;
+
+  // Try to parse the whole text as JSON
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (
+      parsed &&
+      Array.isArray(parsed.questions) &&
+      parsed.questions.length > 0 &&
+      parsed.questions.every(
+        (q: any) => typeof q.question === "string" && Array.isArray(q.options)
+      )
+    ) {
+      return parsed.questions as PendingQuestion[];
+    }
+  } catch {
+    // Not valid JSON as-is — try to extract a JSON block
+  }
+
+  // Try to extract JSON from a fenced code block
+  const fenced = trimmed.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
+  if (fenced) {
+    try {
+      const parsed = JSON.parse(fenced[1].trim());
+      if (
+        parsed &&
+        Array.isArray(parsed.questions) &&
+        parsed.questions.length > 0 &&
+        parsed.questions.every(
+          (q: any) => typeof q.question === "string" && Array.isArray(q.options)
+        )
+      ) {
+        return parsed.questions as PendingQuestion[];
+      }
+    } catch {
+      // not valid
+    }
+  }
+
+  return null;
+}
 
 // ─── Helper: process SSE event stream (runs in background) ───
 function processSSEStream(stream: AsyncIterable<unknown>) {
@@ -120,12 +182,10 @@ function processSSEStream(stream: AsyncIterable<unknown>) {
               const last = s.messages[s.messages.length - 1];
               if (last && last.role === "assistant") {
                 const updated = [...s.messages];
-                // Replace existing text part with same id, or add new
                 const existingParts = (last.parts ?? []).filter(
                   (p) => !(p.type === "text" && (p as any).id === (part as any).id)
                 );
                 const newParts = [...existingParts, part];
-                // Compute content from all text parts' cumulative text
                 const textContent = newParts
                   .filter((p) => p.type === "text")
                   .map((p) => (p as any).text ?? "")
@@ -135,6 +195,13 @@ function processSSEStream(stream: AsyncIterable<unknown>) {
                   content: textContent,
                   parts: newParts,
                 };
+
+                // Detect questions JSON and unlock loading
+                const questions = tryParseQuestions(textContent);
+                if (questions) {
+                  return { messages: updated, pendingQuestions: questions, loading: false };
+                }
+
                 return { messages: updated };
               }
               return s;
@@ -300,6 +367,7 @@ function doDisconnect() {
     sessions: [],
     currentSessionId: null,
     error: null,
+    pendingQuestions: null,
   });
 }
 
@@ -486,6 +554,7 @@ export async function doSendMessage(text: string, agentOverride?: string) {
       { role: "assistant" as const, content: "", parts: [] },
     ],
     loading: true,
+    pendingQuestions: null,
   }));
 
   try {
@@ -574,6 +643,7 @@ async function doCreateNewSession() {
     messages: [],
     currentSessionId: null,
     error: null,
+    pendingQuestions: null,
   });
 }
 
@@ -693,6 +763,7 @@ export function useOpencodeChat(folderPath?: string): UseOpencodeChatResult {
     loading,
     sessions,
     currentSessionId,
+    pendingQuestions,
     selectedAgent,
     availableAgents,
     useMdContext,
@@ -758,6 +829,7 @@ export function useOpencodeChat(folderPath?: string): UseOpencodeChatResult {
     loading,
     sessions,
     currentSessionId,
+    pendingQuestions,
     selectedAgent,
     setSelectedAgent,
     availableAgents,
