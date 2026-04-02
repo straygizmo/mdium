@@ -158,6 +158,7 @@
   "customToolCommand": "Shell Command",
   "customToolDeleteConfirm": "Delete \"{{name}}\"?",
   "ocChatMdContext": "MD File Context",
+  "ocChatMdContextPrefix": "Instructions about the following file.",
   "ocChatMdToggleLabel": "Instruct about {{name}}",
   "webuiEnabled": "Enable WebUI",
   "webuiHost": "Host",

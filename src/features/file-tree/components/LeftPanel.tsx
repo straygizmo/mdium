@@ -9,9 +9,9 @@ import { FileTree } from "./FileTree";
 import { OutlinePanel } from "./OutlinePanel";
 import { RagPanel } from "@/features/rag/components/RagPanel";
 import { OpencodeConfigPanel } from "@/features/opencode-config/components/OpencodeConfigPanel";
-import { useChatUIStore } from "@/features/opencode-config/hooks/useOpencodeChat";
 import { GitPanel } from "@/features/git/components/GitPanel";
 import { useGitStore } from "@/stores/git-store";
+import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 import { collectConvertibleFiles } from "@/features/export/lib/collectConvertibleFiles";
 import { BatchConvertModal } from "@/features/export/components/BatchConvertModal";
 import "./LeftPanel.css";
@@ -52,10 +52,8 @@ export function LeftPanel({
   showDocxBtn, showXlsBtn, showKmBtn, showPdfBtn,
 }: LeftPanelProps) {
   const { t } = useTranslation("toolbar");
-  const { t: tOc } = useTranslation("opencode-config");
   const leftPanel = useUiStore((s) => s.leftPanel);
   const setLeftPanel = useUiStore((s) => s.setLeftPanel);
-  const opencodeTopTab = useUiStore((s) => s.opencodeTopTab);
   const activeFolderPath = useTabStore((s) => s.activeFolderPath);
   const fileTree = useFileStore((s) =>
     activeFolderPath ? s.fileTrees[activeFolderPath] : undefined
@@ -65,8 +63,7 @@ export function LeftPanel({
   const { aiSettings } = useSettingsStore();
   const setShowSettings = useSettingsStore((s) => s.setShowSettings);
   const collapseAllDirs = useFileStore((s) => s.collapseAllDirs);
-  const ocConnected = useChatUIStore((s) => s.connected);
-  const ocConnecting = useChatUIStore((s) => s.connecting);
+  const ocModel = useOpencodeConfigStore((s) => s.config.model);
   const [showBatchConvert, setShowBatchConvert] = useState(false);
   const convertibleFiles = useMemo(() => collectConvertibleFiles(fileTree), [fileTree]);
 
@@ -180,17 +177,12 @@ export function LeftPanel({
             )}
             {leftPanel === "opencode-config" && (
               <>
-                {`OPENCODE ${opencodeTopTab === "chat" ? "CHAT" : "SETTINGS"}`}
-                {opencodeTopTab === "chat" && (
-                  <span
-                    className={`oc-chat__badge oc-chat__badge--${ocConnected ? "connected" : ocConnecting ? "connecting" : "disconnected"}`}
-                    style={{ marginLeft: 8 }}
-                  >
-                    {ocConnecting
-                      ? tOc("ocChatConnecting")
-                      : ocConnected
-                        ? tOc("ocChatConnected")
-                        : tOc("ocChatDisconnected")}
+                OPENCODE
+                {ocModel && (
+                  <span className="left-panel__section-header-model">
+                    ({ocModel.includes("/")
+                      ? `${ocModel.split("/")[0]} / ${ocModel.split("/").slice(1).join("/")}`
+                      : ocModel})
                   </span>
                 )}
               </>

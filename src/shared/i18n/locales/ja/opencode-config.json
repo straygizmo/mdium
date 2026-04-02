@@ -158,6 +158,7 @@
   "customToolCommand": "シェルコマンド",
   "customToolDeleteConfirm": "「{{name}}」を削除しますか？",
   "ocChatMdContext": "MDファイル連携",
+  "ocChatMdContextPrefix": "Instructions about the following file.",
   "ocChatMdToggleLabel": "{{name}}について指示する",
   "webuiEnabled": "WebUI を有効にする",
   "webuiHost": "ホスト",

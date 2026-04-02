@@ -106,7 +106,7 @@ export function OpencodeChat() {
     if (useMdContext) {
       const ctx = useEditorContextStore.getState();
       if (ctx.filePath) {
-        let prefix = `Instructions about the following Markdown file.\n\nFile: ${ctx.filePath}\nCursor position: line ${ctx.cursorLine}, column ${ctx.cursorColumn}`;
+        let prefix = `${t("ocChatMdContextPrefix")}\n\nFile: ${ctx.filePath}\nCursor position: line ${ctx.cursorLine}, column ${ctx.cursorColumn}`;
         if (ctx.selectionStart !== ctx.selectionEnd) {
           const startLC = computeLineColFromContext(ctx.content, ctx.selectionStart);
           const endLC = computeLineColFromContext(ctx.content, ctx.selectionEnd);
@@ -260,22 +260,6 @@ export function OpencodeChat() {
           {toastMsg}
         </div>
       )}
-      {/* Status bar */}
-      <div className="oc-chat__status">
-        <OpencodeConfigBadges />
-        {!connected && !connecting && (
-          <button className="oc-chat__connect-btn" onClick={connect}>
-            {t("ocChatConnecting").replace("...", "")}
-          </button>
-        )}
-      </div>
-
-      {error && (
-        <div className="oc-chat__error">
-          {t("ocChatError")}: {error}
-        </div>
-      )}
-
       {/* Toolbar */}
       <div className="oc-chat__toolbar">
         <button
@@ -323,6 +307,15 @@ export function OpencodeChat() {
             )
           }
         </select>
+        <span
+          className={`oc-chat__badge oc-chat__badge--${connected ? "connected" : connecting ? "connecting" : "disconnected"}`}
+        >
+          {connecting
+            ? t("ocChatConnecting")
+            : connected
+              ? t("ocChatConnected")
+              : t("ocChatDisconnected")}
+        </span>
         <button
           className="oc-chat__toolbar-btn oc-chat__toolbar-btn--right"
           onClick={createNewSession}
@@ -335,6 +328,22 @@ export function OpencodeChat() {
             <path d="M5 6v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V6" />
           </svg>
         </button>
+      </div>
+
+      {error && (
+        <div className="oc-chat__error">
+          {t("ocChatError")}: {error}
+        </div>
+      )}
+
+      {/* Status bar */}
+      <div className="oc-chat__status">
+        <OpencodeConfigBadges />
+        {!connected && !connecting && (
+          <button className="oc-chat__connect-btn" onClick={connect}>
+            {t("ocChatConnecting").replace("...", "")}
+          </button>
+        )}
       </div>
 
       {/* Messages */}
