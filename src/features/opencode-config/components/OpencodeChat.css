@@ -484,6 +484,23 @@
   flex-shrink: 0;
 }
 
+.oc-chat__abort-btn {
+  font-size: 11px;
+  padding: 2px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-overlay);
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.oc-chat__abort-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
 /* Input area */
 .oc-chat__input-area {
   position: relative;

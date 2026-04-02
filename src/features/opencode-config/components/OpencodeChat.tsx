@@ -33,6 +33,7 @@ export function OpencodeChat() {
     connect,
     sendMessage,
     executeCommand,
+    abortSession,
     createNewSession,
     loadSession,
     deleteSession,
@@ -411,6 +412,13 @@ export function OpencodeChat() {
           <div className="oc-chat__loading">
             <div className="oc-chat__loading-bar" />
             <span className="oc-chat__loading-label">{t("ocChatThinking", "Thinking...")}</span>
+            <button
+              className="oc-chat__abort-btn"
+              onClick={abortSession}
+              title={t("ocChatAbort", "Stop")}
+            >
+              {t("ocChatAbort", "Stop")}
+            </button>
           </div>
         )}
         {pendingQuestions && (

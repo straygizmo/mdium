@@ -52,6 +52,7 @@ interface UseOpencodeChatResult {
   setUseMdContext: (value: boolean) => void;
   connect: () => Promise<void>;
   disconnect: () => void;
+  abortSession: () => Promise<void>;
   sendMessage: (text: string, agent?: string) => Promise<void>;
   executeCommand: (commandName: string, args?: string) => Promise<void>;
   createNewSession: () => Promise<void>;
@@ -591,6 +592,17 @@ export async function doSendMessage(text: string, agentOverride?: string) {
   }
 }
 
+export async function doAbortSession() {
+  if (!_client || !_currentSessionId) return;
+  try {
+    await _client.session.abort({ path: { id: _currentSessionId } });
+  } catch (e: any) {
+    console.error("[opencode] abort failed:", e);
+  } finally {
+    useChatUIStore.setState({ loading: false, pendingQuestions: null });
+  }
+}
+
 export async function doExecuteCommand(commandName: string, args?: string) {
   if (!_client) return;
 
@@ -789,6 +801,10 @@ export function useOpencodeChat(folderPath?: string): UseOpencodeChatResult {
     doDisconnect();
   }, []);
 
+  const abortSession = useCallback(async () => {
+    await doAbortSession();
+  }, []);
+
   const sendMessage = useCallback(async (text: string, agent?: string) => {
     await doSendMessage(text, agent);
   }, []);
@@ -846,6 +862,7 @@ export function useOpencodeChat(folderPath?: string): UseOpencodeChatResult {
     setUseMdContext,
     connect,
     disconnect,
+    abortSession,
     sendMessage,
     executeCommand,
     createNewSession,

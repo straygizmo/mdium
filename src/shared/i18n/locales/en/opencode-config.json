@@ -167,6 +167,7 @@
   "skillBuiltinAdd": "Add Built-In Skill",
   "skillBuiltinSelect": "Select a built-in skill...",
   "ocChatThinking": "Thinking...",
+  "ocChatAbort": "Stop",
   "ocChatDone": "Done",
   "ocChatDoneError": "Done (with errors)",
   "commandBuiltinSelect": "Select a built-in command...",

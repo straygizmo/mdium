@@ -167,6 +167,7 @@
   "skillBuiltinAdd": "ビルトイン スキルを追加",
   "skillBuiltinSelect": "ビルトイン スキルを選択...",
   "ocChatThinking": "思考中...",
+  "ocChatAbort": "中止",
   "ocChatDone": "完了",
   "ocChatDoneError": "完了（エラーあり）",
   "commandBuiltinSelect": "ビルトイン コマンドを選択...",
