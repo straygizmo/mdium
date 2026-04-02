@@ -852,6 +852,128 @@
   100% { opacity: 0; transform: translateX(-50%) translateY(-120%); }
 }
 
+/* Questions card */
+.oc-chat__questions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.oc-chat__question-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.oc-chat__question-header {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.oc-chat__question-text {
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.oc-chat__question-options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.oc-chat__question-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-base);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
+  width: 100%;
+}
+
+.oc-chat__question-option:hover:not(:disabled) {
+  background: var(--bg-overlay);
+  border-color: var(--text-secondary);
+}
+
+.oc-chat__question-option--selected {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 10%, var(--bg-base));
+}
+
+.oc-chat__question-option--selected:hover:not(:disabled) {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 15%, var(--bg-base));
+}
+
+.oc-chat__question-option:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.oc-chat__question-option-radio {
+  flex-shrink: 0;
+  font-size: 14px;
+  line-height: 1;
+  margin-top: 1px;
+  color: var(--text-muted);
+}
+
+.oc-chat__question-option--selected .oc-chat__question-option-radio {
+  color: var(--primary);
+}
+
+.oc-chat__question-option-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.oc-chat__question-option-label {
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.oc-chat__question-option-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.oc-chat__questions-submit {
+  align-self: flex-end;
+  padding: 6px 16px;
+  border: none;
+  border-radius: 4px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.oc-chat__questions-submit:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.oc-chat__questions-submit:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 @keyframes oc-chat-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.6; }
