@@ -1,6 +1,7 @@
 import { type FC, useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
+import { mkdir, copyFile } from "@tauri-apps/plugin-fs";
 import { useTabStore } from "@/stores/tab-store";
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 import type { OpencodeMcpServer } from "@/shared/types";
@@ -163,14 +164,18 @@ export const GenerateMcpImageDialog: FC<Props> = ({ visible, onClose, onInsert }
 
       // MCP generate_image returns JSON with path info
       const parsed = JSON.parse(textContent.text);
-      if (parsed.path) {
-        setGeneratedPath(parsed.path);
-      }
 
-      // Load preview
-      if (parsed.absolutePath) {
+      if (parsed.savedImagePath) {
+        // External MCP server saved image elsewhere — copy to images folder
+        const safeName = filename.trim().replace(/[\\/:*?"<>|]/g, "_");
+        const destPath = `${outputDir}/${safeName}`;
+        await mkdir(outputDir, { recursive: true });
+        await copyFile(parsed.savedImagePath, destPath);
+        setGeneratedPath(`images/${safeName}`);
+
+        // Load preview from saved path
         try {
-          const bytes = await invoke<number[]>("read_binary_file", { path: parsed.absolutePath });
+          const bytes = await invoke<number[]>("read_binary_file", { path: parsed.savedImagePath });
           const mime = parsed.mimeType || "image/png";
           const blob = new Blob([new Uint8Array(bytes)], { type: mime });
           if (previewUrl) URL.revokeObjectURL(previewUrl);
@@ -178,6 +183,24 @@ export const GenerateMcpImageDialog: FC<Props> = ({ visible, onClose, onInsert }
         } catch {
           // Preview failed silently
         }
+      } else if (parsed.path) {
+        setGeneratedPath(parsed.path);
+
+        // Load preview
+        if (parsed.absolutePath) {
+          try {
+            const bytes = await invoke<number[]>("read_binary_file", { path: parsed.absolutePath });
+            const mime = parsed.mimeType || "image/png";
+            const blob = new Blob([new Uint8Array(bytes)], { type: mime });
+            if (previewUrl) URL.revokeObjectURL(previewUrl);
+            setPreviewUrl(URL.createObjectURL(blob));
+          } catch {
+            // Preview failed silently
+          }
+        }
+      } else {
+        setError(textContent.text);
+        return;
       }
     } catch (e) {
       setError(String(e));
