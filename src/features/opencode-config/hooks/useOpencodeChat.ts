@@ -228,9 +228,15 @@ function processSSEStream(stream: AsyncIterable<unknown>) {
           }
         } else if (ev.type === "session.idle") {
           if (ev.properties.sessionID === _currentSessionId) {
+            const state = useChatUIStore.getState();
+
+            // If questions are pending, the user is interacting — don't reset loading
+            if (state.pendingQuestions) {
+              continue;
+            }
+
             // Convert final assistant message content to HTML via marked
             // Strip echoed user question before converting
-            const state = useChatUIStore.getState();
             const last = state.messages[state.messages.length - 1];
             if (last && last.role === "assistant") {
               // Skip spurious session.idle fired when a session is first created
