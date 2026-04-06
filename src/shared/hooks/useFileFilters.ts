@@ -147,7 +147,7 @@ export function useFileFilters(folderPath: string | null, setFileTree: (folderPa
           includeKm: isZennMode ? false : filterKm,
           includeImages: isZennMode ? true : filterImages,
           includePdf: isZennMode ? false : filterPdf,
-          includeEmptyDirs: isZennMode,
+          includeEmptyDirs: true,
         });
         if (!cancelled) setFileTree(fp, entries);
       } catch { /* ignore */ }
@@ -166,7 +166,7 @@ export function useFileFilters(folderPath: string | null, setFileTree: (folderPa
         includeKm: isZennMode ? false : filterKm,
         includeImages: isZennMode ? true : filterImages,
         includePdf: isZennMode ? false : filterPdf,
-        includeEmptyDirs: isZennMode,
+        includeEmptyDirs: true,
       });
       setFileTree(folderPath, entries);
     } catch { /* ignore */ }
