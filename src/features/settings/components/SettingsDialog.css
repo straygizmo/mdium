@@ -251,6 +251,12 @@
   color: #ef4444;
 }
 
+.settings-dialog__verified-badge {
+  font-size: 12px;
+  color: #22c55e;
+  margin-top: 2px;
+}
+
 .settings-dialog__speech-status {
   padding: 0 4px;
 }

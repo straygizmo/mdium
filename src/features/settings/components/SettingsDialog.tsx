@@ -564,6 +564,9 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
                     <option value="__manual__">{t("aiModelManualInput")}</option>
                   </select>
                 )}
+                {(localAi.verifiedModels?.[localAi.provider] ?? []).includes(localAi.model) && (
+                  <span className="settings-dialog__verified-badge">{t("aiModelVerified")}</span>
+                )}
               </div>
 
               <div className="settings-dialog__test-row">
