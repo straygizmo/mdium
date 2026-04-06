@@ -2,6 +2,8 @@ use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::process::Command;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use tauri::{AppHandle, Emitter};
@@ -137,7 +139,11 @@ pub fn kill_pty(id: String) -> Result<(), String> {
 #[tauri::command]
 pub fn check_command_exists(name: String) -> bool {
     let result = if cfg!(target_os = "windows") {
-        Command::new("where").arg(&name).output()
+        let mut cmd = Command::new("where");
+        cmd.arg(&name);
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        cmd.output()
     } else {
         Command::new("which").arg(&name).output()
     };
@@ -150,9 +156,11 @@ pub fn check_command_exists(name: String) -> bool {
 #[tauri::command]
 pub fn install_npm_package(name: String) -> Result<(), String> {
     let npm = if cfg!(target_os = "windows") { "npm.cmd" } else { "npm" };
-    let output = Command::new(npm)
-        .args(["install", "-g", &name])
-        .output()
+    let mut cmd = Command::new(npm);
+    cmd.args(["install", "-g", &name]);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    let output = cmd.output()
         .map_err(|e| format!("Failed to run npm: {}", e))?;
     if output.status.success() {
         Ok(())
@@ -214,6 +222,7 @@ pub fn kill_background_process(pid: u32) -> Result<(), String> {
     {
         let output = Command::new("taskkill")
             .args(["/PID", &pid.to_string(), "/F", "/T"])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .output()
             .map_err(|e| format!("Failed to run taskkill: {}", e))?;
         if !output.status.success() {
@@ -245,6 +254,7 @@ pub fn install_claude_code() -> Result<(), String> {
     let output = if cfg!(target_os = "windows") {
         Command::new("powershell")
             .args(["-NoProfile", "-Command", "irm https://claude.ai/install.ps1 | iex"])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .output()
     } else {
         Command::new("bash")

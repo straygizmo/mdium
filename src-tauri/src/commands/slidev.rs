@@ -4,6 +4,8 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::process::Command;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -79,6 +81,7 @@ fn kill_process(pid: u32) -> Result<(), String> {
     {
         let output = Command::new("taskkill")
             .args(["/PID", &pid.to_string(), "/F", "/T"])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .output()
             .map_err(|e| format!("Failed to run taskkill: {}", e))?;
         if !output.status.success() {
@@ -209,11 +212,13 @@ pub async fn slidev_start(
 
         // Install base dependencies + theme
         let npm = if cfg!(target_os = "windows") { "npm.cmd" } else { "npm" };
-        let install_output = Command::new(npm)
-            .args(["install", "--prefer-offline", &theme_package])
+        let mut npm_cmd = Command::new(npm);
+        npm_cmd.args(["install", "--prefer-offline", &theme_package])
             .current_dir(&temp_dir)
-            .stdin(std::process::Stdio::null())
-            .output()
+            .stdin(std::process::Stdio::null());
+        #[cfg(target_os = "windows")]
+        npm_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        let install_output = npm_cmd.output()
             .map_err(|e| format!("Failed to run npm install: {}", e))?;
 
         if !install_output.status.success() {
@@ -225,11 +230,13 @@ pub async fn slidev_start(
         let theme_dir = node_modules_dest.join(&theme_package);
         if !theme_dir.exists() {
             let npm = if cfg!(target_os = "windows") { "npm.cmd" } else { "npm" };
-            let _ = Command::new(npm)
-                .args(["install", "--prefer-offline", &theme_package])
+            let mut npm_cmd = Command::new(npm);
+            npm_cmd.args(["install", "--prefer-offline", &theme_package])
                 .current_dir(&temp_dir)
-                .stdin(std::process::Stdio::null())
-                .output();
+                .stdin(std::process::Stdio::null());
+            #[cfg(target_os = "windows")]
+            npm_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            let _ = npm_cmd.output();
         }
     }
 

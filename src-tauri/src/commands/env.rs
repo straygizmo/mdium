@@ -13,9 +13,11 @@ pub fn set_env_var(name: String, value: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
         let output = std::process::Command::new("setx")
             .arg(&name)
             .arg(&value)
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .output()
             .map_err(|e| format!("Failed to run setx: {}", e))?;
         if !output.status.success() {

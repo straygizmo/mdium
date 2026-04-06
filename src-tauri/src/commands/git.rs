@@ -1,11 +1,15 @@
 use std::process::Command;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 
 fn run_git(path: &str, args: &[&str]) -> Result<String, String> {
     let mut full_args = vec!["-c", "core.quotePath=false"];
     full_args.extend_from_slice(args);
-    let output = Command::new("git")
-        .args(&full_args)
-        .current_dir(path)
+    let mut cmd = Command::new("git");
+    cmd.args(&full_args).current_dir(path);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    let output = cmd
         .output()
         .map_err(|e| format!("Failed to run git: {}", e))?;
 

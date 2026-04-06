@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 
 #[derive(Serialize, Clone)]
 pub struct FileEntry {
@@ -472,6 +474,7 @@ pub fn open_in_default_app(path: String) -> Result<(), String> {
     {
         Command::new("cmd")
             .args(["/C", "start", "", &path])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .spawn()
             .map_err(|e| format!("Failed to open file: {}", e))?;
     }
@@ -499,6 +502,7 @@ pub fn open_external_url(url: String) -> Result<(), String> {
     {
         Command::new("cmd")
             .args(["/C", "start", "", &url])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .spawn()
             .map_err(|e| format!("Failed to open URL: {}", e))?;
     }
@@ -532,6 +536,7 @@ pub fn open_in_vscode(path: String) -> Result<(), String> {
     {
         Command::new("cmd")
             .args(["/C", "code", &path])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .spawn()
             .map_err(|e| format!("Failed to open VSCode: {}", e))?;
     }

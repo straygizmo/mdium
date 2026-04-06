@@ -4,6 +4,8 @@ use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::Command;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use tauri::{AppHandle, Emitter, Manager};
 
 /// Derive the sidecar `.video.json` path from a markdown file path.
@@ -191,12 +193,14 @@ fn open_motion_dir_valid(dir: &PathBuf) -> bool {
 
 #[tauri::command]
 pub async fn video_check_ffmpeg() -> Result<bool, String> {
-    let result = Command::new("ffmpeg")
-        .arg("-version")
+    let mut cmd = Command::new("ffmpeg");
+    cmd.arg("-version")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
+        .stderr(std::process::Stdio::null());
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    let result = cmd.status();
     Ok(result.is_ok())
 }
 
@@ -448,11 +452,13 @@ pub async fn video_export(
     let npm = if cfg!(target_os = "windows") { "npm.cmd" } else { "npm" };
     let lock_file = temp_dir.join("node_modules").join(".package-lock.json");
     if !lock_file.exists() {
-        let install_output = Command::new(npm)
-            .args(["install", "--prefer-offline"])
+        let mut npm_cmd = Command::new(npm);
+        npm_cmd.args(["install", "--prefer-offline"])
             .current_dir(&temp_dir)
-            .stdin(std::process::Stdio::null())
-            .output()
+            .stdin(std::process::Stdio::null());
+        #[cfg(target_os = "windows")]
+        npm_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        let install_output = npm_cmd.output()
             .map_err(|e| format!("Failed to run npm install: {}", e))?;
 
         if !install_output.status.success() {
