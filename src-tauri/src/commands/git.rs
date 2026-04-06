@@ -1,8 +1,10 @@
 use std::process::Command;
 
 fn run_git(path: &str, args: &[&str]) -> Result<String, String> {
+    let mut full_args = vec!["-c", "core.quotePath=false"];
+    full_args.extend_from_slice(args);
     let output = Command::new("git")
-        .args(args)
+        .args(&full_args)
         .current_dir(path)
         .output()
         .map_err(|e| format!("Failed to run git: {}", e))?;

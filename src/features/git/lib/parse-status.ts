@@ -22,6 +22,11 @@ export function parseStatusPorcelain(output: string): GitFileEntry[] {
     const y = line[1]; // working tree
     let filePath = line.slice(3);
 
+    // Strip surrounding double quotes that git adds for paths with special characters
+    if (filePath.startsWith('"') && filePath.endsWith('"')) {
+      filePath = filePath.slice(1, -1);
+    }
+
     // Handle renames/copies: "R  old -> new" or "C  old -> new"
     const arrowIdx = filePath.indexOf(" -> ");
     if (arrowIdx !== -1) {
