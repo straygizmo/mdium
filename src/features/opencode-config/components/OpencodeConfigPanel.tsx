@@ -57,17 +57,15 @@ export function OpencodeConfigPanel() {
 
   const contextValue = useMemo(() => ({ useRelativePaths: true }), []);
 
-  const renderSection = () => {
-    switch (activeTab) {
-      case "rules": return <RulesSection />;
-      case "tools": return <ToolsSection />;
-      case "agents": return <AgentsSection />;
-      case "commands": return <CommandsSection />;
-      case "mcp": return <McpServersSection />;
-      case "skills": return <SkillsSection />;
-      case "custom-tools": return <CustomToolsSection />;
-      case "webui": return <WebUiSection />;
-    }
+  const TAB_SECTIONS: Record<OpencodeConfigTab, React.ReactNode> = {
+    rules: <RulesSection />,
+    tools: <ToolsSection />,
+    agents: <AgentsSection />,
+    commands: <CommandsSection />,
+    mcp: <McpServersSection />,
+    skills: <SkillsSection />,
+    "custom-tools": <CustomToolsSection />,
+    webui: <WebUiSection />,
   };
 
   if (!activeFolderPath) {
@@ -113,7 +111,11 @@ export function OpencodeConfigPanel() {
             ))}
           </div>
           <div className="oc-panel__body">
-            {renderSection()}
+            {TABS.map(({ key }) => (
+              <div key={key} style={{ display: activeTab === key ? undefined : "none" }}>
+                {TAB_SECTIONS[key]}
+              </div>
+            ))}
           </div>
         </OpencodeConfigProvider>
       )}
