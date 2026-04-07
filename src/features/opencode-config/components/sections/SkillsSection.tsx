@@ -463,14 +463,28 @@ export function SkillsSection() {
                   + Built-in
                 </button>
                 {showBuiltinMenu && (
-                  <div className="oc-section__builtin-dropdown">
+                  <div
+                    className="oc-section__builtin-dropdown"
+                    ref={(el) => {
+                      if (el?.parentElement) {
+                        let container: HTMLElement | null = el.parentElement;
+                        while (container && !container.classList.contains("oc-panel__body") && !container.classList.contains("oc-dialog__body")) {
+                          container = container.parentElement;
+                        }
+                        const containerTop = container ? container.getBoundingClientRect().top : 0;
+                        const buttonTop = el.parentElement.getBoundingClientRect().top;
+                        el.style.maxHeight = `${Math.max(buttonTop - containerTop - 8, 80)}px`;
+                      }
+                    }}
+                  >
                     {missingBuiltins.map((name) => (
                       <button
                         key={name}
                         className="oc-section__builtin-dropdown-item"
                         onClick={() => handleAddBuiltin(name)}
                       >
-                        {name} — {REGISTRY_SKILLS[name]?.description ?? ""}
+                        <span className="oc-section__builtin-dropdown-name">{name}</span>
+                        <span className="oc-section__builtin-dropdown-desc">{REGISTRY_SKILLS[name]?.description ?? ""}</span>
                       </button>
                     ))}
                   </div>
