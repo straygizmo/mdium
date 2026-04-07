@@ -499,6 +499,7 @@
 }
 
 .oc-section__item--disabled .oc-section__toggle,
+.oc-section__item--disabled .oc-section__edit-btn,
 .oc-section__item--disabled .oc-section__delete-btn {
   pointer-events: auto;
   opacity: 1;
