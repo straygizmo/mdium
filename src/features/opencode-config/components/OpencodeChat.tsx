@@ -9,6 +9,7 @@ import { OpencodeConfigBadges } from "./OpencodeConfigBadges";
 import { CompletionPopup } from "./CompletionPopup";
 import { QuestionsCard } from "./QuestionsCard";
 import { useCompletion } from "../hooks/useCompletion";
+import { useDividerDragVertical } from "@/shared/hooks/useDividerDragVertical";
 import "./OpencodeChat.css";
 
 function computeLineColFromContext(text: string, pos: number) {
@@ -57,6 +58,21 @@ export function OpencodeChat() {
   const messagesRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const agentOverrideRef = useRef<string | null>(null);
+
+  // Vertical splitter between messages and input
+  const chatSplitRatio = useChatUIStore((s) => s.chatSplitRatio);
+  const setChatSplitRatio = useCallback(
+    (r: number) => useChatUIStore.setState({ chatSplitRatio: r }),
+    []
+  );
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const handleSplitterDrag = useDividerDragVertical(
+    chatContainerRef,
+    chatSplitRatio,
+    setChatSplitRatio,
+    30,
+    85
+  );
 
   // Show toast when loading finishes (loading: true → false with messages present)
   // Skip the toast when the session was aborted by the user
@@ -356,151 +372,161 @@ export function OpencodeChat() {
         )}
       </div>
 
-      {/* Messages */}
-      <div
-        className="oc-chat__messages"
-        ref={messagesRef}
-        tabIndex={0}
-        onKeyDown={handleMessagesKeyDown}
-      >
-        {messages.map((msg, i) => {
-          if (msg.role === "user") {
-            return (
-              <div key={i} className="oc-chat__msg oc-chat__msg--user">
-                <div className="oc-chat__msg-content">{msg.content}</div>
-              </div>
-            );
-          }
+      {/* Splittable area */}
+      <div className="oc-chat__split" ref={chatContainerRef}>
+        {/* Messages */}
+        <div
+          className="oc-chat__messages"
+          ref={messagesRef}
+          tabIndex={0}
+          onKeyDown={handleMessagesKeyDown}
+          style={{ flex: `0 0 ${chatSplitRatio}%` }}
+        >
+          {messages.map((msg, i) => {
+            if (msg.role === "user") {
+              return (
+                <div key={i} className="oc-chat__msg oc-chat__msg--user">
+                  <div className="oc-chat__msg-content">{msg.content}</div>
+                </div>
+              );
+            }
 
-          const toolParts = (msg.parts ?? []).filter((p) => p.type === "tool");
-          const hasTools = toolParts.length > 0;
-          const isStreaming = !msg.completed;
+            const toolParts = (msg.parts ?? []).filter((p) => p.type === "tool");
+            const hasTools = toolParts.length > 0;
+            const isStreaming = !msg.completed;
 
-          // Strip echoed user question from content
-          // During streaming: raw text; after completion: HTML from marked()
-          let displayContent = msg.content;
-          if (i > 0 && msg.parts) {
-            const prevUser = messages[i - 1];
-            if (prevUser?.role === "user" && prevUser.content) {
-              const userText = prevUser.content.trim();
-              const textParts = msg.parts.filter((p) => p.type === "text");
-              const firstText = textParts.length > 0 ? ((textParts[0] as any).text ?? "") : "";
-              if (firstText.trim().startsWith(userText)) {
-                if (isStreaming) {
-                  // Raw text: strip directly
-                  const stripped = firstText.trim().slice(userText.length).trimStart();
-                  const restParts = textParts.slice(1).map((p) => (p as any).text ?? "").join("");
-                  displayContent = stripped + restParts;
-                } else {
-                  // HTML from marked(): strip the leading <p>question</p> or plain text prefix
-                  const escapedUser = userText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-                  displayContent = displayContent
-                    .replace(new RegExp(`^\\s*<p>${escapedUser}\\s*`), "<p>")
-                    .replace(/^<p>\s*<\/p>\s*/, "");
+            // Strip echoed user question from content
+            // During streaming: raw text; after completion: HTML from marked()
+            let displayContent = msg.content;
+            if (i > 0 && msg.parts) {
+              const prevUser = messages[i - 1];
+              if (prevUser?.role === "user" && prevUser.content) {
+                const userText = prevUser.content.trim();
+                const textParts = msg.parts.filter((p) => p.type === "text");
+                const firstText = textParts.length > 0 ? ((textParts[0] as any).text ?? "") : "";
+                if (firstText.trim().startsWith(userText)) {
+                  if (isStreaming) {
+                    // Raw text: strip directly
+                    const stripped = firstText.trim().slice(userText.length).trimStart();
+                    const restParts = textParts.slice(1).map((p) => (p as any).text ?? "").join("");
+                    displayContent = stripped + restParts;
+                  } else {
+                    // HTML from marked(): strip the leading <p>question</p> or plain text prefix
+                    const escapedUser = userText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+                    displayContent = displayContent
+                      .replace(new RegExp(`^\\s*<p>${escapedUser}\\s*`), "<p>")
+                      .replace(/^<p>\s*<\/p>\s*/, "");
+                  }
                 }
               }
             }
-          }
-          // Hide raw JSON text when questions are pending for the last assistant message
-          const isLastMsg = i === messages.length - 1;
-          const hideForQuestions = isLastMsg && !!pendingQuestions;
-          const hasContent = !!displayContent && !hideForQuestions;
+            // Hide raw JSON text when questions are pending for the last assistant message
+            const isLastMsg = i === messages.length - 1;
+            const hideForQuestions = isLastMsg && !!pendingQuestions;
+            const hasContent = !!displayContent && !hideForQuestions;
 
-          return (
-            <Fragment key={i}>
-              {/* Tool parts bubble */}
-              {hasTools && (
-                <div className="oc-chat__msg oc-chat__msg--assistant oc-chat__msg--tools">
-                  {isStreaming ? (
-                    // During streaming: show tools individually, expanded by default
-                    toolParts.map((p) => renderToolPart(p, true))
-                  ) : (
-                    // Completed: collapsible summary
-                    <>
-                      {renderToolsSummary(toolParts, i)}
-                      {expandedToolGroups.has(i) && toolParts.map((p) => renderToolPart(p))}
-                    </>
-                  )}
-                </div>
-              )}
-              {/* Text answer bubble (separate from tools) */}
-              {hasContent && (
-                <div className="oc-chat__msg oc-chat__msg--assistant">
-                  <div
-                    className="oc-chat__msg-content"
-                    dangerouslySetInnerHTML={{ __html: displayContent }}
-                  />
-                </div>
-              )}
-            </Fragment>
-          );
-        })}
-        {loading && !pendingQuestions && (
-          <div className="oc-chat__loading">
-            <div className="oc-chat__loading-bar" />
-            <span className="oc-chat__loading-label">{t("ocChatThinking", "Thinking...")}</span>
-            <button
-              className="oc-chat__abort-btn"
-              onClick={abortSession}
-              title={t("ocChatAbort", "Stop")}
-            >
-              {t("ocChatAbort", "Stop")}
-            </button>
-          </div>
-        )}
-        {pendingQuestions && (
-          <div className="oc-chat__msg oc-chat__msg--assistant">
-            <QuestionsCard
-              key={JSON.stringify(pendingQuestions)}
-              questions={pendingQuestions}
-              onSubmit={handleQuestionsSubmit}
+            return (
+              <Fragment key={i}>
+                {/* Tool parts bubble */}
+                {hasTools && (
+                  <div className="oc-chat__msg oc-chat__msg--assistant oc-chat__msg--tools">
+                    {isStreaming ? (
+                      // During streaming: show tools individually, expanded by default
+                      toolParts.map((p) => renderToolPart(p, true))
+                    ) : (
+                      // Completed: collapsible summary
+                      <>
+                        {renderToolsSummary(toolParts, i)}
+                        {expandedToolGroups.has(i) && toolParts.map((p) => renderToolPart(p))}
+                      </>
+                    )}
+                  </div>
+                )}
+                {/* Text answer bubble (separate from tools) */}
+                {hasContent && (
+                  <div className="oc-chat__msg oc-chat__msg--assistant">
+                    <div
+                      className="oc-chat__msg-content"
+                      dangerouslySetInnerHTML={{ __html: displayContent }}
+                    />
+                  </div>
+                )}
+              </Fragment>
+            );
+          })}
+          {loading && !pendingQuestions && (
+            <div className="oc-chat__loading">
+              <div className="oc-chat__loading-bar" />
+              <span className="oc-chat__loading-label">{t("ocChatThinking", "Thinking...")}</span>
+              <button
+                className="oc-chat__abort-btn"
+                onClick={abortSession}
+                title={t("ocChatAbort", "Stop")}
+              >
+                {t("ocChatAbort", "Stop")}
+              </button>
+            </div>
+          )}
+          {pendingQuestions && (
+            <div className="oc-chat__msg oc-chat__msg--assistant">
+              <QuestionsCard
+                key={JSON.stringify(pendingQuestions)}
+                questions={pendingQuestions}
+                onSubmit={handleQuestionsSubmit}
+              />
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* Splitter handle */}
+        <div className="oc-chat__splitter" onMouseDown={handleSplitterDrag} />
+
+        {/* Bottom section */}
+        <div className="oc-chat__bottom" style={{ flex: `0 0 ${100 - chatSplitRatio}%` }}>
+          {/* MD context toggle */}
+          <label className="oc-chat__md-toggle-bar" title={t("ocChatMdContext")}>
+            <input
+              type="checkbox"
+              checked={useMdContext}
+              onChange={(e) => setUseMdContext(e.target.checked)}
             />
-          </div>
-        )}
-        <div ref={messagesEndRef} />
-      </div>
+            <span className="oc-chat__md-toggle-slider" />
+            <span className="oc-chat__md-toggle-label">
+              {t("ocChatMdToggleLabel", { name: activeTabName ?? "MD" })}
+            </span>
+          </label>
 
-      {/* MD context toggle */}
-      <label className="oc-chat__md-toggle-bar" title={t("ocChatMdContext")}>
-        <input
-          type="checkbox"
-          checked={useMdContext}
-          onChange={(e) => setUseMdContext(e.target.checked)}
-        />
-        <span className="oc-chat__md-toggle-slider" />
-        <span className="oc-chat__md-toggle-label">
-          {t("ocChatMdToggleLabel", { name: activeTabName ?? "MD" })}
-        </span>
-      </label>
-
-      {/* Input area */}
-      <div className="oc-chat__input-area">
-        <CompletionPopup
-          items={completion.items}
-          selectedIndex={completion.selectedIndex}
-          visible={completion.visible}
-          onItemClick={completion.handleItemClick}
-        />
-        <div className="oc-chat__input-wrapper">
-          <textarea
-            className="oc-chat__input"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={connected ? t("ocChatPlaceholder") : t("ocChatDisconnected")}
-            rows={2}
-            disabled={!connected || loading}
-          />
-          <div className="oc-chat__input-actions">
-            <button
-              className="oc-chat__send"
-              onClick={handleSubmit}
-              disabled={!input.trim() || loading || !connected}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="m14 10l-3 3m9.288-9.969a.535.535 0 0 1 .68.681l-5.924 16.93a.535.535 0 0 1-.994.04l-3.219-7.242a.54.54 0 0 0-.271-.271l-7.242-3.22a.535.535 0 0 1 .04-.993z"/>
-              </svg>
-            </button>
+          {/* Input area */}
+          <div className="oc-chat__input-area">
+            <CompletionPopup
+              items={completion.items}
+              selectedIndex={completion.selectedIndex}
+              visible={completion.visible}
+              onItemClick={completion.handleItemClick}
+            />
+            <div className="oc-chat__input-wrapper">
+              <textarea
+                className="oc-chat__input"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder={connected ? t("ocChatPlaceholder") : t("ocChatDisconnected")}
+                rows={2}
+                disabled={!connected || loading}
+              />
+              <div className="oc-chat__input-actions">
+                <button
+                  className="oc-chat__send"
+                  onClick={handleSubmit}
+                  disabled={!input.trim() || loading || !connected}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="m14 10l-3 3m9.288-9.969a.535.535 0 0 1 .68.681l-5.924 16.93a.535.535 0 0 1-.994.04l-3.219-7.242a.54.54 0 0 0-.271-.271l-7.242-3.22a.535.535 0 0 1 .04-.993z"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>

@@ -184,9 +184,51 @@
   color: var(--accent-green);
 }
 
+/* Splittable area container */
+.oc-chat__split {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Splitter drag handle */
+.oc-chat__splitter {
+  flex-shrink: 0;
+  height: 4px;
+  cursor: row-resize;
+  background: transparent;
+  position: relative;
+}
+
+.oc-chat__splitter::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 1px;
+  height: 1px;
+  background: var(--border);
+}
+
+.oc-chat__splitter:hover::after,
+.oc-chat__splitter:active::after {
+  height: 2px;
+  top: 1px;
+  background: var(--primary);
+}
+
+/* Bottom section (MD toggle + input) */
+.oc-chat__bottom {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
 /* Messages */
 .oc-chat__messages {
-  flex: 1;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
@@ -509,8 +551,10 @@
 .oc-chat__input-area {
   position: relative;
   padding: 8px;
-  border-top: 1px solid var(--border);
-  flex-shrink: 0;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .oc-chat__input-wrapper {
@@ -521,6 +565,8 @@
   border-radius: 6px;
   background: var(--bg-input);
   overflow: hidden;
+  flex: 1;
+  min-height: 0;
 }
 
 .oc-chat__input-wrapper:focus-within {
@@ -537,6 +583,7 @@
   font-size: 13px;
   resize: none;
   outline: none;
+  min-height: 0;
 }
 
 .oc-chat__input-actions {

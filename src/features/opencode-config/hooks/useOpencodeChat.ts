@@ -104,6 +104,7 @@ interface OpencodeChatUIState {
   useMdContext: boolean;
   chatInput: string;
   aborted: boolean;
+  chatSplitRatio: number;
 }
 
 export const useChatUIStore = create<OpencodeChatUIState>()(() => ({
@@ -120,6 +121,7 @@ export const useChatUIStore = create<OpencodeChatUIState>()(() => ({
   useMdContext: false,
   chatInput: "",
   aborted: false,
+  chatSplitRatio: 75,
 }));
 
 /**
