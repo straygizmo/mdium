@@ -130,3 +130,13 @@ pub fn git_remove_untracked(path: String, files: Vec<String>) -> Result<String, 
 pub fn git_push_upstream(path: String, branch: String) -> Result<String, String> {
     run_git(&path, &["push", "-u", "origin", &branch])
 }
+
+#[tauri::command]
+pub fn git_show_file(path: String, revision: String, file: String) -> Result<String, String> {
+    let spec = if revision.is_empty() {
+        format!(":{}", file)
+    } else {
+        format!("{}:{}", revision, file)
+    };
+    run_git(&path, &["show", &spec])
+}

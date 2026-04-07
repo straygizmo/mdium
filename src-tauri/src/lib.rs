@@ -142,6 +142,7 @@ pub fn run() {
             commands::git::git_discard,
             commands::git::git_remove_untracked,
             commands::git::git_push_upstream,
+            commands::git::git_show_file,
             // PTY operations
             commands::pty::spawn_pty,
             commands::pty::write_to_pty,
