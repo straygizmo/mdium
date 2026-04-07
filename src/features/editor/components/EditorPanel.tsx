@@ -5,6 +5,7 @@ import { useSettingsStore } from "@/stores/settings-store";
 import { useEditorContextStore } from "@/stores/editor-context-store";
 import { useEditorFormatting } from "../hooks/useEditorFormatting";
 import { useImagePaste } from "../hooks/useImagePaste";
+import { useTablePaste } from "../hooks/useTablePaste";
 import TableGridSelector from "@/features/table/components/TableGridSelector";
 import EditorContextMenu from "./EditorContextMenu";
 import { ImagePasteDialog } from "./ImagePasteDialog";
@@ -89,6 +90,20 @@ export function EditorPanel({ editorRef }: EditorPanelProps) {
     onContentChange: handleContentChange,
     onNoFile: handleNoFile,
   });
+
+  const { handleTablePaste } = useTablePaste({
+    editorRef,
+    content,
+    onContentChange: handleContentChange,
+  });
+
+  const handleUnifiedPaste = useCallback(
+    (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      if (handleTablePaste(e)) return;
+      handlePaste(e);
+    },
+    [handleTablePaste, handlePaste]
+  );
 
   const handleTextareaChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -409,7 +424,7 @@ export function EditorPanel({ editorRef }: EditorPanelProps) {
           onClick={handleCursorChange}
           onBlur={handleCursorChange}
           onContextMenu={handleContextMenu}
-          onPaste={handlePaste}
+          onPaste={handleUnifiedPaste}
           placeholder={t("placeholder", { defaultValue: "" })}
           spellCheck={false}
         />
