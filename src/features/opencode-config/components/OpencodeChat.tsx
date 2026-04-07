@@ -9,6 +9,7 @@ import { OpencodeConfigBadges } from "./OpencodeConfigBadges";
 import { CompletionPopup } from "./CompletionPopup";
 import { QuestionsCard } from "./QuestionsCard";
 import { useCompletion } from "../hooks/useCompletion";
+import { useInputHistoryStore, useInputHistoryNav } from "../hooks/useInputHistory";
 import { useDividerDragVertical } from "@/shared/hooks/useDividerDragVertical";
 import "./OpencodeChat.css";
 
@@ -101,6 +102,8 @@ export function OpencodeChat() {
     },
   });
 
+  const { handleHistoryKey, resetNav: resetHistoryNav } = useInputHistoryNav(input, setInput);
+
   // Scroll to bottom on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -121,6 +124,10 @@ export function OpencodeChat() {
     agentOverrideRef.current = null;
     if (!textToSend) return;
 
+    // Save to input history
+    useInputHistoryStore.getState().addEntry(input.trim());
+    resetHistoryNav();
+
     // MD Context prefix
     if (useMdContext) {
       const ctx = useEditorContextStore.getState();
@@ -138,7 +145,7 @@ export function OpencodeChat() {
 
     sendMessage(textToSend, agent);
     setInput("");
-  }, [input, loading, sendMessage, useMdContext]);
+  }, [input, loading, sendMessage, useMdContext, resetHistoryNav]);
 
   const handleQuestionsSubmit = useCallback(
     (answers: string) => {
@@ -152,12 +159,15 @@ export function OpencodeChat() {
       // Let completion handle the key first
       if (completion.handleKeyDown(e)) return;
 
+      // Input history navigation (only when completion is not visible)
+      if (handleHistoryKey(e)) return;
+
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         handleSubmit();
       }
     },
-    [handleSubmit, completion.handleKeyDown] // eslint-disable-line react-hooks/exhaustive-deps
+    [handleSubmit, completion.handleKeyDown, handleHistoryKey] // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   const handleMessagesKeyDown = useCallback((e: React.KeyboardEvent) => {
