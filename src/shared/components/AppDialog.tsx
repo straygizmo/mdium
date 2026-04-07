@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { useDialogStore } from "@/stores/dialog-store";
+import { useDialogStore, type ChoiceOption } from "@/stores/dialog-store";
 import "./AppDialog.css";
 
 const KIND_ICONS: Record<string, string> = {
@@ -36,6 +36,13 @@ export function AppDialog() {
             onConfirm={() => handleResolve(true)}
             onCancel={() => handleResolve(false)}
             okLabel={t("ok")}
+            cancelLabel={t("cancel")}
+          />
+        ) : entry.type === "choice" ? (
+          <ChoiceContent
+            entry={entry}
+            onChoice={(v) => handleResolve(v)}
+            onCancel={() => handleResolve(null)}
             cancelLabel={t("cancel")}
           />
         ) : (
@@ -174,6 +181,57 @@ function PromptContent({
         <button className="app-dialog__btn app-dialog__btn--primary" onClick={() => onConfirm(value)}>
           {okLabel}
         </button>
+        <button className="app-dialog__btn" onClick={onCancel}>
+          {cancelLabel}
+        </button>
+      </div>
+    </>
+  );
+}
+
+/* ── Choice ── */
+function ChoiceContent({
+  entry,
+  onChoice,
+  onCancel,
+  cancelLabel,
+}: {
+  entry: { title?: string; text: string; kind?: string; choices?: ChoiceOption[] };
+  onChoice: (value: string) => void;
+  onCancel: () => void;
+  cancelLabel: string;
+}) {
+  const primaryRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => { primaryRef.current?.focus(); }, []);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCancel();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onCancel]);
+
+  const choices = entry.choices ?? [];
+
+  return (
+    <>
+      {entry.title && <div className="app-dialog__title">{entry.title}</div>}
+      <div className="app-dialog__body">
+        {entry.kind && <span className="app-dialog__icon">{KIND_ICONS[entry.kind]}</span>}
+        <span>{entry.text}</span>
+      </div>
+      <div className="app-dialog__actions">
+        {choices.map((c, i) => (
+          <button
+            key={c.value}
+            ref={c.primary ? primaryRef : (i === 0 && !choices.some((x) => x.primary) ? primaryRef : undefined)}
+            className={`app-dialog__btn${c.primary ? " app-dialog__btn--primary" : ""}`}
+            onClick={() => onChoice(c.value)}
+          >
+            {c.label}
+          </button>
+        ))}
         <button className="app-dialog__btn" onClick={onCancel}>
           {cancelLabel}
         </button>

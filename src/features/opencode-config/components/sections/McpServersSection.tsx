@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
-import { showConfirm } from "@/stores/dialog-store";
+import { showConfirm, showChoice } from "@/stores/dialog-store";
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 import { useTabStore } from "@/stores/tab-store";
 import type { OpencodeMcpServer } from "@/shared/types";
@@ -440,12 +440,25 @@ export function McpServersSection() {
       serverObj.timeout = timeoutVal;
     }
 
-    // If scope changed during edit, delete from old scope
+    // If scope changed during edit, handle move/copy
     if (editing && editingScope && editingScope !== formScope) {
-      if (editingScope === "global") {
-        await deleteMcpServer(editing);
-      } else {
+      if (editingScope === "project") {
+        // Project → Global: always move (delete from project)
         await deleteProjectMcpServer(activeFolderPath!, editing);
+      } else {
+        // Global → Project: ask user whether to copy or move
+        const result = await showChoice(
+          t("mcpScopeCopyOrMoveMessage", { name }),
+          [
+            { label: t("mcpScopeCopy"), value: "copy", primary: true },
+            { label: t("mcpScopeMove"), value: "move" },
+          ],
+        );
+        if (result === null) return; // cancelled
+        if (result === "move") {
+          await deleteMcpServer(editing);
+        }
+        // "copy" → keep global, just save to project below
       }
     }
 

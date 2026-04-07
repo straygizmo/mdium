@@ -2,15 +2,24 @@ import { create } from "zustand";
 
 export type DialogKind = "info" | "warning" | "error";
 
+interface ChoiceOption {
+  label: string;
+  value: string;
+  primary?: boolean;
+}
+
 interface DialogEntry {
   id: number;
-  type: "message" | "confirm" | "prompt";
+  type: "message" | "confirm" | "prompt" | "choice";
   title?: string;
   text: string;
   kind?: DialogKind;
   defaultValue?: string;
+  choices?: ChoiceOption[];
   resolve: (value: boolean | string | null) => void;
 }
+
+export type { ChoiceOption };
 
 interface DialogState {
   dialogs: DialogEntry[];
@@ -62,6 +71,27 @@ export function showConfirm(
       title: options?.title,
       kind: options?.kind,
       resolve: (v) => resolve(v as boolean),
+    });
+  });
+}
+
+/**
+ * Show a choice dialog with custom buttons. Resolves to the chosen value string, or null if cancelled.
+ * The first option with `primary: true` gets focus. If none, the first option is focused.
+ */
+export function showChoice(
+  text: string,
+  choices: ChoiceOption[],
+  options?: { title?: string; kind?: DialogKind },
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    useDialogStore.getState()._push({
+      type: "choice",
+      text,
+      title: options?.title,
+      kind: options?.kind,
+      choices,
+      resolve: (v) => resolve(v as string | null),
     });
   });
 }
