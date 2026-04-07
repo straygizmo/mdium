@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
-import { open, save, ask, message } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useTabStore } from "@/stores/tab-store";
@@ -31,6 +31,8 @@ import { ImageCanvas } from "@/features/image/components/ImageCanvas";
 import { CodeEditorPanel } from "@/features/code-editor/components/CodeEditorPanel";
 import { GitDiffViewer } from "@/features/git/components/GitDiffViewer";
 import { ExternalChangeDialog } from "@/features/editor/components/ExternalChangeDialog";
+import { AppDialog } from "@/shared/components/AppDialog";
+import { showMessage, showConfirm, showPrompt } from "@/stores/dialog-store";
 import type { ImageCanvasHandle } from "@/features/image/components/ImageCanvas";
 import type { MindmapEditorHandle } from "@/features/mindmap/components/MindmapEditor";
 import type { KityMinderJson } from "@/features/mindmap/lib/types";
@@ -248,7 +250,7 @@ export function App() {
     getCurrentWindow().onCloseRequested(async (e) => {
       const hasDirty = useTabStore.getState().tabs.some((tab) => tab.dirty);
       if (hasDirty) {
-        const yes = await ask(t("unsavedChanges"), { kind: "warning" });
+        const yes = await showConfirm(t("unsavedChanges"), { kind: "warning" });
         if (!yes) {
           e.preventDefault();
           return;
@@ -324,9 +326,9 @@ export function App() {
     async (path: string) => {
       const exists = await invoke<boolean>("folder_exists", { path });
       if (!exists) {
-        await message(
-          t("errors.folderNotFound", "Folder not found: {{path}}", { path }),
-          { title: t("common.error", "Error"), kind: "error" }
+        await showMessage(
+          t("folderNotFound", { path }),
+          { title: t("error"), kind: "error" }
         );
         removeRecentFolder(path);
         return;
@@ -615,7 +617,7 @@ export function App() {
   // New folder
   const handleNewFolder = useCallback(async () => {
     if (!activeFolderPath) return;
-    const name = window.prompt(t("newFolder", { ns: "fileTree" }));
+    const name = await showPrompt(t("newFolder", { ns: "fileTree" }));
     if (!name?.trim()) return;
     const separator = activeFolderPath.includes("\\") ? "\\" : "/";
     const newPath = activeFolderPath + separator + name.trim();
@@ -860,10 +862,12 @@ export function App() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.ctrlKey && e.key === "z") {
         if (activeTab?.isCodeFile) return;
+        if ((e.target as HTMLElement).closest?.(".oc-chat__input")) return;
         e.preventDefault();
         handleUndo();
       } else if (e.ctrlKey && e.key === "y") {
         if (activeTab?.isCodeFile) return;
+        if ((e.target as HTMLElement).closest?.(".oc-chat__input")) return;
         e.preventDefault();
         handleRedo();
       } else if (e.ctrlKey && e.shiftKey && e.key === "S") {
@@ -927,7 +931,7 @@ export function App() {
         e.preventDefault();
         if (activeTab) {
           if (activeTab.dirty) {
-            ask(t("unsavedChanges"), { kind: "warning" }).then((yes) => {
+            showConfirm(t("unsavedChanges"), { kind: "warning" }).then((yes) => {
               if (yes) useTabStore.getState().closeTab(activeTab.id);
             });
             return;
@@ -1236,6 +1240,7 @@ export function App() {
           onClose={() => setExternalChange(null)}
         />
       )}
+      <AppDialog />
     </div>
   );
 }
