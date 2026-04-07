@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { useTabStore } from "@/stores/tab-store";
@@ -60,6 +60,7 @@ export function AgentsSection() {
   const [formDisable, setFormDisable] = useState(false);
 
   const [showBuiltinMenu, setShowBuiltinMenu] = useState(false);
+  const builtinMenuRef = useRef<HTMLDivElement>(null);
 
   // --- Scope-aware directory ---
   const getAgentsDir = useCallback(
@@ -246,6 +247,18 @@ export function AgentsSection() {
     await loadAllAgentFiles();
     loadGlobalAgentFiles();
   };
+
+  // Close builtin dropdown on outside click
+  useEffect(() => {
+    if (!showBuiltinMenu) return;
+    const handleClick = (e: MouseEvent) => {
+      if (builtinMenuRef.current && !builtinMenuRef.current.contains(e.target as Node)) {
+        setShowBuiltinMenu(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [showBuiltinMenu]);
 
   const handleCancel = () => { setEditing(null); setAdding(false); };
 
@@ -481,7 +494,7 @@ export function AgentsSection() {
           <div style={{ display: "flex", alignItems: "center", marginTop: 4, position: "relative" }}>
             <button className="oc-section__add-btn" onClick={startAddFile}>+ {t("add")}</button>
             {missingBuiltins.length > 0 && (
-              <>
+              <div ref={builtinMenuRef} style={{ position: "relative" }}>
                 <button className="oc-section__builtin-btn" onClick={() => setShowBuiltinMenu((v) => !v)}>
                   + Built-in
                 </button>
@@ -494,7 +507,7 @@ export function AgentsSection() {
                     ))}
                   </div>
                 )}
-              </>
+              </div>
             )}
           </div>
         </>

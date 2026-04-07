@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { showConfirm } from "@/stores/dialog-store";
@@ -44,6 +44,7 @@ export function CommandsSection() {
   const [, setSavedContent] = useState("");
   const [viewTab, setViewTab] = useState<ViewTab>("editor");
   const [showBuiltinMenu, setShowBuiltinMenu] = useState(false);
+  const builtinMenuRef = useRef<HTMLDivElement>(null);
 
   // --- Preview (same pattern as AgentsSection) ---
   const { frontMatter: cmdFrontMatter, previewHtml } = useMemo(() => {
@@ -110,6 +111,18 @@ export function CommandsSection() {
     await saveCommand(name, { ...entry });
     setShowBuiltinMenu(false);
   };
+
+  // Close builtin dropdown on outside click
+  useEffect(() => {
+    if (!showBuiltinMenu) return;
+    const handleClick = (e: MouseEvent) => {
+      if (builtinMenuRef.current && !builtinMenuRef.current.contains(e.target as Node)) {
+        setShowBuiltinMenu(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [showBuiltinMenu]);
 
   /** Build frontmatter + template string from command fields */
   const buildCommandContent = (cmd: OpencodeCommand): string => {
@@ -345,7 +358,7 @@ export function CommandsSection() {
           <div style={{ display: "flex", alignItems: "center", marginTop: 4, position: "relative" }}>
             <button className="oc-section__add-btn" onClick={startAdd}>+ {t("add")}</button>
             {missingBuiltins.length > 0 && (
-              <>
+              <div ref={builtinMenuRef} style={{ position: "relative" }}>
                 <button
                   className="oc-section__builtin-btn"
                   onClick={() => setShowBuiltinMenu((v) => !v)}
@@ -365,7 +378,7 @@ export function CommandsSection() {
                     ))}
                   </div>
                 )}
-              </>
+              </div>
             )}
           </div>
         </>

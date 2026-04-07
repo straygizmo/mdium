@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { showConfirm } from "@/stores/dialog-store";
@@ -152,6 +152,7 @@ export function McpServersSection() {
   const [testErrors, setTestErrors] = useState<Record<string, string>>({});
   const [toolsDialogServer, setToolsDialogServer] = useState<string | null>(null);
   const [showBuiltinMenu, setShowBuiltinMenu] = useState(false);
+  const builtinMenuRef = useRef<HTMLDivElement>(null);
   const [formTesting, setFormTesting] = useState(false);
   const [formTestTools, setFormTestTools] = useState<McpToolInfo[] | null>(null);
   const [formTestError, setFormTestError] = useState<string | null>(null);
@@ -235,6 +236,18 @@ export function McpServersSection() {
     await saveMcpServer(name, resolved);
     setShowBuiltinMenu(false);
   };
+
+  // Close builtin dropdown on outside click
+  useEffect(() => {
+    if (!showBuiltinMenu) return;
+    const handleClick = (e: MouseEvent) => {
+      if (builtinMenuRef.current && !builtinMenuRef.current.contains(e.target as Node)) {
+        setShowBuiltinMenu(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [showBuiltinMenu]);
 
   const startEdit = (name: string, server: OpencodeMcpServer, itemScope: Scope) => {
     const serverType = server.type ?? "local";
@@ -785,7 +798,7 @@ export function McpServersSection() {
           <div style={{ display: "flex", alignItems: "center", marginTop: 4, position: "relative" }}>
             <button className="oc-section__add-btn" onClick={startAdd}>+ {t("add")}</button>
             {missingBuiltins.length > 0 && (
-              <>
+              <div ref={builtinMenuRef} style={{ position: "relative" }}>
                 <button
                   className="oc-section__builtin-btn"
                   onClick={() => setShowBuiltinMenu((v) => !v)}
@@ -805,7 +818,7 @@ export function McpServersSection() {
                     ))}
                   </div>
                 )}
-              </>
+              </div>
             )}
           </div>
         </>
