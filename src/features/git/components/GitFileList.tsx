@@ -38,12 +38,11 @@ export function GitFileList({
   onDiscard,
 }: GitFileListProps) {
   const { t } = useTranslation("git");
+  const openDiffTab = useTabStore((s) => s.openDiffTab);
 
   if (files.length === 0) return null;
 
   const allPaths = files.map((f) => f.path);
-
-  const openDiffTab = useTabStore((s) => s.openDiffTab);
 
   const handleFileClick = async (file: GitFileEntry) => {
     if (!folderPath) return;
@@ -142,7 +141,6 @@ export function GitFileList({
             className="git-file-list__row"
             key={`${f.path}-${f.staged}`}
             onClick={() => handleFileClick(f)}
-            style={{ cursor: "pointer" }}
           >
             <span
               className="git-file-list__status"
@@ -162,7 +160,7 @@ export function GitFileList({
               {staged && onUnstage && (
                 <button
                   className="git-file-list__action-btn"
-                  onClick={() => onUnstage([f.path])}
+                  onClick={(e) => { e.stopPropagation(); onUnstage([f.path]); }}
                   title={t("unstageFile")}
                 >
                   −
@@ -171,7 +169,7 @@ export function GitFileList({
               {!staged && onStage && (
                 <button
                   className="git-file-list__action-btn"
-                  onClick={() => onStage([f.path])}
+                  onClick={(e) => { e.stopPropagation(); onStage([f.path]); }}
                   title={t("stageFile")}
                 >
                   +
@@ -180,7 +178,7 @@ export function GitFileList({
               {!staged && onDiscard && (
                 <button
                   className="git-file-list__action-btn"
-                  onClick={() => onDiscard([f.path])}
+                  onClick={(e) => { e.stopPropagation(); onDiscard([f.path]); }}
                   title={t("discardChanges")}
                 >
                   ↩

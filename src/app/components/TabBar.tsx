@@ -113,7 +113,7 @@ export function TabBar() {
                   </span>
                 )}
                 <span className="tab-bar__file-icon">{getFileIcon(tab.fileName)}</span>
-                {tab.isDiffTab ? `${tab.fileName} (diff)` : tab.fileName}
+                {tab.isDiffTab ? t("diffTab", { ns: "git", fileName: tab.fileName }) : tab.fileName}
                 {!tab.isDiffTab && tab.dirty && <span className="tab-bar__dirty">*</span>}
               </span>
               <button

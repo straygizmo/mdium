@@ -338,7 +338,7 @@
   align-items: center;
   padding: 2px 8px 2px 12px;
   gap: 6px;
-  cursor: default;
+  cursor: pointer;
 }
 
 .git-file-list__row:hover {
