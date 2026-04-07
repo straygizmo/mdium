@@ -75,6 +75,121 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<()
     Ok(())
 }
 
+/// Resolve the bundled slidev-env directory (contains package.json only)
+fn resolve_slidev_env_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let resource_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|e| format!("Failed to get resource dir: {}", e))?;
+    let prod_path = resource_dir.join("resources").join("slidev-env");
+    if prod_path.join("package.json").exists() {
+        return Ok(prod_path);
+    }
+    // Dev mode: resources are relative to the Tauri project root
+    let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("resources")
+        .join("slidev-env");
+    if dev_path.join("package.json").exists() {
+        return Ok(dev_path);
+    }
+    Err(format!(
+        "Slidev environment not found. Checked:\n  {}\n  {}",
+        prod_path.display(),
+        dev_path.display()
+    ))
+}
+
+/// Read the "dependencies" field from a package.json as a string for comparison
+fn read_dependencies_json(package_json_path: &std::path::Path) -> Result<String, String> {
+    let content = fs::read_to_string(package_json_path)
+        .map_err(|e| format!("Failed to read {}: {}", package_json_path.display(), e))?;
+    let parsed: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse {}: {}", package_json_path.display(), e))?;
+    let deps = parsed.get("dependencies").cloned().unwrap_or(serde_json::Value::Null);
+    Ok(deps.to_string())
+}
+
+/// Ensure Slidev packages are installed in AppData.
+/// Returns the path to the AppData slidev-env directory.
+fn ensure_slidev_installed(app: &AppHandle) -> Result<PathBuf, String> {
+    let slidev_env_dir = resolve_slidev_env_dir(app)?;
+    let bundled_package_json = slidev_env_dir.join("package.json");
+    let bundled_lock = slidev_env_dir.join("package-lock.json");
+
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+    let install_dir = app_data_dir.join("slidev-env");
+    let installed_package_json = install_dir.join("package.json");
+    let installed_cli = install_dir.join("node_modules").join("@slidev").join("cli").join("package.json");
+
+    // Check if install is needed
+    let needs_install = if !installed_package_json.exists() || !installed_cli.exists() {
+        true
+    } else {
+        let bundled_deps = read_dependencies_json(&bundled_package_json)?;
+        let installed_deps = read_dependencies_json(&installed_package_json)?;
+        bundled_deps != installed_deps
+    };
+
+    if !needs_install {
+        return Ok(install_dir);
+    }
+
+    // Emit install start event
+    let _ = app.emit("slidev-install-start", serde_json::json!({}));
+
+    // Prepare install directory
+    fs::create_dir_all(&install_dir)
+        .map_err(|e| format!("Failed to create install dir: {}", e))?;
+
+    // Copy package.json and package-lock.json from bundled resources
+    fs::copy(&bundled_package_json, &installed_package_json)
+        .map_err(|e| format!("Failed to copy package.json: {}", e))?;
+    if bundled_lock.exists() {
+        fs::copy(&bundled_lock, install_dir.join("package-lock.json"))
+            .map_err(|e| format!("Failed to copy package-lock.json: {}", e))?;
+    }
+
+    // Run npm install
+    let npm = if cfg!(target_os = "windows") { "npm.cmd" } else { "npm" };
+    let mut npm_cmd = Command::new(npm);
+    npm_cmd
+        .args(["install"])
+        .current_dir(&install_dir)
+        .stdin(std::process::Stdio::null());
+    #[cfg(target_os = "windows")]
+    npm_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+    let output = npm_cmd
+        .output()
+        .map_err(|e| {
+            let msg = format!("Failed to run npm install: {}. If you are behind a proxy, set HTTP_PROXY environment variable or run 'npm config set proxy <url>'.", e);
+            let _ = app.emit("slidev-install-error", serde_json::json!({ "message": msg }));
+            msg
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let msg = format!(
+            "npm install failed: {}. If you are behind a proxy, set HTTP_PROXY environment variable or run 'npm config set proxy <url>'.",
+            stderr
+        );
+        let _ = app.emit("slidev-install-error", serde_json::json!({ "message": msg }));
+        // Clean up failed install so next attempt re-tries
+        let _ = fs::remove_file(&installed_package_json);
+        return Err(msg);
+    }
+
+    // Emit install complete event
+    let _ = app.emit("slidev-install-complete", serde_json::json!({}));
+
+    Ok(install_dir)
+}
+
 /// Kill a process by PID (platform-specific)
 fn kill_process(pid: u32) -> Result<(), String> {
     #[cfg(target_os = "windows")]
@@ -202,33 +317,22 @@ pub async fn slidev_start(
         format!("@slidev/theme-{}", theme)
     };
 
-    // Set up node_modules: install Slidev + theme in temp dir if not already present
+    // Set up node_modules: copy bundled modules or install via npm as fallback
     let node_modules_dest = temp_dir.join("node_modules");
     if !node_modules_dest.join(".package-lock.json").exists() {
-        // Copy package.json as base
-        let package_json_src = slidev_env_dir.join("package.json");
-        fs::copy(&package_json_src, temp_dir.join("package.json"))
-            .map_err(|e| format!("Failed to copy package.json: {}", e))?;
+        let node_modules_src = slidev_env_dir.join("node_modules");
+        if node_modules_src.exists() {
+            // Copy pre-bundled node_modules (works offline / behind proxy)
+            copy_dir_recursive(&node_modules_src, &node_modules_dest)?;
+            let package_json_src = slidev_env_dir.join("package.json");
+            fs::copy(&package_json_src, temp_dir.join("package.json"))
+                .map_err(|e| format!("Failed to copy package.json: {}", e))?;
+        } else {
+            // Fallback: install via npm (dev mode or missing bundle)
+            let package_json_src = slidev_env_dir.join("package.json");
+            fs::copy(&package_json_src, temp_dir.join("package.json"))
+                .map_err(|e| format!("Failed to copy package.json: {}", e))?;
 
-        // Install base dependencies + theme
-        let npm = if cfg!(target_os = "windows") { "npm.cmd" } else { "npm" };
-        let mut npm_cmd = Command::new(npm);
-        npm_cmd.args(["install", "--prefer-offline", &theme_package])
-            .current_dir(&temp_dir)
-            .stdin(std::process::Stdio::null());
-        #[cfg(target_os = "windows")]
-        npm_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        let install_output = npm_cmd.output()
-            .map_err(|e| format!("Failed to run npm install: {}", e))?;
-
-        if !install_output.status.success() {
-            let stderr = String::from_utf8_lossy(&install_output.stderr);
-            return Err(format!("npm install failed: {}", stderr));
-        }
-    } else {
-        // node_modules exists, but check if theme is installed
-        let theme_dir = node_modules_dest.join(&theme_package);
-        if !theme_dir.exists() {
             let npm = if cfg!(target_os = "windows") { "npm.cmd" } else { "npm" };
             let mut npm_cmd = Command::new(npm);
             npm_cmd.args(["install", "--prefer-offline", &theme_package])
@@ -236,8 +340,27 @@ pub async fn slidev_start(
                 .stdin(std::process::Stdio::null());
             #[cfg(target_os = "windows")]
             npm_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-            let _ = npm_cmd.output();
+            let install_output = npm_cmd.output()
+                .map_err(|e| format!("Failed to run npm install: {}", e))?;
+
+            if !install_output.status.success() {
+                let stderr = String::from_utf8_lossy(&install_output.stderr);
+                return Err(format!("npm install failed: {}", stderr));
+            }
         }
+    }
+
+    // Install non-default theme if not already present
+    let theme_dir = node_modules_dest.join(&theme_package);
+    if !theme_dir.exists() {
+        let npm = if cfg!(target_os = "windows") { "npm.cmd" } else { "npm" };
+        let mut npm_cmd = Command::new(npm);
+        npm_cmd.args(["install", "--prefer-offline", &theme_package])
+            .current_dir(&temp_dir)
+            .stdin(std::process::Stdio::null());
+        #[cfg(target_os = "windows")]
+        npm_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        let _ = npm_cmd.output();
     }
 
     // Find available port
