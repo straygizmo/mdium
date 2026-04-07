@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { useOpencodeServerStore } from "./opencode-server-store";
 import { useOpencodeConfigStore } from "./opencode-config-store";
-import { useUiStore } from "./ui-store";
+import { useUiStore, type LeftPanel } from "./ui-store";
 
 export interface Tab {
   id: string;
@@ -52,6 +52,8 @@ interface TabState {
   activeFolderPath: string | null;
   /** Last active tab ID per folder */
   folderLastActiveTab: Record<string, string>;
+  /** Last active left panel per folder */
+  folderLeftPanel: Record<string, LeftPanel>;
   /** List of open folder paths (managed independently from tabs) */
   openFolderPaths: string[];
 
@@ -83,6 +85,9 @@ interface TabState {
     status: string;
   }) => void;
 
+  /** Save current folder's left panel selection */
+  setFolderLeftPanel: (panel: LeftPanel) => void;
+
   /** Add folder tab when opening a folder (also creates an empty tab) */
   openFolder: (folderPath: string) => void;
   /** Switch folder tab */
@@ -104,6 +109,7 @@ export const useTabStore = create<TabState>()(
   activeTabId: null,
   activeFolderPath: null,
   folderLastActiveTab: {},
+  folderLeftPanel: {},
   openFolderPaths: [],
 
   openTab: (tabData) => {
@@ -316,6 +322,15 @@ export const useTabStore = create<TabState>()(
     }));
   },
 
+  setFolderLeftPanel: (panel) => {
+    const { activeFolderPath } = get();
+    if (activeFolderPath) {
+      set((s) => ({
+        folderLeftPanel: { ...s.folderLeftPanel, [activeFolderPath]: panel },
+      }));
+    }
+  },
+
   openFolder: (folderPath) => {
     const { tabs } = get();
     // If tabs for this folder already exist, just switch
@@ -353,7 +368,7 @@ export const useTabStore = create<TabState>()(
   },
 
   switchFolder: (folderPath) => {
-    const { tabs, folderLastActiveTab } = get();
+    const { tabs, folderLastActiveTab, folderLeftPanel } = get();
     const lastTabId = folderLastActiveTab[folderPath];
     const folderTabs = tabs.filter((t) => t.folderPath === folderPath);
     const target = folderTabs.find((t) => t.id === lastTabId) ?? folderTabs[0];
@@ -363,7 +378,10 @@ export const useTabStore = create<TabState>()(
     ocStore.loadConfig();
     ocStore.loadProjectMcpServers(folderPath);
 
-    useUiStore.getState().setEditorVisible(target?.editorVisible ?? true);
+    const uiStore = useUiStore.getState();
+    uiStore.setEditorVisible(target?.editorVisible ?? true);
+    // Restore left panel selection for this folder (default: "folder")
+    uiStore.setLeftPanel(folderLeftPanel[folderPath] ?? "folder");
     set({
       activeFolderPath: folderPath,
       activeTabId: target?.id ?? null,
@@ -398,9 +416,19 @@ export const useTabStore = create<TabState>()(
 
     const newFolderLast = { ...get().folderLastActiveTab };
     delete newFolderLast[folderPath];
+    const newFolderLeftPanel = { ...get().folderLeftPanel };
+    delete newFolderLeftPanel[folderPath];
 
     const newActiveTab = newTabs.find((t) => t.id === newActiveId);
-    useUiStore.getState().setEditorVisible(newActiveTab?.editorVisible ?? true);
+    const uiStore = useUiStore.getState();
+    uiStore.setEditorVisible(newActiveTab?.editorVisible ?? true);
+    // Restore left panel for the new active folder
+    if (newActiveFolderPath) {
+      const savedLeftPanel = newFolderLeftPanel[newActiveFolderPath];
+      if (savedLeftPanel) {
+        uiStore.setLeftPanel(savedLeftPanel);
+      }
+    }
 
     set({
       tabs: newTabs,
@@ -408,6 +436,7 @@ export const useTabStore = create<TabState>()(
       activeFolderPath: newActiveFolderPath,
       openFolderPaths: newOpenFolderPaths,
       folderLastActiveTab: newFolderLast,
+      folderLeftPanel: newFolderLeftPanel,
     });
   },
 
@@ -421,6 +450,7 @@ export const useTabStore = create<TabState>()(
       partialize: (state) => ({
         openFolderPaths: state.openFolderPaths,
         activeFolderPath: state.activeFolderPath,
+        folderLeftPanel: state.folderLeftPanel,
       }),
     }
   )

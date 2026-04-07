@@ -517,6 +517,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
 
     // Switch UI to chat panel
     useUiStore.getState().setLeftPanel("opencode-config");
+    useTabStore.getState().setFolderLeftPanel("opencode-config");
     useUiStore.getState().setOpencodeTopTab("chat");
 
     // Ensure connection, create a new chat, and send expanded prompt
@@ -572,6 +573,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
 
     // Switch UI to chat panel
     useUiStore.getState().setLeftPanel("opencode-config");
+    useTabStore.getState().setFolderLeftPanel("opencode-config");
     useUiStore.getState().setOpencodeTopTab("chat");
 
     // Expand the template with actual parameter values (prefer user-edited version)

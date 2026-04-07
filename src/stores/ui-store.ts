@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { OpencodeConfigTab, OpencodeTopTab } from "@/shared/types";
 
-type LeftPanel = "folder" | "outline" | "rag" | "opencode-config" | "git";
+export type LeftPanel = "folder" | "outline" | "rag" | "opencode-config" | "git";
 type ViewTab = "preview" | "table" | "pdf-preview" | "docx-preview" | "html-preview" | "slidev-preview" | "video";
 type FolderPanelTab = "terminal" | "rag";
 type BottomTerminalTab = "terminal" | "claude-code";

@@ -54,6 +54,7 @@ export function LeftPanel({
   const { t } = useTranslation("toolbar");
   const leftPanel = useUiStore((s) => s.leftPanel);
   const setLeftPanel = useUiStore((s) => s.setLeftPanel);
+  const setFolderLeftPanel = useTabStore((s) => s.setFolderLeftPanel);
   const activeFolderPath = useTabStore((s) => s.activeFolderPath);
   const fileTree = useFileStore((s) =>
     activeFolderPath ? s.fileTrees[activeFolderPath] : undefined
@@ -75,7 +76,7 @@ export function LeftPanel({
         <div className="left-panel__activity-bar-top">
           <button
             className={`left-panel__activity-btn ${leftPanel === "folder" ? "left-panel__activity-btn--active" : ""}`}
-            onClick={() => setLeftPanel("folder")}
+            onClick={() => { setLeftPanel("folder"); setFolderLeftPanel("folder"); }}
             title={t("files")}
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -85,7 +86,7 @@ export function LeftPanel({
           </button>
           <button
             className={`left-panel__activity-btn ${leftPanel === "outline" ? "left-panel__activity-btn--active" : ""}`}
-            onClick={() => setLeftPanel("outline")}
+            onClick={() => { setLeftPanel("outline"); setFolderLeftPanel("outline"); }}
             title={t("outline")}
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -99,7 +100,7 @@ export function LeftPanel({
           </button>
           <button
             className={`left-panel__activity-btn ${leftPanel === "git" ? "left-panel__activity-btn--active" : ""}`}
-            onClick={() => setLeftPanel("git")}
+            onClick={() => { setLeftPanel("git"); setFolderLeftPanel("git"); }}
             title={t("sourceControl", { ns: "git" })}
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -115,7 +116,7 @@ export function LeftPanel({
           </button>
           <button
             className={`left-panel__activity-btn ${leftPanel === "rag" ? "left-panel__activity-btn--active" : ""}`}
-            onClick={() => setLeftPanel("rag")}
+            onClick={() => { setLeftPanel("rag"); setFolderLeftPanel("rag"); }}
             title="RAG"
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -124,7 +125,7 @@ export function LeftPanel({
           </button>
           <button
             className={`left-panel__activity-btn ${leftPanel === "opencode-config" ? "left-panel__activity-btn--active" : ""}`}
-            onClick={() => setLeftPanel("opencode-config")}
+            onClick={() => { setLeftPanel("opencode-config"); setFolderLeftPanel("opencode-config"); }}
             title="opencode"
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

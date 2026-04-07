@@ -914,6 +914,7 @@ export function App() {
       } else if (e.ctrlKey && e.key === "o") {
         e.preventDefault();
         useUiStore.getState().setLeftPanel("opencode-config");
+        useTabStore.getState().setFolderLeftPanel("opencode-config");
       } else if (e.ctrlKey && e.key === "`") {
         e.preventDefault();
         const ui = useUiStore.getState();
