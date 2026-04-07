@@ -18,9 +18,14 @@ struct SlidevProcess {
 type SlidevMap = Arc<Mutex<HashMap<String, SlidevProcess>>>;
 
 static SLIDEV_MAP: OnceLock<SlidevMap> = OnceLock::new();
+static INSTALL_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 fn slidev_store() -> &'static SlidevMap {
     SLIDEV_MAP.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
+}
+
+fn install_lock() -> &'static Mutex<()> {
+    INSTALL_LOCK.get_or_init(|| Mutex::new(()))
 }
 
 /// Find an available port by letting the OS assign one
@@ -114,6 +119,9 @@ fn read_dependencies_json(package_json_path: &std::path::Path) -> Result<String,
 /// Ensure Slidev packages are installed in AppData.
 /// Returns the path to the AppData slidev-env directory.
 fn ensure_slidev_installed(app: &AppHandle) -> Result<PathBuf, String> {
+    // Prevent concurrent npm install from multiple Slidev sessions
+    let _guard = install_lock().lock().unwrap();
+
     let slidev_env_dir = resolve_slidev_env_dir(app)?;
     let bundled_package_json = slidev_env_dir.join("package.json");
     let bundled_lock = slidev_env_dir.join("package-lock.json");
@@ -281,6 +289,16 @@ pub async fn slidev_start(
         let mut guard = slidev_store().lock().unwrap();
         if let Some(existing) = guard.remove(&file_path) {
             let _ = kill_process(existing.pid);
+            // Remove junction/symlink first to avoid deleting AppData node_modules
+            let nm_link = existing.temp_dir.join("node_modules");
+            #[cfg(target_os = "windows")]
+            {
+                let _ = fs::remove_dir(&nm_link);
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                let _ = fs::remove_file(&nm_link);
+            }
             let _ = fs::remove_dir_all(&existing.temp_dir);
         }
     }
@@ -291,8 +309,13 @@ pub async fn slidev_start(
     fs::create_dir_all(temp_dir.join("public").join("images"))
         .map_err(|e| format!("Failed to create public/images dir: {}", e))?;
 
-    // Ensure Slidev is installed in AppData
-    let install_dir = ensure_slidev_installed(&app)?;
+    // Ensure Slidev is installed in AppData (run in blocking thread to avoid starving async runtime)
+    let app_clone = app.clone();
+    let install_dir = tokio::task::spawn_blocking(move || {
+        ensure_slidev_installed(&app_clone)
+    })
+    .await
+    .map_err(|e| format!("Install task panicked: {}", e))??;
 
     // Write slides.md first (needed for theme detection)
     let slides_path = temp_dir.join("slides.md");
