@@ -1,6 +1,8 @@
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
+import { useUiStore } from "@/stores/ui-store";
+import type { OpencodeConfigTab } from "@/shared/types";
 
 export function OpencodeConfigBadges() {
   const { t } = useTranslation("opencode-config");
@@ -59,14 +61,30 @@ export function OpencodeConfigBadges() {
     ];
   }, [config, projectCommands, projectMcpServers, projectSkillNames, globalSkillNames, t]);
 
+  const setTopTab = useUiStore((s) => s.setOpencodeTopTab);
+  const setConfigTab = useUiStore((s) => s.setOpencodeConfigTab);
+
+  const handleDoubleClick = useCallback(
+    (tab: OpencodeConfigTab) => {
+      setTopTab("settings");
+      setConfigTab(tab);
+    },
+    [setTopTab, setConfigTab],
+  );
+
   const activeBadges = badges.filter((b) => b.count > 0);
   if (activeBadges.length === 0) return null;
 
   return (
     <div className="oc-config-badges">
       {activeBadges.map((badge) => (
-        <span key={badge.key} className="oc-config-badges__item">
-          {badge.label}: {badge.count}
+        <span
+          key={badge.key}
+          className="oc-config-badges__item"
+          onDoubleClick={() => handleDoubleClick(badge.key as OpencodeConfigTab)}
+        >
+          {badge.label}
+          <span className="oc-config-badges__count">{badge.count}</span>
           <span className="oc-config-badges__tooltip">
             {badge.items.map((name) => (
               <span key={name} className="oc-config-badges__tooltip-item">{name}</span>

@@ -778,21 +778,38 @@
 
 .oc-config-badges__item {
   position: relative;
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 10px;
   font-weight: 600;
-  padding: 1px 6px;
+  padding: 2px 6px;
   border-radius: 3px;
-  background: var(--bg-surface);
+  background: none;
   border: 1px solid var(--border);
-  color: var(--text-muted);
+  color: var(--text-secondary);
   cursor: default;
   white-space: nowrap;
 }
 
 .oc-config-badges__item:hover {
+  background: color-mix(in srgb, var(--text-secondary) 12%, transparent);
   border-color: var(--text-secondary);
-  color: var(--text-secondary);
+}
+
+.oc-config-badges__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--text-secondary);
+  color: var(--bg-base);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .oc-config-badges__tooltip {

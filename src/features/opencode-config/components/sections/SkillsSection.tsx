@@ -97,11 +97,11 @@ export function SkillsSection() {
       if (targetScope === "global") {
         const home = await invoke<string>("get_home_dir");
         const sep = home.includes("\\") ? "\\" : "/";
-        return `${home}${sep}.config${sep}opencode${sep}skills`;
+        return `${home}${sep}.config${sep}opencode`;
       }
       if (activeFolderPath) {
         const sep = activeFolderPath.includes("\\") ? "\\" : "/";
-        return `${activeFolderPath}${sep}.opencode${sep}skills`;
+        return `${activeFolderPath}${sep}.opencode`;
       }
       return null;
     },
@@ -143,7 +143,7 @@ export function SkillsSection() {
       const dir = await getSkillsDir(formScope);
       if (dir) {
         const sep = dir.includes("\\") ? "\\" : "/";
-        setDisplayPath(`${dir}${sep}<name>${sep}SKILL.md`);
+        setDisplayPath(`${dir}${sep}skills${sep}<name>${sep}SKILL.md`);
       } else {
         setDisplayPath("");
       }
