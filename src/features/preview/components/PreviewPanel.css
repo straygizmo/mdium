@@ -51,7 +51,7 @@
   padding: 6px 16px;
   border: none;
   background: none;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: 12px;
   cursor: pointer;
   border-bottom: 2px solid transparent;
@@ -84,7 +84,7 @@
 
 .preview-panel__command-label {
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   white-space: nowrap;
 }
 
