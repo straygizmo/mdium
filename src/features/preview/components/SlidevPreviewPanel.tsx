@@ -18,6 +18,8 @@ export function SlidevPreviewPanel({ content, filePath }: SlidevPreviewPanelProp
   const removeSession = useSlidevStore((s) => s.removeSession);
   const [starting, setStarting] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [installError, setInstallError] = useState<string | null>(null);
   const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const filePathRef = useRef(filePath);
 
@@ -57,6 +59,26 @@ export function SlidevPreviewPanel({ content, filePath }: SlidevPreviewPanelProp
       unlistenError.then((fn) => fn());
     };
   }, [updateSession]);
+
+  // Listen for Slidev install events
+  useEffect(() => {
+    const unlistenStart = listen("slidev-install-start", () => {
+      setInstalling(true);
+      setInstallError(null);
+    });
+    const unlistenComplete = listen("slidev-install-complete", () => {
+      setInstalling(false);
+    });
+    const unlistenError = listen<{ message: string }>("slidev-install-error", (event) => {
+      setInstalling(false);
+      setInstallError(event.payload.message);
+    });
+    return () => {
+      unlistenStart.then((fn) => fn());
+      unlistenComplete.then((fn) => fn());
+      unlistenError.then((fn) => fn());
+    };
+  }, []);
 
   // Start server when needed (mount or filePath change)
   // Session persists across tab switches via Zustand store
@@ -133,6 +155,30 @@ export function SlidevPreviewPanel({ content, filePath }: SlidevPreviewPanelProp
           <span className="slidev-spinner" />
           <span style={{ fontSize: 13, opacity: 0.7 }}>{t("slidevStarting")}</span>
         </div>
+      </div>
+    );
+  }
+
+  if (installing) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", background: "var(--bg-base)" }}>
+        {slidevLogo}
+        <div style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 8 }}>
+          <span className="slidev-spinner" />
+          <span style={{ fontSize: 13, opacity: 0.7 }}>{t("slidevInstalling")}</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (installError) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", background: "var(--bg-base)", padding: 24 }}>
+        {slidevLogo}
+        <p style={{ marginTop: 12, color: "var(--error)", fontSize: 13 }}>{t("slidevInstallError")}</p>
+        <p style={{ marginTop: 4, opacity: 0.6, fontSize: 12, textAlign: "center" }}>{t("slidevInstallProxyHint")}</p>
+        <p style={{ marginTop: 4, opacity: 0.5, fontSize: 11, maxWidth: 400, wordBreak: "break-all" }}>{installError}</p>
+        <button onClick={() => { setInstallError(null); startServer(); }} style={{ marginTop: 8, padding: "4px 16px", cursor: "pointer" }}>{t("slidevRetry")}</button>
       </div>
     );
   }
