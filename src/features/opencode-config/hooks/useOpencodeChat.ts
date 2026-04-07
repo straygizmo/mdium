@@ -139,41 +139,50 @@ export const useChatUIStore = create<OpencodeChatUIState>()(() => ({
 function tryParseQuestions(text: string): PendingQuestion[] | null {
   const trimmed = text.trim();
   if (!trimmed.includes('"questions"')) return null;
-  // Skip incomplete JSON during streaming (wait for closing brace)
-  if (!trimmed.endsWith('}') && !trimmed.endsWith('```')) return null;
+  // Need at least one closing brace for valid JSON
+  if (!trimmed.includes('}')) return null;
 
-  // Try to parse the whole text as JSON
-  try {
-    const parsed = JSON.parse(trimmed);
+  const validate = (obj: unknown): PendingQuestion[] | null => {
     if (
-      parsed &&
-      Array.isArray(parsed.questions) &&
-      parsed.questions.length > 0 &&
-      parsed.questions.every(
+      obj &&
+      typeof obj === "object" &&
+      Array.isArray((obj as any).questions) &&
+      (obj as any).questions.length > 0 &&
+      (obj as any).questions.every(
         (q: any) => typeof q.question === "string" && Array.isArray(q.options)
       )
     ) {
-      return parsed.questions as PendingQuestion[];
+      return (obj as any).questions as PendingQuestion[];
     }
+    return null;
+  };
+
+  // Try to parse the whole text as JSON
+  try {
+    const result = validate(JSON.parse(trimmed));
+    if (result) return result;
   } catch {
-    // Not valid JSON as-is — try to extract a JSON block
+    // Not valid JSON as-is — try other strategies
   }
 
   // Try to extract JSON from a fenced code block
   const fenced = trimmed.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
   if (fenced) {
     try {
-      const parsed = JSON.parse(fenced[1].trim());
-      if (
-        parsed &&
-        Array.isArray(parsed.questions) &&
-        parsed.questions.length > 0 &&
-        parsed.questions.every(
-          (q: any) => typeof q.question === "string" && Array.isArray(q.options)
-        )
-      ) {
-        return parsed.questions as PendingQuestion[];
-      }
+      const result = validate(JSON.parse(fenced[1].trim()));
+      if (result) return result;
+    } catch {
+      // not valid
+    }
+  }
+
+  // Fallback: extract the outermost JSON object from surrounding text
+  const firstBrace = trimmed.indexOf('{');
+  const lastBrace = trimmed.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    try {
+      const result = validate(JSON.parse(trimmed.slice(firstBrace, lastBrace + 1)));
+      if (result) return result;
     } catch {
       // not valid
     }
@@ -214,6 +223,7 @@ function processSSEStream(stream: AsyncIterable<unknown>) {
                 // Detect questions JSON and unlock loading
                 const questions = tryParseQuestions(textContent);
                 if (questions) {
+                  updated[updated.length - 1] = { ...updated[updated.length - 1], content: "" };
                   return { messages: updated, pendingQuestions: questions, loading: false };
                 }
 
@@ -275,6 +285,22 @@ function processSSEStream(stream: AsyncIterable<unknown>) {
                   }
                 }
               }
+
+              // Try to detect questions in the final text before converting to HTML
+              const questionsFromIdle = tryParseQuestions(rawText);
+              if (questionsFromIdle) {
+                useChatUIStore.setState((s) => {
+                  const updated = [...s.messages];
+                  updated[updated.length - 1] = {
+                    ...updated[updated.length - 1],
+                    content: "",
+                    completed: true,
+                  };
+                  return { messages: updated, pendingQuestions: questionsFromIdle, loading: false };
+                });
+                continue;
+              }
+
               const html = rawText ? await marked(rawText) : "";
               useChatUIStore.setState((s) => {
                 const updated = [...s.messages];
