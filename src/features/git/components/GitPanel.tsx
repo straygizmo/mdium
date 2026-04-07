@@ -261,12 +261,14 @@ export function GitPanel() {
           title={t("stagedChanges")}
           files={stagedFiles}
           staged={true}
+          folderPath={activeFolderPath ?? ""}
           onUnstage={handleUnstage}
         />
         <GitFileList
           title={t("changes")}
           files={unstagedFiles}
           staged={false}
+          folderPath={activeFolderPath ?? ""}
           onStage={handleStage}
           onDiscard={handleDiscard}
         />
