@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicegui-org/nicegui/main/nicegui/static/tauri2/tauri.conf.json",
   "productName": "MDium",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "identifier": "com.mdium.app",
   "build": {
     "frontendDist": "../dist",
@@ -30,7 +30,7 @@
     "active": true,
     "targets": ["msi", "nsis"],
     "resources": [
-      "../resources/slidev-env/package.json",
+      "../resources/slidev-env/**/*",
       "../resources/mcp-servers/**/*",
       "../resources/video-env/**/*",
       "../resources/lottie-presets/**/*",
