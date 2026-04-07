@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 import type { FileEntry } from "@/shared/types";
 
 interface ClipboardEntry {
@@ -48,7 +49,9 @@ interface FileState {
   clearDragState: () => void;
 }
 
-export const useFileStore = create<FileState>()((set, get) => ({
+export const useFileStore = create<FileState>()(
+  persist(
+    (set, get) => ({
   folderPath: null,
   activeFile: null,
   fileTrees: {},
@@ -116,4 +119,12 @@ export const useFileStore = create<FileState>()((set, get) => ({
   setDragState: (sourcePath, dropTargetPath) =>
     set({ dragState: { sourcePath, dropTargetPath } }),
   clearDragState: () => set({ dragState: null }),
-}));
+    }),
+    {
+      name: "mdium-file-store",
+      partialize: (state) => ({
+        expandedDirs: state.expandedDirs,
+      }),
+    }
+  )
+);
