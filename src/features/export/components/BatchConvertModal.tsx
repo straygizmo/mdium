@@ -36,11 +36,6 @@ export function BatchConvertModal({ files, tree, onClose, onComplete }: BatchCon
     return set;
   });
 
-  const filteredFiles = useMemo(() => {
-    if (filter === "all") return files;
-    return files.filter((f) => f.type === filter);
-  }, [files, filter]);
-
   const filteredTree = useMemo(
     () => pruneTreeByFilter(tree, filter),
     [tree, filter]
