@@ -107,15 +107,20 @@ export function TabBar() {
               title={tab.filePath || tab.fileName}
             >
               <span className="tab-bar__name">
+                {tab.isDiffTab && tab.diffStatus && (
+                  <span className="tab-bar__diff-status" data-status={tab.diffStatus}>
+                    {tab.diffStatus}
+                  </span>
+                )}
                 <span className="tab-bar__file-icon">{getFileIcon(tab.fileName)}</span>
-                {tab.fileName}
-                {tab.dirty && <span className="tab-bar__dirty">*</span>}
+                {tab.isDiffTab ? `${tab.fileName} (diff)` : tab.fileName}
+                {!tab.isDiffTab && tab.dirty && <span className="tab-bar__dirty">*</span>}
               </span>
               <button
                 className="tab-bar__close"
                 onClick={async (e) => {
                   e.stopPropagation();
-                  if (tab.dirty && !(await ask(t("unsavedChanges"), { kind: "warning" }))) return;
+                  if (!tab.isDiffTab && tab.dirty && !(await ask(t("unsavedChanges"), { kind: "warning" }))) return;
                   closeTab(tab.id);
                 }}
               >

@@ -118,3 +118,30 @@
   background: var(--accent-red);
   color: #fff;
 }
+
+.tab-bar__diff-status {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  margin-right: 4px;
+  min-width: 14px;
+  text-align: center;
+}
+
+.tab-bar__diff-status[data-status="M"] {
+  color: var(--git-modified, #e2a438);
+}
+
+.tab-bar__diff-status[data-status="A"],
+.tab-bar__diff-status[data-status="??"] {
+  color: var(--git-added, #73c991);
+}
+
+.tab-bar__diff-status[data-status="D"] {
+  color: var(--git-deleted, #f44747);
+}
+
+.tab-bar__diff-status[data-status="R"],
+.tab-bar__diff-status[data-status="C"] {
+  color: var(--git-renamed, #6eb5ff);
+}
