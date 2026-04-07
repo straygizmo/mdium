@@ -730,6 +730,30 @@ pub fn extract_vba_modules(xlsm_path: String) -> Result<ExtractResult, String> {
 }
 
 // ---------------------------------------------------------------------------
+// Helper: extract Attribute VB_Name from VBA source
+// ---------------------------------------------------------------------------
+
+/// Parse the `Attribute VB_Name = "..."` line from VBA source code.
+/// Returns the module name if found, None otherwise.
+fn extract_vb_name(source: &str) -> Option<String> {
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("Attribute VB_Name") {
+            let rest = rest.trim();
+            if let Some(rest) = rest.strip_prefix('=') {
+                let rest = rest.trim();
+                if let Some(rest) = rest.strip_prefix('"') {
+                    if let Some(end) = rest.find('"') {
+                        return Some(rest[..end].to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
 // Command: inject_vba_modules
 // ---------------------------------------------------------------------------
 
@@ -816,25 +840,42 @@ pub fn inject_vba_modules(xlsm_path: String, macros_dir: String) -> Result<Injec
     let dir_data = vba_decompress(&dir_compressed)?;
     let project = parse_dir_stream(&dir_data)?;
 
-    // Build mapping: module name -> VbaModuleInfo
-    let module_map: std::collections::HashMap<String, &VbaModuleInfo> = project
+    // Build mappings: by module name and by stream name
+    let name_map: std::collections::HashMap<String, &VbaModuleInfo> = project
         .modules
         .iter()
         .map(|m| (m.name.clone(), m))
+        .collect();
+    let stream_name_map: std::collections::HashMap<String, &VbaModuleInfo> = project
+        .modules
+        .iter()
+        .map(|m| (m.stream_name.clone(), m))
         .collect();
 
     // 6. For each macro file, encode and compress, then write back
     let mut updated_modules: Vec<String> = Vec::new();
 
     for (module_name, file_path_str) in &macro_files {
-        let info = match module_map.get(module_name) {
+        // Read UTF-8 source from file first (needed for VB_Name extraction)
+        let source = fs::read_to_string(file_path_str)
+            .map_err(|e| format!("Failed to read macro file '{}': {}", file_path_str, e))?;
+
+        let vb_name = extract_vb_name(&source);
+
+        // Try matching in priority order:
+        // 1. filename -> name
+        // 2. Attribute VB_Name -> name
+        // 3. filename -> stream_name
+        // 4. Attribute VB_Name -> stream_name
+        let info = name_map.get(module_name.as_str())
+            .or_else(|| vb_name.as_ref().and_then(|n| name_map.get(n.as_str())))
+            .or_else(|| stream_name_map.get(module_name.as_str()))
+            .or_else(|| vb_name.as_ref().and_then(|n| stream_name_map.get(n.as_str())));
+
+        let info = match info {
             Some(info) => info,
             None => continue, // skip unmatched modules
         };
-
-        // Read UTF-8 source from file
-        let source = fs::read_to_string(file_path_str)
-            .map_err(|e| format!("Failed to read macro file '{}': {}", file_path_str, e))?;
 
         // Encode UTF-8 -> code page
         let encoded = encode_string(&source, code_page)?;
