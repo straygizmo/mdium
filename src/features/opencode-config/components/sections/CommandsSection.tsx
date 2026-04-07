@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { showConfirm } from "@/stores/dialog-store";
@@ -15,6 +15,7 @@ import { marked } from "marked";
 import { ScopeToggle, type Scope } from "../shared/ScopeToggle";
 import { ScopeFormWrapper } from "../shared/ScopeFormWrapper";
 import { useScopeItems } from "../../hooks/useScopeItems";
+import { useEditorKeyDown } from "../../hooks/useEditorKeyDown";
 
 type ViewTab = "editor" | "preview";
 
@@ -71,23 +72,7 @@ export function CommandsSection() {
     catch { return { frontMatter: meta, previewHtml: "<p>Markdown rendering error</p>" }; }
   }, [formContent]);
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === "Tab") {
-        e.preventDefault();
-        const textarea = e.currentTarget;
-        const start = textarea.selectionStart;
-        const end = textarea.selectionEnd;
-        const newContent =
-          formContent.substring(0, start) + "  " + formContent.substring(end);
-        setFormContent(newContent);
-        setTimeout(() => {
-          textarea.selectionStart = textarea.selectionEnd = start + 2;
-        }, 0);
-      }
-    },
-    [formContent]
-  );
+  const handleKeyDown = useEditorKeyDown(formContent, setFormContent);
 
   useEffect(() => {
     invoke<string>("get_home_dir").then((home) => {

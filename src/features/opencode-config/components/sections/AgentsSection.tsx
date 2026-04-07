@@ -13,6 +13,7 @@ import {
 import { ScopeToggle, type Scope } from "../shared/ScopeToggle";
 import { ScopeFormWrapper } from "../shared/ScopeFormWrapper";
 import { useScopeItems } from "../../hooks/useScopeItems";
+import { useEditorKeyDown } from "../../hooks/useEditorKeyDown";
 
 type AgentViewTab = "editor" | "preview";
 
@@ -273,19 +274,7 @@ export function AgentsSection() {
     catch { return { frontMatter: meta, previewHtml: "<p>Markdown rendering error</p>" }; }
   }, [fileFormContent]);
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === "Tab") {
-        e.preventDefault();
-        const ta = e.currentTarget;
-        const s = ta.selectionStart, en = ta.selectionEnd;
-        const nc = fileFormContent.substring(0, s) + "  " + fileFormContent.substring(en);
-        setFileFormContent(nc);
-        setTimeout(() => { ta.selectionStart = ta.selectionEnd = s + 2; }, 0);
-      }
-    },
-    [fileFormContent]
-  );
+  const handleKeyDown = useEditorKeyDown(fileFormContent, setFileFormContent);
 
   const isEditingConfig = adding || editing !== null;
   const isEditingFile = addingFile || editingFile !== null;

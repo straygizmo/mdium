@@ -7,6 +7,7 @@ import { useOpencodeConfigContext, toRelativeProjectPath } from "../OpencodeConf
 import { ScopeToggle, type Scope } from "../shared/ScopeToggle";
 import { ScopeFormWrapper } from "../shared/ScopeFormWrapper";
 import { useScopeItems } from "../../hooks/useScopeItems";
+import { useEditorKeyDown } from "../../hooks/useEditorKeyDown";
 
 interface ToolFileEntry {
   file_name: string;
@@ -158,23 +159,7 @@ export function CustomToolsSection() {
     await loadAllToolFiles();
   };
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === "Tab") {
-        e.preventDefault();
-        const textarea = e.currentTarget;
-        const start = textarea.selectionStart;
-        const end = textarea.selectionEnd;
-        const newContent =
-          formContent.substring(0, start) + "  " + formContent.substring(end);
-        setFormContent(newContent);
-        setTimeout(() => {
-          textarea.selectionStart = textarea.selectionEnd = start + 2;
-        }, 0);
-      }
-    },
-    [formContent]
-  );
+  const handleKeyDown = useEditorKeyDown(formContent, setFormContent);
 
   const isEditing = adding || editing !== null;
 

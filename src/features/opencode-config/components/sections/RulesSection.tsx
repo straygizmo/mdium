@@ -6,6 +6,7 @@ import { marked } from "marked";
 import { useOpencodeConfigContext, toRelativeProjectPath } from "../OpencodeConfigContext";
 import { ScopeToggle, type Scope } from "../shared/ScopeToggle";
 import { ScopeFormWrapper } from "../shared/ScopeFormWrapper";
+import { useEditorKeyDown } from "../../hooks/useEditorKeyDown";
 
 type RulesViewTab = "editor" | "preview";
 
@@ -74,23 +75,7 @@ export function RulesSection() {
     }
   }, [content]);
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === "Tab") {
-        e.preventDefault();
-        const textarea = e.currentTarget;
-        const start = textarea.selectionStart;
-        const end = textarea.selectionEnd;
-        const newContent =
-          content.substring(0, start) + "  " + content.substring(end);
-        setContent(newContent);
-        setTimeout(() => {
-          textarea.selectionStart = textarea.selectionEnd = start + 2;
-        }, 0);
-      }
-    },
-    [content]
-  );
+  const handleKeyDown = useEditorKeyDown(content, setContent);
 
   const noProject = scope === "project" && !activeFolderPath;
   const isDirty = content !== savedContent;
