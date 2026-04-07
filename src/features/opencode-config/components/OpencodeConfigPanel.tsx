@@ -112,7 +112,7 @@ export function OpencodeConfigPanel() {
           </div>
           <div className="oc-panel__body">
             {TABS.map(({ key }) => (
-              <div key={key} style={{ display: activeTab === key ? undefined : "none" }}>
+              <div key={key} style={{ display: activeTab === key ? "flex" : "none", flexDirection: "column" as const, flex: 1, minHeight: 0 }}>
                 {TAB_SECTIONS[key]}
               </div>
             ))}

@@ -218,7 +218,7 @@ export function CustomToolsSection() {
             <div className="oc-section__field" style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
               <label className="oc-section__label">{t("customToolContent")}</label>
               <textarea
-                className="oc-section__textarea--agent"
+                className="oc-section__textarea oc-section__textarea--agent"
                 value={formContent}
                 onChange={(e) => setFormContent(e.target.value)}
                 onKeyDown={handleKeyDown}

@@ -678,7 +678,7 @@ export function McpServersSection() {
           {formTestTools && formTestTools.length > 0 && (
             <div
               className="oc-section__tools-badge"
-              style={{ display: "inline-block", marginTop: 8, cursor: "pointer" }}
+              style={{ display: "inline-block", marginTop: 8, cursor: "pointer", flexShrink: 0 }}
               onClick={() => {
                 const name = formName.trim();
                 if (name && serverTools[name]) setToolsDialogServer(name);
@@ -689,7 +689,7 @@ export function McpServersSection() {
             </div>
           )}
           {formTestError && (
-            <div className="oc-section__test-status oc-section__test-status--error" style={{ marginTop: 4 }}>
+            <div className="oc-section__test-status oc-section__test-status--error" style={{ marginTop: 4, flexShrink: 0 }}>
               {formTestError}
             </div>
           )}

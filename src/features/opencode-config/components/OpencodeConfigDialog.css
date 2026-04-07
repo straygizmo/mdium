@@ -233,6 +233,7 @@
 .oc-section__form-actions {
   display: flex;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 .oc-section__save-btn {
@@ -390,6 +391,7 @@
   gap: 8px;
   margin-bottom: 12px;
   cursor: pointer;
+  flex-shrink: 0;
 }
 
 .oc-section__scope-toggle-label {
@@ -512,6 +514,7 @@
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: 4px;
+  flex-shrink: 0;
 }
 
 /* File path hint */
@@ -521,6 +524,7 @@
   color: var(--text-muted);
   margin-top: 8px;
   margin-bottom: 8px;
+  flex-shrink: 0;
 }
 
 /* Agent markdown textarea */
