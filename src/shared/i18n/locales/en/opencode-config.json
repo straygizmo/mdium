@@ -173,5 +173,6 @@
   "ocChatDoneError": "Done (with errors)",
   "commandBuiltinSelect": "Select a built-in command...",
   "ocChatAgentSelect": "Agent",
-  "ocChatQuestionsSubmit": "Submit"
+  "ocChatQuestionsSubmit": "Submit",
+  "ocChatRemoveImage": "Remove"
 }

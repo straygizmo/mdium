@@ -173,5 +173,6 @@
   "ocChatDoneError": "完了（エラーあり）",
   "commandBuiltinSelect": "ビルトイン コマンドを選択...",
   "ocChatAgentSelect": "エージェント",
-  "ocChatQuestionsSubmit": "送信"
+  "ocChatQuestionsSubmit": "送信",
+  "ocChatRemoveImage": "削除"
 }

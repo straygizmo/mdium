@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef, Fragment } from "react";
 import { useTranslation } from "react-i18next";
 import { useOpencodeChat, useChatUIStore } from "../hooks/useOpencodeChat";
-import type { OpencodeSessionInfo } from "../hooks/useOpencodeChat";
+import type { OpencodeSessionInfo, ImageAttachment } from "../hooks/useOpencodeChat";
 import type { Part } from "@opencode-ai/sdk/client";
 import { useTabStore } from "@/stores/tab-store";
 import { useEditorContextStore } from "@/stores/editor-context-store";
@@ -49,6 +49,7 @@ export function OpencodeChat() {
 
   const input = useChatUIStore((s) => s.chatInput);
   const setInput = useCallback((v: string) => useChatUIStore.setState({ chatInput: v }), []);
+  const [attachedImages, setAttachedImages] = useState<ImageAttachment[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<number>>(new Set());
@@ -109,8 +110,42 @@ export function OpencodeChat() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  const handlePaste = useCallback((e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    const imageItems: DataTransferItem[] = [];
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.startsWith("image/")) {
+        imageItems.push(items[i]);
+      }
+    }
+
+    if (imageItems.length === 0) return;
+
+    e.preventDefault();
+    for (const item of imageItems) {
+      const file = item.getAsFile();
+      if (!file) continue;
+
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result as string;
+        const ext = file.type.split("/")[1] ?? "png";
+        const filename = file.name || `image.${ext}`;
+        setAttachedImages((prev) => [...prev, { mime: file.type, dataUrl, filename }]);
+      };
+      reader.readAsDataURL(file);
+    }
+  }, []);
+
+  const removeImage = useCallback((index: number) => {
+    setAttachedImages((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
   const handleSubmit = useCallback(() => {
-    if (!input.trim() || loading) return;
+    if (!input.trim() && attachedImages.length === 0) return;
+    if (loading) return;
 
     let textToSend = input.trim();
     let agent: string | undefined;
@@ -122,10 +157,12 @@ export function OpencodeChat() {
     }
 
     agentOverrideRef.current = null;
-    if (!textToSend) return;
+    if (!textToSend && attachedImages.length === 0) return;
 
     // Save to input history
-    useInputHistoryStore.getState().addEntry(input.trim());
+    if (input.trim()) {
+      useInputHistoryStore.getState().addEntry(input.trim());
+    }
     resetHistoryNav();
 
     // MD Context prefix
@@ -143,9 +180,11 @@ export function OpencodeChat() {
       }
     }
 
-    sendMessage(textToSend, agent);
+    const imagesToSend = attachedImages.length > 0 ? [...attachedImages] : undefined;
+    sendMessage(textToSend, agent, imagesToSend);
     setInput("");
-  }, [input, loading, sendMessage, useMdContext, resetHistoryNav]);
+    setAttachedImages([]);
+  }, [input, loading, sendMessage, useMdContext, resetHistoryNav, attachedImages]);
 
   const handleQuestionsSubmit = useCallback(
     (answers: string) => {
@@ -516,11 +555,28 @@ export function OpencodeChat() {
               onItemClick={completion.handleItemClick}
             />
             <div className="oc-chat__input-wrapper">
+              {attachedImages.length > 0 && (
+                <div className="oc-chat__image-preview">
+                  {attachedImages.map((img, i) => (
+                    <div key={i} className="oc-chat__image-preview-item">
+                      <img src={img.dataUrl} alt={img.filename} />
+                      <button
+                        className="oc-chat__image-preview-remove"
+                        onClick={() => removeImage(i)}
+                        title={t("ocChatRemoveImage", "Remove")}
+                      >
+                        &#x2715;
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
               <textarea
                 className="oc-chat__input"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
                 placeholder={connected ? t("ocChatPlaceholder") : t("ocChatDisconnected")}
                 rows={2}
                 disabled={!connected || loading}
@@ -529,7 +585,7 @@ export function OpencodeChat() {
                 <button
                   className="oc-chat__send"
                   onClick={handleSubmit}
-                  disabled={!input.trim() || loading || !connected}
+                  disabled={(!input.trim() && attachedImages.length === 0) || loading || !connected}
                 >
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                     <path d="m14 10l-3 3m9.288-9.969a.535.535 0 0 1 .68.681l-5.924 16.93a.535.535 0 0 1-.994.04l-3.219-7.242a.54.54 0 0 0-.271-.271l-7.242-3.22a.535.535 0 0 1 .04-.993z"/>

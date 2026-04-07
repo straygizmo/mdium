@@ -1042,6 +1042,56 @@
   cursor: default;
 }
 
+/* Image preview strip */
+.oc-chat__image-preview {
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.oc-chat__image-preview-item {
+  position: relative;
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.oc-chat__image-preview-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.oc-chat__image-preview-remove {
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: none;
+  background: var(--bg-overlay);
+  color: var(--text-muted);
+  font-size: 9px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  line-height: 1;
+}
+
+.oc-chat__image-preview-remove:hover {
+  background: var(--accent-red);
+  color: #fff;
+}
+
 @keyframes oc-chat-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.6; }

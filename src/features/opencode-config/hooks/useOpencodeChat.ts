@@ -5,6 +5,8 @@ import type {
   Message,
   Part,
   Event as OcEvent,
+  TextPartInput,
+  FilePartInput,
 } from "@opencode-ai/sdk/client";
 import { invoke } from "@tauri-apps/api/core";
 import { marked } from "marked";
@@ -36,6 +38,12 @@ export interface OpencodeSessionInfo {
   updatedAt: number;
 }
 
+export interface ImageAttachment {
+  mime: string;
+  dataUrl: string;
+  filename: string;
+}
+
 interface UseOpencodeChatResult {
   connected: boolean;
   connecting: boolean;
@@ -53,7 +61,7 @@ interface UseOpencodeChatResult {
   connect: () => Promise<void>;
   disconnect: () => void;
   abortSession: () => Promise<void>;
-  sendMessage: (text: string, agent?: string) => Promise<void>;
+  sendMessage: (text: string, agent?: string, images?: ImageAttachment[]) => Promise<void>;
   executeCommand: (commandName: string, args?: string) => Promise<void>;
   createNewSession: () => Promise<void>;
   loadSession: (sessionId: string) => Promise<void>;
@@ -553,17 +561,22 @@ async function ensureSessionId(title: string): Promise<string | null> {
   }
 }
 
-export async function doSendMessage(text: string, agentOverride?: string) {
-  if (!_client || !text.trim()) return;
+export async function doSendMessage(text: string, agentOverride?: string, images?: ImageAttachment[]) {
+  if (!_client || (!text.trim() && (!images || images.length === 0))) return;
 
   useChatUIStore.setState({ error: null });
-  const sessionId = await ensureSessionId(text);
+  const sessionId = await ensureSessionId(text || "image");
   if (!sessionId) return;
+
+  // Build display text
+  const displayText = images && images.length > 0
+    ? `${text}${text ? " " : ""}[${images.map((img) => img.filename).join(", ")}]`
+    : text;
 
   useChatUIStore.setState((s) => ({
     messages: [
       ...s.messages,
-      { role: "user" as const, content: text },
+      { role: "user" as const, content: displayText },
       { role: "assistant" as const, content: "", parts: [] },
     ],
     loading: true,
@@ -573,11 +586,28 @@ export async function doSendMessage(text: string, agentOverride?: string) {
 
   try {
     const agent = agentOverride ?? useChatUIStore.getState().selectedAgent ?? undefined;
+
+    // Build parts array
+    const parts: Array<TextPartInput | FilePartInput> = [];
+    if (text.trim()) {
+      parts.push({ type: "text", text });
+    }
+    if (images) {
+      for (const img of images) {
+        parts.push({
+          type: "file",
+          mime: img.mime,
+          url: img.dataUrl,
+          filename: img.filename,
+        });
+      }
+    }
+
     const res = await _client.session.promptAsync({
       path: { id: sessionId },
       body: {
         ...(agent ? { agent } : {}),
-        parts: [{ type: "text", text }],
+        parts,
       },
     });
     console.log("[opencode] promptAsync res:", res.data, res.error);
@@ -811,8 +841,8 @@ export function useOpencodeChat(folderPath?: string): UseOpencodeChatResult {
     await doAbortSession();
   }, []);
 
-  const sendMessage = useCallback(async (text: string, agent?: string) => {
-    await doSendMessage(text, agent);
+  const sendMessage = useCallback(async (text: string, agent?: string, images?: ImageAttachment[]) => {
+    await doSendMessage(text, agent, images);
   }, []);
 
   const executeCommand = useCallback(async (commandName: string, args?: string) => {
