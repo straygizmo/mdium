@@ -22,7 +22,7 @@ import { splitNarration } from "@/features/video/lib/narration-splitter";
 import { videoFilePrefix } from "@/features/video/lib/audio-filename";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
-import { useChatUIStore, consumePendingVideoOutput, doConnect, doSendMessage, setPendingVideoOutput } from "@/features/opencode-config/hooks/useOpencodeChat";
+import { useChatUIStore, consumePendingVideoOutput, doConnect, doCreateNewSession, doSendMessage, setPendingVideoOutput } from "@/features/opencode-config/hooks/useOpencodeChat";
 import { BUILTIN_COMMANDS } from "@/features/opencode-config/lib/builtin-commands";
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 import { docxToMarkdown } from "@/features/export/lib/docxToMarkdown";
@@ -519,8 +519,9 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
     useUiStore.getState().setLeftPanel("opencode-config");
     useUiStore.getState().setOpencodeTopTab("chat");
 
-    // Ensure connection and send expanded prompt directly
+    // Ensure connection, create a new chat, and send expanded prompt
     await doConnect(activeFolderPath ?? undefined);
+    await doCreateNewSession();
     doSendMessage(prompt);
   }, [filePath, globalCommands, handleEnterVideoMode, handlePublishToMedium, activeFolderPath]);
 
@@ -587,8 +588,9 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
     // Track output path for auto-open when generation completes
     setPendingVideoOutput(outputPath);
 
-    // Ensure connection and send expanded prompt directly
+    // Ensure connection, create a new chat, and send expanded prompt
     await doConnect(activeFolderPath ?? undefined);
+    await doCreateNewSession();
     doSendMessage(prompt);
   }, [scenarioDialog, activeFolderPath]);
 

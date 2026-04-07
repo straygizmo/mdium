@@ -694,7 +694,7 @@ export async function doExecuteCommand(commandName: string, args?: string) {
   }
 }
 
-async function doCreateNewSession() {
+export async function doCreateNewSession() {
   _currentSessionId = null;
   useChatUIStore.setState({
     messages: [],
