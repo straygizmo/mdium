@@ -103,6 +103,7 @@ interface OpencodeChatUIState {
   availableAgents: { name: string; description: string }[];
   useMdContext: boolean;
   chatInput: string;
+  aborted: boolean;
 }
 
 export const useChatUIStore = create<OpencodeChatUIState>()(() => ({
@@ -118,6 +119,7 @@ export const useChatUIStore = create<OpencodeChatUIState>()(() => ({
   availableAgents: [],
   useMdContext: false,
   chatInput: "",
+  aborted: false,
 }));
 
 /**
@@ -564,6 +566,7 @@ export async function doSendMessage(text: string, agentOverride?: string) {
     ],
     loading: true,
     pendingQuestions: null,
+    aborted: false,
   }));
 
   try {
@@ -599,7 +602,7 @@ export async function doAbortSession() {
   } catch (e: any) {
     console.error("[opencode] abort failed:", e);
   } finally {
-    useChatUIStore.setState({ loading: false, pendingQuestions: null });
+    useChatUIStore.setState({ loading: false, pendingQuestions: null, aborted: true });
   }
 }
 
@@ -634,6 +637,7 @@ export async function doExecuteCommand(commandName: string, args?: string) {
     ],
     loading: true,
     pendingQuestions: null,
+    aborted: false,
   }));
 
   try {

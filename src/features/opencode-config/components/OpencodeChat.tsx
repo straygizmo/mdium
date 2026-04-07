@@ -52,13 +52,15 @@ export function OpencodeChat() {
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<number>>(new Set());
   const [toastKey, setToastKey] = useState(0);
   const [toastMsg, setToastMsg] = useState("");
+  const aborted = useChatUIStore((s) => s.aborted);
   const prevLoadingRef = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const agentOverrideRef = useRef<string | null>(null);
 
   // Show toast when loading finishes (loading: true → false with messages present)
+  // Skip the toast when the session was aborted by the user
   useEffect(() => {
-    if (prevLoadingRef.current && !loading && messages.length > 0) {
+    if (prevLoadingRef.current && !loading && messages.length > 0 && !aborted) {
       const last = messages[messages.length - 1];
       const hasError = last?.role === "assistant" && last.parts?.some(
         (p) => p.type === "tool" && (p as any).state?.status === "error"
@@ -67,7 +69,7 @@ export function OpencodeChat() {
       setToastKey((k) => k + 1);
     }
     prevLoadingRef.current = loading;
-  }, [loading, messages, t]);
+  }, [loading, messages, t, aborted]);
 
   const completion = useCompletion({
     connected,
