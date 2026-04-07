@@ -7,7 +7,7 @@ export function htmlTableToMarkdown(html: string): string | null {
   const table = doc.querySelector("table");
   if (!table) return null;
 
-  const rows = Array.from(table.querySelectorAll("tr"));
+  const rows = Array.from(table.querySelectorAll(":scope > tr, :scope > thead > tr, :scope > tbody > tr"));
   if (rows.length === 0) return null;
 
   // Determine max column count
@@ -33,7 +33,7 @@ export function htmlTableToMarkdown(html: string): string | null {
 
   // Extract cells from a row, padding to maxCols
   const extractCells = (row: Element): string[] => {
-    const cells = Array.from(row.querySelectorAll("td, th"));
+    const cells = Array.from(row.querySelectorAll(":scope > td, :scope > th"));
     const result = cells.map((cell) => convertCellContent(cell));
     while (result.length < maxCols) result.push("");
     return result.slice(0, maxCols);
@@ -81,7 +81,7 @@ export function htmlTableToMarkdown(html: string): string | null {
 type Alignment = "left" | "center" | "right" | null;
 
 function detectAlignments(row: Element, maxCols: number): Alignment[] {
-  const cells = Array.from(row.querySelectorAll("td, th"));
+  const cells = Array.from(row.querySelectorAll(":scope > td, :scope > th"));
   const result: Alignment[] = [];
   for (let i = 0; i < maxCols; i++) {
     const cell = cells[i] as HTMLElement | undefined;

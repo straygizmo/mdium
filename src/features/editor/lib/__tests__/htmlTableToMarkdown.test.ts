@@ -155,4 +155,22 @@ describe("htmlTableToMarkdown", () => {
     expect(result).toBeDefined();
     expect(result).toContain("data");
   });
+
+  it("ignores nested 2x2 table and extracts text only", () => {
+    const html = `
+      <table>
+        <tr><th>H1</th><th>H2</th></tr>
+        <tr>
+          <td>
+            <table><tr><td>n1</td><td>n2</td></tr><tr><td>n3</td><td>n4</td></tr></table>
+          </td>
+          <td>ok</td>
+        </tr>
+      </table>`;
+    const result = htmlTableToMarkdown(html)!;
+    const lines = result.split("\n");
+    // Should only have 3 lines: header, separator, 1 data row
+    expect(lines).toHaveLength(3);
+    expect(result).toContain("ok");
+  });
 });
