@@ -7,6 +7,8 @@ Furthermore, by converting Markdown back to DOCX, PDF, and other formats, it ens
 
 Each workspace (folder) runs its own opencode-sdk instance, enabling not only conventional RAG (Retrieval-Augmented Generation) but also **Agentic RAG** — an AI agent that reads, reasons over, and references all data within a folder to generate documents contextually grounded in your project's knowledge.
 
+![MDium_img](MDium_img.png)
+
 ```mermaid
 graph LR
     subgraph Workspace["Workspace (per folder)"]
