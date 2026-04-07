@@ -12,7 +12,7 @@ import { OpencodeConfigPanel } from "@/features/opencode-config/components/Openc
 import { GitPanel } from "@/features/git/components/GitPanel";
 import { useGitStore } from "@/stores/git-store";
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
-import { collectConvertibleFiles } from "@/features/export/lib/collectConvertibleFiles";
+import { collectConvertibleFiles, buildConvertibleTree } from "@/features/export/lib/collectConvertibleFiles";
 import { BatchConvertModal } from "@/features/export/components/BatchConvertModal";
 import "./LeftPanel.css";
 
@@ -67,6 +67,7 @@ export function LeftPanel({
   const gitFileCount = useGitStore((s) => s.files.length);
   const [showBatchConvert, setShowBatchConvert] = useState(false);
   const convertibleFiles = useMemo(() => collectConvertibleFiles(fileTree), [fileTree]);
+  const convertibleTree = useMemo(() => buildConvertibleTree(fileTree), [fileTree]);
 
   return (
     <div className="left-panel">
@@ -344,6 +345,7 @@ export function LeftPanel({
       {showBatchConvert && (
         <BatchConvertModal
           files={convertibleFiles}
+          tree={convertibleTree}
           onClose={() => setShowBatchConvert(false)}
           onComplete={onRefresh}
         />

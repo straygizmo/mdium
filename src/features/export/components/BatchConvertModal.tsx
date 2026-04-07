@@ -1,18 +1,25 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import type { ConvertibleFile } from "../lib/collectConvertibleFiles";
+import type { ConvertibleTreeNode } from "../lib/collectConvertibleFiles";
+import {
+  pruneTreeByFilter,
+  collectFilePaths,
+} from "../lib/collectConvertibleFiles";
 import { useBatchConvert } from "../hooks/useBatchConvert";
+import { BatchConvertTree } from "./BatchConvertTree";
 import "./BatchConvertModal.css";
 
 type FilterTab = "all" | "docx" | "pdf" | "xlsx";
 
 interface BatchConvertModalProps {
   files: ConvertibleFile[];
+  tree: ConvertibleTreeNode[];
   onClose: () => void;
   onComplete: () => void;
 }
 
-export function BatchConvertModal({ files, onClose, onComplete }: BatchConvertModalProps) {
+export function BatchConvertModal({ files, tree, onClose, onComplete }: BatchConvertModalProps) {
   const { t } = useTranslation("common");
   const { isConverting, progress, summary, convert, reset } = useBatchConvert();
 
@@ -34,6 +41,11 @@ export function BatchConvertModal({ files, onClose, onComplete }: BatchConvertMo
     return files.filter((f) => f.type === filter);
   }, [files, filter]);
 
+  const filteredTree = useMemo(
+    () => pruneTreeByFilter(tree, filter),
+    [tree, filter]
+  );
+
   const totalSelected = useMemo(() => {
     return files.filter((f) => selected.has(f.path)).length;
   }, [files, selected]);
@@ -41,22 +53,28 @@ export function BatchConvertModal({ files, onClose, onComplete }: BatchConvertMo
   const handleSelectAll = useCallback(() => {
     setSelected((prev) => {
       const next = new Set(prev);
-      for (const f of filteredFiles) {
-        next.add(f.path);
+      const paths = collectFilePaths(filteredTree);
+      for (const p of paths) {
+        if (skipExisting) {
+          const file = files.find((f) => f.path === p);
+          if (file?.hasExistingMd) continue;
+        }
+        next.add(p);
       }
       return next;
     });
-  }, [filteredFiles]);
+  }, [filteredTree, skipExisting, files]);
 
   const handleDeselectAll = useCallback(() => {
     setSelected((prev) => {
       const next = new Set(prev);
-      for (const f of filteredFiles) {
-        next.delete(f.path);
+      const paths = collectFilePaths(filteredTree);
+      for (const p of paths) {
+        next.delete(p);
       }
       return next;
     });
-  }, [filteredFiles]);
+  }, [filteredTree]);
 
   const handleToggle = useCallback((path: string) => {
     setSelected((prev) => {
@@ -69,6 +87,27 @@ export function BatchConvertModal({ files, onClose, onComplete }: BatchConvertMo
       return next;
     });
   }, []);
+
+  const handleToggleFolder = useCallback(
+    (paths: string[], select: boolean) => {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        for (const p of paths) {
+          if (skipExisting) {
+            const file = files.find((f) => f.path === p);
+            if (file?.hasExistingMd) continue;
+          }
+          if (select) {
+            next.add(p);
+          } else {
+            next.delete(p);
+          }
+        }
+        return next;
+      });
+    },
+    [skipExisting, files]
+  );
 
   const handleConvert = useCallback(async () => {
     const selectedFiles = files.filter((f) => selected.has(f.path));
@@ -203,27 +242,18 @@ export function BatchConvertModal({ files, onClose, onComplete }: BatchConvertMo
             {t("batchConvertSkipExisting")}
           </label>
         </div>
-        {filteredFiles.length === 0 ? (
+        {filteredTree.length === 0 ? (
           <div className="batch-convert__empty">{t("batchConvertNoFiles")}</div>
         ) : (
-          <ul className="batch-convert__list">
-            {filteredFiles.map((file) => (
-              <li key={file.path} className="batch-convert__item">
-                <input
-                  type="checkbox"
-                  checked={selected.has(file.path)}
-                  onChange={() => handleToggle(file.path)}
-                  disabled={skipExisting && file.hasExistingMd}
-                />
-                <span className="batch-convert__item-name" title={file.path}>
-                  {file.name}
-                </span>
-                {file.hasExistingMd && (
-                  <span className="batch-convert__item-badge">.md exists</span>
-                )}
-              </li>
-            ))}
-          </ul>
+          <div className="batch-convert__list">
+            <BatchConvertTree
+              tree={filteredTree}
+              selected={selected}
+              onToggleFile={handleToggle}
+              onToggleFolder={handleToggleFolder}
+              skipExisting={skipExisting}
+            />
+          </div>
         )}
         <div className="batch-convert__footer">
           <button className="batch-convert__btn-cancel" onClick={handleClose}>
