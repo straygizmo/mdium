@@ -205,6 +205,11 @@ export function FileTree({
     setContextMenu(null);
   }, [setClipboard]);
 
+  const handleCopyPath = useCallback((entry: FileEntry) => {
+    navigator.clipboard.writeText(entry.path);
+    setContextMenu(null);
+  }, []);
+
   const handlePaste = useCallback(async (targetEntry: FileEntry) => {
     setContextMenu(null);
     if (!clipboardEntry) return;
@@ -622,6 +627,11 @@ export function FileTree({
           <div className="ctx-group">
             <button onClick={() => handleOpenInDefaultApp(contextMenu.entry)}>
               <span className="ctx-label">{t("openInDefaultApp")}</span>
+            </button>
+          </div>
+          <div className="ctx-group">
+            <button onClick={() => handleCopyPath(contextMenu.entry)}>
+              <span className="ctx-label">{t("copyPath")}</span>
             </button>
           </div>
           <div className="ctx-group">

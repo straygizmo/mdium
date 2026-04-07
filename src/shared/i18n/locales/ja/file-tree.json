@@ -20,5 +20,6 @@
   "filterDocx": "フィルタ: .docx ファイル",
   "filterXls": "フィルタ: .xls* ファイル",
   "filterKm": "フィルタ: .km / .xmind ファイル",
-  "filterPdf": "フィルタ: .pdf ファイル"
+  "filterPdf": "フィルタ: .pdf ファイル",
+  "copyPath": "パスをコピー"
 }

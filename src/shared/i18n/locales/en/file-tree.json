@@ -20,5 +20,6 @@
   "filterDocx": "Filter: .docx files",
   "filterXls": "Filter: .xls* files",
   "filterKm": "Filter: .km / .xmind files",
-  "filterPdf": "Filter: .pdf files"
+  "filterPdf": "Filter: .pdf files",
+  "copyPath": "Copy Path"
 }
