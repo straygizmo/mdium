@@ -1,4 +1,7 @@
 import { useTranslation } from "react-i18next";
+import { invoke } from "@tauri-apps/api/core";
+import { useTabStore } from "@/stores/tab-store";
+import { getMonacoLanguage } from "@/features/code-editor/lib/language-map";
 import type { GitFileEntry } from "@/features/git/lib/parse-status";
 
 const STATUS_COLORS: Record<string, string> = {
@@ -19,6 +22,7 @@ interface GitFileListProps {
   title: string;
   files: GitFileEntry[];
   staged: boolean;
+  folderPath: string;
   onStage?: (files: string[]) => void;
   onUnstage?: (files: string[]) => void;
   onDiscard?: (files: string[]) => void;
@@ -28,6 +32,7 @@ export function GitFileList({
   title,
   files,
   staged,
+  folderPath,
   onStage,
   onUnstage,
   onDiscard,
@@ -37,6 +42,72 @@ export function GitFileList({
   if (files.length === 0) return null;
 
   const allPaths = files.map((f) => f.path);
+
+  const openDiffTab = useTabStore((s) => s.openDiffTab);
+
+  const handleFileClick = async (file: GitFileEntry) => {
+    if (!folderPath) return;
+    const fileName = file.path.split("/").pop() ?? file.path;
+    const language = getMonacoLanguage(file.path);
+
+    try {
+      let original = "";
+      let modified = "";
+      let originalLabel = "";
+      let modifiedLabel = "";
+
+      if (staged) {
+        // Staged: HEAD (left) vs Index (right)
+        if (file.status !== "A") {
+          original = await invoke<string>("git_show_file", {
+            path: folderPath,
+            revision: "HEAD",
+            file: file.path,
+          });
+        }
+        if (file.status !== "D") {
+          modified = await invoke<string>("git_show_file", {
+            path: folderPath,
+            revision: "",
+            file: file.path,
+          });
+        }
+        originalLabel = t("diffOriginalHead", { fileName });
+        modifiedLabel = t("diffModifiedIndex", { fileName });
+      } else {
+        // Unstaged: Index (left) vs Working Tree (right)
+        if (file.status !== "??" && file.status !== "A") {
+          original = await invoke<string>("git_show_file", {
+            path: folderPath,
+            revision: "",
+            file: file.path,
+          }).catch(() => "");
+        }
+        if (file.status !== "D") {
+          // Read working tree file
+          const fullPath = folderPath.replace(/\\/g, "/") + "/" + file.path;
+          modified = await invoke<string>("read_text_file", { path: fullPath });
+        }
+        originalLabel = t("diffOriginalIndex", { fileName });
+        modifiedLabel = t("diffModifiedWorking", { fileName });
+      }
+
+      openDiffTab({
+        folderPath,
+        filePath: file.path,
+        fileName,
+        original,
+        modified,
+        language,
+        originalLabel,
+        modifiedLabel,
+        staged,
+        status: file.status,
+      });
+    } catch (e) {
+      console.error("Failed to load diff:", e);
+    }
+  };
 
   return (
     <div className="git-file-list">
@@ -67,7 +138,12 @@ export function GitFileList({
       </div>
       <div className="git-file-list__items">
         {files.map((f) => (
-          <div className="git-file-list__row" key={`${f.path}-${f.staged}`}>
+          <div
+            className="git-file-list__row"
+            key={`${f.path}-${f.staged}`}
+            onClick={() => handleFileClick(f)}
+            style={{ cursor: "pointer" }}
+          >
             <span
               className="git-file-list__status"
               style={{ color: statusColor(f.status) }}
