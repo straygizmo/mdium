@@ -16,6 +16,8 @@ export function useInputUndoRedo(
   const skipNextSnapshotRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSnapshotRef = useRef(input);
+  const inputRef = useRef(input);
+  inputRef.current = input;
 
   // Debounced snapshot: record input changes after 300ms of inactivity
   useEffect(() => {
@@ -48,32 +50,31 @@ export function useInputUndoRedo(
       clearTimeout(timerRef.current);
       timerRef.current = null;
     }
-    if (input !== lastSnapshotRef.current) {
+    if (inputRef.current !== lastSnapshotRef.current) {
       const stack = undoStackRef.current;
       stack.push(lastSnapshotRef.current);
       if (stack.length > MAX_UNDO) stack.shift();
-      redoStackRef.current = [];
-      lastSnapshotRef.current = input;
+      lastSnapshotRef.current = inputRef.current;
     }
 
     const stack = undoStackRef.current;
     if (stack.length === 0) return;
     const prev = stack.pop()!;
-    redoStackRef.current.push(input);
+    redoStackRef.current.push(inputRef.current);
     skipNextSnapshotRef.current = true;
     lastSnapshotRef.current = prev;
     setInput(prev);
-  }, [input, setInput]);
+  }, [setInput]);
 
   const redo = useCallback(() => {
     const stack = redoStackRef.current;
     if (stack.length === 0) return;
     const next = stack.pop()!;
-    undoStackRef.current.push(input);
+    undoStackRef.current.push(inputRef.current);
     skipNextSnapshotRef.current = true;
     lastSnapshotRef.current = next;
     setInput(next);
-  }, [input, setInput]);
+  }, [setInput]);
 
   return { undo, redo };
 }
