@@ -190,6 +190,50 @@ fn ensure_slidev_installed(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(install_dir)
 }
 
+/// Create a directory junction (Windows) or symlink (Unix) for node_modules.
+/// On Windows, uses `mklink /J` which does not require admin privileges.
+fn create_node_modules_link(source: &std::path::Path, dest: &std::path::Path) -> Result<(), String> {
+    // Remove existing link or directory if present
+    if dest.exists() || dest.read_link().is_ok() {
+        #[cfg(target_os = "windows")]
+        {
+            // Junction removal: use fs::remove_dir (does not follow junction)
+            let _ = fs::remove_dir(dest);
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = fs::remove_file(dest);
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let output = Command::new("cmd")
+            .args([
+                "/C",
+                "mklink",
+                "/J",
+                &dest.to_string_lossy(),
+                &source.to_string_lossy(),
+            ])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .output()
+            .map_err(|e| format!("Failed to create junction: {}", e))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("mklink /J failed: {}", stderr));
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::os::unix::fs::symlink(source, dest)
+            .map_err(|e| format!("Failed to create symlink: {}", e))?;
+    }
+
+    Ok(())
+}
+
 /// Kill a process by PID (platform-specific)
 fn kill_process(pid: u32) -> Result<(), String> {
     #[cfg(target_os = "windows")]
