@@ -9,7 +9,7 @@ export function useEditorKeyDown(
   content: string,
   setContent: (v: string) => void
 ) {
-  const { undo, redo } = useInputUndoRedo(content, setContent);
+  const { undo, redo, reset } = useInputUndoRedo(content, setContent);
   const contentRef = useRef(content);
   contentRef.current = content;
 
@@ -47,5 +47,5 @@ export function useEditorKeyDown(
     [undo, redo, setContent]
   );
 
-  return handleKeyDown;
+  return { handleKeyDown, resetUndo: reset };
 }
