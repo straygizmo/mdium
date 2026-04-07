@@ -255,6 +255,11 @@ function processSSEStream(stream: AsyncIterable<unknown>) {
           if (ev.properties.sessionID === _currentSessionId) {
             const state = useChatUIStore.getState();
 
+            // If the session was aborted, skip — don't show "Done" toast
+            if (state.aborted) {
+              continue;
+            }
+
             // If questions are pending, the user is interacting — don't reset loading
             if (state.pendingQuestions) {
               continue;
@@ -655,12 +660,15 @@ export async function doSendMessage(text: string, agentOverride?: string, images
 
 export async function doAbortSession() {
   if (!_client || !_currentSessionId) return;
+  // Set aborted BEFORE the API call so that the SSE session.idle handler
+  // (which may fire before the await resolves) won't trigger a "Done" toast.
+  useChatUIStore.setState({ aborted: true });
   try {
     await _client.session.abort({ path: { id: _currentSessionId } });
   } catch (e: any) {
     console.error("[opencode] abort failed:", e);
   } finally {
-    useChatUIStore.setState({ loading: false, pendingQuestions: null, aborted: true });
+    useChatUIStore.setState({ loading: false, pendingQuestions: null });
   }
 }
 
