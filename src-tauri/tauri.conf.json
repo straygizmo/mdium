@@ -30,7 +30,8 @@
     "active": true,
     "targets": ["msi", "nsis"],
     "resources": [
-      "../resources/slidev-env/**/*",
+      "../resources/slidev-env/package.json",
+      "../resources/slidev-env/package-lock.json",
       "../resources/mcp-servers/**/*",
       "../resources/video-env/**/*",
       "../resources/lottie-presets/**/*",
