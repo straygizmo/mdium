@@ -3,7 +3,6 @@ import { persist } from "zustand/middleware";
 import i18n from "@/shared/i18n";
 import { applyTheme } from "@/shared/themes/apply-theme";
 import { getThemeById, DEFAULT_THEME_ID } from "@/shared/themes";
-import { syncOpencodeTheme } from "@/shared/themes/opencode-theme-sync";
 import { syncProviderToOpencode } from "@/shared/lib/opencode-auth-sync";
 import type { AiSettings, MediumSettings, RagSettings } from "@/shared/types";
 
@@ -88,7 +87,6 @@ export const useSettingsStore = create<SettingsState>()(
         const theme = getThemeById(id);
         applyTheme(theme);
         set({ themeId: id });
-        syncOpencodeTheme(theme);
       },
 
       setLanguage: (lang) => {
@@ -128,7 +126,6 @@ export const useSettingsStore = create<SettingsState>()(
         const theme = getThemeById(get().themeId);
         applyTheme(theme);
         i18n.changeLanguage(get().language);
-        syncOpencodeTheme(theme);
       },
     }),
     {
