@@ -76,5 +76,16 @@ export function useInputUndoRedo(
     setInput(next);
   }, [setInput]);
 
-  return { undo, redo };
+  const reset = useCallback(() => {
+    undoStackRef.current = [];
+    redoStackRef.current = [];
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    lastSnapshotRef.current = inputRef.current;
+    skipNextSnapshotRef.current = true;
+  }, []);
+
+  return { undo, redo, reset };
 }
