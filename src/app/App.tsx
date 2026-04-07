@@ -29,6 +29,7 @@ import { RagPanel } from "@/features/rag/components/RagPanel";
 import MindmapEditor from "@/features/mindmap/components/MindmapEditor";
 import { ImageCanvas } from "@/features/image/components/ImageCanvas";
 import { CodeEditorPanel } from "@/features/code-editor/components/CodeEditorPanel";
+import { GitDiffViewer } from "@/features/git/components/GitDiffViewer";
 import { ExternalChangeDialog } from "@/features/editor/components/ExternalChangeDialog";
 import type { ImageCanvasHandle } from "@/features/image/components/ImageCanvas";
 import type { MindmapEditorHandle } from "@/features/mindmap/components/MindmapEditor";
@@ -265,7 +266,7 @@ export function App() {
   // Force-hide editor for non-editable file types; normal files use per-tab state
   useEffect(() => {
     if (activeTab) {
-      const isSpecialFile = activeTab.mindmapFileType || activeTab.imageFileType || activeTab.officeFileType;
+      const isSpecialFile = activeTab.mindmapFileType || activeTab.imageFileType || activeTab.officeFileType || activeTab.isDiffTab;
       const isVideoJson = activeTab.filePath?.toLowerCase().endsWith(".video.json");
       const isCode = activeTab.isCodeFile;
       if (isSpecialFile || isVideoJson || isCode) {
@@ -999,7 +1000,9 @@ export function App() {
             )}
 
             {activeTab ? (
-              activeTab.mindmapFileType && activeTab.binaryData ? (
+              activeTab.isDiffTab ? (
+                <GitDiffViewer />
+              ) : activeTab.mindmapFileType && activeTab.binaryData ? (
                 <MindmapEditor
                   ref={mindmapEditorRef}
                   fileData={activeTab.binaryData}
