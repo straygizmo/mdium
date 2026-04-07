@@ -10,6 +10,7 @@ import { CompletionPopup } from "./CompletionPopup";
 import { QuestionsCard } from "./QuestionsCard";
 import { useCompletion } from "../hooks/useCompletion";
 import { useInputHistoryStore, useInputHistoryNav } from "../hooks/useInputHistory";
+import { useInputUndoRedo } from "../hooks/useInputUndoRedo";
 import { useDividerDragVertical } from "@/shared/hooks/useDividerDragVertical";
 import "./OpencodeChat.css";
 
@@ -104,6 +105,7 @@ export function OpencodeChat() {
   });
 
   const { handleHistoryKey, resetNav: resetHistoryNav } = useInputHistoryNav(input, setInput);
+  const { undo, redo } = useInputUndoRedo(input, setInput);
 
   // Scroll to bottom on new messages
   useEffect(() => {
@@ -195,6 +197,25 @@ export function OpencodeChat() {
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // Undo/Redo/Paste: handle before anything else, stop propagation
+      // to prevent the global handler in App.tsx from intercepting
+      if (e.ctrlKey && e.key === "z") {
+        e.preventDefault();
+        e.stopPropagation();
+        undo();
+        return;
+      }
+      if (e.ctrlKey && e.key === "y") {
+        e.preventDefault();
+        e.stopPropagation();
+        redo();
+        return;
+      }
+      if (e.ctrlKey && e.key === "v") {
+        e.stopPropagation();
+        return;
+      }
+
       // Let completion handle the key first
       if (completion.handleKeyDown(e)) return;
 
@@ -206,7 +227,7 @@ export function OpencodeChat() {
         handleSubmit();
       }
     },
-    [handleSubmit, completion.handleKeyDown, handleHistoryKey] // eslint-disable-line react-hooks/exhaustive-deps
+    [handleSubmit, completion.handleKeyDown, handleHistoryKey, undo, redo] // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   const handleMessagesKeyDown = useCallback((e: React.KeyboardEvent) => {
