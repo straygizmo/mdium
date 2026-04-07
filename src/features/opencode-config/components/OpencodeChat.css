@@ -196,6 +196,10 @@
   gap: 8px;
 }
 
+.oc-chat__messages:focus {
+  outline: none;
+}
+
 .oc-chat__msg {
   padding: 8px 12px;
   border-radius: 6px;

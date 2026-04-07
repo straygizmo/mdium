@@ -54,6 +54,7 @@ export function OpencodeChat() {
   const [toastMsg, setToastMsg] = useState("");
   const aborted = useChatUIStore((s) => s.aborted);
   const prevLoadingRef = useRef(false);
+  const messagesRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const agentOverrideRef = useRef<string | null>(null);
 
@@ -142,6 +143,13 @@ export function OpencodeChat() {
     },
     [handleSubmit, completion.handleKeyDown] // eslint-disable-line react-hooks/exhaustive-deps
   );
+
+  const handleMessagesKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === "End") {
+      e.preventDefault();
+      messagesRef.current?.scrollTo({ top: messagesRef.current.scrollHeight, behavior: "smooth" });
+    }
+  }, []);
 
   const handleOpenHistory = useCallback(async () => {
     await getSessionHistory();
@@ -349,7 +357,12 @@ export function OpencodeChat() {
       </div>
 
       {/* Messages */}
-      <div className="oc-chat__messages">
+      <div
+        className="oc-chat__messages"
+        ref={messagesRef}
+        tabIndex={0}
+        onKeyDown={handleMessagesKeyDown}
+      >
         {messages.map((msg, i) => {
           if (msg.role === "user") {
             return (
