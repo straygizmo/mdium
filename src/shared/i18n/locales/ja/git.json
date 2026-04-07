@@ -32,5 +32,12 @@
   "errorGeneration": "コミットメッセージの生成に失敗しました",
   "errorCommit": "コミットに失敗しました",
   "errorPush": "プッシュに失敗しました",
-  "errorEmptyMessage": "コミットメッセージを入力してください"
+  "errorEmptyMessage": "コミットメッセージを入力してください",
+  "diffTab": "{{fileName}} (diff)",
+  "diffOriginalHead": "{{fileName}} (HEAD)",
+  "diffOriginalIndex": "{{fileName}} (Index)",
+  "diffModifiedWorking": "{{fileName}} (Working Tree)",
+  "diffModifiedIndex": "{{fileName}} (Index)",
+  "diffLoadError": "差分の読み込みに失敗しました",
+  "diffBinaryFile": "バイナリファイル - 差分は表示できません"
 }

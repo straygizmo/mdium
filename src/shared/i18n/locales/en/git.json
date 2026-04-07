@@ -32,5 +32,12 @@
   "errorGeneration": "Failed to generate commit message",
   "errorCommit": "Commit failed",
   "errorPush": "Push failed",
-  "errorEmptyMessage": "Please enter a commit message"
+  "errorEmptyMessage": "Please enter a commit message",
+  "diffTab": "{{fileName}} (diff)",
+  "diffOriginalHead": "{{fileName}} (HEAD)",
+  "diffOriginalIndex": "{{fileName}} (Index)",
+  "diffModifiedWorking": "{{fileName}} (Working Tree)",
+  "diffModifiedIndex": "{{fileName}} (Index)",
+  "diffLoadError": "Failed to load diff",
+  "diffBinaryFile": "Binary file - diff not available"
 }
