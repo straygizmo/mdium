@@ -593,6 +593,17 @@ pub async fn slidev_stop(file_path: String) -> Result<(), String> {
     };
     if let Some(process) = process {
         let kill_result = kill_process(process.pid);
+        // Remove junction/symlink first to avoid deleting AppData node_modules
+        let nm_link = process.temp_dir.join("node_modules");
+        #[cfg(target_os = "windows")]
+        {
+            // fs::remove_dir removes a junction without following it
+            let _ = fs::remove_dir(&nm_link);
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = fs::remove_file(&nm_link);
+        }
         let _ = fs::remove_dir_all(&process.temp_dir);
         kill_result?;
     }
