@@ -73,5 +73,6 @@
   "batchConvertFilterDocx": "DOCX",
   "batchConvertFilterXlsx": "Excel",
   "batchConvertFilterPdf": "PDF",
-  "closeUnsavedConfirm": "\"{{name}}\" has unsaved changes. Close anyway?"
+  "closeUnsavedConfirm": "\"{{name}}\" has unsaved changes. Close anyway?",
+  "folderNotFound": "Folder not found: {{path}}"
 }

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { ask } from "@tauri-apps/plugin-dialog";
+import { showConfirm } from "@/stores/dialog-store";
 import { useGitStore } from "@/stores/git-store";
 
 interface GitBranchSelectProps {
@@ -32,7 +32,7 @@ export function GitBranchSelect({ folderPath, hasUncommitted }: GitBranchSelectP
       return;
     }
     if (hasUncommitted) {
-      const ok = await ask(t("switchBranchWarning"), {
+      const ok = await showConfirm(t("switchBranchWarning"), {
         title: t("switchBranch"),
         kind: "warning",
       });

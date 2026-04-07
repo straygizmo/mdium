@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { save } from "@tauri-apps/plugin-dialog";
+import { showConfirm } from "@/stores/dialog-store";
 import { invoke } from "@tauri-apps/api/core";
 import { useVideoStore } from "@/stores/video-store";
 
@@ -71,7 +72,7 @@ export function ExportPanel({ disabled, onExport }: ExportPanelProps) {
     const fileExists = await invoke<boolean>("video_file_exists", { path: effectiveOutputPath }).catch(() => false);
     if (fileExists) {
       const fileName = effectiveOutputPath.split(/[\\/]/).pop() ?? effectiveOutputPath;
-      const confirmed = window.confirm(t("exportFileExistsWarning", { fileName }));
+      const confirmed = await showConfirm(t("exportFileExistsWarning", { fileName }), { kind: "warning" });
       if (!confirmed) return;
     }
     onExport({

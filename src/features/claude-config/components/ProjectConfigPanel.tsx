@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { useTabStore } from "@/stores/tab-store";
 import { useClaudeConfigStore } from "@/stores/claude-config-store";
+import { showConfirm } from "@/stores/dialog-store";
 import type { McpServer, SkillInfo } from "@/shared/types";
 import { McpServerForm } from "./McpServerForm";
 import { SkillForm } from "./SkillForm";
@@ -60,7 +61,7 @@ export function ProjectConfigPanel() {
   };
 
   const handleMcpDelete = async (name: string) => {
-    if (!window.confirm(t("mcpDeleteConfirm"))) return;
+    if (!(await showConfirm(t("mcpDeleteConfirm"), { kind: "warning" }))) return;
     await deleteProjectMcpServer(activeFolderPath, name);
   };
 
@@ -71,7 +72,7 @@ export function ProjectConfigPanel() {
   };
 
   const handleSkillDelete = async (dirName: string) => {
-    if (!window.confirm(t("skillDeleteConfirm"))) return;
+    if (!(await showConfirm(t("skillDeleteConfirm"), { kind: "warning" }))) return;
     await deleteProjectSkill(activeFolderPath, dirName);
   };
 

@@ -1,0 +1,94 @@
+.app-dialog__overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100;
+}
+
+.app-dialog {
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px var(--shadow-strong);
+  width: 400px;
+  padding: 20px;
+}
+
+.app-dialog__title {
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.app-dialog__body {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--text);
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.app-dialog__icon {
+  flex-shrink: 0;
+  font-size: 18px;
+}
+
+.app-dialog__label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.app-dialog__input {
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 14px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input, var(--bg-base));
+  color: var(--text);
+  outline: none;
+  box-sizing: border-box;
+}
+
+.app-dialog__input:focus {
+  border-color: var(--accent, #4a9eff);
+}
+
+.app-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.app-dialog__btn {
+  padding: 6px 16px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-base);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.app-dialog__btn:hover {
+  background: var(--bg-hover, var(--bg-surface));
+}
+
+.app-dialog__btn--primary {
+  background: var(--accent, #4a9eff);
+  color: #fff;
+  border-color: var(--accent, #4a9eff);
+}
+
+.app-dialog__btn--primary:hover {
+  opacity: 0.9;
+}

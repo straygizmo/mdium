@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useClaudeConfigStore } from "@/stores/claude-config-store";
+import { showConfirm } from "@/stores/dialog-store";
 import type { SkillInfo } from "@/shared/types";
 import { SkillForm } from "./SkillForm";
 import "./SkillsTab.css";
@@ -28,7 +29,7 @@ export function SkillsTab() {
   };
 
   const handleDelete = async (dirName: string) => {
-    if (!window.confirm(t("skillDeleteConfirm"))) return;
+    if (!(await showConfirm(t("skillDeleteConfirm"), { kind: "warning" }))) return;
     await deleteGlobalSkill(dirName);
   };
 

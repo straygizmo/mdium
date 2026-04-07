@@ -10,7 +10,8 @@ import EditorContextMenu from "./EditorContextMenu";
 import { ImagePasteDialog } from "./ImagePasteDialog";
 import { GenerateMcpImageDialog } from "./GenerateMcpImageDialog";
 import { useSpeechToText } from "@/features/speech/hooks/useSpeechToText";
-import { message, open } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
+import { showMessage } from "@/stores/dialog-store";
 import { mkdir, copyFile } from "@tauri-apps/plugin-fs";
 import "./EditorPanel.css";
 
@@ -73,7 +74,7 @@ export function EditorPanel({ editorRef }: EditorPanelProps) {
   });
 
   const handleNoFile = useCallback(() => {
-    message(t("imagePasteNoFile"), { kind: "warning" });
+    showMessage(t("imagePasteNoFile"), { kind: "warning" });
   }, [t]);
 
   const {
@@ -231,9 +232,9 @@ export function EditorPanel({ editorRef }: EditorPanelProps) {
           return;
         }
       }
-      message(t("imagePasteNoImage"), { kind: "warning" });
+      showMessage(t("imagePasteNoImage"), { kind: "warning" });
     } catch {
-      message(t("imagePasteNoImage"), { kind: "warning" });
+      showMessage(t("imagePasteNoImage"), { kind: "warning" });
     }
   }, [editorRef, t]);
 

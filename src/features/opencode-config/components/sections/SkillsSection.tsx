@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
-import { ask } from "@tauri-apps/plugin-dialog";
+import { showConfirm } from "@/stores/dialog-store";
 import { useTabStore } from "@/stores/tab-store";
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 import type { OpencodeSkill } from "@/shared/types";
@@ -218,7 +218,7 @@ export function SkillsSection() {
   };
 
   const handleDelete = async (dirName: string, targetScope: Scope) => {
-    const confirmed = await ask(t("skillDeleteConfirm", { name: dirName }), { kind: "warning" });
+    const confirmed = await showConfirm(t("skillDeleteConfirm", { name: dirName }), { kind: "warning" });
     if (!confirmed) return;
     const base = await getSkillsDir(targetScope);
     if (!base) return;

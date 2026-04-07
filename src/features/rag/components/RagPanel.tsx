@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
+import { showConfirm } from "@/stores/dialog-store";
 import { useRagFeatures } from "../hooks/useRagFeatures";
 import type { ChatSession } from "../hooks/useRagFeatures";
 import { useSettingsStore } from "@/stores/settings-store";
@@ -76,9 +77,9 @@ export function RagPanel({ folderPath, aiSettings, onOpenFile }: RagPanelProps) 
     setShowHistory(true);
   }, [getChatHistory]);
 
-  const handleLoadChat = useCallback((sessionId: string) => {
+  const handleLoadChat = useCallback(async (sessionId: string) => {
     if (messages.length > 0) {
-      if (!window.confirm(t("ragLoadChatConfirm"))) return;
+      if (!(await showConfirm(t("ragLoadChatConfirm"), { kind: "warning" }))) return;
     }
     loadChat(sessionId);
     setShowHistory(false);
@@ -174,9 +175,9 @@ export function RagPanel({ folderPath, aiSettings, onOpenFile }: RagPanelProps) 
           {status.state === "ready" && (
             <button
               className="rag-panel__btn rag-panel__btn--danger"
-              onClick={() => {
+              onClick={async () => {
                 const modelLabel = ragSettings.embeddingModel.split("/").pop() ?? ragSettings.embeddingModel;
-                if (window.confirm(t("ragDeleteIndexConfirm", { model: modelLabel }))) {
+                if (await showConfirm(t("ragDeleteIndexConfirm", { model: modelLabel }), { kind: "warning" })) {
                   deleteIndex();
                 }
               }}

@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import type { Tab } from "@/stores/tab-store";
+import { showConfirm } from "@/stores/dialog-store";
 
 interface UseKeyboardShortcutsParams {
   handleSave: () => void;
@@ -39,7 +40,7 @@ export function useKeyboardShortcuts({
 }: UseKeyboardShortcutsParams) {
   const { t } = useTranslation();
   useEffect(() => {
-    const handleKeyDown = (e: globalThis.KeyboardEvent) => {
+    const handleKeyDown = async (e: globalThis.KeyboardEvent) => {
       if (e.ctrlKey && e.key === "s") {
         e.preventDefault();
         handleSave();
@@ -86,7 +87,7 @@ export function useKeyboardShortcuts({
         const tab = tabsRef.current.find((t) => t.id === activeTabIdRef.current);
         if (tab?.dirty) {
           const name = tab.filePath ? tab.filePath.split(/[\\/]/).pop() ?? "Untitled" : t("untitled");
-          if (!window.confirm(t("closeUnsavedConfirm", { name }))) return;
+          if (!(await showConfirm(t("closeUnsavedConfirm", { name }), { kind: "warning" }))) return;
         }
         closeTab(activeTabIdRef.current);
       }

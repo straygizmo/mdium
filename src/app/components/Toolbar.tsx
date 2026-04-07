@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ask } from "@tauri-apps/plugin-dialog";
+import { showConfirm } from "@/stores/dialog-store";
 
 import { useTabStore } from "@/stores/tab-store";
 import { useUiStore } from "@/stores/ui-store";
@@ -48,7 +48,7 @@ export function Toolbar({
   const handleMaximize = () => getCurrentWindow().toggleMaximize();
   const handleClose = async () => {
     const hasDirty = useTabStore.getState().tabs.some((tab) => tab.dirty);
-    if (hasDirty && !(await ask(t("common:unsavedChanges"), { kind: "warning" }))) return;
+    if (hasDirty && !(await showConfirm(t("common:unsavedChanges"), { kind: "warning" }))) return;
     getCurrentWindow().destroy();
   };
 

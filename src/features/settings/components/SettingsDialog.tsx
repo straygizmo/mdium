@@ -2,7 +2,8 @@ import { useState, useCallback, useMemo, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { ask, message, open } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
+import { showMessage, showConfirm, showPrompt } from "@/stores/dialog-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import type { SpeechModel } from "@/stores/settings-store";
 import type { AiSettings } from "@/shared/types";
@@ -194,7 +195,7 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
         includeEmptyDirs: false,
       });
       if (entries.length > 0) {
-        await message(t("zennInitNotEmpty"), { kind: "warning" });
+        await showMessage(t("zennInitNotEmpty"), { kind: "warning" });
         return;
       }
     } catch {
@@ -211,13 +212,13 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
         path: `${folderPath}/.gitignore`,
         content: "work/\n",
       });
-      await message(t("zennInitSuccess"), { kind: "info" });
+      await showMessage(t("zennInitSuccess"), { kind: "info" });
       setShowSettings(false);
 
       // Open the initialized folder as a workspace
       useTabStore.getState().openFolder(folderPath);
     } catch (e) {
-      await message(`${t("zennInitFailed")}: ${e}`, { kind: "error" });
+      await showMessage(`${t("zennInitFailed")}: ${e}`, { kind: "error" });
     }
   }, [t, setShowSettings]);
 
@@ -243,14 +244,16 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
       }
 
       const yes = alreadySet
-        ? await ask(t("azureEnvAlreadySet"), { kind: "warning" })
-        : await ask(t("azureEnvConfirm"), { kind: "info" });
+        ? await showConfirm(t("azureEnvAlreadySet"), { kind: "warning" })
+        : await showConfirm(t("azureEnvConfirm"), { kind: "info" });
 
       if (yes) {
-        const value = window.prompt(t("azureEnvPrompt"), localAi.azureResourceName ?? "");
+        const value = await showPrompt(t("azureEnvPrompt"), {
+          defaultValue: localAi.azureResourceName ?? "",
+        });
         if (value) {
           await invoke("set_env_var", { name: "AZURE_RESOURCE_NAME", value });
-          await message(t("azureEnvSet"), { kind: "info" });
+          await showMessage(t("azureEnvSet"), { kind: "info" });
         }
       }
     }

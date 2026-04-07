@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useTabStore } from "@/stores/tab-store";
 import { useFileStore } from "@/stores/file-store";
 import { getFileIcon } from "@/features/file-tree/components/FileTree";
-import { ask } from "@tauri-apps/plugin-dialog";
+import { showConfirm } from "@/stores/dialog-store";
 import "./TabBar.css";
 
 /** Folder tabs (displayed at full width) */
@@ -19,7 +19,7 @@ export function FolderTabBar() {
     // Read tabs from store directly to avoid subscribing to all tab changes
     const folderTabs = useTabStore.getState().tabs.filter((tab) => tab.folderPath === folder);
     const hasDirty = folderTabs.some((tab) => tab.dirty);
-    if (hasDirty && !(await ask(t("unsavedChanges"), { kind: "warning" }))) return;
+    if (hasDirty && !(await showConfirm(t("unsavedChanges"), { kind: "warning" }))) return;
     closeFolder(folder);
     removeFileTree(folder);
   };
@@ -120,7 +120,7 @@ export function TabBar() {
                 className="tab-bar__close"
                 onClick={async (e) => {
                   e.stopPropagation();
-                  if (!tab.isDiffTab && tab.dirty && !(await ask(t("unsavedChanges"), { kind: "warning" }))) return;
+                  if (!tab.isDiffTab && tab.dirty && !(await showConfirm(t("unsavedChanges"), { kind: "warning" }))) return;
                   closeTab(tab.id);
                 }}
               >

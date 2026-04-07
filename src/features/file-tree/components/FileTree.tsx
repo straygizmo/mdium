@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
-import { ask } from "@tauri-apps/plugin-dialog";
+import { showConfirm } from "@/stores/dialog-store";
 import type { FileEntry } from "@/shared/types";
 import { useFileStore } from "@/stores/file-store";
 import { useTabStore } from "@/stores/tab-store";
@@ -232,7 +232,7 @@ export function FileTree({
       } catch (err: unknown) {
         const msg = String(err);
         if (msg.includes("already exists")) {
-          const overwrite = await ask(t("overwriteConfirm", { name: fileName }), { kind: "warning" });
+          const overwrite = await showConfirm(t("overwriteConfirm", { name: fileName }), { kind: "warning" });
           if (overwrite) {
             try {
               await invoke("delete_file", { path: destPath });
@@ -329,7 +329,7 @@ export function FileTree({
   const deleteEntry = useCallback(async (entry: FileEntry) => {
     setContextMenu(null);
 
-    const confirmed = await ask(t("deleteConfirm", { name: entry.name }), { kind: "warning" });
+    const confirmed = await showConfirm(t("deleteConfirm", { name: entry.name }), { kind: "warning" });
     if (!confirmed) return;
 
     try {
@@ -437,7 +437,7 @@ export function FileTree({
     } catch (err: unknown) {
       const msg = String(err);
       if (msg.includes("already exists")) {
-        const overwrite = await ask(t("overwriteConfirm", { name: fileName }), { kind: "warning" });
+        const overwrite = await showConfirm(t("overwriteConfirm", { name: fileName }), { kind: "warning" });
         if (overwrite) {
           try {
             await invoke("delete_file", { path: destPath });

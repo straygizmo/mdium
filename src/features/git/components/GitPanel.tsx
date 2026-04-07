@@ -5,7 +5,7 @@ import { useTabStore } from "@/stores/tab-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import { GitBranchSelect } from "./GitBranchSelect";
 import { GitFileList } from "./GitFileList";
-import { ask } from "@tauri-apps/plugin-dialog";
+import { showConfirm } from "@/stores/dialog-store";
 import "./GitPanel.css";
 
 export function GitPanel() {
@@ -61,11 +61,9 @@ export function GitPanel() {
 
   const handleDiscard = useCallback(
     async (paths: string[]) => {
-      const ok = await ask(t("discardConfirmMessage"), {
+      const ok = await showConfirm(t("discardConfirmMessage"), {
         title: t("discardConfirmTitle"),
         kind: "warning",
-        okLabel: t("discardConfirmOk"),
-        cancelLabel: t("discardConfirmCancel"),
       });
       if (!ok || !activeFolderPath) return;
 

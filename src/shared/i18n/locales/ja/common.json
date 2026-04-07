@@ -73,5 +73,6 @@
   "batchConvertFilterDocx": "DOCX",
   "batchConvertFilterXlsx": "Excel",
   "batchConvertFilterPdf": "PDF",
-  "closeUnsavedConfirm": "「{{name}}」の変更は保存されていません。閉じますか？"
+  "closeUnsavedConfirm": "「{{name}}」の変更は保存されていません。閉じますか？",
+  "folderNotFound": "フォルダが見つかりません: {{path}}"
 }

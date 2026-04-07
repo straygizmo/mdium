@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useClaudeConfigStore } from "@/stores/claude-config-store";
+import { showConfirm } from "@/stores/dialog-store";
 import type { McpServer } from "@/shared/types";
 import { McpServerForm } from "./McpServerForm";
 import "./McpServersTab.css";
@@ -31,7 +32,7 @@ export function McpServersTab() {
   };
 
   const handleDelete = async (name: string) => {
-    if (!window.confirm(t("mcpDeleteConfirm"))) return;
+    if (!(await showConfirm(t("mcpDeleteConfirm"), { kind: "warning" }))) return;
     await deleteGlobalMcpServer(name);
   };
 

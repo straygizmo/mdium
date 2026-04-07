@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
-import { ask } from "@tauri-apps/plugin-dialog";
+import { showConfirm } from "@/stores/dialog-store";
 import { useTabStore } from "@/stores/tab-store";
 import { useOpencodeConfigContext, toRelativeProjectPath } from "../OpencodeConfigContext";
 import { ScopeToggle, type Scope } from "../shared/ScopeToggle";
@@ -150,7 +150,7 @@ export function CustomToolsSection() {
   };
 
   const handleDelete = async (fileName: string, targetScope: Scope) => {
-    const confirmed = await ask(t("customToolDeleteConfirm", { name: fileName }), { kind: "warning" });
+    const confirmed = await showConfirm(t("customToolDeleteConfirm", { name: fileName }), { kind: "warning" });
     if (!confirmed) return;
     const dir = await getToolsDir(targetScope);
     if (!dir) return;

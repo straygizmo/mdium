@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef, Fragment } from "react";
 import { useTranslation } from "react-i18next";
+import { showConfirm } from "@/stores/dialog-store";
 import { useOpencodeChat, useChatUIStore } from "../hooks/useOpencodeChat";
 import type { OpencodeSessionInfo, ImageAttachment } from "../hooks/useOpencodeChat";
 import type { Part } from "@opencode-ai/sdk/client";
@@ -251,9 +252,9 @@ export function OpencodeChat() {
   );
 
   const handleDeleteSession = useCallback(
-    (e: React.MouseEvent, sessionId: string) => {
+    async (e: React.MouseEvent, sessionId: string) => {
       e.stopPropagation();
-      if (window.confirm(t("ocChatDeleteConfirm"))) {
+      if (await showConfirm(t("ocChatDeleteConfirm"), { kind: "warning" })) {
         deleteSession(sessionId);
       }
     },

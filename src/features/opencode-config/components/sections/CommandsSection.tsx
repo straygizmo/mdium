@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
-import { ask } from "@tauri-apps/plugin-dialog";
+import { showConfirm } from "@/stores/dialog-store";
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 import { useTabStore } from "@/stores/tab-store";
 import type { OpencodeCommand } from "@/shared/types";
@@ -221,7 +221,7 @@ export function CommandsSection() {
   };
 
   const handleDelete = async (name: string, itemScope: Scope) => {
-    const confirmed = await ask(t("commandDeleteConfirm", { name }), { kind: "warning" });
+    const confirmed = await showConfirm(t("commandDeleteConfirm", { name }), { kind: "warning" });
     if (!confirmed) return;
     if (itemScope === "global") {
       await deleteCommand(name);
