@@ -189,10 +189,16 @@ export function usePreviewTableEdit(
   startInlineEditRef.current = startInlineEdit;
 
   // ── Event delegation: attach handlers to the container div ──
-  // Works via event bubbling regardless of innerHTML update timing
+  // Works via event bubbling regardless of innerHTML update timing.
+  // Re-attaches when the DOM element changes (e.g. after early-return
+  // paths in PreviewPanel unmount and recreate the contentRef div).
+  const listenedElRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const div = contentRef.current;
     if (!div) return;
+    // Already listening on this exact element — skip
+    if (div === listenedElRef.current) return;
+    listenedElRef.current = div;
 
     const handleDblClick = (e: MouseEvent) => {
       const info = findCellInfo(e, div);
@@ -222,8 +228,9 @@ export function usePreviewTableEdit(
     return () => {
       div.removeEventListener("dblclick", handleDblClick);
       div.removeEventListener("contextmenu", handleContextMenu);
+      listenedElRef.current = null;
     };
-  }, []);
+  });
 
   // ── Process pending Tab navigation (executed after html update) ──
   useEffect(() => {
