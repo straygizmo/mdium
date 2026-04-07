@@ -35,12 +35,15 @@ export function RulesSection() {
     return null;
   }, [scope, activeFolderPath]);
 
+  const { handleKeyDown, resetUndo } = useEditorKeyDown(content, setContent);
+
   const loadContent = useCallback(async () => {
     const path = await getRulesPath();
     setDisplayPath(path ?? "");
     if (!path) {
       setContent("");
       setSavedContent("");
+      resetUndo();
       return;
     }
     setLoading(true);
@@ -52,8 +55,9 @@ export function RulesSection() {
       setContent("");
       setSavedContent("");
     }
+    resetUndo();
     setLoading(false);
-  }, [getRulesPath]);
+  }, [getRulesPath, resetUndo]);
 
   useEffect(() => {
     loadContent();
@@ -74,8 +78,6 @@ export function RulesSection() {
       return "<p>Markdown rendering error</p>";
     }
   }, [content]);
-
-  const handleKeyDown = useEditorKeyDown(content, setContent);
 
   const noProject = scope === "project" && !activeFolderPath;
   const isDirty = content !== savedContent;

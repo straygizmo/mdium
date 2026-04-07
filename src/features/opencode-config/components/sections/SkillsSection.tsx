@@ -162,6 +162,7 @@ export function SkillsSection() {
     setSavedContent("");
     setViewTab("editor");
     setNameError("");
+    resetUndo();
   };
 
   const startEdit = (entry: SkillEntry, entryScope: Scope) => {
@@ -175,6 +176,7 @@ export function SkillsSection() {
     setSavedContent(entry.content);
     setViewTab("editor");
     setNameError("");
+    resetUndo();
   };
 
   const handleCancel = () => {
@@ -258,7 +260,7 @@ export function SkillsSection() {
     catch { return { frontMatter: meta, previewHtml: "<p>Markdown rendering error</p>" }; }
   }, [formContent]);
 
-  const handleKeyDown = useEditorKeyDown(formContent, setFormContent);
+  const { handleKeyDown, resetUndo } = useEditorKeyDown(formContent, setFormContent);
 
   // Compute missing builtin skills by comparing registry keys against all loaded skill dir_names
   const allSkillEntries = [...globalSkillEntries, ...projectSkillEntries];

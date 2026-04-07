@@ -72,7 +72,7 @@ export function CommandsSection() {
     catch { return { frontMatter: meta, previewHtml: "<p>Markdown rendering error</p>" }; }
   }, [formContent]);
 
-  const handleKeyDown = useEditorKeyDown(formContent, setFormContent);
+  const { handleKeyDown, resetUndo } = useEditorKeyDown(formContent, setFormContent);
 
   useEffect(() => {
     invoke<string>("get_home_dir").then((home) => {
@@ -159,6 +159,7 @@ export function CommandsSection() {
     setFormContent(content);
     setSavedContent(content);
     setViewTab("editor");
+    resetUndo();
   };
 
   const startAdd = () => {
@@ -169,6 +170,7 @@ export function CommandsSection() {
     setFormContent("---\ndescription: \n---\n\n");
     setSavedContent("");
     setViewTab("editor");
+    resetUndo();
   };
 
   const handleSave = async () => {

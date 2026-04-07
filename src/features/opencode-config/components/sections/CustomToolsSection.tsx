@@ -102,6 +102,7 @@ export function CustomToolsSection() {
     setFormName("");
     setFormExt(".ts");
     setFormContent("");
+    resetUndo();
   };
 
   const startEdit = (entry: ToolFileEntry, entryScope: Scope) => {
@@ -119,6 +120,7 @@ export function CustomToolsSection() {
       setFormExt("");
     }
     setFormContent(entry.content);
+    resetUndo();
   };
 
   const handleCancel = () => {
@@ -159,7 +161,7 @@ export function CustomToolsSection() {
     await loadAllToolFiles();
   };
 
-  const handleKeyDown = useEditorKeyDown(formContent, setFormContent);
+  const { handleKeyDown, resetUndo } = useEditorKeyDown(formContent, setFormContent);
 
   const isEditing = adding || editing !== null;
 

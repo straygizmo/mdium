@@ -143,6 +143,7 @@ export function AgentsSection() {
     setFileFormContent("---\ndescription: \nmode: all\n---\n\n");
     setFileSavedContent("");
     setFileViewTab("editor");
+    resetUndo();
   };
 
   const startEditFile = (entry: AgentFileEntry, entryScope: Scope) => {
@@ -156,6 +157,7 @@ export function AgentsSection() {
     setFileFormContent(entry.content);
     setFileSavedContent(entry.content);
     setFileViewTab("editor");
+    resetUndo();
   };
 
   const handleSaveFile = async () => {
@@ -274,7 +276,7 @@ export function AgentsSection() {
     catch { return { frontMatter: meta, previewHtml: "<p>Markdown rendering error</p>" }; }
   }, [fileFormContent]);
 
-  const handleKeyDown = useEditorKeyDown(fileFormContent, setFileFormContent);
+  const { handleKeyDown, resetUndo } = useEditorKeyDown(fileFormContent, setFileFormContent);
 
   const isEditingConfig = adding || editing !== null;
   const isEditingFile = addingFile || editingFile !== null;
