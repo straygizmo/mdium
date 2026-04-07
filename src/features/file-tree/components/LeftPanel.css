@@ -32,6 +32,7 @@
 }
 
 .left-panel__activity-btn {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -123,4 +124,21 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.left-panel__badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--color-primary, #89b4fa);
+  color: var(--bg-base, #1e1e2e);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  pointer-events: none;
 }

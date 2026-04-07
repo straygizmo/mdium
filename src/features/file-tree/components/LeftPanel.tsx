@@ -64,6 +64,7 @@ export function LeftPanel({
   const setShowSettings = useSettingsStore((s) => s.setShowSettings);
   const collapseAllDirs = useFileStore((s) => s.collapseAllDirs);
   const ocModel = useOpencodeConfigStore((s) => s.config.model);
+  const gitFileCount = useGitStore((s) => s.files.length);
   const [showBatchConvert, setShowBatchConvert] = useState(false);
   const convertibleFiles = useMemo(() => collectConvertibleFiles(fileTree), [fileTree]);
 
@@ -105,6 +106,11 @@ export function LeftPanel({
               <circle cx="6" cy="6" r="3" />
               <path d="M6 21V9a9 9 0 0 0 9 9" />
             </svg>
+            {gitFileCount > 0 && (
+              <span className="left-panel__badge">
+                {gitFileCount > 99 ? "99+" : gitFileCount}
+              </span>
+            )}
           </button>
           <button
             className={`left-panel__activity-btn ${leftPanel === "rag" ? "left-panel__activity-btn--active" : ""}`}
