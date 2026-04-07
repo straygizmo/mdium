@@ -291,35 +291,8 @@ pub async fn slidev_start(
     fs::create_dir_all(temp_dir.join("public").join("images"))
         .map_err(|e| format!("Failed to create public/images dir: {}", e))?;
 
-    // Locate bundled resources
-    // In production: resource_dir contains bundled files
-    // In development: fall back to project root's resources/ directory
-    let slidev_env_dir = {
-        let resource_dir = app
-            .path()
-            .resource_dir()
-            .map_err(|e| format!("Failed to get resource dir: {}", e))?;
-        let prod_path = resource_dir.join("resources").join("slidev-env");
-        if prod_path.join("package.json").exists() {
-            prod_path
-        } else {
-            // Dev mode: resources are relative to the Tauri project root
-            let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .unwrap_or_else(|| std::path::Path::new("."))
-                .join("resources")
-                .join("slidev-env");
-            if dev_path.join("package.json").exists() {
-                dev_path
-            } else {
-                return Err(format!(
-                    "Slidev environment not found. Checked:\n  {}\n  {}",
-                    prod_path.display(),
-                    dev_path.display()
-                ));
-            }
-        }
-    };
+    // Ensure Slidev is installed in AppData
+    let install_dir = ensure_slidev_installed(&app)?;
 
     // Write slides.md first (needed for theme detection)
     let slides_path = temp_dir.join("slides.md");
@@ -361,46 +334,22 @@ pub async fn slidev_start(
         format!("@slidev/theme-{}", theme)
     };
 
-    // Set up node_modules: copy bundled modules or install via npm as fallback
+    // Copy package.json from AppData install dir
+    fs::copy(install_dir.join("package.json"), temp_dir.join("package.json"))
+        .map_err(|e| format!("Failed to copy package.json: {}", e))?;
+
+    // Create junction/symlink to AppData node_modules
+    let node_modules_source = install_dir.join("node_modules");
     let node_modules_dest = temp_dir.join("node_modules");
-    if !node_modules_dest.join(".package-lock.json").exists() {
-        let node_modules_src = slidev_env_dir.join("node_modules");
-        if node_modules_src.exists() {
-            // Copy pre-bundled node_modules (works offline / behind proxy)
-            copy_dir_recursive(&node_modules_src, &node_modules_dest)?;
-            let package_json_src = slidev_env_dir.join("package.json");
-            fs::copy(&package_json_src, temp_dir.join("package.json"))
-                .map_err(|e| format!("Failed to copy package.json: {}", e))?;
-        } else {
-            // Fallback: install via npm (dev mode or missing bundle)
-            let package_json_src = slidev_env_dir.join("package.json");
-            fs::copy(&package_json_src, temp_dir.join("package.json"))
-                .map_err(|e| format!("Failed to copy package.json: {}", e))?;
-
-            let npm = if cfg!(target_os = "windows") { "npm.cmd" } else { "npm" };
-            let mut npm_cmd = Command::new(npm);
-            npm_cmd.args(["install", "--prefer-offline", &theme_package])
-                .current_dir(&temp_dir)
-                .stdin(std::process::Stdio::null());
-            #[cfg(target_os = "windows")]
-            npm_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-            let install_output = npm_cmd.output()
-                .map_err(|e| format!("Failed to run npm install: {}", e))?;
-
-            if !install_output.status.success() {
-                let stderr = String::from_utf8_lossy(&install_output.stderr);
-                return Err(format!("npm install failed: {}", stderr));
-            }
-        }
-    }
+    create_node_modules_link(&node_modules_source, &node_modules_dest)?;
 
     // Install non-default theme if not already present
-    let theme_dir = node_modules_dest.join(&theme_package);
+    let theme_dir = node_modules_source.join(&theme_package);
     if !theme_dir.exists() {
         let npm = if cfg!(target_os = "windows") { "npm.cmd" } else { "npm" };
         let mut npm_cmd = Command::new(npm);
         npm_cmd.args(["install", "--prefer-offline", &theme_package])
-            .current_dir(&temp_dir)
+            .current_dir(&install_dir)
             .stdin(std::process::Stdio::null());
         #[cfg(target_os = "windows")]
         npm_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
