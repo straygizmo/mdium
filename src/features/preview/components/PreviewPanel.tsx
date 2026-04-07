@@ -574,9 +574,9 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
     useUiStore.getState().setLeftPanel("opencode-config");
     useUiStore.getState().setOpencodeTopTab("chat");
 
-    // Expand the template with actual parameter values
-    const builtin = BUILTIN_COMMANDS["generate-video-scenario"];
-    const prompt = builtin.template
+    // Expand the template with actual parameter values (prefer user-edited version)
+    const videoCmd = globalCommands["generate-video-scenario"] ?? BUILTIN_COMMANDS["generate-video-scenario"];
+    const prompt = videoCmd.template
       .replace(/\$1/g, mdPath)
       .replace(/\$2/g, outputPath)
       .replace(/\$3/g, params.resolution)
@@ -592,7 +592,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
     await doConnect(activeFolderPath ?? undefined);
     await doCreateNewSession();
     doSendMessage(prompt);
-  }, [scenarioDialog, activeFolderPath]);
+  }, [scenarioDialog, activeFolderPath, globalCommands]);
 
   const handleScenarioCancel = useCallback(() => {
     setScenarioDialog(null);
