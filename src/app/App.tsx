@@ -863,11 +863,13 @@ export function App() {
       if (e.ctrlKey && e.key === "z") {
         if (activeTab?.isCodeFile) return;
         if ((e.target as HTMLElement).closest?.(".oc-chat__input")) return;
+        if ((e.target as HTMLElement).closest?.(".oc-rules__editor-textarea")) return;
         e.preventDefault();
         handleUndo();
       } else if (e.ctrlKey && e.key === "y") {
         if (activeTab?.isCodeFile) return;
         if ((e.target as HTMLElement).closest?.(".oc-chat__input")) return;
+        if ((e.target as HTMLElement).closest?.(".oc-rules__editor-textarea")) return;
         e.preventDefault();
         handleRedo();
       } else if (e.ctrlKey && e.shiftKey && e.key === "S") {
