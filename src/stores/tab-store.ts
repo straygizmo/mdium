@@ -29,6 +29,20 @@ export interface Tab {
   isCodeFile?: boolean;
   /** Whether the editor pane is visible for this tab (default: true) */
   editorVisible?: boolean;
+  /** Whether this tab displays a diff view */
+  isDiffTab?: boolean;
+  /** Original file content for diff (left side) */
+  diffOriginal?: string;
+  /** Modified file content for diff (right side) */
+  diffModified?: string;
+  /** Monaco language ID for diff syntax highlighting */
+  diffLanguage?: string;
+  /** Label for the original (left) pane */
+  diffOriginalLabel?: string;
+  /** Label for the modified (right) pane */
+  diffModifiedLabel?: string;
+  /** Git status code for display in tab (e.g. "M", "A", "D") */
+  diffStatus?: string;
 }
 
 interface TabState {
@@ -55,6 +69,19 @@ interface TabState {
   getActiveTab: () => Tab | undefined;
   /** Toggle editor visibility for the active tab and sync to UI store */
   toggleTabEditor: () => void;
+  /** Open a diff tab (or reuse existing one for the same file+staged combination) */
+  openDiffTab: (params: {
+    folderPath: string;
+    filePath: string;
+    fileName: string;
+    original: string;
+    modified: string;
+    language: string;
+    originalLabel: string;
+    modifiedLabel: string;
+    staged: boolean;
+    status: string;
+  }) => void;
 
   /** Add folder tab when opening a folder (also creates an empty tab) */
   openFolder: (folderPath: string) => void;
@@ -241,6 +268,52 @@ export const useTabStore = create<TabState>()(
         ),
       }));
     }
+  },
+
+  openDiffTab: ({ folderPath, filePath, fileName, original, modified, language, originalLabel, modifiedLabel, staged, status }) => {
+    const diffId = `diff:${staged ? "staged" : "unstaged"}:${filePath}`;
+    const { tabs, folderLastActiveTab } = get();
+    const existing = tabs.find((t) => t.id === diffId && t.folderPath === folderPath);
+    if (existing) {
+      // Update content and reactivate
+      set((s) => ({
+        tabs: s.tabs.map((t) =>
+          t.id === diffId && t.folderPath === folderPath
+            ? { ...t, diffOriginal: original, diffModified: modified, diffOriginalLabel: originalLabel, diffModifiedLabel: modifiedLabel }
+            : t
+        ),
+        activeTabId: diffId,
+        activeFolderPath: folderPath,
+        folderLastActiveTab: { ...folderLastActiveTab, [folderPath]: diffId },
+      }));
+      useUiStore.getState().setEditorVisible(false);
+      return;
+    }
+    const newTab: Tab = {
+      id: diffId,
+      filePath,
+      folderPath,
+      fileName,
+      content: "",
+      dirty: false,
+      undoStack: [],
+      redoStack: [],
+      isDiffTab: true,
+      diffOriginal: original,
+      diffModified: modified,
+      diffLanguage: language,
+      diffOriginalLabel: originalLabel,
+      diffModifiedLabel: modifiedLabel,
+      diffStatus: status,
+      editorVisible: false,
+    };
+    useUiStore.getState().setEditorVisible(false);
+    set((s) => ({
+      tabs: [...s.tabs, newTab],
+      activeTabId: diffId,
+      activeFolderPath: folderPath,
+      folderLastActiveTab: { ...s.folderLastActiveTab, [folderPath]: diffId },
+    }));
   },
 
   openFolder: (folderPath) => {
