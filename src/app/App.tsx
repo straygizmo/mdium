@@ -1031,6 +1031,14 @@ export function App() {
                 </div>
               ) : activeTab.isCodeFile ? (
                 <CodeEditorPanel />
+              ) : activeTab.officeFileType ? (
+                <div className="app__preview-pane">
+                  <PreviewPanel
+                    previewRef={previewRef}
+                    onOpenFile={handleFileSelect}
+                    onRefreshFileTree={loadFileTree}
+                  />
+                </div>
               ) : (
                 <>
                   {editorVisible && (
