@@ -696,6 +696,10 @@ pub fn extract_vba_modules(xlsm_path: String) -> Result<ExtractResult, String> {
         // Decode from code page to UTF-8
         let source = decode_bytes(&decompressed, project.code_page)?;
 
+        // Ensure Attribute VB_Name matches the dir-stream MODULENAME.
+        // After a VBE rename the compressed source may still carry the old name.
+        let source = fix_vb_name(&source, &module_info.name);
+
         // Determine file extension and refined module type
         let (ext, module_type) = if module_info.module_type == "standard" {
             ("bas", "standard".to_string())
@@ -751,6 +755,44 @@ fn extract_vb_name(source: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Ensure the `Attribute VB_Name = "..."` line in VBA source matches the
+/// expected module name.  When VBE renames a module the dir-stream
+/// MODULENAME is updated but the compressed source may still carry the old
+/// `Attribute VB_Name`.  This helper rewrites the line so that the source
+/// is always consistent with the dir stream, which prevents VBA/Excel from
+/// rejecting the compressed source in favour of the (stale) performance
+/// cache.
+fn fix_vb_name(source: &str, expected_name: &str) -> String {
+    let mut result = String::with_capacity(source.len());
+    let mut found = false;
+    for line in source.lines() {
+        if !found {
+            let trimmed = line.trim();
+            if trimmed.starts_with("Attribute VB_Name") {
+                if let Some(rest) = trimmed.strip_prefix("Attribute VB_Name") {
+                    let rest = rest.trim();
+                    if let Some(rest) = rest.strip_prefix('=') {
+                        let rest = rest.trim();
+                        if rest.starts_with('"') {
+                            result.push_str(&format!("Attribute VB_Name = \"{}\"", expected_name));
+                            result.push_str("\r\n");
+                            found = true;
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+        result.push_str(line);
+        result.push_str("\r\n");
+    }
+    // Remove the trailing \r\n if the original source didn't end with one
+    if !source.ends_with('\n') && result.ends_with("\r\n") {
+        result.truncate(result.len() - 2);
+    }
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -854,9 +896,9 @@ pub fn inject_vba_modules(xlsm_path: String, macros_dir: String) -> Result<Injec
 
     // 6. For each macro file, encode and compress, then write back
     let mut updated_modules: Vec<String> = Vec::new();
+    let mut any_module_changed = false;
 
     for (module_name, file_path_str) in &macro_files {
-        // Read UTF-8 source from file first (needed for VB_Name extraction)
         let source = fs::read_to_string(file_path_str)
             .map_err(|e| format!("Failed to read macro file '{}': {}", file_path_str, e))?;
 
@@ -876,6 +918,11 @@ pub fn inject_vba_modules(xlsm_path: String, macros_dir: String) -> Result<Injec
             Some(info) => info,
             None => continue, // skip unmatched modules
         };
+
+        // Ensure Attribute VB_Name matches the target module name from the
+        // dir stream.  After a VBE rename the .bas file may still carry the
+        // old VB_Name; a mismatch can cause VBA to reject the source.
+        let source = fix_vb_name(&source, &info.name);
 
         // Encode UTF-8 -> code page
         let encoded = encode_string(&source, code_page)?;
@@ -898,7 +945,17 @@ pub fn inject_vba_modules(xlsm_path: String, macros_dir: String) -> Result<Injec
             &original_stream[..]
         };
 
-        // Build new stream: cache + compressed source
+        // Check if compressed data actually changed
+        let original_compressed = if text_offset <= original_stream.len() {
+            &original_stream[text_offset..]
+        } else {
+            &[][..]
+        };
+        if compressed != original_compressed {
+            any_module_changed = true;
+        }
+
+        // Build new stream: preserve original cache + new compressed source
         let mut new_stream = Vec::with_capacity(cache.len() + compressed.len());
         new_stream.extend_from_slice(cache);
         new_stream.extend_from_slice(&compressed);
@@ -920,7 +977,36 @@ pub fn inject_vba_modules(xlsm_path: String, macros_dir: String) -> Result<Injec
         return Err("No matching modules found to update. Module names in .bas/.cls files must match existing VBA module names.".to_string());
     }
 
-    // 7. Serialize updated OLE2 back to bytes
+    // 7. Invalidate the _VBA_PROJECT compiled cache so Excel recompiles
+    //    from the compressed source we just updated.
+    //
+    //    _VBA_PROJECT contains version-dependent compiled p-code.  When the
+    //    version matches the running Excel, it trusts the cache and ignores
+    //    the compressed source.  By flipping the version to a value Excel
+    //    doesn't recognise, we force a recompile.  We keep the full stream
+    //    intact (only change 2 bytes) to avoid triggering file-repair.
+    if any_module_changed {
+        let mut vba_proj_data = Vec::new();
+        comp.open_stream("/VBA/_VBA_PROJECT")
+            .map_err(|e| format!("Failed to open _VBA_PROJECT: {}", e))?
+            .read_to_end(&mut vba_proj_data)
+            .map_err(|e| format!("Failed to read _VBA_PROJECT: {}", e))?;
+
+        if vba_proj_data.len() >= 4 {
+            // Bytes 2-3 are the version.  Flip them to force recompile.
+            vba_proj_data[2] = 0x01;
+            vba_proj_data[3] = 0x00;
+
+            let mut stream = comp
+                .create_stream("/VBA/_VBA_PROJECT")
+                .map_err(|e| format!("Failed to create _VBA_PROJECT: {}", e))?;
+            stream
+                .write_all(&vba_proj_data)
+                .map_err(|e| format!("Failed to write _VBA_PROJECT: {}", e))?;
+        }
+    }
+
+    // 8. Serialize updated OLE2 back to bytes
     comp.flush()
         .map_err(|e| format!("Failed to flush OLE2 compound file: {}", e))?;
     let updated_vba_bin = comp.into_inner().into_inner();
@@ -1216,5 +1302,40 @@ mod tests {
         assert_eq!(project.modules.len(), 1);
         // Unicode name should take priority
         assert_eq!(project.modules[0].name, "TestModule");
+    }
+
+    // --- fix_vb_name tests ---
+
+    #[test]
+    fn test_fix_vb_name_replaces_old_name() {
+        let source = "Attribute VB_Name = \"Module1\"\r\nSub Test()\r\nEnd Sub\r\n";
+        let result = fix_vb_name(source, "mdlMain");
+        assert!(result.starts_with("Attribute VB_Name = \"mdlMain\"\r\n"));
+        assert!(result.contains("Sub Test()"));
+    }
+
+    #[test]
+    fn test_fix_vb_name_keeps_matching_name() {
+        let source = "Attribute VB_Name = \"mdlMain\"\r\nSub Test()\r\nEnd Sub\r\n";
+        let result = fix_vb_name(source, "mdlMain");
+        assert!(result.starts_with("Attribute VB_Name = \"mdlMain\"\r\n"));
+        assert!(result.contains("Sub Test()"));
+    }
+
+    #[test]
+    fn test_fix_vb_name_no_attribute_line() {
+        let source = "Sub Test()\r\nEnd Sub\r\n";
+        let result = fix_vb_name(source, "mdlMain");
+        // No Attribute line to fix — source returned as-is
+        assert!(result.contains("Sub Test()"));
+    }
+
+    #[test]
+    fn test_fix_vb_name_preserves_other_attributes() {
+        let source = "Attribute VB_Name = \"Module1\"\r\nAttribute VB_Exposed = False\r\nSub Test()\r\nEnd Sub\r\n";
+        let result = fix_vb_name(source, "mdlMain");
+        assert!(result.contains("Attribute VB_Name = \"mdlMain\""));
+        assert!(result.contains("Attribute VB_Exposed = False"));
+        assert!(result.contains("Sub Test()"));
     }
 }
