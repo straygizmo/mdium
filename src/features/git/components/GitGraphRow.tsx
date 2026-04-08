@@ -26,9 +26,10 @@ interface GitGraphRowProps {
   maxLanes: number;
   onClick: () => void;
   expanded: boolean;
+  isFirst?: boolean;
 }
 
-export function GitGraphRow({ commit, maxLanes, onClick, expanded }: GitGraphRowProps) {
+export function GitGraphRow({ commit, maxLanes, onClick, expanded, isFirst }: GitGraphRowProps) {
   const svgWidth = Math.max(maxLanes * LANE_WIDTH, LANE_WIDTH);
   const cy = ROW_HEIGHT / 2;
 
@@ -69,7 +70,7 @@ export function GitGraphRow({ commit, maxLanes, onClick, expanded }: GitGraphRow
               <line
                 key={i}
                 x1={x1}
-                y1={0}
+                y1={isFirst ? cy : 0}
                 x2={x2}
                 y2={ROW_HEIGHT}
                 stroke={color}

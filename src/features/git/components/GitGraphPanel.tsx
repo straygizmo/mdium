@@ -73,13 +73,14 @@ export function GitGraphPanel() {
               <span className="git-graph-panel__section-count">{graphOutgoing.length}</span>
             </button>
             {!outgoingCollapsed &&
-              graphOutgoing.map((c) => (
+              graphOutgoing.map((c, idx) => (
                 <div key={c.hash}>
                   <GitGraphRow
                     commit={c}
                     maxLanes={maxLanes}
                     onClick={() => handleCommitClick(c.hash)}
                     expanded={expandedCommit === c.hash}
+                    isFirst={idx === 0}
                   />
                   {expandedCommit === c.hash && activeFolderPath && (
                     <GitGraphCommitFiles
@@ -97,13 +98,14 @@ export function GitGraphPanel() {
           <div className="git-graph-panel__separator" />
         )}
 
-        {graphCommits.map((c) => (
+        {graphCommits.map((c, idx) => (
           <div key={c.hash}>
             <GitGraphRow
               commit={c}
               maxLanes={maxLanes}
               onClick={() => handleCommitClick(c.hash)}
               expanded={expandedCommit === c.hash}
+              isFirst={idx === 0 && graphOutgoing.length === 0}
             />
             {expandedCommit === c.hash && activeFolderPath && (
               <GitGraphCommitFiles

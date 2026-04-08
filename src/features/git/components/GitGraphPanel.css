@@ -10,6 +10,7 @@
 .git-graph-panel__content {
   flex: 1;
   overflow-y: auto;
+  padding-top: 4px;
 }
 
 .git-graph-panel__empty {
@@ -127,10 +128,12 @@
 .git-graph-row {
   display: flex;
   align-items: center;
-  height: 24px;
+  min-height: 24px;
+  padding-left: 4px;
   padding-right: 8px;
   cursor: pointer;
   user-select: none;
+  overflow: hidden;
 }
 
 .git-graph-row:hover {
@@ -143,6 +146,7 @@
 
 .git-graph-row__svg {
   flex-shrink: 0;
+  overflow: visible;
 }
 
 .git-graph-row__info {
@@ -161,7 +165,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  min-width: 0;
+  min-width: 60px;
 }
 
 .git-graph-row__ref {
@@ -190,10 +194,7 @@
 }
 
 .git-graph-row__author {
-  font-size: 11px;
-  color: var(--text-muted);
-  white-space: nowrap;
-  flex-shrink: 0;
+  display: none;
 }
 
 .git-graph-row__date {
