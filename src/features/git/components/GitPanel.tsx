@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useGitStore } from "@/stores/git-store";
 import { useTabStore } from "@/stores/tab-store";
@@ -6,6 +7,8 @@ import { useSettingsStore } from "@/stores/settings-store";
 import { GitBranchSelect } from "./GitBranchSelect";
 import { GitFileList } from "./GitFileList";
 import { showConfirm } from "@/stores/dialog-store";
+import { useUiStore } from "@/stores/ui-store";
+import { GitGraphPanel } from "./GitGraphPanel";
 import "./GitPanel.css";
 
 export function GitPanel() {
@@ -35,6 +38,34 @@ export function GitPanel() {
 
   const [editingRemote, setEditingRemote] = useState(false);
   const [remoteInput, setRemoteInput] = useState("");
+
+  const gitGraphRatio = useUiStore((s) => s.gitGraphRatio);
+  const setGitGraphRatio = useUiStore((s) => s.setGitGraphRatio);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const handleSplitterMouseDown = useCallback(
+    (e: ReactMouseEvent) => {
+      e.preventDefault();
+      const container = containerRef.current;
+      if (!container) return;
+
+      const onMouseMove = (ev: globalThis.MouseEvent) => {
+        const rect = container.getBoundingClientRect();
+        const y = ev.clientY - rect.top;
+        const ratio = Math.min(0.85, Math.max(0.15, y / rect.height));
+        setGitGraphRatio(1 - ratio);
+      };
+
+      const onMouseUp = () => {
+        document.removeEventListener("mousemove", onMouseMove);
+        document.removeEventListener("mouseup", onMouseUp);
+      };
+
+      document.addEventListener("mousemove", onMouseMove);
+      document.addEventListener("mouseup", onMouseUp);
+    },
+    [setGitGraphRatio],
+  );
 
   useEffect(() => {
     if (activeFolderPath) {
@@ -159,121 +190,135 @@ export function GitPanel() {
     ? t(error, { defaultValue: error })
     : null;
 
-  return (
-    <div className="git-panel">
-      <GitBranchSelect
-        folderPath={activeFolderPath}
-        hasUncommitted={hasUncommitted}
-      />
+  const topHeight = `calc(${(1 - gitGraphRatio) * 100}% - 2px)`;
+  const bottomHeight = `calc(${gitGraphRatio * 100}% - 2px)`;
 
-      <div className="git-panel__remote">
-        {editingRemote ? (
-          <div className="git-panel__remote-edit">
-            <input
-              className="git-panel__remote-input"
-              type="text"
-              value={remoteInput}
-              onChange={(e) => setRemoteInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleRemoteSave();
-                if (e.key === "Escape") setEditingRemote(false);
+  return (
+    <div className="git-panel" ref={containerRef}>
+      <div className="git-panel__top" style={{ height: topHeight }}>
+        <GitBranchSelect
+          folderPath={activeFolderPath}
+          hasUncommitted={hasUncommitted}
+        />
+
+        <div className="git-panel__remote">
+          {editingRemote ? (
+            <div className="git-panel__remote-edit">
+              <input
+                className="git-panel__remote-input"
+                type="text"
+                value={remoteInput}
+                onChange={(e) => setRemoteInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleRemoteSave();
+                  if (e.key === "Escape") setEditingRemote(false);
+                }}
+                placeholder={t("remoteUrlPlaceholder")}
+                autoFocus
+              />
+              <button
+                className="git-panel__remote-save"
+                onClick={handleRemoteSave}
+                disabled={!remoteInput.trim()}
+              >
+                {t("remoteUrlSet")}
+              </button>
+            </div>
+          ) : (
+            <button
+              className="git-panel__remote-display"
+              onClick={() => { setRemoteInput(remoteUrl); setEditingRemote(true); }}
+              title={remoteUrl || t("remoteUrlNone")}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="2" y1="12" x2="22" y2="12" />
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+              </svg>
+              <span className="git-panel__remote-url">
+                {remoteUrl || t("remoteUrlNone")}
+              </span>
+            </button>
+          )}
+        </div>
+
+        <div className="git-panel__commit-area">
+          <div className="git-panel__message-wrap">
+            <textarea
+              className="git-panel__message-input"
+              placeholder={t("commitMessagePlaceholder")}
+              value={commitMessage}
+              onChange={(e) => {
+                setCommitMessage(e.target.value);
+                if (error) clearError();
               }}
-              placeholder={t("remoteUrlPlaceholder")}
-              autoFocus
+              onKeyDown={handleKeyDown}
+              rows={1}
             />
             <button
-              className="git-panel__remote-save"
-              onClick={handleRemoteSave}
-              disabled={!remoteInput.trim()}
+              className={`git-panel__ai-btn ${generating ? "git-panel__ai-btn--generating" : ""}`}
+              onClick={handleGenerate}
+              disabled={generating || files.length === 0}
+              title={t("generateAI")}
             >
-              {t("remoteUrlSet")}
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinejoin="round" strokeWidth="2">
+                <path d="M15 19c1.2-3.678 2.526-5.005 6-6c-3.474-.995-4.8-2.322-6-6c-1.2 3.678-2.526 5.005-6 6c3.474.995 4.8 2.322 6 6Zm-8-9c.6-1.84 1.263-2.503 3-3c-1.737-.497-2.4-1.16-3-3c-.6 1.84-1.263 2.503-3 3c1.737.497 2.4 1.16 3 3Zm1.5 10c.3-.92.631-1.251 1.5-1.5c-.869-.249-1.2-.58-1.5-1.5c-.3.92-.631 1.251-1.5 1.5c.869.249 1.2.58 1.5 1.5Z" />
+              </svg>
             </button>
           </div>
-        ) : (
-          <button
-            className="git-panel__remote-display"
-            onClick={() => { setRemoteInput(remoteUrl); setEditingRemote(true); }}
-            title={remoteUrl || t("remoteUrlNone")}
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10" />
-              <line x1="2" y1="12" x2="22" y2="12" />
-              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-            </svg>
-            <span className="git-panel__remote-url">
-              {remoteUrl || t("remoteUrlNone")}
-            </span>
-          </button>
-        )}
-      </div>
+          <div className="git-panel__actions">
+            <button
+              className="git-panel__action-btn git-panel__action-btn--commit"
+              onClick={handleCommit}
+              disabled={loading || !commitMessage.trim() || files.length === 0}
+              title={t("commit")}
+            >
+              {t("commit")}
+            </button>
+            <button
+              className="git-panel__action-btn git-panel__action-btn--push"
+              onClick={handlePush}
+              disabled={loading || commitsAhead === 0}
+              title={t("push")}
+            >
+              {t("push")}{commitsAhead > 0 ? ` (${commitsAhead})` : ""}
+            </button>
+          </div>
+        </div>
 
-      <div className="git-panel__commit-area">
-        <div className="git-panel__message-wrap">
-          <textarea
-            className="git-panel__message-input"
-            placeholder={t("commitMessagePlaceholder")}
-            value={commitMessage}
-            onChange={(e) => {
-              setCommitMessage(e.target.value);
-              if (error) clearError();
-            }}
-            onKeyDown={handleKeyDown}
-            rows={1}
+        {errorMessage && (
+          <div className="git-panel__error">{errorMessage}</div>
+        )}
+
+        <div className="git-panel__file-lists">
+          <GitFileList
+            title={t("stagedChanges")}
+            files={stagedFiles}
+            staged={true}
+            folderPath={activeFolderPath ?? ""}
+            onUnstage={handleUnstage}
           />
-          <button
-            className={`git-panel__ai-btn ${generating ? "git-panel__ai-btn--generating" : ""}`}
-            onClick={handleGenerate}
-            disabled={generating || files.length === 0}
-            title={t("generateAI")}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinejoin="round" strokeWidth="2">
-              <path d="M15 19c1.2-3.678 2.526-5.005 6-6c-3.474-.995-4.8-2.322-6-6c-1.2 3.678-2.526 5.005-6 6c3.474.995 4.8 2.322 6 6Zm-8-9c.6-1.84 1.263-2.503 3-3c-1.737-.497-2.4-1.16-3-3c-.6 1.84-1.263 2.503-3 3c1.737.497 2.4 1.16 3 3Zm1.5 10c.3-.92.631-1.251 1.5-1.5c-.869-.249-1.2-.58-1.5-1.5c-.3.92-.631 1.251-1.5 1.5c.869.249 1.2.58 1.5 1.5Z" />
-            </svg>
-          </button>
-        </div>
-        <div className="git-panel__actions">
-          <button
-            className="git-panel__action-btn git-panel__action-btn--commit"
-            onClick={handleCommit}
-            disabled={loading || !commitMessage.trim() || files.length === 0}
-            title={t("commit")}
-          >
-            {t("commit")}
-          </button>
-          <button
-            className="git-panel__action-btn git-panel__action-btn--push"
-            onClick={handlePush}
-            disabled={loading || commitsAhead === 0}
-            title={t("push")}
-          >
-            {t("push")}{commitsAhead > 0 ? ` (${commitsAhead})` : ""}
-          </button>
+          <GitFileList
+            title={t("changes")}
+            files={unstagedFiles}
+            staged={false}
+            folderPath={activeFolderPath ?? ""}
+            onStage={handleStage}
+            onDiscard={handleDiscard}
+          />
+          {files.length === 0 && !loading && (
+            <div className="git-panel__no-changes">{t("noChanges")}</div>
+          )}
         </div>
       </div>
 
-      {errorMessage && (
-        <div className="git-panel__error">{errorMessage}</div>
-      )}
+      <div
+        className="git-panel__splitter"
+        onMouseDown={handleSplitterMouseDown}
+      />
 
-      <div className="git-panel__file-lists">
-        <GitFileList
-          title={t("stagedChanges")}
-          files={stagedFiles}
-          staged={true}
-          folderPath={activeFolderPath ?? ""}
-          onUnstage={handleUnstage}
-        />
-        <GitFileList
-          title={t("changes")}
-          files={unstagedFiles}
-          staged={false}
-          folderPath={activeFolderPath ?? ""}
-          onStage={handleStage}
-          onDiscard={handleDiscard}
-        />
-        {files.length === 0 && !loading && (
-          <div className="git-panel__no-changes">{t("noChanges")}</div>
-        )}
+      <div className="git-panel__bottom" style={{ height: bottomHeight }}>
+        <GitGraphPanel />
       </div>
     </div>
   );

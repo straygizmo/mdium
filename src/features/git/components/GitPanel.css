@@ -399,3 +399,35 @@
   background: var(--bg-overlay);
   color: var(--text);
 }
+
+/* ── Splitter layout ── */
+.git-panel__top {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.git-panel__splitter {
+  height: 4px;
+  background: var(--border);
+  cursor: row-resize;
+  flex-shrink: 0;
+}
+
+.git-panel__splitter:hover {
+  background: var(--primary);
+}
+
+.git-panel__bottom {
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* ── Graph color palette ── */
+:root {
+  --graph-color-0: #f97583;
+  --graph-color-1: #79b8ff;
+  --graph-color-2: #85e89d;
+  --graph-color-3: #ffab70;
+  --graph-color-4: #b392f0;
+  --graph-color-5: #f692ce;
+}
