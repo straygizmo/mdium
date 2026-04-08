@@ -354,7 +354,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   const [macroImporting, setMacroImporting] = useState(false);
   const [macroError, setMacroError] = useState<string | null>(null);
   const [macroSuccess, setMacroSuccess] = useState<string | null>(null);
-  const [scenarioDialog, setScenarioDialog] = useState<{ videoJsonName: string; mdPath: string; baseName: string; hasExisting: boolean } | null>(null);
+  const [scenarioDialog, setScenarioDialog] = useState<{ videoJsonName: string; mdPath: string; baseName: string; hasExisting: boolean; commandName: string } | null>(null);
   const [mediumDialog, setMediumDialog] = useState<{
     title: string;
     tags: string[];
@@ -373,7 +373,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   const configCommands = useOpencodeConfigStore((s) => s.config.command);
   const globalCommands = useMemo(() => configCommands ?? {}, [configCommands]);
 
-  const handleEnterVideoMode = useCallback(async () => {
+  const handleEnterVideoMode = useCallback(async (commandName = "generate-video-scenario") => {
     if (!filePath) return;
 
     // Derive paths
@@ -385,7 +385,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
     // Check if .video.json already exists
     const existing = await invoke<string | null>("video_load_project", { mdPath: filePath });
 
-    setScenarioDialog({ videoJsonName, mdPath: filePath, baseName, hasExisting: !!existing });
+    setScenarioDialog({ videoJsonName, mdPath: filePath, baseName, hasExisting: !!existing, commandName });
   }, [filePath]);
 
   const handlePublishToMedium = useCallback(() => {
@@ -497,8 +497,8 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   const handleCommandSelect = useCallback(async (commandName: string) => {
     if (!filePath) return;
 
-    if (commandName === "generate-video-scenario") {
-      handleEnterVideoMode();
+    if (commandName.startsWith("generate-video-scenario")) {
+      handleEnterVideoMode(commandName);
       return;
     }
 
@@ -544,7 +544,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
 
   const handleScenarioSubmit = useCallback(async (params: VideoScenarioParams) => {
     if (!scenarioDialog) return;
-    const { mdPath, baseName } = scenarioDialog;
+    const { mdPath, baseName, commandName } = scenarioDialog;
     setScenarioDialog(null);
 
     // Determine output path
@@ -577,7 +577,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
     useUiStore.getState().setOpencodeTopTab("chat");
 
     // Expand the template with actual parameter values (prefer user-edited version)
-    const videoCmd = globalCommands["generate-video-scenario"] ?? BUILTIN_COMMANDS["generate-video-scenario"];
+    const videoCmd = globalCommands[commandName] ?? BUILTIN_COMMANDS[commandName];
     const prompt = videoCmd.template
       .replace(/\$1/g, mdPath)
       .replace(/\$2/g, outputPath)
