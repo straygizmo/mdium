@@ -5,6 +5,10 @@ import type { Language } from "@/stores/settings-store";
 import { COMMIT_MESSAGE_PROMPT } from "@/shared/lib/constants";
 import { parseStatusPorcelain, parseBranchList } from "@/features/git/lib/parse-status";
 import type { GitFileEntry } from "@/features/git/lib/parse-status";
+import { parseLogOutput, parseDiffTree } from "@/features/git/lib/parse-log";
+import { computeGraphLanes } from "@/features/git/lib/graph-lanes";
+import type { GraphCommit } from "@/features/git/lib/graph-lanes";
+import type { CommitFileEntry } from "@/features/git/lib/parse-log";
 import { getOpencodeClient } from "@/features/opencode-config/hooks/useOpencodeChat";
 import { useChatUIStore } from "@/features/opencode-config/hooks/useOpencodeChat";
 
@@ -67,6 +71,13 @@ interface GitState {
   isRepo: boolean;
   remoteUrl: string;
   commitsAhead: number;
+  graphCommits: GraphCommit[];
+  graphOutgoing: GraphCommit[];
+  graphLoading: boolean;
+  graphSkip: number;
+  graphHasMore: boolean;
+  expandedCommit: string | null;
+  expandedFiles: CommitFileEntry[];
 
   refresh: (folderPath: string) => Promise<void>;
   initRepo: (folderPath: string) => Promise<void>;
@@ -85,6 +96,9 @@ interface GitState {
   ) => Promise<void>;
   setCommitMessage: (msg: string) => void;
   clearError: () => void;
+  refreshGraph: (folderPath: string) => Promise<void>;
+  loadMoreGraph: (folderPath: string) => Promise<void>;
+  toggleCommitExpand: (folderPath: string, hash: string) => Promise<void>;
 }
 
 export const useGitStore = create<GitState>()((set, get) => ({
@@ -98,6 +112,13 @@ export const useGitStore = create<GitState>()((set, get) => ({
   isRepo: false,
   remoteUrl: "",
   commitsAhead: 0,
+  graphCommits: [],
+  graphOutgoing: [],
+  graphLoading: false,
+  graphSkip: 0,
+  graphHasMore: true,
+  expandedCommit: null,
+  expandedFiles: [],
 
   refresh: async (folderPath) => {
     set({ loading: true, error: null });
@@ -122,10 +143,13 @@ export const useGitStore = create<GitState>()((set, get) => ({
       // Also fetch remote URL and commits ahead count
       get().getRemoteUrl(folderPath);
       invoke<number>("git_commits_ahead", { path: folderPath })
-        .then((n) => set({ commitsAhead: n }))
+        .then((n) => {
+          set({ commitsAhead: n });
+          get().refreshGraph(folderPath);
+        })
         .catch(() => set({ commitsAhead: 0 }));
     } catch (e: any) {
-      set({ files: [], currentBranch: "", branches: [], isRepo: false, remoteUrl: "", commitsAhead: 0 });
+      set({ files: [], currentBranch: "", branches: [], isRepo: false, remoteUrl: "", commitsAhead: 0, graphCommits: [], graphOutgoing: [], graphHasMore: false });
     } finally {
       set({ loading: false });
     }
@@ -325,4 +349,92 @@ export const useGitStore = create<GitState>()((set, get) => ({
 
   setCommitMessage: (msg) => set({ commitMessage: msg }),
   clearError: () => set({ error: null }),
+
+  refreshGraph: async (folderPath) => {
+    set({ graphLoading: true });
+    try {
+      const { commitsAhead } = get();
+      const logOut = await invoke<string>("git_log_graph", {
+        path: folderPath,
+        count: 100,
+        skip: 0,
+      });
+      const raw = parseLogOutput(logOut);
+      const all = computeGraphLanes(raw);
+
+      // Split into outgoing (unpushed) and history
+      const outgoing = all.slice(0, commitsAhead);
+      const history = all.slice(commitsAhead);
+
+      set({
+        graphCommits: history,
+        graphOutgoing: outgoing,
+        graphSkip: 100,
+        graphHasMore: raw.length >= 100,
+        expandedCommit: null,
+        expandedFiles: [],
+      });
+    } catch {
+      set({ graphCommits: [], graphOutgoing: [], graphHasMore: false });
+    } finally {
+      set({ graphLoading: false });
+    }
+  },
+
+  loadMoreGraph: async (folderPath) => {
+    const { graphSkip, graphCommits, graphOutgoing } = get();
+    set({ graphLoading: true });
+    try {
+      const logOut = await invoke<string>("git_log_graph", {
+        path: folderPath,
+        count: 100,
+        skip: graphSkip,
+      });
+      const raw = parseLogOutput(logOut);
+      // Recompute lanes for the full list
+      const existingRaw = [...graphOutgoing, ...graphCommits].map((c) => ({
+        hash: c.hash,
+        shortHash: c.shortHash,
+        author: c.author,
+        date: c.date,
+        message: c.message,
+        parents: c.parents,
+        refs: c.refs,
+      }));
+      const allRaw = [...existingRaw, ...raw];
+      const all = computeGraphLanes(allRaw);
+
+      const { commitsAhead } = get();
+      const outgoing = all.slice(0, commitsAhead);
+      const history = all.slice(commitsAhead);
+
+      set({
+        graphCommits: history,
+        graphOutgoing: outgoing,
+        graphSkip: graphSkip + 100,
+        graphHasMore: raw.length >= 100,
+      });
+    } catch {
+      set({ graphHasMore: false });
+    } finally {
+      set({ graphLoading: false });
+    }
+  },
+
+  toggleCommitExpand: async (folderPath, hash) => {
+    const { expandedCommit } = get();
+    if (expandedCommit === hash) {
+      set({ expandedCommit: null, expandedFiles: [] });
+      return;
+    }
+    try {
+      const out = await invoke<string>("git_diff_commit", {
+        path: folderPath,
+        hash,
+      });
+      set({ expandedCommit: hash, expandedFiles: parseDiffTree(out) });
+    } catch {
+      set({ expandedCommit: null, expandedFiles: [] });
+    }
+  },
 }));

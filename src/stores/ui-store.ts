@@ -25,6 +25,8 @@ interface UiState {
   opencodeConfigTab: OpencodeConfigTab;
   opencodeTopTab: OpencodeTopTab;
   isZennMode: boolean;
+  gitGraphRatio: number;
+  setGitGraphRatio: (ratio: number) => void;
 
   toggleEditor: () => void;
   setActiveViewTab: (tab: ViewTab) => void;
@@ -67,6 +69,7 @@ export const useUiStore = create<UiState>()((set) => ({
   opencodeConfigTab: "rules" as OpencodeConfigTab,
   opencodeTopTab: "chat" as OpencodeTopTab,
   isZennMode: false,
+  gitGraphRatio: 0.5,
 
   toggleEditor: () => set((s) => ({ editorVisible: !s.editorVisible })),
   setEditorVisible: (visible) => set({ editorVisible: visible }),
@@ -109,4 +112,5 @@ export const useUiStore = create<UiState>()((set) => ({
   setOpencodeConfigTab: (tab) => set({ opencodeConfigTab: tab }),
   setOpencodeTopTab: (tab) => set({ opencodeTopTab: tab }),
   setZennMode: (mode) => set({ isZennMode: mode }),
+  setGitGraphRatio: (ratio) => set({ gitGraphRatio: ratio }),
 }));
