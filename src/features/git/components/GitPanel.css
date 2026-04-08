@@ -212,7 +212,7 @@
 .git-panel__ai-btn {
   position: absolute;
   top: 4px;
-  right: 4px;
+  right: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
