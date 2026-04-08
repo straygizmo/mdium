@@ -90,6 +90,11 @@ pub fn git_diff_staged(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+pub fn git_diff_unstaged(path: String) -> Result<String, String> {
+    run_git(&path, &["diff"])
+}
+
+#[tauri::command]
 pub fn git_log_oneline(path: String, count: u32) -> Result<String, String> {
     let n = format!("-{}", count);
     run_git(&path, &["log", "--oneline", &n])
@@ -124,6 +129,26 @@ pub fn git_remove_untracked(path: String, files: Vec<String>) -> Result<String, 
     let file_refs: Vec<&str> = files.iter().map(|s| s.as_str()).collect();
     args.extend(file_refs);
     run_git(&path, &args)
+}
+
+#[tauri::command]
+pub fn git_commits_ahead(path: String) -> Result<u32, String> {
+    // Get the upstream tracking ref for HEAD
+    let upstream = run_git(&path, &["rev-parse", "--abbrev-ref", "@{upstream}"])
+        .map(|s| s.trim().to_string());
+    match upstream {
+        Ok(up) if !up.is_empty() => {
+            let range = format!("{}..HEAD", up);
+            let out = run_git(&path, &["rev-list", "--count", &range])?;
+            out.trim().parse::<u32>().map_err(|e| e.to_string())
+        }
+        // No upstream configured — treat all local commits as ahead
+        _ => {
+            let out = run_git(&path, &["rev-list", "--count", "HEAD"])
+                .unwrap_or_else(|_| "0".to_string());
+            Ok(out.trim().parse::<u32>().unwrap_or(0))
+        }
+    }
 }
 
 #[tauri::command]

@@ -66,6 +66,7 @@ interface GitState {
   error: string | null;
   isRepo: boolean;
   remoteUrl: string;
+  commitsAhead: number;
 
   refresh: (folderPath: string) => Promise<void>;
   initRepo: (folderPath: string) => Promise<void>;
@@ -96,6 +97,7 @@ export const useGitStore = create<GitState>()((set, get) => ({
   error: null,
   isRepo: false,
   remoteUrl: "",
+  commitsAhead: 0,
 
   refresh: async (folderPath) => {
     set({ loading: true, error: null });
@@ -117,10 +119,13 @@ export const useGitStore = create<GitState>()((set, get) => ({
         } catch { /* ignore */ }
       }
       set({ files, currentBranch: current, branches, isRepo: true });
-      // Also fetch remote URL
+      // Also fetch remote URL and commits ahead count
       get().getRemoteUrl(folderPath);
+      invoke<number>("git_commits_ahead", { path: folderPath })
+        .then((n) => set({ commitsAhead: n }))
+        .catch(() => set({ commitsAhead: 0 }));
     } catch (e: any) {
-      set({ files: [], currentBranch: "", branches: [], isRepo: false, remoteUrl: "" });
+      set({ files: [], currentBranch: "", branches: [], isRepo: false, remoteUrl: "", commitsAhead: 0 });
     } finally {
       set({ loading: false });
     }
@@ -179,13 +184,18 @@ export const useGitStore = create<GitState>()((set, get) => ({
   },
 
   commit: async (folderPath) => {
-    const { commitMessage } = get();
+    const { commitMessage, files } = get();
     if (!commitMessage.trim()) {
       set({ error: "errorEmptyMessage" });
       return;
     }
     set({ error: null, loading: true });
     try {
+      // Auto-stage all changes if nothing is staged (VS Code behavior)
+      const hasStaged = files.some((f) => f.staged);
+      if (!hasStaged && files.length > 0) {
+        await invoke("git_add_all", { path: folderPath });
+      }
       await invoke("git_commit", { path: folderPath, message: commitMessage });
       set({ commitMessage: "" });
       await get().refresh(folderPath);
@@ -252,13 +262,15 @@ export const useGitStore = create<GitState>()((set, get) => ({
   generateCommitMessage: async (folderPath, settings, language) => {
     set({ generating: true, error: null });
     try {
-      const [diffOut, logOut] = await Promise.all([
+      const [stagedDiff, unstagedDiff, logOut] = await Promise.all([
         invoke<string>("git_diff_staged", { path: folderPath }),
+        invoke<string>("git_diff_unstaged", { path: folderPath }),
         invoke<string>("git_log_oneline", { path: folderPath, count: 10 }).catch(
           () => "",
         ),
       ]);
 
+      const diffOut = stagedDiff.trim() ? stagedDiff : unstagedDiff;
       if (!diffOut.trim()) {
         set({ error: "noStagedChanges", generating: false });
         return;

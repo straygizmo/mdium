@@ -135,6 +135,7 @@ pub fn run() {
             commands::git::git_add,
             commands::git::git_restore_staged,
             commands::git::git_diff_staged,
+            commands::git::git_diff_unstaged,
             commands::git::git_log_oneline,
             commands::git::git_branch_list,
             commands::git::git_current_branch,
@@ -142,6 +143,7 @@ pub fn run() {
             commands::git::git_discard,
             commands::git::git_remove_untracked,
             commands::git::git_push_upstream,
+            commands::git::git_commits_ahead,
             commands::git::git_show_file,
             // PTY operations
             commands::pty::spawn_pty,

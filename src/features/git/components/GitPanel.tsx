@@ -20,6 +20,7 @@ export function GitPanel() {
   const error = useGitStore((s) => s.error);
   const isRepo = useGitStore((s) => s.isRepo);
   const remoteUrl = useGitStore((s) => s.remoteUrl);
+  const commitsAhead = useGitStore((s) => s.commitsAhead);
   const refresh = useGitStore((s) => s.refresh);
   const initRepo = useGitStore((s) => s.initRepo);
   const setRemoteUrlAction = useGitStore((s) => s.setRemoteUrl);
@@ -222,7 +223,7 @@ export function GitPanel() {
           <button
             className={`git-panel__ai-btn ${generating ? "git-panel__ai-btn--generating" : ""}`}
             onClick={handleGenerate}
-            disabled={generating || stagedFiles.length === 0}
+            disabled={generating || files.length === 0}
             title={t("generateAI")}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinejoin="round" strokeWidth="2">
@@ -234,7 +235,7 @@ export function GitPanel() {
           <button
             className="git-panel__action-btn git-panel__action-btn--commit"
             onClick={handleCommit}
-            disabled={loading || !commitMessage.trim() || stagedFiles.length === 0}
+            disabled={loading || !commitMessage.trim() || files.length === 0}
             title={t("commit")}
           >
             {t("commit")}
@@ -242,10 +243,10 @@ export function GitPanel() {
           <button
             className="git-panel__action-btn git-panel__action-btn--push"
             onClick={handlePush}
-            disabled={loading}
+            disabled={loading || commitsAhead === 0}
             title={t("push")}
           >
-            {t("push")}
+            {t("push")}{commitsAhead > 0 ? ` (${commitsAhead})` : ""}
           </button>
         </div>
       </div>
