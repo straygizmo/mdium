@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useTabStore } from "@/stores/tab-store";
 import { useUiStore } from "@/stores/ui-store";
 import { useSettingsStore } from "@/stores/settings-store";
+import { showConfirm } from "@/stores/dialog-store";
 import { getThemeById } from "@/shared/themes";
 import { makeHeadingId } from "@/shared/lib/markdown/heading-id";
 import { preprocessMath } from "@/shared/lib/markdown/math-preprocess";
@@ -354,6 +355,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   const [macroImporting, setMacroImporting] = useState(false);
   const [macroError, setMacroError] = useState<string | null>(null);
   const [macroSuccess, setMacroSuccess] = useState<string | null>(null);
+  const [macrosDirExists, setMacrosDirExists] = useState(false);
   const [scenarioDialog, setScenarioDialog] = useState<{ videoJsonName: string; mdPath: string; baseName: string; hasExisting: boolean; commandName: string } | null>(null);
   const [mediumDialog, setMediumDialog] = useState<{
     title: string;
@@ -1096,6 +1098,19 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
     activeTab?.filePath?.toLowerCase().endsWith(".xlsm") ||
     activeTab?.filePath?.toLowerCase().endsWith(".xlam");
 
+  // Check if macros directory exists (for showing Import button)
+  useEffect(() => {
+    if (!isMacroEnabled || !activeTab?.filePath) {
+      setMacrosDirExists(false);
+      return;
+    }
+    const lastDot = activeTab.filePath.lastIndexOf(".");
+    const macrosDir = activeTab.filePath.substring(0, lastDot) + "_assets/macros";
+    import("@tauri-apps/plugin-fs").then(({ exists }) =>
+      exists(macrosDir).then(setMacrosDirExists)
+    );
+  }, [isMacroEnabled, activeTab?.filePath]);
+
   const handleConvertToMarkdown = useCallback(async () => {
     if (!activeTab?.binaryData || !activeTab?.filePath) return;
     setConverting(true);
@@ -1140,6 +1155,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
         { xlsmPath: activeTab.filePath }
       );
       setMacroSuccess(t("macroExportSuccess", { count: result.modules.length }));
+      setMacrosDirExists(true);
       onRefreshFileTree?.();
     } catch (e) {
       setMacroError(e instanceof Error ? e.message : String(e));
@@ -1174,6 +1190,12 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
           tab.id === activeId ? { ...tab, binaryData } : tab
         ),
       });
+
+      // Ask user if they want to open the file
+      const shouldOpen = await showConfirm(t("macroImportOpenFile"));
+      if (shouldOpen) {
+        await invoke("open_in_default_app", { path: filePath });
+      }
     } catch (e) {
       setMacroError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1203,20 +1225,20 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
               {converting ? t("converting") : t("convertToMarkdown")}
             </button>
             {isMacroEnabled && (
-              <>
-                <button
-                  onClick={handleExportMacros}
-                  disabled={macroExporting || macroImporting}
-                >
-                  {macroExporting ? t("exportingMacros") : t("exportMacros")}
-                </button>
-                <button
-                  onClick={handleImportMacros}
-                  disabled={macroImporting || macroExporting}
-                >
-                  {macroImporting ? t("importingMacros") : t("importMacros")}
-                </button>
-              </>
+              <button
+                onClick={handleExportMacros}
+                disabled={macroExporting || macroImporting}
+              >
+                {macroExporting ? t("exportingMacros") : t("exportMacros")}
+              </button>
+            )}
+            {isMacroEnabled && macrosDirExists && (
+              <button
+                onClick={handleImportMacros}
+                disabled={macroImporting || macroExporting}
+              >
+                {macroImporting ? t("importingMacros") : t("importMacros")}
+              </button>
             )}
             {convertError && (
               <span className="preview-panel__convert-error">{convertError}</span>

@@ -165,6 +165,7 @@
   "importingMacros": "Importing...",
   "macroExportSuccess": "Exported {{count}} modules",
   "macroImportSuccess": "Imported {{count}} modules (backup: .bak)",
+  "macroImportOpenFile": "Open the file?",
   "macroExportNoVba": "No VBA macros found in this file",
   "macroDirNotFound": "Macro folder not found",
   "macroImportSkipped": "{{name}} was skipped: no matching module found",

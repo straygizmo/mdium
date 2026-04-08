@@ -165,6 +165,7 @@
   "importingMacros": "インポート中...",
   "macroExportSuccess": "{{count}}個のモジュールをエクスポートしました",
   "macroImportSuccess": "{{count}}個のモジュールをインポートしました（バックアップ: .bak）",
+  "macroImportOpenFile": "ファイルを開きますか？",
   "macroExportNoVba": "このファイルにはVBAマクロが含まれていません",
   "macroDirNotFound": "マクロフォルダが見つかりません",
   "macroImportSkipped": "{{name}} はスキップされました：対応するモジュールが見つかりません",
