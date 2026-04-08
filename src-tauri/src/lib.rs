@@ -137,6 +137,8 @@ pub fn run() {
             commands::git::git_diff_staged,
             commands::git::git_diff_unstaged,
             commands::git::git_log_oneline,
+            commands::git::git_log_graph,
+            commands::git::git_diff_commit,
             commands::git::git_branch_list,
             commands::git::git_current_branch,
             commands::git::git_switch,

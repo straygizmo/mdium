@@ -39,5 +39,11 @@
   "diffModifiedWorking": "{{fileName}} (Working Tree)",
   "diffModifiedIndex": "{{fileName}} (Index)",
   "diffLoadError": "差分の読み込みに失敗しました",
-  "diffBinaryFile": "バイナリファイル - 差分は表示できません"
+  "diffBinaryFile": "バイナリファイル - 差分は表示できません",
+  "graph": "グラフ",
+  "graphRefresh": "グラフを更新",
+  "graphOutgoing": "送信する変更",
+  "graphLoadMore": "さらに読み込む",
+  "graphNoCommits": "コミットはありません",
+  "graphCommitFiles": "変更されたファイル"
 }

@@ -101,6 +101,27 @@ pub fn git_log_oneline(path: String, count: u32) -> Result<String, String> {
 }
 
 #[tauri::command]
+pub fn git_log_graph(path: String, count: u32, skip: u32) -> Result<String, String> {
+    let n = format!("-{}", count);
+    let s = format!("--skip={}", skip);
+    run_git(
+        &path,
+        &[
+            "log",
+            "--format=<hash>%H<author>%an<date>%aI<message>%s<parents>%P<refs>%D",
+            "--topo-order",
+            &n,
+            &s,
+        ],
+    )
+}
+
+#[tauri::command]
+pub fn git_diff_commit(path: String, hash: String) -> Result<String, String> {
+    run_git(&path, &["diff-tree", "--no-commit-id", "--name-status", "-r", &hash])
+}
+
+#[tauri::command]
 pub fn git_branch_list(path: String) -> Result<String, String> {
     run_git(&path, &["branch", "-a", "--no-color"])
 }

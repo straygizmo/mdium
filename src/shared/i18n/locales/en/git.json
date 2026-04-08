@@ -39,5 +39,11 @@
   "diffModifiedWorking": "{{fileName}} (Working Tree)",
   "diffModifiedIndex": "{{fileName}} (Index)",
   "diffLoadError": "Failed to load diff",
-  "diffBinaryFile": "Binary file - diff not available"
+  "diffBinaryFile": "Binary file - diff not available",
+  "graph": "Graph",
+  "graphRefresh": "Refresh Graph",
+  "graphOutgoing": "Outgoing Changes",
+  "graphLoadMore": "Load more",
+  "graphNoCommits": "No commits yet",
+  "graphCommitFiles": "Changed files"
 }
