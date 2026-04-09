@@ -1,0 +1,130 @@
+.clone-dialog__overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100;
+}
+
+.clone-dialog {
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px var(--shadow-strong);
+  width: 440px;
+  padding: 20px;
+}
+
+.clone-dialog__title {
+  margin: 0 0 16px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.clone-dialog__field {
+  margin-bottom: 12px;
+}
+
+.clone-dialog__label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.clone-dialog__input {
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 14px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input, var(--bg-base));
+  color: var(--text);
+  outline: none;
+  box-sizing: border-box;
+}
+
+.clone-dialog__input:focus {
+  border-color: var(--accent, #4a9eff);
+}
+
+.clone-dialog__dest-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.clone-dialog__dest-path {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.clone-dialog__dest-btn {
+  padding: 6px 12px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-base);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.clone-dialog__dest-btn:hover {
+  background: var(--bg-hover, var(--bg-surface));
+}
+
+.clone-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.clone-dialog__btn {
+  padding: 6px 16px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-base);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.clone-dialog__btn:hover {
+  background: var(--bg-hover, var(--bg-surface));
+}
+
+.clone-dialog__btn--primary {
+  background: var(--accent, #4a9eff);
+  color: #fff;
+  border-color: var(--accent, #4a9eff);
+}
+
+.clone-dialog__btn--primary:hover {
+  opacity: 0.9;
+}
+
+.clone-dialog__btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.clone-dialog__error {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--danger, #e55);
+}
+
+.clone-dialog__spinner {
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
