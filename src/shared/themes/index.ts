@@ -133,7 +133,7 @@ export const themePresets: ThemePreset[] = [
   ocZenburnLight,
 ];
 
-export const DEFAULT_THEME_ID = "oc-opencode-dark";
+export const DEFAULT_THEME_ID = "mdium-dark";
 
 /** Migration map from old theme IDs to new opencode-synced IDs */
 const LEGACY_THEME_MAP: Record<string, string> = {
@@ -151,5 +151,5 @@ const LEGACY_THEME_MAP: Record<string, string> = {
 
 export function getThemeById(id: string): ThemePreset {
   const resolved = LEGACY_THEME_MAP[id] ?? id;
-  return themePresets.find((t) => t.id === resolved) ?? ocOpencodeDark;
+  return themePresets.find((t) => t.id === resolved) ?? mdiumDark;
 }
