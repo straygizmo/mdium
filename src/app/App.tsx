@@ -30,6 +30,7 @@ import MindmapEditor from "@/features/mindmap/components/MindmapEditor";
 import { ImageCanvas } from "@/features/image/components/ImageCanvas";
 import { CodeEditorPanel } from "@/features/code-editor/components/CodeEditorPanel";
 import { GitDiffViewer } from "@/features/git/components/GitDiffViewer";
+import { CloneDialog } from "@/features/git/components/CloneDialog";
 import { ExternalChangeDialog } from "@/features/editor/components/ExternalChangeDialog";
 import { AppDialog } from "@/shared/components/AppDialog";
 import { showMessage, showConfirm, showPrompt } from "@/stores/dialog-store";
@@ -84,6 +85,7 @@ export function App() {
     currentContent: string;
     externalContent: string;
   } | null>(null);
+  const [showCloneDialog, setShowCloneDialog] = useState(false);
 
   useScrollSync(editorRef, previewRef, editorVisible, activeTab?.id ?? "");
   const handleEditorDividerMouseDown = useDividerDrag(editorAreaRef, editorRatio, setEditorRatio);
@@ -321,6 +323,14 @@ export function App() {
       openFolder(selected);
     }
   }, [addRecentFolder, openFolder]);
+
+  const handleCloned = useCallback(
+    (clonedPath: string) => {
+      addRecentFolder(clonedPath);
+      openFolder(clonedPath);
+    },
+    [addRecentFolder, openFolder],
+  );
 
   const handleOpenRecentFolder = useCallback(
     async (path: string) => {
@@ -1080,6 +1090,9 @@ export function App() {
                   <button className="app__welcome-btn" onClick={handleOpenFolder}>
                     {t("openFolder")}
                   </button>
+                  <button className="app__welcome-btn" onClick={() => setShowCloneDialog(true)}>
+                    {t("cloneRepository")}
+                  </button>
                 </div>
               </div>
             )}
@@ -1251,6 +1264,11 @@ export function App() {
           onClose={() => setExternalChange(null)}
         />
       )}
+      <CloneDialog
+        open={showCloneDialog}
+        onClose={() => setShowCloneDialog(false)}
+        onCloned={handleCloned}
+      />
       <AppDialog />
     </div>
   );
