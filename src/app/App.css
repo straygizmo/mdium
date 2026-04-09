@@ -31,7 +31,8 @@ body {
 /* Body (sidebar + workspace) */
 .app__body {
   display: flex;
-  flex: 1;
+  flex: 1 1 0px;
+  min-height: 0;
   overflow: hidden;
 }
 
