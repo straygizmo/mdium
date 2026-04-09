@@ -12,6 +12,7 @@ import { OpencodeConfigPanel } from "@/features/opencode-config/components/Openc
 import { GitPanel } from "@/features/git/components/GitPanel";
 import { useGitStore } from "@/stores/git-store";
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
+import { useChatUIStore } from "@/features/opencode-config/hooks/useOpencodeChat";
 import { collectConvertibleFiles, buildConvertibleTree } from "@/features/export/lib/collectConvertibleFiles";
 import { BatchConvertModal } from "@/features/export/components/BatchConvertModal";
 import "./LeftPanel.css";
@@ -64,7 +65,13 @@ export function LeftPanel({
   const { aiSettings } = useSettingsStore();
   const setShowSettings = useSettingsStore((s) => s.setShowSettings);
   const collapseAllDirs = useFileStore((s) => s.collapseAllDirs);
-  const ocModel = useOpencodeConfigStore((s) => s.config.model);
+  const ocConfigAgents = useOpencodeConfigStore((s) => s.config.agents);
+  const ocSelectedAgent = useChatUIStore((s) => s.selectedAgent);
+  const ocModel = useMemo(() => {
+    const agentModel = ocSelectedAgent && ocConfigAgents?.[ocSelectedAgent]?.model;
+    if (agentModel) return agentModel;
+    return `${aiSettings.provider}/${aiSettings.model}`;
+  }, [ocSelectedAgent, ocConfigAgents, aiSettings.provider, aiSettings.model]);
   const gitFileCount = useGitStore((s) => s.files.length);
   const [showBatchConvert, setShowBatchConvert] = useState(false);
   const convertibleFiles = useMemo(() => collectConvertibleFiles(fileTree), [fileTree]);
