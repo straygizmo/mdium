@@ -74,5 +74,14 @@
   "batchConvertFilterXlsx": "Excel",
   "batchConvertFilterPdf": "PDF",
   "closeUnsavedConfirm": "\"{{name}}\" has unsaved changes. Close anyway?",
-  "folderNotFound": "Folder not found: {{path}}"
+  "folderNotFound": "Folder not found: {{path}}",
+  "cloneRepository": "Clone Repository",
+  "cloneUrl": "Repository URL",
+  "cloneUrlPlaceholder": "https://github.com/user/repo.git",
+  "cloneDest": "Destination",
+  "cloneDestSelect": "Select folder",
+  "cloneDestNotSelected": "No folder selected",
+  "cloning": "Cloning...",
+  "cloneSuccess": "Repository cloned successfully",
+  "cloneError": "Failed to clone repository"
 }

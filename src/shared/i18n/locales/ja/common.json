@@ -74,5 +74,14 @@
   "batchConvertFilterXlsx": "Excel",
   "batchConvertFilterPdf": "PDF",
   "closeUnsavedConfirm": "「{{name}}」の変更は保存されていません。閉じますか？",
-  "folderNotFound": "フォルダが見つかりません: {{path}}"
+  "folderNotFound": "フォルダが見つかりません: {{path}}",
+  "cloneRepository": "リポジトリをクローン",
+  "cloneUrl": "リポジトリURL",
+  "cloneUrlPlaceholder": "https://github.com/user/repo.git",
+  "cloneDest": "保存先",
+  "cloneDestSelect": "フォルダを選択",
+  "cloneDestNotSelected": "フォルダ未選択",
+  "cloning": "クローン中...",
+  "cloneSuccess": "リポジトリのクローンが完了しました",
+  "cloneError": "リポジトリのクローンに失敗しました"
 }
