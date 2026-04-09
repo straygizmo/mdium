@@ -235,25 +235,27 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
 
     // Azure only: check AZURE_RESOURCE_NAME environment variable
     if (localAi.provider === "azure" && activeTab === "ai") {
-      let alreadySet = false;
+      let currentValue: string | null = null;
       try {
-        await invoke<string>("get_env_var", { name: "AZURE_RESOURCE_NAME" });
-        alreadySet = true;
+        currentValue = await invoke<string>("get_env_var", { name: "AZURE_RESOURCE_NAME" });
       } catch {
         // Not set
       }
 
-      const yes = alreadySet
-        ? await showConfirm(t("azureEnvAlreadySet"), { kind: "warning" })
-        : await showConfirm(t("azureEnvConfirm"), { kind: "info" });
+      const newValue = localAi.azureResourceName ?? "";
+      if (currentValue !== newValue) {
+        const yes = currentValue != null
+          ? await showConfirm(t("azureEnvAlreadySet"), { kind: "warning" })
+          : await showConfirm(t("azureEnvConfirm"), { kind: "info" });
 
-      if (yes) {
-        const value = await showPrompt(t("azureEnvPrompt"), {
-          defaultValue: localAi.azureResourceName ?? "",
-        });
-        if (value) {
-          await invoke("set_env_var", { name: "AZURE_RESOURCE_NAME", value });
-          await showMessage(t("azureEnvSet"), { kind: "info" });
+        if (yes) {
+          const value = await showPrompt(t("azureEnvPrompt"), {
+            defaultValue: newValue,
+          });
+          if (value) {
+            await invoke("set_env_var", { name: "AZURE_RESOURCE_NAME", value });
+            await showMessage(t("azureEnvSet"), { kind: "info" });
+          }
         }
       }
     }
