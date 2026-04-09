@@ -177,5 +177,6 @@
   "commandBuiltinSelect": "ビルトイン コマンドを選択...",
   "ocChatAgentSelect": "エージェント",
   "ocChatQuestionsSubmit": "送信",
-  "ocChatRemoveImage": "削除"
+  "ocChatRemoveImage": "削除",
+  "ocChatReasoning": "思考内容"
 }

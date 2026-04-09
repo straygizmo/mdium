@@ -463,7 +463,9 @@ export function OpencodeChat() {
             }
 
             const toolParts = (msg.parts ?? []).filter((p) => p.type === "tool");
+            const reasoningParts = (msg.parts ?? []).filter((p) => p.type === "reasoning");
             const hasTools = toolParts.length > 0;
+            const hasReasoning = reasoningParts.length > 0;
             const isStreaming = !msg.completed;
 
             // Strip echoed user question from content
@@ -498,6 +500,21 @@ export function OpencodeChat() {
 
             return (
               <Fragment key={i}>
+                {/* Reasoning / thinking parts */}
+                {hasReasoning && (
+                  <div className="oc-chat__msg oc-chat__msg--assistant oc-chat__msg--reasoning">
+                    <details open={isStreaming}>
+                      <summary className="oc-chat__reasoning-summary">
+                        {t("ocChatReasoning", "Thinking")}
+                      </summary>
+                      <div className="oc-chat__reasoning-body">
+                        {reasoningParts.map((p) => (
+                          <p key={(p as any).id}>{(p as any).text ?? ""}</p>
+                        ))}
+                      </div>
+                    </details>
+                  </div>
+                )}
                 {/* Tool parts bubble */}
                 {hasTools && (
                   <div className="oc-chat__msg oc-chat__msg--assistant oc-chat__msg--tools">

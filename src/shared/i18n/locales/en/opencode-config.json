@@ -177,5 +177,6 @@
   "commandBuiltinSelect": "Select a built-in command...",
   "ocChatAgentSelect": "Agent",
   "ocChatQuestionsSubmit": "Submit",
-  "ocChatRemoveImage": "Remove"
+  "ocChatRemoveImage": "Remove",
+  "ocChatReasoning": "Thinking"
 }

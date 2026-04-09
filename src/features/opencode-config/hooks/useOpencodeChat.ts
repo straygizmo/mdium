@@ -231,6 +231,22 @@ function processSSEStream(stream: AsyncIterable<unknown>) {
               }
               return s;
             });
+          } else if (part.type === "reasoning") {
+            useChatUIStore.setState((s) => {
+              const last = s.messages[s.messages.length - 1];
+              if (last && last.role === "assistant") {
+                const updated = [...s.messages];
+                const existingParts = (last.parts ?? []).filter(
+                  (p) => !(p.type === "reasoning" && (p as any).id === (part as any).id)
+                );
+                updated[updated.length - 1] = {
+                  ...last,
+                  parts: [...existingParts, part],
+                };
+                return { messages: updated };
+              }
+              return s;
+            });
           } else if (part.type === "tool") {
             const toolPart = part as Extract<Part, { type: "tool" }>;
             useChatUIStore.setState((s) => {
@@ -270,8 +286,9 @@ function processSSEStream(stream: AsyncIterable<unknown>) {
             const last = state.messages[state.messages.length - 1];
             if (last && last.role === "assistant") {
               // Skip spurious session.idle fired when a session is first created
-              // (before any prompt response has arrived)
-              if (!last.content && (!last.parts || last.parts.length === 0)) {
+              // (before any prompt response has arrived).
+              // Only skip when we are NOT actively waiting for a response.
+              if (!state.loading && !last.content && (!last.parts || last.parts.length === 0)) {
                 continue;
               }
               let rawText = last.content;
@@ -324,6 +341,38 @@ function processSSEStream(stream: AsyncIterable<unknown>) {
           // Completion (loading: false) is handled exclusively by session.idle
           // to avoid premature "Done" toast when intermediate messages complete
           // before the full agent loop finishes.
+          //
+          // However, populate assistant message content from message.updated in
+          // case message.part.updated events were not fired (e.g. LLM refusal
+          // or very short responses).
+          const msgInfo = (ev.properties as any).info;
+          if (
+            msgInfo &&
+            msgInfo.role === "assistant" &&
+            msgInfo.sessionID === _currentSessionId
+          ) {
+            useChatUIStore.setState((s) => {
+              const last = s.messages[s.messages.length - 1];
+              if (last && last.role === "assistant" && !last.content && (!last.parts || last.parts.length === 0)) {
+                // Extract text from the message's parts array
+                const msgParts: any[] = msgInfo.parts ?? [];
+                const textContent = msgParts
+                  .filter((p: any) => p.type === "text")
+                  .map((p: any) => p.text ?? "")
+                  .join("");
+                if (textContent) {
+                  const updated = [...s.messages];
+                  updated[updated.length - 1] = {
+                    ...last,
+                    content: textContent,
+                    parts: msgParts,
+                  };
+                  return { messages: updated };
+                }
+              }
+              return s;
+            });
+          }
         }
       }
     } catch (e) {

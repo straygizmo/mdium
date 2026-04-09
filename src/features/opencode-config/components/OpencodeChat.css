@@ -392,6 +392,46 @@
   margin-top: 0;
 }
 
+/* Reasoning / thinking */
+.oc-chat__msg--reasoning {
+  opacity: 0.75;
+  font-size: 12px;
+}
+
+.oc-chat__reasoning-summary {
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  user-select: none;
+  padding: 2px 0;
+}
+
+.oc-chat__reasoning-summary:hover {
+  color: var(--text-secondary);
+}
+
+.oc-chat__reasoning-body {
+  margin-top: 4px;
+  padding: 6px 8px;
+  background: var(--bg-overlay);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-muted);
+  font-size: 11px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.oc-chat__reasoning-body p {
+  margin: 0 0 4px;
+}
+
+.oc-chat__reasoning-body p:last-child {
+  margin-bottom: 0;
+}
+
 .oc-chat__tool-header {
   display: flex;
   align-items: center;
