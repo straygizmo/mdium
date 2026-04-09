@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -16,6 +16,25 @@ export function CloneDialog({ open: isOpen, onClose, onCloned }: CloneDialogProp
   const [dest, setDest] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const resetAndClose = () => {
+    if (loading) return;
+    setUrl("");
+    setDest("");
+    setError(null);
+    onClose();
+  };
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !loading) {
+        resetAndClose();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isOpen, loading]);
 
   if (!isOpen) return null;
 
@@ -46,16 +65,10 @@ export function CloneDialog({ open: isOpen, onClose, onCloned }: CloneDialogProp
     }
   };
 
-  const handleOverlayClick = () => {
-    if (!loading) {
-      onClose();
-    }
-  };
-
   const canClone = url.trim() !== "" && dest !== "" && !loading;
 
   return (
-    <div className="clone-dialog__overlay" onMouseDown={handleOverlayClick}>
+    <div className="clone-dialog__overlay" onMouseDown={resetAndClose}>
       <div className="clone-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <h2 className="clone-dialog__title">{t("cloneRepository")}</h2>
 
@@ -99,7 +112,7 @@ export function CloneDialog({ open: isOpen, onClose, onCloned }: CloneDialogProp
         <div className="clone-dialog__actions">
           <button
             className="clone-dialog__btn"
-            onClick={onClose}
+            onClick={resetAndClose}
             disabled={loading}
           >
             {t("cancel")}

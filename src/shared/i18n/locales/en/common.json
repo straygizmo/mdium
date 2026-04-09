@@ -82,6 +82,5 @@
   "cloneDestSelect": "Select folder",
   "cloneDestNotSelected": "No folder selected",
   "cloning": "Cloning...",
-  "cloneSuccess": "Repository cloned successfully",
   "cloneError": "Failed to clone repository"
 }
