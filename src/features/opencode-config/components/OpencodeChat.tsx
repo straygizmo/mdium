@@ -544,7 +544,11 @@ export function OpencodeChat() {
           })}
           {loading && !pendingQuestions && (
             <div className="oc-chat__loading">
-              <div className="oc-chat__loading-bar" />
+              <span className="oc-chat__loading-dots">
+                <span className="oc-chat__loading-dot" />
+                <span className="oc-chat__loading-dot" />
+                <span className="oc-chat__loading-dot" />
+              </span>
               <span className="oc-chat__loading-label">{t("ocChatThinking", "Thinking...")}</span>
               <button
                 className="oc-chat__abort-btn"
