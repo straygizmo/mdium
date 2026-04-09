@@ -192,3 +192,20 @@ pub fn git_show_file(path: String, revision: String, file: String) -> Result<Str
     };
     run_git(&path, &["show", &spec])
 }
+
+#[tauri::command]
+pub fn git_clone(url: String, dest: String) -> Result<String, String> {
+    let mut cmd = Command::new("git");
+    cmd.args(&["clone", &url, &dest]);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Failed to run git: {}", e))?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        let err = String::from_utf8_lossy(&output.stderr).to_string();
+        Err(err)
+    }
+}
