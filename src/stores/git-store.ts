@@ -353,7 +353,13 @@ export const useGitStore = create<GitState>()((set, get) => ({
   refreshGraph: async (folderPath) => {
     set({ graphLoading: true });
     try {
-      const { commitsAhead } = get();
+      // Fetch latest remote refs before loading the graph
+      await invoke<string>("git_fetch", { path: folderPath }).catch(() => {});
+      // Re-query commitsAhead since fetch may have updated tracking refs
+      const commitsAhead = await invoke<number>("git_commits_ahead", {
+        path: folderPath,
+      }).catch(() => 0);
+      set({ commitsAhead });
       const logOut = await invoke<string>("git_log_graph", {
         path: folderPath,
         count: 100,

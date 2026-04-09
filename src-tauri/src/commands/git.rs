@@ -95,6 +95,11 @@ pub fn git_diff_unstaged(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+pub fn git_fetch(path: String) -> Result<String, String> {
+    run_git(&path, &["fetch", "--all", "--prune"])
+}
+
+#[tauri::command]
 pub fn git_log_oneline(path: String, count: u32) -> Result<String, String> {
     let n = format!("-{}", count);
     run_git(&path, &["log", "--oneline", &n])
@@ -108,6 +113,7 @@ pub fn git_log_graph(path: String, count: u32, skip: u32) -> Result<String, Stri
         &path,
         &[
             "log",
+            "--all",
             "--format=<hash>%H<author>%an<date>%aI<message>%s<parents>%P<refs>%D",
             "--topo-order",
             &n,
