@@ -165,20 +165,6 @@ graph LR
 - 外部ツールとのテーマ同期
 - 日本語/英語 UI
 
-## 技術スタック
-
-| レイヤー               | 技術                                                                                                                                                                                                                                             |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| フロントエンド         | [React](https://github.com/facebook/react) 19、[TypeScript](https://github.com/microsoft/TypeScript) 5.9、[Vite](https://github.com/vitejs/vite) 7                                                                                                        |
-| 状態管理               | [Zustand](https://github.com/pmndrs/zustand)                                                                                                                                                                                                        |
-| デスクトップ           | [Tauri](https://github.com/tauri-apps/tauri) 2                                                                                                                                                                                                      |
-| バックエンド           | [Rust](https://github.com/rust-lang/rust)（[Tokio](https://github.com/tokio-rs/tokio)、[rusqlite](https://github.com/rusqlite/rusqlite)、[reqwest](https://github.com/seanmonstar/reqwest)、[portable-pty](https://github.com/wez/wezterm/tree/main/pty)）       |
-| Markdown               | [marked](https://github.com/markedjs/marked)、[remark](https://github.com/remarkjs/remark)、[KaTeX](https://github.com/KaTeX/KaTeX)、[Mermaid](https://github.com/mermaid-js/mermaid)、[highlight.js](https://github.com/highlightjs/highlight.js)              |
-| AI/ML                  | [Hugging Face Transformers](https://github.com/huggingface/transformers.js)、[Tesseract.js](https://github.com/naptha/tesseract.js)                                                                                                                    |
-| Office                 | [docx](https://github.com/dolanmiu/docx)、[mammoth](https://github.com/mwilliamson/mammoth.js)、[xlsx](https://github.com/SheetJS/sheetjs)、[xlsx2md](https://github.com/igapyon/xlsx2md)、[pdfjs-dist](https://github.com/nicolo-ribaudo/pdfjs-dist)、[html2pdf.js](https://github.com/eKoopmans/html2pdf.js) |
-| ビジュアライゼーション | [ReactFlow](https://github.com/xyflow/xyflow)、[d3-hierarchy](https://github.com/d3/d3-hierarchy)、[Fabric.js](https://github.com/fabricjs/fabric.js)                                                                                                     |
-| ターミナル             | [xterm.js](https://github.com/xtermjs/xterm.js)                                                                                                                                                                                                     |
-
 ## はじめに
 
 ### 前提条件
@@ -257,6 +243,35 @@ mdium/
 ├── public/                # 静的アセット・テーマファイル
 └── scripts/               # ビルド・インポートスクリプト
 ```
+
+## クレジット
+
+MDium は多くの優れたオープンソースプロジェクトの上に構築されています。特に以下のプロジェクトに感謝します：
+
+| プロジェクト | 説明 |
+| ------------ | ---- |
+| [opencode](https://github.com/nicepkg/opencode) | MDium のチャット、MCP サーバー、Agentic RAG 機能を支える AI コーディングツール |
+| [Slidev](https://github.com/slidevjs/slidev) | Markdown から PPTX へのエクスポートに使用するプレゼンテーションエンジン |
+| [open-motion](https://github.com/jsongo/open-motion) | Markdown から動画生成を実現するプログラマティックビデオエンジン |
+| [Tauri](https://github.com/tauri-apps/tauri) | ネイティブシェルを提供するデスクトップアプリケーションフレームワーク |
+| [React](https://github.com/facebook/react) | フロントエンド全体を支える UI ライブラリ |
+| [Vite](https://github.com/vitejs/vite) | ビルドツール・開発サーバー |
+| [Monaco Editor](https://github.com/microsoft/monaco-editor) | ソースファイル編集用コードエディタコンポーネント |
+| [ReactFlow](https://github.com/xyflow/xyflow) | マインドマップエディタ用のノードベースグラフライブラリ |
+| [KityMinder](https://github.com/nicepkg/kityminder) | マインドマップフォーマット（.km）のサポート |
+| [xlsx2md](https://github.com/igapyon/xlsx2md) | テーブル検出・リッチテキスト抽出対応の Excel→Markdown コンバーター |
+| [marked](https://github.com/markedjs/marked) / [remark](https://github.com/remarkjs/remark) | Markdown のパースと変換 |
+| [KaTeX](https://github.com/KaTeX/KaTeX) | 数式レンダリング |
+| [Mermaid](https://github.com/mermaid-js/mermaid) | テキスト定義からの図表・チャートレンダリング |
+| [Fabric.js](https://github.com/fabricjs/fabric.js) | 画像エディタ用 HTML5 キャンバスライブラリ |
+| [xterm.js](https://github.com/xtermjs/xterm.js) | 統合ターミナル用のターミナルエミュレータ |
+| [Hugging Face Transformers.js](https://github.com/huggingface/transformers.js) | 音声認識・埋め込みモデル用の ML 推論 |
+| [Tesseract.js](https://github.com/naptha/tesseract.js) | 画像テキスト認識用 OCR エンジン |
+| [Zustand](https://github.com/pmndrs/zustand) | 軽量な状態管理 |
+| [mammoth](https://github.com/mwilliamson/mammoth.js) / [docx](https://github.com/dolanmiu/docx) | Word ドキュメントの読み書き |
+| [highlight.js](https://github.com/highlightjs/highlight.js) | コードブロックのシンタックスハイライト |
+
+…その他 `package.json` および `Cargo.toml` に記載されているすべてのライブラリに感謝します。
 
 ## ライセンス
 

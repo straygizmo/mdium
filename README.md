@@ -165,20 +165,6 @@ graph LR
 - Theme synchronization with external tools
 - Bilingual UI (English / Japanese)
 
-## Tech Stack
-
-| Layer         | Technologies                                                                                                                                                                                                                                     |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Frontend      | [React](https://github.com/facebook/react) 19, [TypeScript](https://github.com/microsoft/TypeScript) 5.9, [Vite](https://github.com/vitejs/vite) 7                                                                                                        |
-| State         | [Zustand](https://github.com/pmndrs/zustand)                                                                                                                                                                                                        |
-| Desktop       | [Tauri](https://github.com/tauri-apps/tauri) 2                                                                                                                                                                                                      |
-| Backend       | [Rust](https://github.com/rust-lang/rust) ([Tokio](https://github.com/tokio-rs/tokio), [rusqlite](https://github.com/rusqlite/rusqlite), [reqwest](https://github.com/seanmonstar/reqwest), [portable-pty](https://github.com/wez/wezterm/tree/main/pty))       |
-| Markdown      | [marked](https://github.com/markedjs/marked), [remark](https://github.com/remarkjs/remark), [KaTeX](https://github.com/KaTeX/KaTeX), [Mermaid](https://github.com/mermaid-js/mermaid), [highlight.js](https://github.com/highlightjs/highlight.js)              |
-| AI/ML         | [Hugging Face Transformers](https://github.com/huggingface/transformers.js), [Tesseract.js](https://github.com/naptha/tesseract.js)                                                                                                                    |
-| Office        | [docx](https://github.com/dolanmiu/docx), [mammoth](https://github.com/mwilliamson/mammoth.js), [xlsx](https://github.com/SheetJS/sheetjs), [xlsx2md](https://github.com/igapyon/xlsx2md), [pdfjs-dist](https://github.com/nicolo-ribaudo/pdfjs-dist), [html2pdf.js](https://github.com/eKoopmans/html2pdf.js) |
-| Visualization | [ReactFlow](https://github.com/xyflow/xyflow), [d3-hierarchy](https://github.com/d3/d3-hierarchy), [Fabric.js](https://github.com/fabricjs/fabric.js)                                                                                                     |
-| Terminal      | [xterm.js](https://github.com/xtermjs/xterm.js)                                                                                                                                                                                                     |
-
 ## Getting Started
 
 ### Prerequisites
@@ -257,6 +243,35 @@ mdium/
 ├── public/                # Static assets and theme files
 └── scripts/               # Build and import scripts
 ```
+
+## Credits
+
+MDium is built on the shoulders of many outstanding open-source projects. Special thanks to:
+
+| Project | Description |
+| ------- | ----------- |
+| [opencode](https://github.com/nicepkg/opencode) | AI coding tool that powers MDium's chat, MCP server, and agentic RAG capabilities |
+| [Slidev](https://github.com/slidevjs/slidev) | Presentation slides engine used for Markdown-to-PPTX export |
+| [open-motion](https://github.com/jsongo/open-motion) | Programmatic video engine enabling Markdown-to-video generation |
+| [Tauri](https://github.com/tauri-apps/tauri) | Desktop application framework providing the native shell |
+| [React](https://github.com/facebook/react) | UI library powering the entire frontend |
+| [Vite](https://github.com/vitejs/vite) | Build tool and dev server |
+| [Monaco Editor](https://github.com/microsoft/monaco-editor) | Code editor component for source file editing |
+| [ReactFlow](https://github.com/xyflow/xyflow) | Node-based graph library for the mindmap editor |
+| [KityMinder](https://github.com/nicepkg/kityminder) | Mindmap format support (.km) |
+| [xlsx2md](https://github.com/igapyon/xlsx2md) | Excel-to-Markdown converter with table detection and rich text extraction |
+| [marked](https://github.com/markedjs/marked) / [remark](https://github.com/remarkjs/remark) | Markdown parsing and transformation |
+| [KaTeX](https://github.com/KaTeX/KaTeX) | Mathematical expression rendering |
+| [Mermaid](https://github.com/mermaid-js/mermaid) | Diagram and chart rendering from text definitions |
+| [Fabric.js](https://github.com/fabricjs/fabric.js) | HTML5 canvas library for the image editor |
+| [xterm.js](https://github.com/xtermjs/xterm.js) | Terminal emulator for the integrated terminal |
+| [Hugging Face Transformers.js](https://github.com/huggingface/transformers.js) | ML inference for speech-to-text and embedding models |
+| [Tesseract.js](https://github.com/naptha/tesseract.js) | OCR engine for image text recognition |
+| [Zustand](https://github.com/pmndrs/zustand) | Lightweight state management |
+| [mammoth](https://github.com/mwilliamson/mammoth.js) / [docx](https://github.com/dolanmiu/docx) | Word document reading and writing |
+| [highlight.js](https://github.com/highlightjs/highlight.js) | Syntax highlighting for code blocks |
+
+…and all the other libraries listed in `package.json` and `Cargo.toml`.
 
 ## License
 
