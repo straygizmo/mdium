@@ -1,9 +1,16 @@
 import { useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
-let pipelineInstance: any = null;
-let pipelinePromise: Promise<any> | null = null;
+type EmbedFn = (input: string) => Promise<Float32Array>;
+
+let embedFn: EmbedFn | null = null;
 let loadedModelName: string | null = null;
+let pipelinePromise: Promise<void> | null = null;
+
+function getDtype(_modelName: string): string {
+  // Per-model dtype map. Harrier is added in Task 4.
+  return "q8";
+}
 
 function getPrefix(modelName: string | null, type: "query" | "passage"): string {
   if (modelName && modelName.includes("ruri")) {
@@ -15,19 +22,19 @@ function getPrefix(modelName: string | null, type: "query" | "passage"): string 
 export function useLocalEmbedding() {
   const [status, setStatus] = useState<
     "idle" | "downloading" | "loading" | "ready" | "error"
-  >(pipelineInstance ? "ready" : "idle");
+  >(embedFn ? "ready" : "idle");
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async (modelName: string = "Xenova/multilingual-e5-large") => {
-    // If a different model is requested, clear the cached pipeline
-    if (pipelineInstance && loadedModelName !== modelName) {
-      pipelineInstance = null;
+    // If a different model is requested, clear the cached embed fn
+    if (embedFn && loadedModelName !== modelName) {
+      embedFn = null;
       pipelinePromise = null;
       loadedModelName = null;
     }
 
-    if (pipelineInstance) {
+    if (embedFn) {
       setStatus("ready");
       return;
     }
@@ -53,29 +60,37 @@ export function useLocalEmbedding() {
         setStatus("loading");
         setProgress(10);
 
-        const { pipeline, env } = await import("@huggingface/transformers");
+        const transformers = await import("@huggingface/transformers");
+        const { pipeline, env } = transformers;
 
         // Use custom "models" protocol registered in Rust to serve model files
         // On Windows: http://models.localhost/<path>
-        env.remoteHost = 'http://models.localhost/';
-        env.remotePathTemplate = '{model}/';
+        env.remoteHost = "http://models.localhost/";
+        env.remotePathTemplate = "{model}/";
         env.allowRemoteModels = true;
         env.allowLocalModels = false;
         env.useBrowserCache = false;
 
-        pipelineInstance = await pipeline(
+        const progressCallback = (p: any) => {
+          if (p.status === "progress" && p.progress != null) {
+            setProgress(10 + Math.round(p.progress * 0.9));
+          }
+        };
+
+        const pipe = await pipeline(
           "feature-extraction",
           modelName,
           {
-            dtype: "q8",
-            revision: '',
-            progress_callback: (p: any) => {
-              if (p.status === "progress" && p.progress != null) {
-                setProgress(10 + Math.round(p.progress * 0.9));
-              }
-            },
+            dtype: getDtype(modelName),
+            revision: "",
+            progress_callback: progressCallback,
           } as any
         );
+        embedFn = async (input) => {
+          const r = await pipe(input, { pooling: "mean", normalize: true });
+          return r.data as Float32Array;
+        };
+
         loadedModelName = modelName;
         setStatus("ready");
         setProgress(100);
@@ -99,13 +114,10 @@ export function useLocalEmbedding() {
   }, []);
 
   const embed = useCallback(async (text: string, type: "query" | "passage" = "query"): Promise<number[]> => {
-    if (!pipelineInstance) throw new Error("Model not loaded");
+    if (!embedFn) throw new Error("Model not loaded");
     const prefix = getPrefix(loadedModelName, type);
-    const result = await pipelineInstance(`${prefix}${text}`, {
-      pooling: "mean",
-      normalize: true,
-    });
-    return Array.from(result.data as Float32Array);
+    const data = await embedFn(`${prefix}${text}`);
+    return Array.from(data);
   }, []);
 
   const embedBatch = useCallback(
