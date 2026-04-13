@@ -7,12 +7,20 @@ let embedFn: EmbedFn | null = null;
 let loadedModelName: string | null = null;
 let pipelinePromise: Promise<void> | null = null;
 
-function getDtype(_modelName: string): string {
-  // Per-model dtype map. Harrier is added in Task 4.
+const isHarrier = (name: string | null): boolean => !!name && name.includes("harrier");
+
+function getDtype(modelName: string): string {
+  if (isHarrier(modelName)) return "q4f16";
   return "q8";
 }
 
 function getPrefix(modelName: string | null, type: "query" | "passage"): string {
+  if (isHarrier(modelName)) {
+    if (type === "query") {
+      return "Instruct: Given a question, retrieve relevant markdown notes that answer it\nQuery: ";
+    }
+    return "";
+  }
   if (modelName && modelName.includes("ruri")) {
     return type === "query" ? "Search query: " : "Search document: ";
   }
@@ -61,7 +69,7 @@ export function useLocalEmbedding() {
         setProgress(10);
 
         const transformers = await import("@huggingface/transformers");
-        const { pipeline, env } = transformers;
+        const { pipeline, AutoModel, AutoTokenizer, env } = transformers;
 
         // Use custom "models" protocol registered in Rust to serve model files
         // On Windows: http://models.localhost/<path>
@@ -77,19 +85,37 @@ export function useLocalEmbedding() {
           }
         };
 
-        const pipe = await pipeline(
-          "feature-extraction",
-          modelName,
-          {
+        if (isHarrier(modelName)) {
+          const tokenizer = await AutoTokenizer.from_pretrained(modelName, {
+            revision: "",
+            progress_callback: progressCallback,
+          } as any);
+          const model = await AutoModel.from_pretrained(modelName, {
             dtype: getDtype(modelName),
             revision: "",
             progress_callback: progressCallback,
-          } as any
-        );
-        embedFn = async (input) => {
-          const r = await pipe(input, { pooling: "mean", normalize: true });
-          return r.data as Float32Array;
-        };
+          } as any);
+          embedFn = async (input) => {
+            const inputs = tokenizer(input, { padding: true, truncation: true });
+            const out: any = await (model as any)(inputs);
+            // Harrier outputs `sentence_embedding` (last-token pooled + L2-normalized)
+            return out.sentence_embedding.data as Float32Array;
+          };
+        } else {
+          const pipe = await pipeline(
+            "feature-extraction",
+            modelName,
+            {
+              dtype: getDtype(modelName),
+              revision: "",
+              progress_callback: progressCallback,
+            } as any
+          );
+          embedFn = async (input) => {
+            const r = await pipe(input, { pooling: "mean", normalize: true });
+            return r.data as Float32Array;
+          };
+        }
 
         loadedModelName = modelName;
         setStatus("ready");
