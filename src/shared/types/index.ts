@@ -89,7 +89,13 @@ export interface AiSettings {
 
 /** RAG settings */
 export interface RagSettings {
-  embeddingModel: "Xenova/multilingual-e5-large" | "Xenova/multilingual-e5-base" | "Xenova/multilingual-e5-small" | "sirasagi62/ruri-v3-30m-ONNX" | "sirasagi62/ruri-v3-130m-ONNX";
+  embeddingModel:
+    | "Xenova/multilingual-e5-large"
+    | "Xenova/multilingual-e5-base"
+    | "Xenova/multilingual-e5-small"
+    | "sirasagi62/ruri-v3-30m-ONNX"
+    | "sirasagi62/ruri-v3-130m-ONNX"
+    | "onnx-community/harrier-oss-v1-270m-ONNX";
   minChunkLength: number;
   fileExtensions: string;
   retrieveTopK: number;
