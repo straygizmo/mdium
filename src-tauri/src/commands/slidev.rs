@@ -43,6 +43,104 @@ fn hash_path(file_path: &str) -> String {
 }
 
 
+/// Rewrite bare relative image paths so Slidev/Vite can resolve them.
+///
+/// Slidev compiles markdown images into Vite `import` statements. Vite treats any
+/// path that does not start with `./`, `../`, or `/` as a bare module specifier
+/// (like `import x from 'lodash'`), so `![alt](images/foo.png)` triggers a
+/// "Failed to resolve import" error and blocks the slide from rendering. We
+/// prepend `./` so Vite treats the path as a local file reference.
+fn rewrite_image_paths(markdown: &str) -> String {
+    let mut result = String::with_capacity(markdown.len() + 16);
+    let mut in_fence = false;
+    for line in markdown.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            in_fence = !in_fence;
+            result.push_str(line);
+            continue;
+        }
+        if in_fence {
+            result.push_str(line);
+            continue;
+        }
+        rewrite_line_images(line, &mut result);
+    }
+    result
+}
+
+fn rewrite_line_images(line: &str, out: &mut String) {
+    let mut remaining = line;
+    loop {
+        let Some(bang_pos) = remaining.find("![") else {
+            out.push_str(remaining);
+            return;
+        };
+        out.push_str(&remaining[..bang_pos]);
+        let after_bang = &remaining[bang_pos..];
+        let Some(close_bracket) = after_bang.find("](") else {
+            out.push_str(after_bang);
+            return;
+        };
+        let url_start = close_bracket + 2;
+        let Some(paren_offset) = after_bang[url_start..].find(')') else {
+            out.push_str(after_bang);
+            return;
+        };
+        let url_end = url_start + paren_offset;
+        let url_and_title = &after_bang[url_start..url_end];
+        let (url, title) = match url_and_title.split_once(char::is_whitespace) {
+            Some((u, t)) => (u, Some(t)),
+            None => (url_and_title, None),
+        };
+        let alt = &after_bang[2..close_bracket];
+        out.push_str("![");
+        out.push_str(alt);
+        out.push_str("](");
+        if needs_relative_prefix(url) {
+            out.push_str("./");
+        }
+        out.push_str(url);
+        if let Some(t) = title {
+            out.push(' ');
+            out.push_str(t);
+        }
+        out.push(')');
+        remaining = &after_bang[url_end + 1..];
+    }
+}
+
+fn needs_relative_prefix(path: &str) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    if path.starts_with("./") || path.starts_with("../") {
+        return false;
+    }
+    if path.starts_with('/') || path.starts_with('\\') {
+        return false;
+    }
+    if path.starts_with('#') {
+        return false;
+    }
+    if path.starts_with("data:") {
+        return false;
+    }
+    if path.contains("://") {
+        return false;
+    }
+    // Windows absolute path like "C:\" or "C:/"
+    let bytes = path.as_bytes();
+    if bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'/' || bytes[2] == b'\\')
+    {
+        return false;
+    }
+    true
+}
+
 /// Extract theme name from Slidev markdown frontmatter
 fn extract_theme(markdown: &str) -> Option<String> {
     let content = markdown.strip_prefix("---\n")
@@ -319,7 +417,8 @@ pub async fn slidev_start(
 
     // Write slides.md first (needed for theme detection)
     let slides_path = temp_dir.join("slides.md");
-    fs::write(&slides_path, &markdown)
+    let processed_markdown = rewrite_image_paths(&markdown);
+    fs::write(&slides_path, &processed_markdown)
         .map_err(|e| format!("Failed to write slides.md: {}", e))?;
 
     // Copy asset files (images, etc.) from source directory to temp directory
@@ -513,7 +612,8 @@ pub async fn slidev_sync(file_path: String, markdown: String) -> Result<(), Stri
             .join("slides.md")
     };
 
-    fs::write(&slides_path, &markdown)
+    let processed_markdown = rewrite_image_paths(&markdown);
+    fs::write(&slides_path, &processed_markdown)
         .map_err(|e| format!("Failed to write slides.md: {}", e))?;
 
     Ok(())
@@ -641,4 +741,97 @@ pub async fn slidev_get_temp_dir(file_path: String) -> Result<String, String> {
         .ok_or_else(|| format!("No slidev process found for: {}", file_path))?;
 
     Ok(process.temp_dir.to_string_lossy().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rewrites_bare_relative_image_path() {
+        let md = "![alt](images/foo.png)";
+        assert_eq!(rewrite_image_paths(md), "![alt](./images/foo.png)");
+    }
+
+    #[test]
+    fn rewrites_same_directory_image() {
+        let md = "![](foo.png)";
+        assert_eq!(rewrite_image_paths(md), "![](./foo.png)");
+    }
+
+    #[test]
+    fn preserves_already_relative_path() {
+        let md = "![a](./images/foo.png)";
+        assert_eq!(rewrite_image_paths(md), md);
+    }
+
+    #[test]
+    fn preserves_parent_relative_path() {
+        let md = "![a](../images/foo.png)";
+        assert_eq!(rewrite_image_paths(md), md);
+    }
+
+    #[test]
+    fn preserves_absolute_path() {
+        let md = "![a](/images/foo.png)";
+        assert_eq!(rewrite_image_paths(md), md);
+    }
+
+    #[test]
+    fn preserves_http_url() {
+        let md = "![a](https://example.com/foo.png)";
+        assert_eq!(rewrite_image_paths(md), md);
+    }
+
+    #[test]
+    fn preserves_data_uri() {
+        let md = "![a](data:image/png;base64,iVBOR)";
+        assert_eq!(rewrite_image_paths(md), md);
+    }
+
+    #[test]
+    fn preserves_windows_absolute_path() {
+        let md = "![a](C:/Users/me/foo.png)";
+        assert_eq!(rewrite_image_paths(md), md);
+    }
+
+    #[test]
+    fn rewrites_with_title() {
+        let md = "![a](images/foo.png \"title\")";
+        assert_eq!(rewrite_image_paths(md), "![a](./images/foo.png \"title\")");
+    }
+
+    #[test]
+    fn skips_fenced_code_block() {
+        let md = "```md\n![a](images/foo.png)\n```\n";
+        assert_eq!(rewrite_image_paths(md), md);
+    }
+
+    #[test]
+    fn rewrites_multiple_images_on_one_line() {
+        let md = "![a](images/a.png) and ![b](images/b.png)";
+        assert_eq!(
+            rewrite_image_paths(md),
+            "![a](./images/a.png) and ![b](./images/b.png)"
+        );
+    }
+
+    #[test]
+    fn preserves_plain_text_without_images() {
+        let md = "# Title\n\nSome text with (parens) and ![\n";
+        assert_eq!(rewrite_image_paths(md), md);
+    }
+
+    #[test]
+    fn preserves_frontmatter_and_rewrites_body() {
+        let md = "---\ntheme: default\n---\n\n# Hi\n\n![a](images/foo.png)\n";
+        let expected = "---\ntheme: default\n---\n\n# Hi\n\n![a](./images/foo.png)\n";
+        assert_eq!(rewrite_image_paths(md), expected);
+    }
+
+    #[test]
+    fn handles_unicode_alt_text() {
+        let md = "![画像](images/図.png)";
+        assert_eq!(rewrite_image_paths(md), "![画像](./images/図.png)");
+    }
 }
