@@ -23,8 +23,9 @@ interface FileTreeProps {
 interface TreeNodeProps {
   entry: FileEntry;
   depth: number;
-  activeFile: string | null;
+  selectedPath: string | null;
   onFileSelect: (path: string) => void;
+  onNodePointerDown: (entry: FileEntry) => void;
   onContextMenu: (e: React.MouseEvent, entry: FileEntry) => void;
   renamingPath: string | null;
   renameValue: string;
@@ -58,7 +59,7 @@ export function getFileIcon(name: string): string {
 }
 
 function TreeNode({
-  entry, depth, activeFile, onFileSelect, onContextMenu,
+  entry, depth, selectedPath, onFileSelect, onNodePointerDown, onContextMenu,
   renamingPath, renameValue, onRenameChange, onRenameSubmit, onRenameCancel,
   onImageDragStart, onRefresh, onTreeDragStart, dragSourcePath, dragOverPath,
 }: TreeNodeProps) {
@@ -83,7 +84,7 @@ function TreeNode({
     onContextMenu(e, entry);
   }, [entry, onContextMenu]);
 
-  const isActive = entry.path === activeFile;
+  const isActive = entry.path === selectedPath;
   const icon = entry.is_dir ? (expanded ? "−" : "+") : getFileIcon(entry.name);
   const isRenaming = renamingPath === entry.path;
   const isImage = !entry.is_dir && /\.(png|jpe?g|gif|bmp|svg|webp)$/i.test(entry.name);
@@ -93,8 +94,9 @@ function TreeNode({
   const isDragging = dragSourcePath === entry.path;
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    if (e.button !== 0) return;
     if (isRenaming) return;
+    onNodePointerDown(entry);
+    if (e.button !== 0) return;
     // Image files: use existing image-to-editor drag
     if (isImage && onImageDragStart) {
       e.preventDefault();
@@ -105,7 +107,7 @@ function TreeNode({
     if (onTreeDragStart) {
       onTreeDragStart(entry, e.clientX, e.clientY);
     }
-  }, [isImage, isRenaming, onImageDragStart, onTreeDragStart, entry]);
+  }, [isImage, isRenaming, onImageDragStart, onTreeDragStart, onNodePointerDown, entry]);
 
   useEffect(() => {
     if (isRenaming && inputRef.current) {
@@ -161,8 +163,9 @@ function TreeNode({
               key={child.path}
               entry={child}
               depth={depth + 1}
-              activeFile={activeFile}
+              selectedPath={selectedPath}
               onFileSelect={onFileSelect}
+              onNodePointerDown={onNodePointerDown}
               onContextMenu={onContextMenu}
               renamingPath={renamingPath}
               renameValue={renameValue}
@@ -190,6 +193,17 @@ export function FileTree({
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const menuRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [selectedPath, setSelectedPath] = useState<string | null>(activeFile);
+
+  useEffect(() => {
+    setSelectedPath(activeFile);
+  }, [activeFile]);
+
+  const handleNodePointerDown = useCallback((entry: FileEntry) => {
+    setSelectedPath(entry.path);
+    containerRef.current?.focus({ preventScroll: true });
+  }, []);
 
   const clipboardEntry = useFileStore((s) => s.clipboardEntry);
   const setClipboard = useFileStore((s) => s.setClipboard);
@@ -384,9 +398,9 @@ export function FileTree({
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (renamingPath) return;
-    if (!activeFile) return;
+    if (!selectedPath) return;
 
-    const entry = findEntry(tree, activeFile);
+    const entry = findEntry(tree, selectedPath);
     if (!entry) return;
 
     if (e.key === "Delete") {
@@ -405,7 +419,7 @@ export function FileTree({
       e.preventDefault();
       handlePaste(entry);
     }
-  }, [renamingPath, activeFile, tree, findEntry, deleteEntry, startRename, setClipboard, handlePaste]);
+  }, [renamingPath, selectedPath, tree, findEntry, deleteEntry, startRename, setClipboard, handlePaste]);
 
   // Custom mouse-based drag-and-drop (replaces HTML5 DnD for Tauri/WebView2 compatibility)
   const dragRef = useRef<{
@@ -587,15 +601,16 @@ export function FileTree({
   }
 
   return (
-    <div className="file-tree" onKeyDown={handleKeyDown} tabIndex={0}>
+    <div ref={containerRef} className="file-tree" onKeyDown={handleKeyDown} tabIndex={0}>
       <div className="file-tree__list">
         {tree.map((entry) => (
           <TreeNode
             key={entry.path}
             entry={entry}
             depth={0}
-            activeFile={activeFile}
+            selectedPath={selectedPath}
             onFileSelect={onFileSelect}
+            onNodePointerDown={handleNodePointerDown}
             onContextMenu={handleContextMenu}
             renamingPath={renamingPath}
             renameValue={renameValue}
