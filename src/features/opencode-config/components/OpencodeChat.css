@@ -184,6 +184,11 @@
   color: var(--accent-green);
 }
 
+.oc-chat__md-toggle-bar--disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 /* Splittable area container */
 .oc-chat__split {
   display: flex;

@@ -25,6 +25,9 @@ export function OpencodeChat() {
   const { t } = useTranslation("opencode-config");
   const activeFolderPath = useTabStore((s) => s.activeFolderPath);
   const activeTabName = useTabStore((s) => s.getActiveTab()?.fileName);
+  const activeTabFilePath = useTabStore((s) => s.getActiveTab()?.filePath);
+  const activeTabFolderPath = useTabStore((s) => s.getActiveTab()?.folderPath);
+
   const {
     connected,
     connecting,
@@ -48,6 +51,16 @@ export function OpencodeChat() {
     useMdContext,
     setUseMdContext,
   } = useOpencodeChat(activeFolderPath ?? undefined);
+
+  // MD context toggle is only valid when the active tab is a real file
+  // belonging to the currently active folder. Guards against stale
+  // editor-context-store state leaking file paths from closed/other folders.
+  const canUseMdContext = !!(
+    activeTabFilePath &&
+    activeTabFolderPath &&
+    activeTabFolderPath === activeFolderPath
+  );
+  const mdContextActive = useMdContext && canUseMdContext;
 
   const input = useChatUIStore((s) => s.chatInput);
   const setInput = useCallback((v: string) => useChatUIStore.setState({ chatInput: v }), []);
@@ -168,26 +181,33 @@ export function OpencodeChat() {
     }
     resetHistoryNav();
 
-    // MD Context prefix
-    if (useMdContext) {
+    // MD Context prefix — only when the active tab is a real file in the active folder.
+    // We intentionally use the tab store (not editor-context-store) as the source of truth
+    // for the file path: editor-context-store is only updated while EditorPanel is mounted
+    // and can hold a stale path pointing to a file in a closed or inactive folder.
+    if (mdContextActive && activeTabFilePath) {
+      let prefix = `${t("ocChatMdContextPrefix")}\n\nFile: ${activeTabFilePath}`;
+      // Only attach cursor/selection info when the editor context actually
+      // reflects this same file — otherwise the line/column numbers would
+      // describe a different file.
       const ctx = useEditorContextStore.getState();
-      if (ctx.filePath) {
-        let prefix = `${t("ocChatMdContextPrefix")}\n\nFile: ${ctx.filePath}\nCursor position: line ${ctx.cursorLine}, column ${ctx.cursorColumn}`;
+      if (ctx.filePath === activeTabFilePath) {
+        prefix += `\nCursor position: line ${ctx.cursorLine}, column ${ctx.cursorColumn}`;
         if (ctx.selectionStart !== ctx.selectionEnd) {
           const startLC = computeLineColFromContext(ctx.content, ctx.selectionStart);
           const endLC = computeLineColFromContext(ctx.content, ctx.selectionEnd);
           prefix += `\nSelection: line ${startLC.line} col ${startLC.col} - line ${endLC.line} col ${endLC.col}`;
           prefix += `\n\n--- Selected Text ---\n${ctx.selectedText}\n--- End Selected Text ---`;
         }
-        textToSend = prefix + `\n\nInstruction: ${textToSend}`;
       }
+      textToSend = prefix + `\n\nInstruction: ${textToSend}`;
     }
 
     const imagesToSend = attachedImages.length > 0 ? [...attachedImages] : undefined;
     sendMessage(textToSend, agent, imagesToSend);
     setInput("");
     setAttachedImages([]);
-  }, [input, loading, sendMessage, useMdContext, resetHistoryNav, attachedImages]);
+  }, [input, loading, sendMessage, mdContextActive, activeTabFilePath, resetHistoryNav, attachedImages, t]);
 
   const handleQuestionsSubmit = useCallback(
     (answers: string) => {
@@ -577,15 +597,19 @@ export function OpencodeChat() {
         {/* Bottom section */}
         <div className="oc-chat__bottom" style={{ flex: `0 0 ${100 - chatSplitRatio}%` }}>
           {/* MD context toggle */}
-          <label className="oc-chat__md-toggle-bar" title={t("ocChatMdContext")}>
+          <label
+            className={`oc-chat__md-toggle-bar${canUseMdContext ? "" : " oc-chat__md-toggle-bar--disabled"}`}
+            title={t("ocChatMdContext")}
+          >
             <input
               type="checkbox"
-              checked={useMdContext}
+              checked={mdContextActive}
+              disabled={!canUseMdContext}
               onChange={(e) => setUseMdContext(e.target.checked)}
             />
             <span className="oc-chat__md-toggle-slider" />
             <span className="oc-chat__md-toggle-label">
-              {t("ocChatMdToggleLabel", { name: activeTabName ?? "MD" })}
+              {t("ocChatMdToggleLabel", { name: canUseMdContext ? (activeTabName ?? "MD") : "MD" })}
             </span>
           </label>
 
