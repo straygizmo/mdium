@@ -60,6 +60,11 @@ export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, o
     return set;
   });
 
+  // Fetch .mdium existence flags once when the dialog mounts.
+  // propFiles is intentionally not a dep — the parent is expected to provide
+  // a stable snapshot for the dialog's lifetime; patching state with flags
+  // keyed to a changed propFiles would corrupt local state.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     let cancelled = false;
     const paths = propFiles.map((f) => f.path);
@@ -85,7 +90,7 @@ export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, o
     return () => {
       cancelled = true;
     };
-  }, [propFiles]);
+  }, []);
 
   const filteredTree = useMemo(
     () => pruneTreeByFilter(tree, filter),
