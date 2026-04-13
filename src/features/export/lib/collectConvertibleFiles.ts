@@ -4,7 +4,8 @@ export interface ConvertibleFile {
   name: string;
   path: string;
   type: "docx" | "pdf" | "xlsx";
-  hasExistingMd: boolean;
+  hasExistingMdSibling: boolean;
+  hasExistingMdInMdium: boolean;
 }
 
 /**
@@ -40,13 +41,14 @@ function walkTree(entries: FileEntry[], results: ConvertibleFile[]): void {
     if (!type) continue;
 
     const baseName = entry.name.replace(/\.\w+$/i, "");
-    const hasExistingMd = siblingNames.has(`${baseName}.md`.toLowerCase());
+    const hasExistingMdSibling = siblingNames.has(`${baseName}.md`.toLowerCase());
 
     results.push({
       name: entry.name,
       path: entry.path,
       type,
-      hasExistingMd,
+      hasExistingMdSibling,
+      hasExistingMdInMdium: false,
     });
   }
 }
@@ -57,7 +59,8 @@ export interface ConvertibleTreeNode {
   isDir: boolean;
   children: ConvertibleTreeNode[] | null;
   fileType?: "docx" | "pdf" | "xlsx";
-  hasExistingMd?: boolean;
+  hasExistingMdSibling?: boolean;
+  hasExistingMdInMdium?: boolean;
 }
 
 /**
@@ -100,7 +103,7 @@ export function buildConvertibleTree(tree: FileEntry[]): ConvertibleTreeNode[] {
     if (!fileType) continue;
 
     const baseName = entry.name.replace(/\.\w+$/i, "");
-    const hasExistingMd = siblingNames.has(`${baseName}.md`.toLowerCase());
+    const hasExistingMdSibling = siblingNames.has(`${baseName}.md`.toLowerCase());
 
     result.push({
       name: entry.name,
@@ -108,7 +111,8 @@ export function buildConvertibleTree(tree: FileEntry[]): ConvertibleTreeNode[] {
       isDir: false,
       children: null,
       fileType,
-      hasExistingMd,
+      hasExistingMdSibling,
+      hasExistingMdInMdium: false,
     });
   }
 

@@ -29,7 +29,7 @@ export function BatchConvertModal({ files, tree, onClose, onComplete }: BatchCon
     // Initially select all files that don't have existing .md
     const set = new Set<string>();
     for (const f of files) {
-      if (!f.hasExistingMd) {
+      if (!f.hasExistingMdSibling) {
         set.add(f.path);
       }
     }
@@ -52,7 +52,7 @@ export function BatchConvertModal({ files, tree, onClose, onComplete }: BatchCon
       for (const p of paths) {
         if (skipExisting) {
           const file = files.find((f) => f.path === p);
-          if (file?.hasExistingMd) continue;
+          if (file?.hasExistingMdSibling) continue;
         }
         next.add(p);
       }
@@ -90,7 +90,7 @@ export function BatchConvertModal({ files, tree, onClose, onComplete }: BatchCon
         for (const p of paths) {
           if (skipExisting) {
             const file = files.find((f) => f.path === p);
-            if (file?.hasExistingMd) continue;
+            if (file?.hasExistingMdSibling) continue;
           }
           if (select) {
             next.add(p);
@@ -124,7 +124,7 @@ export function BatchConvertModal({ files, tree, onClose, onComplete }: BatchCon
       setSelected((prev) => {
         const next = new Set(prev);
         for (const f of files) {
-          if (f.hasExistingMd) {
+          if (f.hasExistingMdSibling) {
             next.delete(f.path);
           }
         }

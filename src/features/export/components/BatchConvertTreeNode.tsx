@@ -33,12 +33,12 @@ function getCheckState(
   skipExisting: boolean
 ): CheckState {
   if (!node.isDir) {
-    if (skipExisting && node.hasExistingMd) return "unchecked";
+    if (skipExisting && node.hasExistingMdSibling) return "unchecked";
     return selected.has(node.path) ? "checked" : "unchecked";
   }
   const files = collectDescendantFiles(node);
   const selectable = skipExisting
-    ? files.filter((f) => !f.hasExistingMd)
+    ? files.filter((f) => !f.hasExistingMdSibling)
     : files;
   if (selectable.length === 0) return "unchecked";
   const selectedCount = selectable.filter((f) => selected.has(f.path)).length;
@@ -62,7 +62,7 @@ export function BatchConvertTreeNode({
 
   const checkState = getCheckState(node, selected, skipExisting);
 
-  const isDisabled = !node.isDir && skipExisting && !!node.hasExistingMd;
+  const isDisabled = !node.isDir && skipExisting && !!node.hasExistingMdSibling;
 
   useEffect(() => {
     if (checkboxRef.current) {
@@ -119,7 +119,7 @@ export function BatchConvertTreeNode({
         >
           {node.name}
         </span>
-        {!node.isDir && node.hasExistingMd && (
+        {!node.isDir && node.hasExistingMdSibling && (
           <span className="batch-convert__item-badge">.md exists</span>
         )}
       </div>

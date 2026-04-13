@@ -35,14 +35,14 @@ export function useBatchConvert() {
       abortRef.current = false;
 
       const targetFiles = skipExisting
-        ? files.filter((f) => !f.hasExistingMd)
+        ? files.filter((f) => !f.hasExistingMdSibling)
         : files;
 
       const results: BatchConvertFileResult[] = [];
       // Add skipped files to results
       if (skipExisting) {
         for (const f of files) {
-          if (f.hasExistingMd) {
+          if (f.hasExistingMdSibling) {
             results.push({ file: f, status: "skipped" });
           }
         }
