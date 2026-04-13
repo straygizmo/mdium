@@ -369,7 +369,7 @@ export function RagPanel({ folderPath, aiSettings, onOpenFile }: RagPanelProps) 
                   <option value="Xenova/multilingual-e5-large">multilingual-e5-large</option>
                   <option value="Xenova/multilingual-e5-base">multilingual-e5-base</option>
                   <option value="Xenova/multilingual-e5-small">multilingual-e5-small</option>
-                  <option value="onnx-community/harrier-oss-v1-270m-ONNX">harrier-oss-v1-270m (long context)</option>
+                  <option value="onnx-community/harrier-oss-v1-270m-ONNX">harrier-oss-v1-270m</option>
                   {language === "ja" && <option value="sirasagi62/ruri-v3-30m-ONNX">ruri-v3-30m</option>}
                   {language === "ja" && <option value="sirasagi62/ruri-v3-130m-ONNX">ruri-v3-130m</option>}
                 </select>
