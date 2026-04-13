@@ -502,12 +502,25 @@ pub fn rag_delete_index(folder_path: String, model_name: Option<String>) -> Resu
 // ===== Embedding Model Management =====
 
 const DEFAULT_MODEL_NAME: &str = "Xenova/multilingual-e5-large";
-const MODEL_FILES: &[&str] = &[
-    "config.json",
-    "tokenizer.json",
-    "tokenizer_config.json",
-    "onnx/model_quantized.onnx",
-];
+
+fn model_files_for(model_name: &str) -> &'static [&'static str] {
+    if model_name.contains("harrier") {
+        &[
+            "config.json",
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "onnx/model_q4f16.onnx",
+            "onnx/model_q4f16.onnx_data",
+        ]
+    } else {
+        &[
+            "config.json",
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "onnx/model_quantized.onnx",
+        ]
+    }
+}
 
 fn embedding_model_dir_for(model_name: &str) -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -534,7 +547,7 @@ pub fn rag_get_model_dir(model_name: Option<String>) -> Result<String, String> {
 pub fn rag_check_model(model_name: Option<String>) -> Result<bool, String> {
     let name = model_name.as_deref().unwrap_or(DEFAULT_MODEL_NAME);
     let dir = embedding_model_dir_for(name)?;
-    for file in MODEL_FILES {
+    for file in model_files_for(name) {
         if !dir.join(file).exists() {
             return Ok(false);
         }
@@ -560,9 +573,10 @@ pub async fn rag_download_model(app: tauri::AppHandle, model_name: Option<String
         .timeout(std::time::Duration::from_secs(600))
         .build()
         .map_err(|e| format!("NETWORK_ERROR:{}", e))?;
-    let file_count = MODEL_FILES.len();
+    let files = model_files_for(name);
+    let file_count = files.len();
 
-    for (idx, &file) in MODEL_FILES.iter().enumerate() {
+    for (idx, &file) in files.iter().enumerate() {
         let target = dir.join(file);
 
         if let Some(parent) = target.parent() {
