@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { useTranslation } from "react-i18next";
+import { invoke } from "@tauri-apps/api/core";
 import type { ConvertibleFile } from "../lib/collectConvertibleFiles";
 import type { ConvertibleTreeNode } from "../lib/collectConvertibleFiles";
 import {
@@ -19,22 +20,72 @@ interface BatchConvertModalProps {
   onComplete: () => void;
 }
 
-export function BatchConvertModal({ files, tree, onClose, onComplete }: BatchConvertModalProps) {
+function patchTreeWithMdiumFlags(
+  nodes: ConvertibleTreeNode[],
+  existsMap: Record<string, boolean>
+): ConvertibleTreeNode[] {
+  return nodes.map((node) => {
+    if (node.isDir) {
+      return {
+        ...node,
+        children: node.children
+          ? patchTreeWithMdiumFlags(node.children, existsMap)
+          : node.children,
+      };
+    }
+    return {
+      ...node,
+      hasExistingMdInMdium: existsMap[node.path] ?? false,
+    };
+  });
+}
+
+export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, onComplete }: BatchConvertModalProps) {
   const { t } = useTranslation("common");
   const { isConverting, progress, summary, convert, reset } = useBatchConvert();
+
+  const [files, setFiles] = useState<ConvertibleFile[]>(() => propFiles);
+  const [tree, setTree] = useState<ConvertibleTreeNode[]>(() => propTree);
 
   const [filter, setFilter] = useState<FilterTab>("all");
   const [skipExisting, setSkipExisting] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(() => {
     // Initially select all files that don't have existing .md
     const set = new Set<string>();
-    for (const f of files) {
+    for (const f of propFiles) {
       if (!f.hasExistingMdSibling) {
         set.add(f.path);
       }
     }
     return set;
   });
+
+  useEffect(() => {
+    let cancelled = false;
+    const paths = propFiles.map((f) => f.path);
+    if (paths.length === 0) return;
+    (async () => {
+      try {
+        const existsMap = await invoke<Record<string, boolean>>(
+          "check_mdium_md_exists",
+          { paths }
+        );
+        if (cancelled) return;
+        setFiles((prev) =>
+          prev.map((f) => ({
+            ...f,
+            hasExistingMdInMdium: existsMap[f.path] ?? false,
+          }))
+        );
+        setTree((prev) => patchTreeWithMdiumFlags(prev, existsMap));
+      } catch (e) {
+        console.error("check_mdium_md_exists failed", e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [propFiles]);
 
   const filteredTree = useMemo(
     () => pruneTreeByFilter(tree, filter),
