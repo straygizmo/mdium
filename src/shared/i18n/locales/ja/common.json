@@ -66,6 +66,7 @@
   "batchConvertConverting": "変換中...",
   "batchConvertProgress": "{{current}} / {{total}}",
   "batchConvertComplete": "変換完了: {{success}}件成功, {{failed}}件失敗, {{skipped}}件スキップ",
+  "batchConvertSaveToMdium": "保存先を.mdium内にする",
   "batchConvertSkipExisting": "既存.mdをスキップ",
   "batchConvertNoFiles": "変換対象のOffice/PDFファイルがありません",
   "batchConvertCurrentFile": "変換中: {{file}}",

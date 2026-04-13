@@ -66,6 +66,7 @@
   "batchConvertConverting": "Converting...",
   "batchConvertProgress": "{{current}} / {{total}}",
   "batchConvertComplete": "Conversion complete: {{success}} succeeded, {{failed}} failed, {{skipped}} skipped",
+  "batchConvertSaveToMdium": "Save to .mdium folder",
   "batchConvertSkipExisting": "Skip existing .md files",
   "batchConvertNoFiles": "No Office/PDF files found to convert",
   "batchConvertCurrentFile": "Converting: {{file}}",
