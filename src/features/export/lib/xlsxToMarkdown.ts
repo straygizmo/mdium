@@ -9,6 +9,7 @@ import type { ConvertResult } from "./docxToMarkdown";
 export async function xlsxToMarkdown(
   data: Uint8Array,
   xlsxPath: string,
+  saveToMdium: boolean,
 ): Promise<ConvertResult> {
   const {
     parseWorkbook,
@@ -22,9 +23,10 @@ export async function xlsxToMarkdown(
   const baseName = xlsxPath
     .replace(/^.*[\\/]/, "")
     .replace(/\.(?:xlsx|xlsm|xls)$/i, "");
-  const assetsDir = `${dir}/${baseName}_assets`;
+  const outputDir = saveToMdium ? `${dir}/.mdium` : dir;
+  const assetsDir = `${outputDir}/${baseName}_assets`;
   const imagesDir = `${assetsDir}/images`;
-  const mdPath = `${dir}/${baseName}.md`;
+  const mdPath = `${outputDir}/${baseName}.md`;
 
   // ── Parse workbook ────────────────────────────────────────────────────────
   const workbook = await parseWorkbook(data.buffer as ArrayBuffer, baseName);
@@ -79,6 +81,11 @@ export async function xlsxToMarkdown(
     const strippedPath = originalPath.replace(/^assets\//, "");
     const rewrittenPath = `${baseName}_assets/images/${strippedPath}`;
     markdown = markdown.split(originalPath).join(rewrittenPath);
+  }
+
+  // Ensure output dir exists (needed when saving into .mdium/)
+  if (saveToMdium) {
+    await mkdir(outputDir, { recursive: true });
   }
 
   // ── Save markdown ────────────────────────────────────────────────────────

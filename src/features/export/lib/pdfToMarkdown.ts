@@ -1,4 +1,4 @@
-import { writeTextFile } from "@tauri-apps/plugin-fs";
+import { writeTextFile, mkdir } from "@tauri-apps/plugin-fs";
 import type { ConvertResult } from "./docxToMarkdown";
 
 let workerConfigured = false;
@@ -10,7 +10,8 @@ let workerConfigured = false;
  */
 export async function pdfToMarkdown(
   data: Uint8Array,
-  pdfPath: string
+  pdfPath: string,
+  saveToMdium: boolean,
 ): Promise<ConvertResult> {
   const pdfjsLib = await import("pdfjs-dist");
 
@@ -22,7 +23,8 @@ export async function pdfToMarkdown(
 
   const dir = pdfPath.replace(/[\\/][^\\/]*$/, "");
   const baseName = pdfPath.replace(/^.*[\\/]/, "").replace(/\.pdf$/i, "");
-  const mdPath = `${dir}/${baseName}.md`;
+  const outputDir = saveToMdium ? `${dir}/.mdium` : dir;
+  const mdPath = `${outputDir}/${baseName}.md`;
 
   const pdf = await pdfjsLib.getDocument({ data }).promise;
 
@@ -137,6 +139,10 @@ export async function pdfToMarkdown(
   }
 
   const markdown = mdLines.join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
+
+  if (saveToMdium) {
+    await mkdir(outputDir, { recursive: true });
+  }
 
   await writeTextFile(mdPath, markdown);
 

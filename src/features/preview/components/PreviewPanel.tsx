@@ -1119,7 +1119,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
       let mdPath: string;
       if (activeTab.filePath.toLowerCase().endsWith(".pdf")) {
         const { pdfToMarkdown } = await import("@/features/export/lib/pdfToMarkdown");
-        ({ mdPath } = await pdfToMarkdown(activeTab.binaryData, activeTab.filePath));
+        ({ mdPath } = await pdfToMarkdown(activeTab.binaryData, activeTab.filePath, false));
       } else if (
         activeTab.filePath.toLowerCase().endsWith(".xlsx") ||
         activeTab.filePath.toLowerCase().endsWith(".xlsm") ||
@@ -1131,9 +1131,10 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
         ({ mdPath } = await xlsxToMarkdown(
           activeTab.binaryData,
           activeTab.filePath,
+          false,
         ));
       } else {
-        ({ mdPath } = await docxToMarkdown(activeTab.binaryData, activeTab.filePath));
+        ({ mdPath } = await docxToMarkdown(activeTab.binaryData, activeTab.filePath, false));
       }
       onRefreshFileTree?.();
       onOpenFile?.(mdPath);

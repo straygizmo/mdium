@@ -8,6 +8,7 @@ interface BatchConvertTreeProps {
   onToggleFile: (path: string) => void;
   onToggleFolder: (paths: string[], select: boolean) => void;
   skipExisting: boolean;
+  saveToMdium: boolean;
 }
 
 export function BatchConvertTree({
@@ -16,6 +17,7 @@ export function BatchConvertTree({
   onToggleFile,
   onToggleFolder,
   skipExisting,
+  saveToMdium,
 }: BatchConvertTreeProps) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
@@ -44,6 +46,7 @@ export function BatchConvertTree({
           collapsed={collapsed}
           onToggleCollapse={handleToggleCollapse}
           skipExisting={skipExisting}
+          saveToMdium={saveToMdium}
         />
       ))}
     </div>

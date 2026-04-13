@@ -14,6 +14,7 @@ interface BatchConvertTreeNodeProps {
   collapsed: Set<string>;
   onToggleCollapse: (path: string) => void;
   skipExisting: boolean;
+  saveToMdium: boolean;
 }
 
 function collectDescendantFiles(
@@ -30,15 +31,19 @@ function collectDescendantFiles(
 function getCheckState(
   node: ConvertibleTreeNode,
   selected: Set<string>,
-  skipExisting: boolean
+  skipExisting: boolean,
+  saveToMdium: boolean
 ): CheckState {
+  const nodeExists = (n: ConvertibleTreeNode) =>
+    saveToMdium ? !!n.hasExistingMdInMdium : !!n.hasExistingMdSibling;
+
   if (!node.isDir) {
-    if (skipExisting && node.hasExistingMdSibling) return "unchecked";
+    if (skipExisting && nodeExists(node)) return "unchecked";
     return selected.has(node.path) ? "checked" : "unchecked";
   }
   const files = collectDescendantFiles(node);
   const selectable = skipExisting
-    ? files.filter((f) => !f.hasExistingMdSibling)
+    ? files.filter((f) => !nodeExists(f))
     : files;
   if (selectable.length === 0) return "unchecked";
   const selectedCount = selectable.filter((f) => selected.has(f.path)).length;
@@ -56,13 +61,18 @@ export function BatchConvertTreeNode({
   collapsed,
   onToggleCollapse,
   skipExisting,
+  saveToMdium,
 }: BatchConvertTreeNodeProps) {
   const checkboxRef = useRef<HTMLInputElement>(null);
   const isCollapsed = collapsed.has(node.path);
 
-  const checkState = getCheckState(node, selected, skipExisting);
+  const checkState = getCheckState(node, selected, skipExisting, saveToMdium);
 
-  const isDisabled = !node.isDir && skipExisting && !!node.hasExistingMdSibling;
+  const effectiveExisting = saveToMdium
+    ? !!node.hasExistingMdInMdium
+    : !!node.hasExistingMdSibling;
+
+  const isDisabled = !node.isDir && skipExisting && effectiveExisting;
 
   useEffect(() => {
     if (checkboxRef.current) {
@@ -119,7 +129,7 @@ export function BatchConvertTreeNode({
         >
           {node.name}
         </span>
-        {!node.isDir && node.hasExistingMdSibling && (
+        {!node.isDir && effectiveExisting && (
           <span className="batch-convert__item-badge">.md exists</span>
         )}
       </div>
@@ -136,6 +146,7 @@ export function BatchConvertTreeNode({
               collapsed={collapsed}
               onToggleCollapse={onToggleCollapse}
               skipExisting={skipExisting}
+              saveToMdium={saveToMdium}
             />
           ))}
         </div>

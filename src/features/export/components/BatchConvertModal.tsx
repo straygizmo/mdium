@@ -50,6 +50,11 @@ export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, o
   const [filter, setFilter] = useState<FilterTab>("all");
   const [skipExisting, setSkipExisting] = useState(true);
   const [saveToMdium, setSaveToMdium] = useState(false);
+  const effectiveHasExistingMd = useCallback(
+    (f: ConvertibleFile) =>
+      saveToMdium ? f.hasExistingMdInMdium : f.hasExistingMdSibling,
+    [saveToMdium]
+  );
   const [selected, setSelected] = useState<Set<string>>(() => {
     // Initially select all files that don't have existing .md
     const set = new Set<string>();
@@ -109,13 +114,13 @@ export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, o
       for (const p of paths) {
         if (skipExisting) {
           const file = files.find((f) => f.path === p);
-          if (file?.hasExistingMdSibling) continue;
+          if (file && effectiveHasExistingMd(file)) continue;
         }
         next.add(p);
       }
       return next;
     });
-  }, [filteredTree, skipExisting, files]);
+  }, [filteredTree, skipExisting, files, effectiveHasExistingMd]);
 
   const handleDeselectAll = useCallback(() => {
     setSelected((prev) => {
@@ -147,7 +152,7 @@ export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, o
         for (const p of paths) {
           if (skipExisting) {
             const file = files.find((f) => f.path === p);
-            if (file?.hasExistingMdSibling) continue;
+            if (file && effectiveHasExistingMd(file)) continue;
           }
           if (select) {
             next.add(p);
@@ -158,14 +163,14 @@ export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, o
         return next;
       });
     },
-    [skipExisting, files]
+    [skipExisting, files, effectiveHasExistingMd]
   );
 
   const handleConvert = useCallback(async () => {
     const selectedFiles = files.filter((f) => selected.has(f.path));
     if (selectedFiles.length === 0) return;
-    await convert(selectedFiles, skipExisting);
-  }, [files, selected, skipExisting, convert]);
+    await convert(selectedFiles, skipExisting, saveToMdium);
+  }, [files, selected, skipExisting, saveToMdium, convert]);
 
   const handleClose = useCallback(() => {
     if (summary) {
@@ -181,14 +186,14 @@ export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, o
       setSelected((prev) => {
         const next = new Set(prev);
         for (const f of files) {
-          if (f.hasExistingMdSibling) {
+          if (effectiveHasExistingMd(f)) {
             next.delete(f.path);
           }
         }
         return next;
       });
     }
-  }, [skipExisting, files]);
+  }, [skipExisting, saveToMdium, files, effectiveHasExistingMd]);
 
   // --- Result view ---
   if (summary) {
@@ -312,6 +317,7 @@ export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, o
               onToggleFile={handleToggle}
               onToggleFolder={handleToggleFolder}
               skipExisting={skipExisting}
+              saveToMdium={saveToMdium}
             />
           </div>
         )}

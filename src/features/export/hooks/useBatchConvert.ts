@@ -29,20 +29,27 @@ export function useBatchConvert() {
   const abortRef = useRef(false);
 
   const convert = useCallback(
-    async (files: ConvertibleFile[], skipExisting: boolean) => {
+    async (
+      files: ConvertibleFile[],
+      skipExisting: boolean,
+      saveToMdium: boolean,
+    ) => {
       setIsConverting(true);
       setSummary(null);
       abortRef.current = false;
 
+      const isExisting = (f: ConvertibleFile) =>
+        saveToMdium ? f.hasExistingMdInMdium : f.hasExistingMdSibling;
+
       const targetFiles = skipExisting
-        ? files.filter((f) => !f.hasExistingMdSibling)
+        ? files.filter((f) => !isExisting(f))
         : files;
 
       const results: BatchConvertFileResult[] = [];
       // Add skipped files to results
       if (skipExisting) {
         for (const f of files) {
-          if (f.hasExistingMdSibling) {
+          if (isExisting(f)) {
             results.push({ file: f, status: "skipped" });
           }
         }
@@ -66,15 +73,15 @@ export function useBatchConvert() {
 
           if (file.type === "docx") {
             const { docxToMarkdown } = await import("../lib/docxToMarkdown");
-            const result = await docxToMarkdown(data, file.path);
+            const result = await docxToMarkdown(data, file.path, saveToMdium);
             results.push({ file, status: "success", mdPath: result.mdPath });
           } else if (file.type === "xlsx") {
             const { xlsxToMarkdown } = await import("../lib/xlsxToMarkdown");
-            const result = await xlsxToMarkdown(data, file.path);
+            const result = await xlsxToMarkdown(data, file.path, saveToMdium);
             results.push({ file, status: "success", mdPath: result.mdPath });
           } else {
             const { pdfToMarkdown } = await import("../lib/pdfToMarkdown");
-            const result = await pdfToMarkdown(data, file.path);
+            const result = await pdfToMarkdown(data, file.path, saveToMdium);
             results.push({ file, status: "success", mdPath: result.mdPath });
           }
         } catch (e) {

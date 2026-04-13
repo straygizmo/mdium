@@ -14,13 +14,15 @@ export interface ConvertResult {
  */
 export async function docxToMarkdown(
   data: Uint8Array,
-  docxPath: string
+  docxPath: string,
+  saveToMdium: boolean,
 ): Promise<ConvertResult> {
   // Derive output paths
   const dir = docxPath.replace(/[\\/][^\\/]*$/, "");
   const baseName = docxPath.replace(/^.*[\\/]/, "").replace(/\.docx$/i, "");
-  const imagesDir = `${dir}/${baseName}_images`;
-  const mdPath = `${dir}/${baseName}.md`;
+  const outputDir = saveToMdium ? `${dir}/.mdium` : dir;
+  const imagesDir = `${outputDir}/${baseName}_images`;
+  const mdPath = `${outputDir}/${baseName}.md`;
 
   // Collect images during conversion
   const images: { name: string; data: Uint8Array }[] = [];
@@ -69,6 +71,11 @@ export async function docxToMarkdown(
     for (const img of images) {
       await writeFile(`${imagesDir}/${img.name}`, img.data);
     }
+  }
+
+  // Ensure output dir exists (needed when saving into .mdium/)
+  if (saveToMdium) {
+    await mkdir(outputDir, { recursive: true });
   }
 
   // Save .md file
