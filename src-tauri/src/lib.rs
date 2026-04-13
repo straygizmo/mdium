@@ -118,6 +118,7 @@ pub fn run() {
             commands::file::copy_file,
             commands::file::move_file,
             commands::file::open_in_default_app,
+            commands::file::check_mdium_md_exists,
             // File watcher
             file_watcher::watch_file,
             file_watcher::unwatch_file,

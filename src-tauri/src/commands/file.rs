@@ -1,5 +1,6 @@
 use crate::markdown_parser::{parse_markdown, rebuild_document, MarkdownTable, ParsedDocument};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -548,4 +549,27 @@ pub fn open_in_vscode(path: String) -> Result<(), String> {
             .map_err(|e| format!("Failed to open VSCode: {}", e))?;
     }
     Ok(())
+}
+
+/// For each source file path, check whether
+/// `{parent_dir}/.mdium/{file_stem}.md` exists on disk.
+///
+/// Returns a map keyed by the input path strings. Paths whose parent
+/// directory cannot be determined are reported as `false`.
+#[tauri::command]
+pub fn check_mdium_md_exists(paths: Vec<String>) -> HashMap<String, bool> {
+    let mut result = HashMap::with_capacity(paths.len());
+    for raw in paths {
+        let src = Path::new(&raw);
+        let exists = match (src.parent(), src.file_stem()) {
+            (Some(parent), Some(stem)) => {
+                let mut md_path = parent.join(".mdium");
+                md_path.push(format!("{}.md", stem.to_string_lossy()));
+                md_path.is_file()
+            }
+            _ => false,
+        };
+        result.insert(raw, exists);
+    }
+    result
 }
