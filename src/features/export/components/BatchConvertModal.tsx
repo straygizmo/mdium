@@ -49,6 +49,7 @@ export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, o
 
   const [filter, setFilter] = useState<FilterTab>("all");
   const [skipExisting, setSkipExisting] = useState(true);
+  const [saveToMdium, setSaveToMdium] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(() => {
     // Initially select all files that don't have existing .md
     const set = new Set<string>();
@@ -284,6 +285,14 @@ export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, o
               {t("batchConvertDeselectAll")}
             </button>
           </div>
+          <label className="batch-convert__skip-label">
+            <input
+              type="checkbox"
+              checked={saveToMdium}
+              onChange={(e) => setSaveToMdium(e.target.checked)}
+            />
+            {t("batchConvertSaveToMdium")}
+          </label>
           <label className="batch-convert__skip-label">
             <input
               type="checkbox"
