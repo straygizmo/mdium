@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
+import html2pdf from "html2pdf.js";
 import "./PdfPreviewPanel.css";
 
 interface PdfPreviewPanelProps {
@@ -46,7 +47,6 @@ export function PdfPreviewPanel({ previewRef, filePath }: PdfPreviewPanelProps) 
       const prevScrollTop = el.scrollTop;
       el.scrollTop = 0;
 
-      const html2pdf = (await import("html2pdf.js")).default;
       const opt = {
         margin: 10,
         image: { type: "jpeg" as const, quality: 0.98 },

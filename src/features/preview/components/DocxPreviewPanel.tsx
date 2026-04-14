@@ -2,6 +2,8 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
+import { renderAsync } from "docx-preview";
+import { exportMarkdownToDocx } from "@/features/export/lib/docx/docx-exporter";
 import { processSvgForStandaloneUse } from "./PreviewPanel";
 import "./DocxPreviewPanel.css";
 
@@ -28,8 +30,6 @@ export function DocxPreviewPanel({ previewRef, content, filePath }: DocxPreviewP
     setGenerating(true);
 
     try {
-      const { exportMarkdownToDocx } = await import("@/features/export/lib/docx/docx-exporter");
-
       // Wait for all Mermaid diagrams to finish rendering
       const previewEl = previewRef.current;
       if (previewEl) {
@@ -75,7 +75,6 @@ export function DocxPreviewPanel({ previewRef, content, filePath }: DocxPreviewP
       // Render DOCX preview using docx-preview
       const container = containerRef.current;
       if (container) {
-        const { renderAsync } = await import("docx-preview");
         container.innerHTML = "";
         await renderAsync(docxData.buffer, container, undefined, {
           inWrapper: true,
