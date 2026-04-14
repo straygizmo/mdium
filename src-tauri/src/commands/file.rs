@@ -106,8 +106,9 @@ fn build_tree_filtered(
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
 
-        // Skip hidden files and common non-essential directories
-        if name.starts_with('.')
+        // Skip hidden files and common non-essential directories.
+        // `.mdium` is allow-listed so its contents (e.g. converted .md files) are visible.
+        if (name.starts_with('.') && name != ".mdium")
             || name == "node_modules"
             || name == "target"
             || name == "dist"
@@ -172,7 +173,7 @@ fn build_tree_all(dir: &Path, depth: u32) -> Vec<FileEntry> {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
 
-        if name.starts_with('.')
+        if (name.starts_with('.') && name != ".mdium")
             || name == "node_modules"
             || name == "target"
             || name == "dist"
