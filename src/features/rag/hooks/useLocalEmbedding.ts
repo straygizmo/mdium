@@ -7,24 +7,7 @@ let embedFn: EmbedFn | null = null;
 let loadedModelName: string | null = null;
 let pipelinePromise: Promise<void> | null = null;
 
-const isHarrier = (name: string | null): boolean => !!name && name.includes("harrier");
-
-function getDtype(modelName: string): string {
-  // Harrier uses q4 (not q4f16) because q4f16 requires the WebGPU `shader-f16`
-  // extension, which is not guaranteed on every adapter/driver (e.g. some
-  // integrated GPUs in WebView2). q4 is 4-bit weights with fp32 activations,
-  // so it runs on any WebGPU adapter.
-  if (isHarrier(modelName)) return "q4";
-  return "q8";
-}
-
 function getPrefix(modelName: string | null, type: "query" | "passage"): string {
-  if (isHarrier(modelName)) {
-    if (type === "query") {
-      return "Instruct: Given a question, retrieve relevant markdown notes that answer it\nQuery: ";
-    }
-    return "";
-  }
   if (modelName && modelName.includes("ruri")) {
     return type === "query" ? "Search query: " : "Search document: ";
   }
@@ -73,7 +56,7 @@ export function useLocalEmbedding() {
         setProgress(10);
 
         const transformers = await import("@huggingface/transformers");
-        const { pipeline, AutoModel, AutoTokenizer, env } = transformers;
+        const { pipeline, env } = transformers;
 
         // Use custom "models" protocol registered in Rust to serve model files
         // On Windows: http://models.localhost/<path>
@@ -89,49 +72,19 @@ export function useLocalEmbedding() {
           }
         };
 
-        if (isHarrier(modelName)) {
-          // Harrier is a Gemma3-family model whose ONNX graph uses ops the WASM
-          // EP does not fully cover (e.g. GroupQueryAttention). Force WebGPU, as
-          // in the official onnx-community example.
-          if (!(typeof navigator !== "undefined" && "gpu" in navigator)) {
-            throw new Error(
-              "WEBGPU_UNAVAILABLE: harrier requires WebGPU, which is not available in this runtime. Update WebView2 / Windows or choose a different embedding model."
-            );
-          }
-          const tokenizer = await AutoTokenizer.from_pretrained(modelName, {
+        const pipe = await pipeline(
+          "feature-extraction",
+          modelName,
+          {
+            dtype: "q8",
             revision: "",
             progress_callback: progressCallback,
-          } as any);
-          const model = await AutoModel.from_pretrained(modelName, {
-            dtype: getDtype(modelName),
-            device: "webgpu",
-            revision: "",
-            // Weights ship as an external .onnx_data companion file.
-            use_external_data_format: true,
-            progress_callback: progressCallback,
-          } as any);
-          embedFn = async (input) => {
-            // Harrier's official example passes an array of strings.
-            const inputs = tokenizer([input], { padding: true, truncation: true });
-            const out: any = await (model as any)(inputs);
-            // Harrier outputs `sentence_embedding` (last-token pooled + L2-normalized).
-            return out.sentence_embedding.data as Float32Array;
-          };
-        } else {
-          const pipe = await pipeline(
-            "feature-extraction",
-            modelName,
-            {
-              dtype: getDtype(modelName),
-              revision: "",
-              progress_callback: progressCallback,
-            } as any
-          );
-          embedFn = async (input) => {
-            const r = await pipe(input, { pooling: "mean", normalize: true });
-            return r.data as Float32Array;
-          };
-        }
+          } as any
+        );
+        embedFn = async (input) => {
+          const r = await pipe(input, { pooling: "mean", normalize: true });
+          return r.data as Float32Array;
+        };
 
         loadedModelName = modelName;
         setStatus("ready");
