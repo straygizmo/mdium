@@ -36,6 +36,13 @@ interface AvailableServer {
   timeout?: number;
 }
 
+function makeDefaultFilename(): string {
+  const d = new Date();
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  const ts = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  return `img_${ts}.png`;
+}
+
 function normalizeCommand(server: OpencodeMcpServer): string[] {
   const cmd = server.command;
   if (Array.isArray(cmd)) return cmd;
@@ -118,6 +125,7 @@ export const GenerateMcpImageDialog: FC<Props> = ({ visible, onClose, onInsert }
   useEffect(() => {
     if (visible) {
       scanServers();
+      setFilename((prev) => (prev.trim() === "" ? makeDefaultFilename() : prev));
     }
   }, [visible, scanServers]);
 
