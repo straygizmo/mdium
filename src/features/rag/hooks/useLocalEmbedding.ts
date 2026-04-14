@@ -9,8 +9,9 @@ let pipelinePromise: Promise<void> | null = null;
 
 const isHarrier = (name: string | null): boolean => !!name && name.includes("harrier");
 
-function getDtype(_modelName: string): string {
-  // q4f16 is not used because the Tauri WebView2 ONNX Runtime WASM backend fails on fp16 kernels.
+function getDtype(modelName: string): string {
+  // Harrier runs on WebGPU (see load()), where q4f16 is the size/quality sweet spot.
+  if (isHarrier(modelName)) return "q4f16";
   return "q8";
 }
 
@@ -86,12 +87,21 @@ export function useLocalEmbedding() {
         };
 
         if (isHarrier(modelName)) {
+          // Harrier is a Gemma3-family model whose ONNX graph uses ops the WASM
+          // EP does not fully cover (e.g. GroupQueryAttention). Force WebGPU, as
+          // in the official onnx-community example.
+          if (!(typeof navigator !== "undefined" && "gpu" in navigator)) {
+            throw new Error(
+              "WEBGPU_UNAVAILABLE: harrier requires WebGPU, which is not available in this runtime. Update WebView2 / Windows or choose a different embedding model."
+            );
+          }
           const tokenizer = await AutoTokenizer.from_pretrained(modelName, {
             revision: "",
             progress_callback: progressCallback,
           } as any);
           const model = await AutoModel.from_pretrained(modelName, {
             dtype: getDtype(modelName),
+            device: "webgpu",
             revision: "",
             // Weights ship as an external .onnx_data companion file.
             use_external_data_format: true,
