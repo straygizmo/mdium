@@ -505,12 +505,13 @@ const DEFAULT_MODEL_NAME: &str = "Xenova/multilingual-e5-large";
 
 fn model_files_for(model_name: &str) -> &'static [&'static str] {
     if model_name.contains("harrier") {
+        // Harrier's quantized variant ships the weights as an external .onnx_data file.
         &[
             "config.json",
             "tokenizer.json",
             "tokenizer_config.json",
-            "onnx/model_q4f16.onnx",
-            "onnx/model_q4f16.onnx_data",
+            "onnx/model_quantized.onnx",
+            "onnx/model_quantized.onnx_data",
         ]
     } else {
         &[

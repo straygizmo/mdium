@@ -9,8 +9,8 @@ let pipelinePromise: Promise<void> | null = null;
 
 const isHarrier = (name: string | null): boolean => !!name && name.includes("harrier");
 
-function getDtype(modelName: string): string {
-  if (isHarrier(modelName)) return "q4f16";
+function getDtype(_modelName: string): string {
+  // q4f16 is not used because the Tauri WebView2 ONNX Runtime WASM backend fails on fp16 kernels.
   return "q8";
 }
 
