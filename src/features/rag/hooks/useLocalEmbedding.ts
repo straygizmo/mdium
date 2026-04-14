@@ -93,12 +93,15 @@ export function useLocalEmbedding() {
           const model = await AutoModel.from_pretrained(modelName, {
             dtype: getDtype(modelName),
             revision: "",
+            // Weights ship as an external .onnx_data companion file.
+            use_external_data_format: true,
             progress_callback: progressCallback,
           } as any);
           embedFn = async (input) => {
-            const inputs = tokenizer(input, { padding: true, truncation: true });
+            // Harrier's official example passes an array of strings.
+            const inputs = tokenizer([input], { padding: true, truncation: true });
             const out: any = await (model as any)(inputs);
-            // Harrier outputs `sentence_embedding` (last-token pooled + L2-normalized)
+            // Harrier outputs `sentence_embedding` (last-token pooled + L2-normalized).
             return out.sentence_embedding.data as Float32Array;
           };
         } else {
@@ -121,8 +124,8 @@ export function useLocalEmbedding() {
         setStatus("ready");
         setProgress(100);
       } catch (e: any) {
-        console.error("[RAG] Model load failed:", e);
-        const msg = e.message ?? String(e);
+        console.error("[RAG] Model load failed:", e, "typeof:", typeof e, "stack:", e?.stack);
+        const msg = e?.message ?? String(e);
         if (msg.includes("NETWORK_ERROR:")) {
           setError("NETWORK_ERROR");
         } else if (msg.includes("DOWNLOAD_ERROR:")) {

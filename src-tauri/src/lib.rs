@@ -77,16 +77,36 @@ pub fn run() {
                 Err(_) => return error_response(404),
             }
 
+            let mime = if decoded.ends_with(".json") {
+                "application/json"
+            } else {
+                "application/octet-stream"
+            };
+
+            // HEAD requests only need the size, not the payload.
+            if request.method() == "HEAD" {
+                return match std::fs::metadata(&file_path) {
+                    Ok(meta) => http::Response::builder()
+                        .status(200)
+                        .header("Content-Type", mime)
+                        .header("Content-Length", meta.len().to_string())
+                        .header("Access-Control-Allow-Origin", "*")
+                        .body(Cow::Borrowed(&[] as &[u8]))
+                        .unwrap(),
+                    Err(_) => error_response(404),
+                };
+            }
+
             match std::fs::read(&file_path) {
                 Ok(data) => {
-                    let mime = if decoded.ends_with(".json") {
-                        "application/json"
-                    } else {
-                        "application/octet-stream"
-                    };
+                    // Content-Length lets transformers.js pre-allocate its buffer; without it,
+                    // hub.js repeatedly reallocates while streaming, which is O(N^2) in chunk count
+                    // and fails for large (.onnx_data) files.
+                    let len = data.len();
                     http::Response::builder()
                         .status(200)
                         .header("Content-Type", mime)
+                        .header("Content-Length", len.to_string())
                         .header("Access-Control-Allow-Origin", "*")
                         .body(Cow::Owned(data))
                         .unwrap()
