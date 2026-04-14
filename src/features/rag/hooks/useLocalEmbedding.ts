@@ -10,8 +10,11 @@ let pipelinePromise: Promise<void> | null = null;
 const isHarrier = (name: string | null): boolean => !!name && name.includes("harrier");
 
 function getDtype(modelName: string): string {
-  // Harrier runs on WebGPU (see load()), where q4f16 is the size/quality sweet spot.
-  if (isHarrier(modelName)) return "q4f16";
+  // Harrier uses q4 (not q4f16) because q4f16 requires the WebGPU `shader-f16`
+  // extension, which is not guaranteed on every adapter/driver (e.g. some
+  // integrated GPUs in WebView2). q4 is 4-bit weights with fp32 activations,
+  // so it runs on any WebGPU adapter.
+  if (isHarrier(modelName)) return "q4";
   return "q8";
 }
 

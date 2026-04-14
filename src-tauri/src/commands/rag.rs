@@ -505,13 +505,13 @@ const DEFAULT_MODEL_NAME: &str = "Xenova/multilingual-e5-large";
 
 fn model_files_for(model_name: &str) -> &'static [&'static str] {
     if model_name.contains("harrier") {
-        // Harrier runs on WebGPU and uses the q4f16 variant with an external .onnx_data file.
+        // Harrier runs on WebGPU with the q4 variant (fp32 activations, no shader-f16 required).
         &[
             "config.json",
             "tokenizer.json",
             "tokenizer_config.json",
-            "onnx/model_q4f16.onnx",
-            "onnx/model_q4f16.onnx_data",
+            "onnx/model_q4.onnx",
+            "onnx/model_q4.onnx_data",
         ]
     } else {
         &[
