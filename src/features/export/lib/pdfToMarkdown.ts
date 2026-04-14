@@ -21,10 +21,14 @@ export async function pdfToMarkdown(
     workerConfigured = true;
   }
 
+  // Preserve input path separator so the result matches the OS-native paths
+  // delivered by the file tree — otherwise a mixed separator path creates
+  // duplicate tabs when the same file is reopened.
+  const sep = pdfPath.includes("\\") ? "\\" : "/";
   const dir = pdfPath.replace(/[\\/][^\\/]*$/, "");
   const baseName = pdfPath.replace(/^.*[\\/]/, "").replace(/\.pdf$/i, "");
-  const outputDir = saveToMdium ? `${dir}/.mdium` : dir;
-  const mdPath = `${outputDir}/${baseName}.md`;
+  const outputDir = saveToMdium ? `${dir}${sep}.mdium` : dir;
+  const mdPath = `${outputDir}${sep}${baseName}.md`;
 
   const pdf = await pdfjsLib.getDocument({ data }).promise;
 

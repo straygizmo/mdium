@@ -19,14 +19,18 @@ export async function xlsxToMarkdown(
   } = await import("@/vendor/xlsx2md");
 
   // ── Derive output paths ───────────────────────────────────────────────────
+  // Preserve input path separator so the result matches the OS-native paths
+  // delivered by the file tree — otherwise a mixed separator path creates
+  // duplicate tabs when the same file is reopened.
+  const sep = xlsxPath.includes("\\") ? "\\" : "/";
   const dir = xlsxPath.replace(/[\\/][^\\/]*$/, "");
   const baseName = xlsxPath
     .replace(/^.*[\\/]/, "")
     .replace(/\.(?:xlsx|xlsm|xls)$/i, "");
-  const outputDir = saveToMdium ? `${dir}/.mdium` : dir;
-  const assetsDir = `${outputDir}/${baseName}_assets`;
-  const imagesDir = `${assetsDir}/images`;
-  const mdPath = `${outputDir}/${baseName}.md`;
+  const outputDir = saveToMdium ? `${dir}${sep}.mdium` : dir;
+  const assetsDir = `${outputDir}${sep}${baseName}_assets`;
+  const imagesDir = `${assetsDir}${sep}images`;
+  const mdPath = `${outputDir}${sep}${baseName}.md`;
 
   // ── Parse workbook ────────────────────────────────────────────────────────
   const workbook = await parseWorkbook(data.buffer as ArrayBuffer, baseName);

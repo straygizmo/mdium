@@ -17,12 +17,15 @@ export async function docxToMarkdown(
   docxPath: string,
   saveToMdium: boolean,
 ): Promise<ConvertResult> {
-  // Derive output paths
+  // Derive output paths (preserve input path separator so the result matches
+  // the OS-native paths delivered by the file tree — otherwise a mixed
+  // separator path creates duplicate tabs when the same file is reopened).
+  const sep = docxPath.includes("\\") ? "\\" : "/";
   const dir = docxPath.replace(/[\\/][^\\/]*$/, "");
   const baseName = docxPath.replace(/^.*[\\/]/, "").replace(/\.docx$/i, "");
-  const outputDir = saveToMdium ? `${dir}/.mdium` : dir;
-  const imagesDir = `${outputDir}/${baseName}_images`;
-  const mdPath = `${outputDir}/${baseName}.md`;
+  const outputDir = saveToMdium ? `${dir}${sep}.mdium` : dir;
+  const imagesDir = `${outputDir}${sep}${baseName}_images`;
+  const mdPath = `${outputDir}${sep}${baseName}.md`;
 
   // Collect images during conversion
   const images: { name: string; data: Uint8Array }[] = [];
