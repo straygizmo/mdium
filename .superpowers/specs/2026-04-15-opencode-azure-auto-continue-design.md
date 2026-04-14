@@ -60,7 +60,7 @@ export async function isAzureProviderActive(): Promise<boolean> {
 
   // 2. Fallback: mdium's own AI settings
   const settings = useSettingsStore.getState();
-  return (settings as any).ai?.provider === "azure";
+  return settings.aiSettings?.provider === "azure";
 }
 ```
 
@@ -241,7 +241,7 @@ Conceptual structure:
   <>
     {msg.isAutoReply && (
       <div className="text-xs text-muted-foreground mb-1">
-        {t("opencodeAutoReplyLabel")}
+        {t("ocChatAutoReplyLabel")}
       </div>
     )}
     <div className={msg.isAutoReply ? "opacity-75" : ""}>
@@ -257,13 +257,15 @@ Exact class names and placement must follow the existing `OpencodeChat.tsx` user
 
 Add to `src/shared/i18n/locales/ja/opencode-config.json`:
 ```json
-"opencodeAutoReplyLabel": "(自動返答)"
+"ocChatAutoReplyLabel": "(自動返答)"
 ```
 
 Add to `src/shared/i18n/locales/en/opencode-config.json`:
 ```json
-"opencodeAutoReplyLabel": "(Auto-reply)"
+"ocChatAutoReplyLabel": "(Auto-reply)"
 ```
+
+Key naming follows the existing `ocChat*` prefix convention used for all opencode-chat-related strings in this file.
 
 Per project standard (`CLAUDE.md`), all UI strings are required to use i18n; both locales must be updated in the same change.
 
