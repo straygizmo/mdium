@@ -297,46 +297,75 @@ fn ensure_slidev_installed(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 /// Create a directory junction (Windows) or symlink (Unix) for node_modules.
-/// On Windows, uses `mklink /J` which does not require admin privileges.
+///
+/// On Windows, uses the native `junction` crate (NTFS reparse points) instead of
+/// shelling out to `cmd /C mklink /J`. The shell approach had two problems on
+/// Japanese Windows: mklink's stderr is emitted in CP932 and came back as
+/// mojibake after `from_utf8_lossy`, and `let _ = fs::remove_dir(dest)` silently
+/// masked cleanup failures so a stale directory at `dest` surfaced as "mklink /J
+/// failed" with unreadable text. The native path returns proper UTF-8
+/// `io::Error`s and lets us handle each dest state explicitly.
 fn create_node_modules_link(source: &std::path::Path, dest: &std::path::Path) -> Result<(), String> {
-    // Remove existing link or directory if present
-    if dest.exists() || dest.read_link().is_ok() {
-        #[cfg(target_os = "windows")]
-        {
-            // Junction removal: use fs::remove_dir (does not follow junction)
-            let _ = fs::remove_dir(dest);
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            let _ = fs::remove_file(dest);
-        }
-    }
-
     #[cfg(target_os = "windows")]
     {
-        let output = Command::new("cmd")
-            .args([
-                "/C",
-                "mklink",
-                "/J",
-                &dest.to_string_lossy(),
-                &source.to_string_lossy(),
-            ])
-            .creation_flags(0x08000000) // CREATE_NO_WINDOW
-            .output()
-            .map_err(|e| format!("Failed to create junction: {}", e))?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("mklink /J failed: {}", stderr));
-        }
+        clear_junction_dest(dest)?;
+        junction::create(source, dest)
+            .map_err(|e| format!("Failed to create junction at {}: {}", dest.display(), e))?;
     }
 
     #[cfg(not(target_os = "windows"))]
     {
+        // On Unix, remove any stale symlink or file at dest first.
+        if dest.symlink_metadata().is_ok() {
+            fs::remove_file(dest)
+                .map_err(|e| format!("Failed to remove stale link at {}: {}", dest.display(), e))?;
+        }
         std::os::unix::fs::symlink(source, dest)
             .map_err(|e| format!("Failed to create symlink: {}", e))?;
     }
 
+    Ok(())
+}
+
+/// Clear whatever is occupying `dest` so `junction::create` can succeed.
+/// Handles: nothing there, an existing junction (removed without following),
+/// an empty or non-empty real directory, or a regular file.
+#[cfg(target_os = "windows")]
+fn clear_junction_dest(dest: &std::path::Path) -> Result<(), String> {
+    use std::os::windows::fs::MetadataExt;
+
+    // `symlink_metadata` does not follow reparse points, so a junction reports
+    // its own attributes rather than those of its target.
+    let meta = match fs::symlink_metadata(dest) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("Failed to stat {}: {}", dest.display(), e)),
+    };
+
+    // Inspect raw Win32 attributes. Rust's `Metadata::is_dir` returns false for
+    // a junction (it treats any reparse point as a symlink, not a dir), so we
+    // check `FILE_ATTRIBUTE_DIRECTORY` directly to distinguish a directory-like
+    // entry from a regular file.
+    const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    let attrs = meta.file_attributes();
+    let is_directory_entry = attrs & FILE_ATTRIBUTE_DIRECTORY != 0;
+    let is_reparse_point = attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+
+    if is_reparse_point {
+        // Junction or directory symlink — `RemoveDirectoryW` removes the
+        // reparse point without following into its target. `remove_dir_all`
+        // WOULD follow the junction and delete real files, so never use it.
+        fs::remove_dir(dest).map_err(|e| {
+            format!("Failed to remove stale junction at {}: {}", dest.display(), e)
+        })?;
+    } else if is_directory_entry {
+        fs::remove_dir_all(dest)
+            .map_err(|e| format!("Failed to remove directory at {}: {}", dest.display(), e))?;
+    } else {
+        fs::remove_file(dest)
+            .map_err(|e| format!("Failed to remove file at {}: {}", dest.display(), e))?;
+    }
     Ok(())
 }
 
@@ -387,7 +416,10 @@ pub async fn slidev_start(
         let mut guard = slidev_store().lock().unwrap();
         if let Some(existing) = guard.remove(&file_path) {
             let _ = kill_process(existing.pid);
-            // Remove junction/symlink first to avoid deleting AppData node_modules
+            // Remove junction/symlink first so remove_dir_all cannot follow it
+            // into the AppData node_modules and delete real files there.
+            // On Windows, fs::remove_dir removes a junction without following
+            // it (RemoveDirectoryW semantics).
             let nm_link = existing.temp_dir.join("node_modules");
             #[cfg(target_os = "windows")]
             {
@@ -716,11 +748,12 @@ pub async fn slidev_stop(file_path: String) -> Result<(), String> {
     };
     if let Some(process) = process {
         let kill_result = kill_process(process.pid);
-        // Remove junction/symlink first to avoid deleting AppData node_modules
+        // Remove junction/symlink first so remove_dir_all cannot follow it
+        // into the AppData node_modules and delete real files there.
+        // On Windows, fs::remove_dir removes a junction without following it.
         let nm_link = process.temp_dir.join("node_modules");
         #[cfg(target_os = "windows")]
         {
-            // fs::remove_dir removes a junction without following it
             let _ = fs::remove_dir(&nm_link);
         }
         #[cfg(not(target_os = "windows"))]
@@ -833,5 +866,167 @@ mod tests {
     fn handles_unicode_alt_text() {
         let md = "![画像](images/図.png)";
         assert_eq!(rewrite_image_paths(md), "![画像](./images/図.png)");
+    }
+
+    #[cfg(target_os = "windows")]
+    mod junction_tests {
+        use super::super::create_node_modules_link;
+        use std::fs;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+        fn unique_temp_root(tag: &str) -> std::path::PathBuf {
+            let id = COUNTER.fetch_add(1, Ordering::SeqCst);
+            let root = std::env::temp_dir().join(format!(
+                "mdium-junction-test-{}-{}-{}",
+                tag,
+                std::process::id(),
+                id
+            ));
+            // Clean any leftover from previous runs. Remove the junction first if it
+            // exists, so remove_dir_all doesn't follow it into the real target.
+            let dest = root.join("dst");
+            let _ = fs::remove_dir(&dest);
+            let _ = fs::remove_dir_all(&root);
+            fs::create_dir_all(&root).unwrap();
+            root
+        }
+
+        #[test]
+        fn creates_junction_to_source() {
+            let root = unique_temp_root("create");
+            let source = root.join("src");
+            let dest = root.join("dst");
+            fs::create_dir_all(&source).unwrap();
+            fs::write(source.join("marker.txt"), "hello").unwrap();
+
+            create_node_modules_link(&source, &dest).expect("should create junction");
+
+            assert!(
+                dest.join("marker.txt").exists(),
+                "junction should expose source contents"
+            );
+
+            let _ = fs::remove_dir(&dest);
+            let _ = fs::remove_dir_all(&root);
+        }
+
+        #[test]
+        fn replaces_existing_junction() {
+            let root = unique_temp_root("replace");
+            let source_a = root.join("src_a");
+            let source_b = root.join("src_b");
+            let dest = root.join("dst");
+            fs::create_dir_all(&source_a).unwrap();
+            fs::create_dir_all(&source_b).unwrap();
+            fs::write(source_a.join("a.txt"), "a").unwrap();
+            fs::write(source_b.join("b.txt"), "b").unwrap();
+
+            create_node_modules_link(&source_a, &dest).expect("first link");
+            assert!(dest.join("a.txt").exists());
+
+            create_node_modules_link(&source_b, &dest).expect("replace link");
+            assert!(
+                dest.join("b.txt").exists(),
+                "should now point at source_b"
+            );
+            assert!(
+                !dest.join("a.txt").exists(),
+                "old source_a marker must not leak through"
+            );
+
+            let _ = fs::remove_dir(&dest);
+            let _ = fs::remove_dir_all(&root);
+        }
+
+        #[test]
+        fn replaces_stale_file_at_dest() {
+            // Regression for the "mklink /J failed: ���a������..." report:
+            // a stale regular file at dest (from an interrupted prior run) used
+            // to crash junction creation with mojibake. The fix removes the
+            // stale file and re-creates the junction.
+            let root = unique_temp_root("replace-file");
+            let source = root.join("src");
+            let dest = root.join("dst");
+            fs::create_dir_all(&source).unwrap();
+            fs::write(source.join("marker.txt"), "fresh").unwrap();
+            fs::write(&dest, b"leftover").unwrap();
+
+            create_node_modules_link(&source, &dest)
+                .expect("should replace stale file at dest with a junction");
+
+            assert!(dest.join("marker.txt").exists());
+
+            let _ = fs::remove_dir(&dest);
+            let _ = fs::remove_dir_all(&root);
+        }
+
+        #[test]
+        fn error_message_is_readable_utf8() {
+            // If junction creation fails, the error string must be readable
+            // UTF-8 — never mojibake from CP932-encoded cmd.exe output on
+            // Japanese Windows. Trigger failure via a path that cannot be
+            // created (parent directory does not exist).
+            let root = unique_temp_root("err-utf8");
+            let source = root.join("src");
+            fs::create_dir_all(&source).unwrap();
+            let dest = root.join("missing-parent").join("dst");
+
+            let err = create_node_modules_link(&source, &dest)
+                .expect_err("should fail when parent of dest does not exist");
+
+            assert!(
+                !err.contains('\u{FFFD}'),
+                "error message contains UTF-8 replacement char (mojibake): {:?}",
+                err
+            );
+
+            let _ = fs::remove_dir_all(&root);
+        }
+
+        #[test]
+        fn replaces_non_empty_real_directory() {
+            // If a previous unclean shutdown left a non-empty directory at dest
+            // (e.g., files written after remove_dir_all partially followed a
+            // junction), the next slidev_start must still be able to re-link.
+            let root = unique_temp_root("replace-nonempty");
+            let source = root.join("src");
+            let dest = root.join("dst");
+            fs::create_dir_all(&source).unwrap();
+            fs::create_dir_all(&dest).unwrap();
+            fs::write(dest.join("stale.txt"), "leftover").unwrap();
+            fs::write(source.join("marker.txt"), "fresh").unwrap();
+
+            create_node_modules_link(&source, &dest)
+                .expect("should replace non-empty real directory with a junction");
+
+            assert!(dest.join("marker.txt").exists());
+            assert!(
+                !dest.join("stale.txt").exists(),
+                "stale file must be gone after re-linking"
+            );
+
+            let _ = fs::remove_dir(&dest);
+            let _ = fs::remove_dir_all(&root);
+        }
+
+        #[test]
+        fn replaces_empty_real_directory() {
+            let root = unique_temp_root("replace-dir");
+            let source = root.join("src");
+            let dest = root.join("dst");
+            fs::create_dir_all(&source).unwrap();
+            fs::create_dir_all(&dest).unwrap();
+            fs::write(source.join("marker.txt"), "hi").unwrap();
+
+            create_node_modules_link(&source, &dest)
+                .expect("should replace empty real directory with a junction");
+
+            assert!(dest.join("marker.txt").exists());
+
+            let _ = fs::remove_dir(&dest);
+            let _ = fs::remove_dir_all(&root);
+        }
     }
 }
