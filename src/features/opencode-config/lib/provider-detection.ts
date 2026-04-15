@@ -1,3 +1,5 @@
+import { invoke } from "@tauri-apps/api/core";
+
 /**
  * Detects Azure OpenAI content-filter refusal responses.
  * Requires both an apology marker and a refusal phrase, with a length
@@ -16,4 +18,39 @@ export function isAzureRefusal(text: string): boolean {
     normalized.includes("cannot help") ||
     normalized.includes("can't help");
   return hasSorry && hasRefusal;
+}
+
+async function getHomeSep(): Promise<{ home: string; sep: string }> {
+  const home = await invoke<string>("get_home_dir");
+  const sep = home.includes("\\") ? "\\" : "/";
+  return { home, sep };
+}
+
+/**
+ * Returns true when the current opencode session is likely backed by Azure.
+ *
+ * Detection strategy:
+ * 1. Read ~/.config/opencode/config.json and check whether `model` starts
+ *    with "azure/". If `model` is present but non-Azure, return false
+ *    without falling back — opencode's own config is authoritative.
+ * 2. If config.json is missing / unparsable / has no `model` field,
+ *    fall back to mdium's own AI settings (`aiSettings.provider === "azure"`).
+ *
+ * No caching: called only from the refusal path, which is rare.
+ */
+export async function isAzureProviderActive(): Promise<boolean> {
+  try {
+    const { home, sep } = await getHomeSep();
+    const configPath = `${home}${sep}.config${sep}opencode${sep}config.json`;
+    const raw = await invoke<string>("read_text_file", { path: configPath });
+    const config = JSON.parse(raw);
+    if (typeof config.model === "string") {
+      return config.model.startsWith("azure/");
+    }
+  } catch {
+    // fall through to fallback
+  }
+  const { useSettingsStore } = await import("@/stores/settings-store");
+  const settings = useSettingsStore.getState();
+  return settings.aiSettings?.provider === "azure";
 }
