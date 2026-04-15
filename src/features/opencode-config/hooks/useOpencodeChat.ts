@@ -314,9 +314,8 @@ function processSSEStream(stream: AsyncIterable<unknown>) {
 
               // === Azure auto-continue on content-filter refusal ===
               const isRefusal = isAzureRefusal(rawText);
-              const retryCount = useChatUIStore.getState().azureAutoRetryCount;
 
-              if (isRefusal && retryCount === 0) {
+              if (isRefusal && state.azureAutoRetryCount === 0) {
                 const isAzure = await isAzureProviderActive();
                 if (isAzure) {
                   // Finalize the current assistant message in UI first
@@ -334,11 +333,17 @@ function processSSEStream(stream: AsyncIterable<unknown>) {
                       azureAutoRetryCount: 1,
                     };
                   });
-                  // Send the auto-reply. Awaiting is safe: promptAsync
-                  // schedules the prompt and returns before the model
-                  // response arrives. Awaiting also guarantees the new
-                  // messages are in the store before the next SSE event.
-                  await doSendMessage("続けてください", undefined, undefined, { isAutoReply: true });
+                  // Re-check aborted: the user may have clicked abort during
+                  // the async isAzureProviderActive() call or between the
+                  // finalize setState and this send. doSendMessage
+                  // unconditionally clears aborted, so we must guard here.
+                  if (!useChatUIStore.getState().aborted) {
+                    // Send the auto-reply. Awaiting is safe: promptAsync
+                    // schedules the prompt and returns before the model
+                    // response arrives. Awaiting also guarantees the new
+                    // messages are in the store before the next SSE event.
+                    await doSendMessage("続けてください", undefined, undefined, { isAutoReply: true });
+                  }
                   continue;
                 }
               }
