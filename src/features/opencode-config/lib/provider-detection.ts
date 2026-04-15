@@ -6,7 +6,7 @@
  */
 export function isAzureRefusal(text: string): boolean {
   if (!text) return false;
-  const normalized = text.toLowerCase().trim();
+  const normalized = text.toLowerCase().trim().replace(/\u2019/g, "'");
   if (normalized.length > 300) return false;
   const hasSorry =
     normalized.includes("i'm sorry") || normalized.includes("i am sorry");

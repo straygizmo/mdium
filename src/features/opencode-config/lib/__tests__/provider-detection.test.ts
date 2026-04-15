@@ -26,6 +26,12 @@ describe("isAzureRefusal", () => {
     ).toBe(true);
   });
 
+  it("normalizes Unicode right single quotation mark (U+2019)", () => {
+    expect(
+      isAzureRefusal("I\u2019m sorry, but I can\u2019t assist with that."),
+    ).toBe(true);
+  });
+
   it("trims leading and trailing whitespace", () => {
     expect(
       isAzureRefusal("\n  I'm sorry, but I cannot assist with that.  \n"),
