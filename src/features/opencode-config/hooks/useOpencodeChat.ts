@@ -644,7 +644,16 @@ async function ensureSessionId(title: string): Promise<string | null> {
   }
 }
 
-export async function doSendMessage(text: string, agentOverride?: string, images?: ImageAttachment[]) {
+interface SendOptions {
+  isAutoReply?: boolean;
+}
+
+export async function doSendMessage(
+  text: string,
+  agentOverride?: string,
+  images?: ImageAttachment[],
+  options?: SendOptions,
+) {
   if (!_client || (!text.trim() && (!images || images.length === 0))) return;
 
   useChatUIStore.setState({ error: null });
@@ -659,7 +668,11 @@ export async function doSendMessage(text: string, agentOverride?: string, images
   useChatUIStore.setState((s) => ({
     messages: [
       ...s.messages,
-      { role: "user" as const, content: displayText },
+      {
+        role: "user" as const,
+        content: displayText,
+        isAutoReply: options?.isAutoReply ?? false,
+      },
       { role: "assistant" as const, content: "", parts: [] },
     ],
     loading: true,
