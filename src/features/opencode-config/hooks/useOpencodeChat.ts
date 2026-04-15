@@ -12,6 +12,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { marked } from "marked";
 import { useOpencodeServerStore } from "@/stores/opencode-server-store";
 import { BUILTIN_AGENTS } from "../lib/builtin-registry";
+import { isAzureRefusal, isAzureProviderActive } from "../lib/provider-detection";
 
 export interface OpencodeMessage {
   role: "user" | "assistant";
@@ -310,6 +311,43 @@ function processSSEStream(stream: AsyncIterable<unknown>) {
                   }
                 }
               }
+
+              // === Azure auto-continue on content-filter refusal ===
+              const isRefusal = isAzureRefusal(rawText);
+              const retryCount = useChatUIStore.getState().azureAutoRetryCount;
+
+              if (isRefusal && retryCount === 0) {
+                const isAzure = await isAzureProviderActive();
+                if (isAzure) {
+                  // Finalize the current assistant message in UI first
+                  const refusalHtml = rawText ? await marked(rawText) : "";
+                  useChatUIStore.setState((s) => {
+                    const updated = [...s.messages];
+                    updated[updated.length - 1] = {
+                      ...updated[updated.length - 1],
+                      content: refusalHtml,
+                      completed: true,
+                    };
+                    return {
+                      messages: updated,
+                      loading: false,
+                      azureAutoRetryCount: 1,
+                    };
+                  });
+                  // Send the auto-reply. Awaiting is safe: promptAsync
+                  // schedules the prompt and returns before the model
+                  // response arrives. Awaiting also guarantees the new
+                  // messages are in the store before the next SSE event.
+                  await doSendMessage("続けてください", undefined, undefined, { isAutoReply: true });
+                  continue;
+                }
+              }
+
+              // Reset counter on a genuine normal response (non-refusal + non-empty)
+              if (!isRefusal && rawText.trim()) {
+                useChatUIStore.setState({ azureAutoRetryCount: 0 });
+              }
+              // === end Azure auto-continue ===
 
               // Try to detect questions in the final text before converting to HTML
               const questionsFromIdle = tryParseQuestions(rawText);
