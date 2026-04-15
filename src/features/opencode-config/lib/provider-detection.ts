@@ -50,6 +50,10 @@ export async function isAzureProviderActive(): Promise<boolean> {
   } catch {
     // fall through to fallback
   }
+  // Dynamic import: settings-store transitively loads i18n, which touches
+  // localStorage at module evaluation time and breaks vitest. Deferring
+  // the import to this fallback path avoids the test-env issue and costs
+  // nothing on the happy path.
   const { useSettingsStore } = await import("@/stores/settings-store");
   const settings = useSettingsStore.getState();
   return settings.aiSettings?.provider === "azure";
