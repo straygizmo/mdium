@@ -1164,3 +1164,13 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0.6; }
 }
+
+.oc-chat__msg--auto-reply .oc-chat__msg-content {
+  opacity: 0.75;
+}
+
+.oc-chat__msg-auto-label {
+  font-size: 0.75rem;
+  opacity: 0.6;
+  margin-bottom: 0.25rem;
+}

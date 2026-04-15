@@ -476,7 +476,18 @@ export function OpencodeChat() {
           {messages.map((msg, i) => {
             if (msg.role === "user") {
               return (
-                <div key={i} className="oc-chat__msg oc-chat__msg--user">
+                <div
+                  key={i}
+                  className={
+                    "oc-chat__msg oc-chat__msg--user" +
+                    (msg.isAutoReply ? " oc-chat__msg--auto-reply" : "")
+                  }
+                >
+                  {msg.isAutoReply && (
+                    <div className="oc-chat__msg-auto-label">
+                      {t("ocChatAutoReplyLabel")}
+                    </div>
+                  )}
                   <div className="oc-chat__msg-content">{msg.content}</div>
                 </div>
               );
