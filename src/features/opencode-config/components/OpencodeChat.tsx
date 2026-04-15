@@ -484,7 +484,7 @@ export function OpencodeChat() {
                   }
                 >
                   {msg.isAutoReply && (
-                    <div className="oc-chat__msg-auto-label">
+                    <div className="oc-chat__msg-label">
                       {t("ocChatAutoReplyLabel")}
                     </div>
                   )}

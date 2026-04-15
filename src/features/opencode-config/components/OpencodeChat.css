@@ -1169,7 +1169,7 @@
   opacity: 0.75;
 }
 
-.oc-chat__msg-auto-label {
+.oc-chat__msg--auto-reply .oc-chat__msg-label {
   font-size: 0.75rem;
   opacity: 0.6;
   margin-bottom: 0.25rem;
