@@ -13,6 +13,7 @@
   "ocChatLoadConfirm": "現在のチャットを破棄してロードしますか？",
   "ocChatDeleteConfirm": "このセッションを削除しますか？",
   "ocChatError": "エラー",
+  "ocChatAutoReplyLabel": "(自動返答)",
   "noFolderOpen": "フォルダが開かれていません",
   "tabRules": "ルール",
   "tabTools": "ツール",

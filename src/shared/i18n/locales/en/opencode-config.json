@@ -13,6 +13,7 @@
   "ocChatLoadConfirm": "Discard current chat and load?",
   "ocChatDeleteConfirm": "Delete this session?",
   "ocChatError": "Error",
+  "ocChatAutoReplyLabel": "(Auto-reply)",
   "noFolderOpen": "No folder is open",
   "tabRules": "Rules",
   "tabTools": "Tools",
