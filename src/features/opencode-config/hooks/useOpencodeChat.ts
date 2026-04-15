@@ -510,6 +510,7 @@ function doDisconnect() {
     currentSessionId: null,
     error: null,
     pendingQuestions: null,
+    azureAutoRetryCount: 0,
   });
 }
 
@@ -838,6 +839,7 @@ export async function doCreateNewSession() {
     currentSessionId: null,
     error: null,
     pendingQuestions: null,
+    azureAutoRetryCount: 0,
   });
 }
 
@@ -879,6 +881,7 @@ async function doLoadSession(sessionId: string) {
       useChatUIStore.setState({
         messages: loaded,
         currentSessionId: sessionId,
+        azureAutoRetryCount: 0,
       });
     }
   } catch (e: any) {
