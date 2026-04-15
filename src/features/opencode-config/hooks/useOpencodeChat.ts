@@ -909,6 +909,7 @@ async function doDeleteSession(sessionId: string) {
       useChatUIStore.setState({
         messages: [],
         currentSessionId: null,
+        azureAutoRetryCount: 0,
       });
     }
   } catch (e: any) {
