@@ -18,6 +18,7 @@ export interface OpencodeMessage {
   content: string;
   parts?: Part[];
   completed?: boolean;
+  isAutoReply?: boolean;
 }
 
 export interface QuestionOption {
@@ -113,6 +114,7 @@ interface OpencodeChatUIState {
   chatInput: string;
   aborted: boolean;
   chatSplitRatio: number;
+  azureAutoRetryCount: number;
 }
 
 export const useChatUIStore = create<OpencodeChatUIState>()(() => ({
@@ -130,6 +132,7 @@ export const useChatUIStore = create<OpencodeChatUIState>()(() => ({
   chatInput: "",
   aborted: false,
   chatSplitRatio: 75,
+  azureAutoRetryCount: 0,
 }));
 
 /**
