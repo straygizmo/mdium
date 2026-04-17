@@ -350,6 +350,10 @@ pub struct VbaModuleInfo {
     pub stream_name: String,
     pub module_type: String, // "standard" | "class" | "document"
     pub text_offset: u32,
+    /// Byte offset of the MODULEOFFSET (0x0031) 4-byte value within the
+    /// decompressed dir stream. `None` if the record was missing.
+    /// Used to zero the offset and force Excel to recompile from source.
+    pub offset_value_pos: Option<usize>,
 }
 
 /// Result of parsing the VBA dir stream.
@@ -383,6 +387,7 @@ pub fn parse_dir_stream(data: &[u8]) -> Result<VbaProject, String> {
     let mut cur_stream_name: Option<String> = None;
     let mut cur_type: Option<String> = None;
     let mut cur_offset: u32 = 0;
+    let mut cur_offset_value_pos: Option<usize> = None;
 
     while pos + 6 <= data.len() {
         let record_id = u16::from_le_bytes([data[pos], data[pos + 1]]);
@@ -482,6 +487,7 @@ pub fn parse_dir_stream(data: &[u8]) -> Result<VbaProject, String> {
                         record_data[2],
                         record_data[3],
                     ]);
+                    cur_offset_value_pos = Some(pos);
                 }
             }
             0x002B => {
@@ -493,10 +499,12 @@ pub fn parse_dir_stream(data: &[u8]) -> Result<VbaProject, String> {
                         stream_name,
                         module_type: cur_type.take().unwrap_or_else(|| "standard".to_string()),
                         text_offset: cur_offset,
+                        offset_value_pos: cur_offset_value_pos.take(),
                     });
                 }
                 cur_type = None;
                 cur_offset = 0;
+                cur_offset_value_pos = None;
             }
             0x0010 => {
                 // PROJECTTERMINATOR - stop parsing
@@ -894,9 +902,13 @@ pub fn inject_vba_modules(xlsm_path: String, macros_dir: String) -> Result<Injec
         .map(|m| (m.stream_name.clone(), m))
         .collect();
 
-    // 6. For each macro file, encode and compress, then write back
+    // 6. For each macro file, encode and compress, then write back.
+    //    We write only the compressed source (no PerformanceCache prefix).
+    //    The corresponding MODULEOFFSET in the dir stream is then zeroed
+    //    so Excel recompiles from the compressed source rather than
+    //    trusting the now-absent cache.
     let mut updated_modules: Vec<String> = Vec::new();
-    let mut any_module_changed = false;
+    let mut offset_positions_to_zero: Vec<usize> = Vec::new();
 
     for (module_name, file_path_str) in &macro_files {
         let source = fs::read_to_string(file_path_str)
@@ -930,44 +942,24 @@ pub fn inject_vba_modules(xlsm_path: String, macros_dir: String) -> Result<Injec
         // Compress with VBA compression
         let compressed = vba_compress(&encoded);
 
-        // Read original stream to preserve performance cache
+        // Write new stream containing only the compressed source.
+        // The original stream's PerformanceCache (bytes before text_offset)
+        // is compiled p-code tied to the previous source; preserving it
+        // after a source change makes Excel crash on open.
         let stream_path = format!("/VBA/{}", info.stream_name);
-        let mut original_stream = Vec::new();
-        comp.open_stream(&stream_path)
-            .map_err(|e| format!("Failed to open stream '{}': {}", stream_path, e))?
-            .read_to_end(&mut original_stream)
-            .map_err(|e| format!("Failed to read stream '{}': {}", stream_path, e))?;
-
-        let text_offset = info.text_offset as usize;
-        let cache = if text_offset <= original_stream.len() {
-            &original_stream[..text_offset]
-        } else {
-            &original_stream[..]
-        };
-
-        // Check if compressed data actually changed
-        let original_compressed = if text_offset <= original_stream.len() {
-            &original_stream[text_offset..]
-        } else {
-            &[][..]
-        };
-        if compressed != original_compressed {
-            any_module_changed = true;
-        }
-
-        // Build new stream: preserve original cache + new compressed source
-        let mut new_stream = Vec::with_capacity(cache.len() + compressed.len());
-        new_stream.extend_from_slice(cache);
-        new_stream.extend_from_slice(&compressed);
-
-        // Write new stream back to OLE2
         {
             let mut stream = comp
                 .create_stream(&stream_path)
                 .map_err(|e| format!("Failed to create stream '{}': {}", stream_path, e))?;
             stream
-                .write_all(&new_stream)
+                .write_all(&compressed)
                 .map_err(|e| format!("Failed to write stream '{}': {}", stream_path, e))?;
+        }
+
+        // Record the dir-stream position whose 4-byte MODULEOFFSET value
+        // must be zeroed so that Excel expects no cache in this stream.
+        if let Some(pos) = info.offset_value_pos {
+            offset_positions_to_zero.push(pos);
         }
 
         updated_modules.push(module_name.clone());
@@ -977,33 +969,24 @@ pub fn inject_vba_modules(xlsm_path: String, macros_dir: String) -> Result<Injec
         return Err("No matching modules found to update. Module names in .bas/.cls files must match existing VBA module names.".to_string());
     }
 
-    // 7. Invalidate the _VBA_PROJECT compiled cache so Excel recompiles
-    //    from the compressed source we just updated.
-    //
-    //    _VBA_PROJECT contains version-dependent compiled p-code.  When the
-    //    version matches the running Excel, it trusts the cache and ignores
-    //    the compressed source.  By flipping the version to a value Excel
-    //    doesn't recognise, we force a recompile.  We keep the full stream
-    //    intact (only change 2 bytes) to avoid triggering file-repair.
-    if any_module_changed {
-        let mut vba_proj_data = Vec::new();
-        comp.open_stream("/VBA/_VBA_PROJECT")
-            .map_err(|e| format!("Failed to open _VBA_PROJECT: {}", e))?
-            .read_to_end(&mut vba_proj_data)
-            .map_err(|e| format!("Failed to read _VBA_PROJECT: {}", e))?;
-
-        if vba_proj_data.len() >= 4 {
-            // Bytes 2-3 are the version.  Flip them to force recompile.
-            vba_proj_data[2] = 0x01;
-            vba_proj_data[3] = 0x00;
-
-            let mut stream = comp
-                .create_stream("/VBA/_VBA_PROJECT")
-                .map_err(|e| format!("Failed to create _VBA_PROJECT: {}", e))?;
-            stream
-                .write_all(&vba_proj_data)
-                .map_err(|e| format!("Failed to write _VBA_PROJECT: {}", e))?;
+    // 7. Rewrite the dir stream with zeroed MODULEOFFSETs for modified
+    //    modules, then compress and write it back.  Excel reads this
+    //    offset to locate the PerformanceCache; a zero offset tells it
+    //    the stream starts with the compressed source directly.
+    if !offset_positions_to_zero.is_empty() {
+        let mut new_dir = dir_data.clone();
+        for pos in &offset_positions_to_zero {
+            if pos + 4 <= new_dir.len() {
+                new_dir[*pos..*pos + 4].copy_from_slice(&0u32.to_le_bytes());
+            }
         }
+        let compressed_dir = vba_compress(&new_dir);
+        let mut stream = comp
+            .create_stream("/VBA/dir")
+            .map_err(|e| format!("Failed to create /VBA/dir stream: {}", e))?;
+        stream
+            .write_all(&compressed_dir)
+            .map_err(|e| format!("Failed to write /VBA/dir stream: {}", e))?;
     }
 
     // 8. Serialize updated OLE2 back to bytes
@@ -1274,6 +1257,36 @@ mod tests {
         assert_eq!(project.modules[1].stream_name, "Sheet1");
         assert_eq!(project.modules[1].module_type, "class");
         assert_eq!(project.modules[1].text_offset, 200);
+    }
+
+    #[test]
+    fn test_parse_dir_stream_records_offset_value_position() {
+        // The parser must record the byte position of each MODULEOFFSET's
+        // 4-byte value within the decompressed dir stream, so callers can
+        // overwrite it to force Excel to recompile from the compressed source.
+        let mut stream = Vec::new();
+        stream.extend_from_slice(&make_record(0x0003, &932u16.to_le_bytes()));
+        stream.extend_from_slice(&make_record(0x0019, b"Module1"));
+        stream.extend_from_slice(&make_record(0x001A, b"Module1"));
+        stream.extend_from_slice(&make_record(0x0021, &[]));
+        // The 6-byte record header comes next, then the 4-byte value.
+        let expected_value_pos = stream.len() + 6;
+        stream.extend_from_slice(&make_record(0x0031, &100u32.to_le_bytes()));
+        stream.extend_from_slice(&make_record(0x002B, &[]));
+        stream.extend_from_slice(&make_record(0x0010, &[]));
+
+        let project = parse_dir_stream(&stream).expect("parse failed");
+        assert_eq!(
+            project.modules[0].offset_value_pos,
+            Some(expected_value_pos)
+        );
+
+        // Overwriting the recorded position with zero must zero text_offset on re-parse.
+        let mut modified = stream.clone();
+        let pos = project.modules[0].offset_value_pos.unwrap();
+        modified[pos..pos + 4].copy_from_slice(&0u32.to_le_bytes());
+        let reparsed = parse_dir_stream(&modified).expect("reparse failed");
+        assert_eq!(reparsed.modules[0].text_offset, 0);
     }
 
     #[test]
