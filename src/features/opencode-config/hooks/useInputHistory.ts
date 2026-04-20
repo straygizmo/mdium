@@ -48,6 +48,9 @@ export function useInputHistoryNav(
       if (history.length === 0) return false;
 
       if (e.key === "ArrowUp") {
+        // Only trigger history when the input is empty; otherwise let the
+        // caret move naturally. Continue navigating if already in history.
+        if (indexRef.current === -1 && inputRef.current !== "") return false;
         e.preventDefault();
         if (indexRef.current === -1) {
           savedInputRef.current = inputRef.current;
