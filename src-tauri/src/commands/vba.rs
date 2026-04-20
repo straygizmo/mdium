@@ -989,15 +989,44 @@ pub fn inject_vba_modules(xlsm_path: String, macros_dir: String) -> Result<Injec
             .map_err(|e| format!("Failed to write /VBA/dir stream: {}", e))?;
     }
 
-    // 8. Serialize updated OLE2 back to bytes
+    // 8. Rewrite the /VBA/_VBA_PROJECT stream to its spec-compliant header
+    //    only, discarding the project-level PerformanceCache.
+    //
+    //    Per MS-OVBA 2.3.4.1, _VBA_PROJECT is 7 bytes of version-independent
+    //    header followed by PerformanceCache, and on write:
+    //        Reserved1 (2 bytes): 0x61CC            (little-endian: CC 61)
+    //        Version   (2 bytes): MUST be 0xFFFF
+    //        Reserved2 (1 byte):  MUST be 0x00
+    //        Reserved3 (2 bytes): undefined, MUST be ignored
+    //        PerformanceCache:    MUST NOT be present on write
+    //
+    //    The cache is compiled p-code that references the previous module
+    //    layout (including PerformanceCache regions inside module streams).
+    //    Since step 6 removed those module-level caches and step 7 zeroed
+    //    the MODULEOFFSETs, leaving the project-level cache in place makes
+    //    Excel dereference stale pointers during VBA project load, which
+    //    triggers Safe Mode recovery and in many cases an outright crash.
+    //    Truncating to the 7-byte header forces Excel to recompile fully
+    //    from the compressed source we just wrote.
+    const VBA_PROJECT_HEADER: [u8; 7] = [0xCC, 0x61, 0xFF, 0xFF, 0x00, 0x00, 0x00];
+    {
+        let mut stream = comp
+            .create_stream("/VBA/_VBA_PROJECT")
+            .map_err(|e| format!("Failed to create /VBA/_VBA_PROJECT stream: {}", e))?;
+        stream
+            .write_all(&VBA_PROJECT_HEADER)
+            .map_err(|e| format!("Failed to write /VBA/_VBA_PROJECT stream: {}", e))?;
+    }
+
+    // 9. Serialize updated OLE2 back to bytes
     comp.flush()
         .map_err(|e| format!("Failed to flush OLE2 compound file: {}", e))?;
     let updated_vba_bin = comp.into_inner().into_inner();
 
-    // 8. Replace vbaProject.bin in the ZIP
+    // 10. Replace vbaProject.bin in the ZIP
     let new_xlsm = replace_zip_entry(&xlsm_data, "xl/vbaProject.bin", &updated_vba_bin)?;
 
-    // 9. Write updated file back
+    // 11. Write updated file back
     fs::write(&xlsm_path, &new_xlsm)
         .map_err(|e| format!("Failed to write updated file: {}", e))?;
 
