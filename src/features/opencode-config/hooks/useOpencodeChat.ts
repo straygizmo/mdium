@@ -253,6 +253,70 @@ function processSSEStream(stream: AsyncIterable<unknown>) {
             });
           } else if (part.type === "tool") {
             const toolPart = part as Extract<Part, { type: "tool" }>;
+
+            // Opencode built-in "question" tool: render as QuestionsCard instead of a JSON bubble.
+            // https://opencode.ai/docs/en/tools/#question
+            if (toolPart.tool === "question") {
+              const status = toolPart.state.status;
+              const input = toolPart.state.input as any;
+              useChatUIStore.setState((s) => {
+                // Drop the question tool part from the assistant message so it never renders as a tool bubble
+                let messages = s.messages;
+                const last = s.messages[s.messages.length - 1];
+                if (last && last.role === "assistant" && last.parts?.some(
+                  (p) => p.type === "tool" && (p as any).callID === toolPart.callID,
+                )) {
+                  const filteredParts = (last.parts ?? []).filter(
+                    (p) => !(p.type === "tool" && (p as any).callID === toolPart.callID),
+                  );
+                  messages = [...s.messages];
+                  messages[messages.length - 1] = { ...last, parts: filteredParts };
+                }
+
+                // Only show the card while the tool is still awaiting an answer
+                if (
+                  (status === "pending" || status === "running") &&
+                  input &&
+                  typeof input.question === "string"
+                ) {
+                  const rawOptions = input.options;
+                  const options: QuestionOption[] = Array.isArray(rawOptions)
+                    ? rawOptions
+                        .map((o: any): QuestionOption => {
+                          if (typeof o === "string") return { label: o };
+                          if (o && typeof o === "object") {
+                            return {
+                              label: String(o.label ?? o.value ?? ""),
+                              description:
+                                typeof o.description === "string" ? o.description : undefined,
+                            };
+                          }
+                          return { label: String(o) };
+                        })
+                        .filter((o) => o.label)
+                    : [];
+                  const newQ: PendingQuestion = {
+                    question: input.question,
+                    header: typeof input.header === "string" ? input.header : undefined,
+                    options,
+                  };
+                  const existing = s.pendingQuestions ?? [];
+                  // Dedup by header+question in case the same call fires multiple updates
+                  const idx = existing.findIndex(
+                    (q) => q.question === newQ.question && q.header === newQ.header,
+                  );
+                  const nextQuestions =
+                    idx >= 0
+                      ? existing.map((q, i) => (i === idx ? newQ : q))
+                      : [...existing, newQ];
+                  return { messages, pendingQuestions: nextQuestions, loading: false };
+                }
+
+                return { messages };
+              });
+              continue;
+            }
+
             useChatUIStore.setState((s) => {
               const last = s.messages[s.messages.length - 1];
               if (last && last.role === "assistant") {
