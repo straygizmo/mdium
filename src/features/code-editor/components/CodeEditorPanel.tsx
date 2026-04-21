@@ -21,6 +21,11 @@ export function CodeEditorPanel() {
     ? getMonacoLanguage(activeTab.filePath)
     : "plaintext";
 
+  const isCsv = !!activeTab?.csvFileType;
+  const theme = themeType === "dark"
+    ? (isCsv ? "mdium-csv-dark" : "vs-dark")
+    : (isCsv ? "mdium-csv-light" : "vs");
+
   const handleEditorDidMount: OnMount = useCallback((editor) => {
     editorRef.current = editor;
     editor.focus();
@@ -44,7 +49,7 @@ export function CodeEditorPanel() {
           key={activeTab.id}
           defaultValue={activeTab.content}
           language={language}
-          theme={themeType === "dark" ? "vs-dark" : "vs"}
+          theme={theme}
           onChange={handleChange}
           onMount={handleEditorDidMount}
           options={{
