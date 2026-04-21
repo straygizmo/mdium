@@ -19,6 +19,7 @@
     "@open-motion/components": "file:packages/open-motion/components",
     "@open-motion/core": "file:packages/open-motion/core",
     "@opencode-ai/sdk": "^1.2.27",
+    "@tanstack/react-virtual": "^3.13.24",
     "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/plugin-dialog": "^2.6.0",
     "@tauri-apps/plugin-fs": "^2.4.5",
