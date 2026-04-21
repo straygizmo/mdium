@@ -982,15 +982,56 @@ pub fn inject_vba_modules(xlsm_path: String, macros_dir: String) -> Result<Injec
         return Err("No matching modules found to update. Module names in .bas/.cls files must match existing VBA module names.".to_string());
     }
 
-    // 7. Serialize updated OLE2 back to bytes
+    // 7. Invalidate the project-level PerformanceCache so Excel recompiles
+    //    from the compressed source we just wrote.
+    //
+    //    Per-module layout (cache prefix + new source, MODULEOFFSET unchanged)
+    //    stays structurally valid so Excel can still locate the source, but
+    //    the project-level caches below contain compiled p-code tied to the
+    //    *previous* source and will cause Excel to display the old text if
+    //    left in place:
+    //
+    //      /VBA/_VBA_PROJECT : 7-byte spec header only; MS-OVBA 2.3.4.1 says
+    //                          PerformanceCache MUST NOT be present on write.
+    //      /VBA/__SRP_*      : undocumented secondary caches. Spec 2.3.4.3
+    //                          says readers MUST ignore them, so removing
+    //                          them is safe and forces a full recompile.
+    const VBA_PROJECT_HEADER: [u8; 7] = [0xCC, 0x61, 0xFF, 0xFF, 0x00, 0x00, 0x00];
+    {
+        let mut stream = comp
+            .create_stream("/VBA/_VBA_PROJECT")
+            .map_err(|e| format!("Failed to create /VBA/_VBA_PROJECT stream: {}", e))?;
+        stream
+            .write_all(&VBA_PROJECT_HEADER)
+            .map_err(|e| format!("Failed to write /VBA/_VBA_PROJECT stream: {}", e))?;
+    }
+
+    // Collect __SRP_* stream paths under /VBA/ first, then remove them.
+    // (Mutating the compound file while holding a walk iterator would
+    // invalidate the iterator.)
+    let srp_paths: Vec<std::path::PathBuf> = comp
+        .walk()
+        .filter(|entry| {
+            entry.is_stream()
+                && entry.name().starts_with("__SRP_")
+                && entry.path().parent().map(|p| p.to_string_lossy() == "/VBA").unwrap_or(false)
+        })
+        .map(|entry| entry.path().to_path_buf())
+        .collect();
+    for path in srp_paths {
+        comp.remove_stream(&path)
+            .map_err(|e| format!("Failed to remove stream '{}': {}", path.display(), e))?;
+    }
+
+    // 8. Serialize updated OLE2 back to bytes
     comp.flush()
         .map_err(|e| format!("Failed to flush OLE2 compound file: {}", e))?;
     let updated_vba_bin = comp.into_inner().into_inner();
 
-    // 8. Replace vbaProject.bin in the ZIP
+    // 9. Replace vbaProject.bin in the ZIP
     let new_xlsm = replace_zip_entry(&xlsm_data, "xl/vbaProject.bin", &updated_vba_bin)?;
 
-    // 9. Write updated file back
+    // 10. Write updated file back
     fs::write(&xlsm_path, &new_xlsm)
         .map_err(|e| format!("Failed to write updated file: {}", e))?;
 
