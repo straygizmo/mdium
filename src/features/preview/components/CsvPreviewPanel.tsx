@@ -1,8 +1,11 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTranslation } from "react-i18next";
 import { useTabStore } from "@/stores/tab-store";
 import { useCsvParse } from "../hooks/useCsvParse";
 import "./CsvPreviewPanel.css";
+
+const HEADER_HEIGHT = 30;
 
 export function CsvPreviewPanel() {
   const { t } = useTranslation("csv");
@@ -23,6 +26,14 @@ export function CsvPreviewPanel() {
     const synthetic = Array.from({ length: maxColumns }, (_, i) => `Col ${i + 1}`);
     return { headerRow: synthetic, bodyRows: rows };
   }, [rows, maxColumns, headerMode]);
+
+  const parentRef = useRef<HTMLDivElement>(null);
+  const rowVirtualizer = useVirtualizer({
+    count: bodyRows.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 26,
+    overscan: 12,
+  });
 
   if (!activeTab) return null;
 
@@ -57,8 +68,11 @@ export function CsvPreviewPanel() {
           ⚠ {t("parseWarning", { count: errors.length })}
         </div>
       )}
-      <div className="csv-preview__scroll">
-        <div className="csv-preview__grid">
+      <div className="csv-preview__scroll" ref={parentRef}>
+        <div
+          className="csv-preview__grid"
+          style={{ height: rowVirtualizer.getTotalSize() + HEADER_HEIGHT }}
+        >
           {headerRow && (
             <div
               className="csv-preview__row csv-preview__row--header"
@@ -75,30 +89,38 @@ export function CsvPreviewPanel() {
               ))}
             </div>
           )}
-          {bodyRows.map((row, r) => (
-            <div
-              key={r}
-              className="csv-preview__row"
-              style={{ gridTemplateColumns: gridTemplate }}
-            >
-              {Array.from({ length: columnCount }, (_, c) => {
-                const cell = row[c];
-                return (
-                  <div
-                    key={c}
-                    className={
-                      cell === undefined || cell === ""
-                        ? "csv-preview__cell csv-preview__cell--empty"
-                        : "csv-preview__cell"
-                    }
-                    data-col-index={c % 10}
-                  >
-                    {cell === undefined || cell === "" ? "—" : cell}
-                  </div>
-                );
-              })}
-            </div>
-          ))}
+          {rowVirtualizer.getVirtualItems().map((v) => {
+            const row = bodyRows[v.index];
+            return (
+              <div
+                key={v.key}
+                className="csv-preview__row csv-preview__row--virtual"
+                style={{
+                  gridTemplateColumns: gridTemplate,
+                  transform: `translateY(${v.start + HEADER_HEIGHT}px)`,
+                }}
+                ref={rowVirtualizer.measureElement}
+                data-index={v.index}
+              >
+                {Array.from({ length: columnCount }, (_, c) => {
+                  const cell = row[c];
+                  return (
+                    <div
+                      key={c}
+                      className={
+                        cell === undefined || cell === ""
+                          ? "csv-preview__cell csv-preview__cell--empty"
+                          : "csv-preview__cell"
+                      }
+                      data-col-index={c % 10}
+                    >
+                      {cell === undefined || cell === "" ? "—" : cell}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>

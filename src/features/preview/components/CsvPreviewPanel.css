@@ -66,11 +66,11 @@
 }
 
 .csv-preview__row--header {
-  font-weight: 700;
-  background: var(--bg-alt, #f6f8fa);
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: 2;
+  font-weight: 700;
+  background: var(--bg-alt, #f6f8fa);
 }
 
 .csv-preview__cell {
@@ -108,4 +108,15 @@
   .csv-preview__cell[data-col-index="7"] { color: #e3b341; }
   .csv-preview__cell[data-col-index="8"] { color: #39c5cf; }
   .csv-preview__cell[data-col-index="9"] { color: #8b949e; }
+}
+
+.csv-preview__grid {
+  position: relative;
+}
+
+.csv-preview__row--virtual {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
 }
