@@ -2,6 +2,7 @@
 
 import * as monaco from "monaco-editor";
 import loader from "@monaco-editor/loader";
+import { registerCsvLanguages } from "./csv-language";
 
 import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import jsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
@@ -20,3 +21,34 @@ self.MonacoEnvironment = {
 };
 
 loader.config({ monaco });
+
+registerCsvLanguages(monaco);
+
+const CSV_COLORS_LIGHT = [
+  "D73A49", "E36209", "B08800", "22863A", "005CC5",
+  "6F42C1", "D03592", "795E26", "1F7A7A", "6E7781",
+];
+const CSV_COLORS_DARK = [
+  "FF7B72", "FFA657", "D2A8FF", "7EE787", "79C0FF",
+  "BC8CFF", "F778BA", "E3B341", "39C5CF", "8B949E",
+];
+
+monaco.editor.defineTheme("mdium-csv-light", {
+  base: "vs",
+  inherit: true,
+  rules: CSV_COLORS_LIGHT.map((color, i) => ({
+    token: `col${i}`,
+    foreground: color,
+  })),
+  colors: {},
+});
+
+monaco.editor.defineTheme("mdium-csv-dark", {
+  base: "vs-dark",
+  inherit: true,
+  rules: CSV_COLORS_DARK.map((color, i) => ({
+    token: `col${i}`,
+    foreground: color,
+  })),
+  colors: {},
+});
