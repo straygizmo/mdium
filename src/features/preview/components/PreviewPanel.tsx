@@ -14,6 +14,7 @@ import { PdfPreviewPanel } from "./PdfPreviewPanel";
 import { DocxPreviewPanel } from "./DocxPreviewPanel";
 import { HtmlPreviewPanel } from "./HtmlPreviewPanel";
 import { SlidevPreviewPanel } from "./SlidevPreviewPanel";
+import { CsvPreviewPanel } from "./CsvPreviewPanel";
 import { ZennFrontmatterForm } from "@/features/zenn/components/ZennFrontmatterForm";
 import { VideoPanel } from "@/features/video/components/VideoPanel";
 import { VideoScenarioDialog, type VideoScenarioParams } from "@/features/video/components/VideoScenarioDialog";
@@ -1209,6 +1210,15 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
     return (
       <div className="preview-panel">
         <VideoPanel />
+      </div>
+    );
+  }
+
+  // Show CsvPreviewPanel for CSV/TSV files
+  if (activeTab?.csvFileType) {
+    return (
+      <div className="preview-panel" ref={previewRef}>
+        <CsvPreviewPanel />
       </div>
     );
   }
