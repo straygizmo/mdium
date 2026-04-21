@@ -49,6 +49,14 @@ These are not reserved words but will shadow built-in functions:
 
 **Rule:** Never use these exact names as variable or parameter names. Use prefixed forms: \`sVal\`, \`dtVal\`, \`tmVal\`, \`nmId\`, \`fmtSpec\`, \`lnNum\`, \`stpVal\`, \`errMsg\`.
 
+### Forbidden Object-Model Member Names
+
+These collide with Excel object-model properties (\`Range.Row\`, \`Range.Column\`, \`Collection.Key\`, \`Range.Rows\`, \`Range.Columns\`) and cause ambiguous references or silent bugs inside \`With\` blocks. **Never use these exact names as variable, parameter, or property names:**
+
+\`Row\`, \`Rows\`, \`Column\`, \`Columns\`, \`Key\`
+
+Use prefixed forms instead: \`rowIdx\`, \`rowNum\`, \`targetRow\`, \`rowList\`, \`rowCount\`, \`colIdx\`, \`colNum\`, \`targetCol\`, \`colList\`, \`colCount\`, \`keyName\`, \`dictKey\`, \`lookupKey\`.
+
 ## Syntax Quick Reference
 
 | Feature | VBA Syntax | Common LLM Mistake |
@@ -187,16 +195,17 @@ Before outputting VBA code, verify:
 
 1. No identifiers match reserved words (especially: \`as\`, \`to\`, \`in\`, \`is\`, \`or\`, \`on\`, \`if\`, \`do\`, \`by\`, \`me\`)
 2. No identifiers shadow built-in functions (\`Str\`, \`Val\`, \`Int\`, \`Date\`, \`Time\`, \`Name\`, \`Type\`, \`Line\`, \`Input\`, \`Error\`)
-3. All multi-line statements use \` _\` (space + underscore) continuation
-4. \`Set\` used for every object assignment
-5. \`&\` used for string concatenation (not \`+\`)
-6. Arrays use \`()\` not \`[]\`
-7. No \`//\` comments, \`==\`, \`!=\`, \`&&\`, \`||\`, \`Try/Catch\`
-8. \`Option Explicit\` at module top
-9. Each \`Dim\` variable has its own \`As\` clause
-10. \`Exit Sub\`/\`Exit Function\` placed before error handler label
-11. \`Long\` used instead of \`Integer\` for integer variables
-12. No \`On Error Resume Next\` without immediate \`On Error GoTo 0\` restore
+3. No identifiers match object-model members (\`Row\`, \`Rows\`, \`Column\`, \`Columns\`, \`Key\`)
+4. All multi-line statements use \` _\` (space + underscore) continuation
+5. \`Set\` used for every object assignment
+6. \`&\` used for string concatenation (not \`+\`)
+7. Arrays use \`()\` not \`[]\`
+8. No \`//\` comments, \`==\`, \`!=\`, \`&&\`, \`||\`, \`Try/Catch\`
+9. \`Option Explicit\` at module top
+10. Each \`Dim\` variable has its own \`As\` clause
+11. \`Exit Sub\`/\`Exit Function\` placed before error handler label
+12. \`Long\` used instead of \`Integer\` for integer variables
+13. No \`On Error Resume Next\` without immediate \`On Error GoTo 0\` restore
 `,
   },
 };
