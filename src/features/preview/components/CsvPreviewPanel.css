@@ -58,6 +58,7 @@
   display: flex;
   flex-direction: column;
   min-width: max-content;
+  position: relative;
 }
 
 .csv-preview__row {
@@ -97,22 +98,16 @@
 .csv-preview__cell[data-col-index="8"] { color: #1f7a7a; }
 .csv-preview__cell[data-col-index="9"] { color: #6e7781; }
 
-@media (prefers-color-scheme: dark) {
-  .csv-preview__cell[data-col-index="0"] { color: #ff7b72; }
-  .csv-preview__cell[data-col-index="1"] { color: #ffa657; }
-  .csv-preview__cell[data-col-index="2"] { color: #d2a8ff; }
-  .csv-preview__cell[data-col-index="3"] { color: #7ee787; }
-  .csv-preview__cell[data-col-index="4"] { color: #79c0ff; }
-  .csv-preview__cell[data-col-index="5"] { color: #bc8cff; }
-  .csv-preview__cell[data-col-index="6"] { color: #f778ba; }
-  .csv-preview__cell[data-col-index="7"] { color: #e3b341; }
-  .csv-preview__cell[data-col-index="8"] { color: #39c5cf; }
-  .csv-preview__cell[data-col-index="9"] { color: #8b949e; }
-}
-
-.csv-preview__grid {
-  position: relative;
-}
+[data-theme-type="dark"] .csv-preview__cell[data-col-index="0"] { color: #ff7b72; }
+[data-theme-type="dark"] .csv-preview__cell[data-col-index="1"] { color: #ffa657; }
+[data-theme-type="dark"] .csv-preview__cell[data-col-index="2"] { color: #d2a8ff; }
+[data-theme-type="dark"] .csv-preview__cell[data-col-index="3"] { color: #7ee787; }
+[data-theme-type="dark"] .csv-preview__cell[data-col-index="4"] { color: #79c0ff; }
+[data-theme-type="dark"] .csv-preview__cell[data-col-index="5"] { color: #bc8cff; }
+[data-theme-type="dark"] .csv-preview__cell[data-col-index="6"] { color: #f778ba; }
+[data-theme-type="dark"] .csv-preview__cell[data-col-index="7"] { color: #e3b341; }
+[data-theme-type="dark"] .csv-preview__cell[data-col-index="8"] { color: #39c5cf; }
+[data-theme-type="dark"] .csv-preview__cell[data-col-index="9"] { color: #8b949e; }
 
 .csv-preview__row--virtual {
   position: absolute;

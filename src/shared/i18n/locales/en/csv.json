@@ -4,5 +4,6 @@
   "columns": "{{count}} columns",
   "parseWarning": "{{count}} parse warnings",
   "parseWarningsTitle": "Parse warnings",
-  "empty": "(empty file)"
+  "empty": "(empty file)",
+  "columnLabel": "Col {{index}}"
 }

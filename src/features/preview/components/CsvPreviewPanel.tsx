@@ -23,9 +23,9 @@ export function CsvPreviewPanel() {
     if (headerMode) {
       return { headerRow: rows[0], bodyRows: rows.slice(1) };
     }
-    const synthetic = Array.from({ length: maxColumns }, (_, i) => `Col ${i + 1}`);
+    const synthetic = Array.from({ length: maxColumns }, (_, i) => t("columnLabel", { index: i + 1 }));
     return { headerRow: synthetic, bodyRows: rows };
-  }, [rows, maxColumns, headerMode]);
+  }, [rows, maxColumns, headerMode, t]);
 
   const parentRef = useRef<HTMLDivElement>(null);
   const rowVirtualizer = useVirtualizer({
