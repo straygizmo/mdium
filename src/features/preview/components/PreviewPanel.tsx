@@ -6,7 +6,10 @@ import { useSettingsStore } from "@/stores/settings-store";
 import { showConfirm } from "@/stores/dialog-store";
 import { getThemeById } from "@/shared/themes";
 import { makeHeadingId } from "@/shared/lib/markdown/heading-id";
-import { preprocessMath } from "@/shared/lib/markdown/math-preprocess";
+import {
+  renderMarkdownWithSourceLines,
+  splitFrontMatter,
+} from "@/shared/lib/markdown/render-with-source-lines";
 
 import { usePreviewTableEdit } from "../hooks/usePreviewTableEdit";
 import { OfficePreview } from "./OfficePreview";
@@ -108,131 +111,6 @@ marked.use({
     },
   },
 });
-
-/**
- * Preprocess Zenn-specific notation into HTML
- */
-function preprocessZenn(content: string): string {
-  const lines = content.split("\n");
-  const result: string[] = [];
-  let i = 0;
-
-  while (i < lines.length) {
-    const line = lines[i];
-
-    // :::message / :::message alert / :::message success / :::message warning
-    const msgMatch = line.match(/^:{3,}message\s*(\w*)$/);
-    if (msgMatch) {
-      const type = msgMatch[1];
-      const cls = type ? `zenn-message zenn-message-${type}` : "zenn-message";
-      const inner: string[] = [];
-      i++;
-      while (i < lines.length && !lines[i].match(/^:{3,}$/)) {
-        inner.push(lines[i]);
-        i++;
-      }
-      i++; // skip closing :::
-      result.push(`<div class="${cls}">\n\n${inner.join("\n")}\n\n</div>`);
-      continue;
-    }
-
-    // :::details title
-    const detailsMatch = line.match(/^:{3,}details\s+(.+)$/);
-    if (detailsMatch) {
-      const summary = detailsMatch[1];
-      const inner: string[] = [];
-      i++;
-      while (i < lines.length && !lines[i].match(/^:{3,}$/)) {
-        inner.push(lines[i]);
-        i++;
-      }
-      i++; // skip closing :::
-      result.push(`<details><summary>${summary}</summary>\n\n${inner.join("\n")}\n\n</details>`);
-      continue;
-    }
-
-    // Code block with filename: ```lang:filename
-    const codeMatch = line.match(/^```(\w+):(.+)$/);
-    if (codeMatch) {
-      const [, lang, filename] = codeMatch;
-      const codeLines: string[] = [];
-      i++;
-      while (i < lines.length && !lines[i].startsWith("```")) {
-        codeLines.push(lines[i]);
-        i++;
-      }
-      i++; // skip closing ```
-      const escaped = codeLines.join("\n")
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
-      try {
-        const highlighted = hljs.highlight(codeLines.join("\n"), {
-          language: lang,
-          ignoreIllegals: true,
-        });
-        result.push(
-          `<div class="zenn-code-block"><div class="zenn-code-filename">${filename}</div><pre><code class="hljs language-${lang}">${highlighted.value}</code></pre></div>`
-        );
-      } catch {
-        result.push(
-          `<div class="zenn-code-block"><div class="zenn-code-filename">${filename}</div><pre><code>${escaped}</code></pre></div>`
-        );
-      }
-      continue;
-    }
-
-    // Zenn image size syntax: ![alt](url =WxH) → convert to <img> tag
-    const imgLine = line.replace(
-      /!\[([^\]]*)\]\((.+?)\s+=(\d*)x(\d*)\)/g,
-      (_match, alt: string, url: string, w: string, h: string) => {
-        const attrs = [
-          `src="${url}"`,
-          `alt="${alt}"`,
-          w ? `width="${w}"` : "",
-          h ? `height="${h}"` : "",
-        ].filter(Boolean).join(" ");
-        return `<p><img ${attrs} /></p>`;
-      }
-    );
-    result.push(imgLine);
-    i++;
-  }
-
-  return result.join("\n");
-}
-
-/**
- * Convert <!-- pagebreak --> comments to page break markers
- */
-function preprocessPageBreaks(content: string): string {
-  return content.replace(
-    /<!--\s*pagebreak\s*-->/gi,
-    '<div class="pagebreak-marker"></div>'
-  );
-}
-
-/**
- * Remove extra blank lines between table rows (for GFM table recognition)
- */
-function normalizeTableLines(content: string): string {
-  const lines = content.split("\n");
-  const result: string[] = [];
-  let i = 0;
-  while (i < lines.length) {
-    result.push(lines[i]);
-    if (lines[i].trim().startsWith("|")) {
-      let j = i + 1;
-      while (j < lines.length && lines[j].trim() === "") j++;
-      if (j < lines.length && lines[j].trim().startsWith("|") && j > i + 1) {
-        i = j;
-        continue;
-      }
-    }
-    i++;
-  }
-  return result.join("\n");
-}
 
 /**
  * Extract YAML front matter and separate it from the body
@@ -757,17 +635,13 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
     }
   }, [filePath]);
 
-  // Markdown rendering (YAML front matter → Zenn preprocessing → math preprocessing → table normalization → marked)
+  // Markdown rendering with source-line annotation (front matter → preprocess chain → marked)
   useEffect(() => {
     try {
-      const { meta, body } = extractFrontMatter(content);
+      const { meta, body, bodyLineOffset } = splitFrontMatter(content);
       setFrontMatter(meta);
-      const zennProcessed = preprocessZenn(body);
-      const pageBreakProcessed = preprocessPageBreaks(zennProcessed);
-      const preprocessed = preprocessMath(pageBreakProcessed);
-      const normalized = normalizeTableLines(preprocessed);
       mermaidCounter = 0;
-      const result = marked(normalized) as string;
+      const result = renderMarkdownWithSourceLines(body, bodyLineOffset);
       setHtml(result);
     } catch (error) {
       console.error("Markdown rendering error:", error);
