@@ -1054,7 +1054,9 @@ export function App() {
                 <>
                   {editorVisible && (
                     <div className="app__editor-pane" style={{ flex: `0 0 ${editorRatio}%` }}>
-                      <EditorPanel editorRef={editorRef} />
+                      {activeTab.csvFileType
+                        ? <CodeEditorPanel />
+                        : <EditorPanel editorRef={editorRef} />}
                     </div>
                   )}
                   {editorVisible && (
