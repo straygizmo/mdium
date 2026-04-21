@@ -1,4 +1,4 @@
-import * as monaco from "monaco-editor";
+import type * as monaco from "monaco-editor";
 
 export class CsvTokenState implements monaco.languages.IState {
   constructor(

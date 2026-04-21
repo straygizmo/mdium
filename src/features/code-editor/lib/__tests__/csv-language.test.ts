@@ -64,6 +64,14 @@ describe("tokenizeCsvLine (comma)", () => {
     const cellTokens = tokens.filter((t) => t.type.startsWith("col"));
     expect([...new Set(cellTokens.map((t) => t.type))]).toEqual(["col0", "col1"]);
   });
+
+  it("first token always has startIndex 0", () => {
+    const cases = ["a,b", ",a", '"x",y', "", "\t"];
+    for (const line of cases) {
+      const { tokens } = tokenizeCsvLine(line, new CsvTokenState(0, false), ",");
+      if (tokens.length > 0) expect(tokens[0].startIndex).toBe(0);
+    }
+  });
 });
 
 describe("tokenizeCsvLine (tab)", () => {
