@@ -46,7 +46,7 @@ export function useScrollSync(
         markers = [];
         return;
       }
-      const previewTop = preview.getBoundingClientRect().top - preview.scrollTop;
+      const previewOrigin = preview.getBoundingClientRect().top - preview.scrollTop;
       const result: Marker[] = [];
       let lastLine = -Infinity;
       for (const el of elements) {
@@ -54,10 +54,23 @@ export function useScrollSync(
         if (lineAttr === null) continue;
         const line = Number(lineAttr);
         if (!Number.isFinite(line)) continue;
-        if (line <= lastLine) continue; // keep first occurrence for a given line
-        const top = el.getBoundingClientRect().top - previewTop;
+        if (line <= lastLine) continue;
+        const top = el.getBoundingClientRect().top - previewOrigin;
         result.push({ line, top });
         lastLine = line;
+      }
+      // Trailing sentinel so the region past the last anchor stays in sync:
+      // when editor shows its bottom line at top of viewport, preview reaches its bottom.
+      if (result.length > 0) {
+        const totalLines = editor.value.split("\n").length;
+        const maxPreviewScroll = Math.max(
+          preview.scrollHeight - preview.clientHeight,
+          0,
+        );
+        const last = result[result.length - 1];
+        if (totalLines > last.line && maxPreviewScroll > last.top) {
+          result.push({ line: totalLines, top: maxPreviewScroll });
+        }
       }
       markers = result;
     };
@@ -136,9 +149,16 @@ export function useScrollSync(
       if (markers.length === 0) return;
       if (lineHeight <= 0) measureLineHeight();
       isSyncingRef.current = true;
-      const topLine = editor.scrollTop / lineHeight + 1; // 1-indexed
-      const target = editorLineToPreviewTop(topLine);
-      preview.scrollTop = target;
+      const editorMax = Math.max(editor.scrollHeight - editor.clientHeight, 0);
+      const previewMax = Math.max(preview.scrollHeight - preview.clientHeight, 0);
+      if (editorMax > 0 && editor.scrollTop >= editorMax - 0.5) {
+        preview.scrollTop = previewMax;
+      } else if (editor.scrollTop <= 0.5) {
+        preview.scrollTop = 0;
+      } else {
+        const topLine = editor.scrollTop / lineHeight + 1; // 1-indexed
+        preview.scrollTop = editorLineToPreviewTop(topLine);
+      }
       requestAnimationFrame(() => {
         isSyncingRef.current = false;
       });
@@ -151,8 +171,16 @@ export function useScrollSync(
       if (markers.length === 0) return;
       if (lineHeight <= 0) measureLineHeight();
       isSyncingRef.current = true;
-      const line = previewTopToEditorLine(preview.scrollTop);
-      editor.scrollTop = Math.max(0, (line - 1) * lineHeight);
+      const editorMax = Math.max(editor.scrollHeight - editor.clientHeight, 0);
+      const previewMax = Math.max(preview.scrollHeight - preview.clientHeight, 0);
+      if (previewMax > 0 && preview.scrollTop >= previewMax - 0.5) {
+        editor.scrollTop = editorMax;
+      } else if (preview.scrollTop <= 0.5) {
+        editor.scrollTop = 0;
+      } else {
+        const line = previewTopToEditorLine(preview.scrollTop);
+        editor.scrollTop = Math.max(0, (line - 1) * lineHeight);
+      }
       requestAnimationFrame(() => {
         isSyncingRef.current = false;
       });
