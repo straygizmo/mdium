@@ -23,6 +23,9 @@ import enGit from "./locales/en/git.json";
 import jaVideo from "./locales/ja/video.json";
 import enVideo from "./locales/en/video.json";
 
+import jaCsv from "./locales/ja/csv.json";
+import enCsv from "./locales/en/csv.json";
+
 const savedLanguage = localStorage.getItem("mdium-lang") ?? "ja";
 
 i18n.use(initReactI18next).init({
@@ -37,6 +40,7 @@ i18n.use(initReactI18next).init({
       imageEditor: jaImageEditor,
       git: jaGit,
       video: jaVideo,
+      csv: jaCsv,
     },
     en: {
       common: enCommon,
@@ -48,6 +52,7 @@ i18n.use(initReactI18next).init({
       imageEditor: enImageEditor,
       git: enGit,
       video: enVideo,
+      csv: enCsv,
     },
   },
   lng: savedLanguage,

@@ -7,7 +7,7 @@ import { useSettingsStore } from "@/stores/settings-store";
 import { useTabStore } from "@/stores/tab-store";
 import { useGitStore } from "@/stores/git-store";
 import { useOpencodeServerStore } from "@/stores/opencode-server-store";
-import { getOfficeExt, getMindmapExt, getImageExt, getPdfExt, isCodeFile } from "@/shared/lib/constants";
+import { getOfficeExt, getMindmapExt, getImageExt, getPdfExt, getCsvExt, isCodeFile } from "@/shared/lib/constants";
 import { useFileStore } from "@/stores/file-store";
 import { useUiStore } from "@/stores/ui-store";
 import { useRecentItems } from "@/shared/hooks/useRecentItems";
@@ -359,6 +359,7 @@ export function App() {
 
         const imageExt = getImageExt(filePath);
         const pdfExt = getPdfExt(filePath);
+        const csvExt = getCsvExt(filePath);
 
         if (pdfExt) {
           // Read PDF file as binary
@@ -415,13 +416,17 @@ export function App() {
             imageBlobUrl: blobUrl,
           });
         } else {
-          const content = await invoke<string>("read_text_file", { path: filePath });
+          // CSV/TSV files may be Shift-JIS (e.g. Excel exports in Japan);
+          // use the encoding-detecting reader so they open cleanly.
+          const readCmd = csvExt ? "read_text_file_auto_encoding" : "read_text_file";
+          const content = await invoke<string>(readCmd, { path: filePath });
           openTab({
             filePath,
             folderPath: activeFolderPath ?? "",
             fileName,
             content,
             isCodeFile: isCodeFile(filePath),
+            csvFileType: (csvExt as ".csv" | ".tsv" | null) ?? undefined,
           });
         }
         setActiveFile(filePath);
@@ -430,8 +435,7 @@ export function App() {
         // Hide editor panel for non-.md files
         const isMd = filePath.toLowerCase().endsWith(".md");
         const isVideoJson = filePath.toLowerCase().endsWith(".video.json");
-        const isCode = isCodeFile(filePath);
-        useUiStore.getState().setEditorVisible(isMd && !imageExt && !isVideoJson && !isCode);
+        useUiStore.getState().setEditorVisible((isMd || !!csvExt) && !imageExt && !isVideoJson);
         if (isVideoJson) {
           useUiStore.getState().setActiveViewTab("video");
         }
@@ -1053,7 +1057,9 @@ export function App() {
                 <>
                   {editorVisible && (
                     <div className="app__editor-pane" style={{ flex: `0 0 ${editorRatio}%` }}>
-                      <EditorPanel editorRef={editorRef} />
+                      {activeTab.csvFileType
+                        ? <CodeEditorPanel />
+                        : <EditorPanel editorRef={editorRef} />}
                     </div>
                   )}
                   {editorVisible && (

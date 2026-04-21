@@ -25,7 +25,8 @@ const EXT_TO_LANGUAGE: Record<string, string> = {
   ".yml": "yaml",
   ".toml": "ini",
   ".xml": "xml",
-  ".csv": "plaintext",
+  ".csv": "csv",
+  ".tsv": "tsv",
   // Systems
   ".rs": "rust",
   ".go": "go",

@@ -121,6 +121,7 @@ pub fn run() {
             commands::ai::ai_chat_with_image,
             // File operations
             commands::file::read_text_file,
+            commands::file::read_text_file_auto_encoding,
             commands::file::read_binary_file,
             commands::file::write_text_file,
             commands::file::write_text_file_with_dirs,

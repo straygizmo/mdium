@@ -21,6 +21,8 @@ export interface Tab {
   mindmapFileType?: string;
   /** Image file extension (e.g., ".png") */
   imageFileType?: string;
+  /** CSV/TSV file extension (e.g., ".csv") */
+  csvFileType?: ".csv" | ".tsv";
   /** Image file blob URL (for preview) */
   imageBlobUrl?: string;
   /** Fabric.js JSON for image canvas (for preserving state across tab switches) */

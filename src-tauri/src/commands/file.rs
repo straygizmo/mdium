@@ -22,6 +22,53 @@ pub fn read_text_file(path: String) -> Result<String, String> {
     fs::read_to_string(&path).map_err(|e| format!("Failed to read file: {}", e))
 }
 
+/// Read a text file, auto-detecting encoding.
+///
+/// Tries in order: UTF-8 BOM, UTF-16 LE BOM, UTF-16 BE BOM, strict UTF-8,
+/// then Shift-JIS (CP932). Always returns a UTF-8 String on success.
+///
+/// Used for file formats where Shift-JIS is common (e.g., CSV exports from
+/// Excel in Japan). The encoding is not round-tripped on save — edits will
+/// be written back as UTF-8.
+#[tauri::command]
+pub fn read_text_file_auto_encoding(path: String) -> Result<String, String> {
+    let bytes = fs::read(&path).map_err(|e| format!("Failed to read file: {}", e))?;
+
+    // UTF-8 BOM
+    if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        return std::str::from_utf8(&bytes[3..])
+            .map(|s| s.to_string())
+            .map_err(|e| format!("Invalid UTF-8 after BOM: {}", e));
+    }
+    // UTF-16 LE BOM
+    if bytes.starts_with(&[0xFF, 0xFE]) {
+        let (cow, _, had_errors) = encoding_rs::UTF_16LE.decode(&bytes[2..]);
+        if !had_errors {
+            return Ok(cow.into_owned());
+        }
+    }
+    // UTF-16 BE BOM
+    if bytes.starts_with(&[0xFE, 0xFF]) {
+        let (cow, _, had_errors) = encoding_rs::UTF_16BE.decode(&bytes[2..]);
+        if !had_errors {
+            return Ok(cow.into_owned());
+        }
+    }
+    // Strict UTF-8
+    if let Ok(s) = std::str::from_utf8(&bytes) {
+        return Ok(s.to_string());
+    }
+    // Fallback: Shift-JIS (CP932)
+    let (cow, _, had_errors) = encoding_rs::SHIFT_JIS.decode(&bytes);
+    if had_errors {
+        return Err(
+            "Failed to decode file: tried UTF-8 and Shift-JIS, both produced invalid characters"
+                .to_string(),
+        );
+    }
+    Ok(cow.into_owned())
+}
+
 #[tauri::command]
 pub fn read_binary_file(path: String) -> Result<Vec<u8>, String> {
     fs::read(&path).map_err(|e| format!("Failed to read binary file: {}", e))
@@ -51,6 +98,10 @@ fn is_target_file(
     include_pdf: bool,
 ) -> bool {
     if name.ends_with(".md") || name.ends_with(".video.json") {
+        return true;
+    }
+    let lower_csv = name.to_lowercase();
+    if lower_csv.ends_with(".csv") || lower_csv.ends_with(".tsv") {
         return true;
     }
     let lower = name.to_lowercase();
