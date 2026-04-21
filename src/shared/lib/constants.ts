@@ -1,6 +1,7 @@
 export const OFFICE_EXTENSIONS = [".docx", ".xlsx", ".xlsm", ".xlam"];
 export const MINDMAP_EXTENSIONS = [".km", ".xmind"];
 export const PDF_EXTENSIONS = [".pdf"];
+export const CSV_EXTENSIONS = [".csv", ".tsv"];
 export const IMAGE_EXTENSIONS = [
   ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".webp",
 ];
@@ -20,6 +21,11 @@ export function getPdfExt(filePath: string): string | null {
   return PDF_EXTENSIONS.find((ext) => lower.endsWith(ext)) ?? null;
 }
 
+export function getCsvExt(filePath: string): string | null {
+  const lower = filePath.toLowerCase();
+  return CSV_EXTENSIONS.find((ext) => lower.endsWith(ext)) ?? null;
+}
+
 export function getImageExt(filePath: string): string | null {
   const lower = filePath.toLowerCase();
   return IMAGE_EXTENSIONS.find((ext) => lower.endsWith(ext)) ?? null;
@@ -27,7 +33,7 @@ export function getImageExt(filePath: string): string | null {
 
 /**
  * Returns true if the file should be opened in the code editor
- * (i.e., it is not Markdown, Office, PDF, image, mindmap, or video JSON).
+ * (i.e., it is not Markdown, Office, PDF, image, mindmap, CSV, or video JSON).
  */
 export function isCodeFile(filePath: string): boolean {
   const lower = filePath.toLowerCase();
@@ -36,6 +42,7 @@ export function isCodeFile(filePath: string): boolean {
   if (getOfficeExt(lower)) return false;
   if (getPdfExt(lower)) return false;
   if (getMindmapExt(lower)) return false;
+  if (getCsvExt(lower)) return false;
   if (getImageExt(lower)) return false;
   return true;
 }
