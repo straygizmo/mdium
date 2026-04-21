@@ -416,7 +416,10 @@ export function App() {
             imageBlobUrl: blobUrl,
           });
         } else {
-          const content = await invoke<string>("read_text_file", { path: filePath });
+          // CSV/TSV files may be Shift-JIS (e.g. Excel exports in Japan);
+          // use the encoding-detecting reader so they open cleanly.
+          const readCmd = csvExt ? "read_text_file_auto_encoding" : "read_text_file";
+          const content = await invoke<string>(readCmd, { path: filePath });
           openTab({
             filePath,
             folderPath: activeFolderPath ?? "",
