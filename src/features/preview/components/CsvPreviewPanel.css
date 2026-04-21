@@ -1,0 +1,111 @@
+.csv-preview {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 13px;
+  background: var(--bg-panel, #fff);
+  color: var(--text, #222);
+}
+
+.csv-preview--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted, #888);
+  padding: 24px;
+}
+
+.csv-preview__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border, #e5e5e5);
+  flex-shrink: 0;
+}
+
+.csv-preview__toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.csv-preview__count {
+  color: var(--text-muted, #888);
+}
+
+.csv-preview__warning {
+  padding: 6px 10px;
+  background: var(--warn-bg, #fff4e5);
+  color: var(--warn-fg, #995c00);
+  border-bottom: 1px solid var(--border, #e5e5e5);
+  cursor: help;
+  flex-shrink: 0;
+}
+
+.csv-preview__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.csv-preview__grid {
+  display: flex;
+  flex-direction: column;
+  min-width: max-content;
+}
+
+.csv-preview__row {
+  display: grid;
+  border-bottom: 1px solid var(--border, #eee);
+}
+
+.csv-preview__row--header {
+  font-weight: 700;
+  background: var(--bg-alt, #f6f8fa);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.csv-preview__cell {
+  padding: 4px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-right: 1px solid var(--border, #eee);
+}
+
+.csv-preview__cell--empty {
+  color: var(--text-muted, #bbb);
+}
+
+/* Rainbow palette — matches Monaco theme tokens col0..col9 (light) */
+.csv-preview__cell[data-col-index="0"] { color: #d73a49; }
+.csv-preview__cell[data-col-index="1"] { color: #e36209; }
+.csv-preview__cell[data-col-index="2"] { color: #b08800; }
+.csv-preview__cell[data-col-index="3"] { color: #22863a; }
+.csv-preview__cell[data-col-index="4"] { color: #005cc5; }
+.csv-preview__cell[data-col-index="5"] { color: #6f42c1; }
+.csv-preview__cell[data-col-index="6"] { color: #d03592; }
+.csv-preview__cell[data-col-index="7"] { color: #795e26; }
+.csv-preview__cell[data-col-index="8"] { color: #1f7a7a; }
+.csv-preview__cell[data-col-index="9"] { color: #6e7781; }
+
+@media (prefers-color-scheme: dark) {
+  .csv-preview__cell[data-col-index="0"] { color: #ff7b72; }
+  .csv-preview__cell[data-col-index="1"] { color: #ffa657; }
+  .csv-preview__cell[data-col-index="2"] { color: #d2a8ff; }
+  .csv-preview__cell[data-col-index="3"] { color: #7ee787; }
+  .csv-preview__cell[data-col-index="4"] { color: #79c0ff; }
+  .csv-preview__cell[data-col-index="5"] { color: #bc8cff; }
+  .csv-preview__cell[data-col-index="6"] { color: #f778ba; }
+  .csv-preview__cell[data-col-index="7"] { color: #e3b341; }
+  .csv-preview__cell[data-col-index="8"] { color: #39c5cf; }
+  .csv-preview__cell[data-col-index="9"] { color: #8b949e; }
+}
