@@ -7,7 +7,7 @@ import { useSettingsStore } from "@/stores/settings-store";
 import { useTabStore } from "@/stores/tab-store";
 import { useGitStore } from "@/stores/git-store";
 import { useOpencodeServerStore } from "@/stores/opencode-server-store";
-import { getOfficeExt, getMindmapExt, getImageExt, getPdfExt, isCodeFile } from "@/shared/lib/constants";
+import { getOfficeExt, getMindmapExt, getImageExt, getPdfExt, getCsvExt, isCodeFile } from "@/shared/lib/constants";
 import { useFileStore } from "@/stores/file-store";
 import { useUiStore } from "@/stores/ui-store";
 import { useRecentItems } from "@/shared/hooks/useRecentItems";
@@ -359,6 +359,7 @@ export function App() {
 
         const imageExt = getImageExt(filePath);
         const pdfExt = getPdfExt(filePath);
+        const csvExt = getCsvExt(filePath);
 
         if (pdfExt) {
           // Read PDF file as binary
@@ -422,6 +423,7 @@ export function App() {
             fileName,
             content,
             isCodeFile: isCodeFile(filePath),
+            csvFileType: (csvExt as ".csv" | ".tsv" | null) ?? undefined,
           });
         }
         setActiveFile(filePath);
@@ -430,8 +432,7 @@ export function App() {
         // Hide editor panel for non-.md files
         const isMd = filePath.toLowerCase().endsWith(".md");
         const isVideoJson = filePath.toLowerCase().endsWith(".video.json");
-        const isCode = isCodeFile(filePath);
-        useUiStore.getState().setEditorVisible(isMd && !imageExt && !isVideoJson && !isCode);
+        useUiStore.getState().setEditorVisible((isMd || !!csvExt) && !imageExt && !isVideoJson);
         if (isVideoJson) {
           useUiStore.getState().setActiveViewTab("video");
         }
