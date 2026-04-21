@@ -1,0 +1,8 @@
+{
+  "treatFirstRowAsHeader": "1行目をヘッダとして扱う",
+  "rows": "{{count}} 行",
+  "columns": "{{count}} 列",
+  "parseWarning": "{{count}} 件のパース警告",
+  "parseWarningsTitle": "パース警告",
+  "empty": "（空のファイル）"
+}

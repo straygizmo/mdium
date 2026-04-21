@@ -1,0 +1,8 @@
+{
+  "treatFirstRowAsHeader": "Treat first row as header",
+  "rows": "{{count}} rows",
+  "columns": "{{count}} columns",
+  "parseWarning": "{{count}} parse warnings",
+  "parseWarningsTitle": "Parse warnings",
+  "empty": "(empty file)"
+}
