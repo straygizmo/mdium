@@ -30,7 +30,8 @@ export function computeGraphLanes(rawCommits: RawCommit[]): GraphCommit[] {
   for (const raw of rawCommits) {
     const lines: GraphLine[] = [];
 
-    // Find which lane this commit occupies
+    // Find which lane this commit occupies. Prefer the lowest lane holding
+    // this hash so parent-chain lanes consume first.
     let commitLane = activeLanes.indexOf(raw.hash);
     let commitColor: number;
 
@@ -46,6 +47,22 @@ export function computeGraphLanes(rawCommits: RawCommit[]): GraphCommit[] {
       activeLanes[commitLane] = raw.hash;
     }
     commitColor = laneColors[commitLane];
+
+    // Collapse duplicate lanes: if the same hash is expected on multiple
+    // lanes (e.g. a prior merge reserved a lane for a parent that is also
+    // reachable via the first-parent chain), fold them into commitLane
+    // so they don't continue drawing zombie straight lines.
+    for (let i = commitLane + 1; i < activeLanes.length; i++) {
+      if (activeLanes[i] === raw.hash) {
+        lines.push({
+          fromLane: i,
+          toLane: commitLane,
+          type: "merge-in",
+          colorIndex: laneColors[i],
+        });
+        activeLanes[i] = null;
+      }
+    }
 
     // All active lanes that pass through this row draw a straight line,
     // except the commit's own lane (handled by parent assignment below)
@@ -84,12 +101,12 @@ export function computeGraphLanes(rawCommits: RawCommit[]): GraphCommit[] {
           parentLane = activeLanes.indexOf(null);
           if (parentLane === -1) {
             parentLane = activeLanes.length;
-            activeLanes.push(null);
+            activeLanes.push(parentHash);
             laneColors.push(nextColor);
-            nextColor = (nextColor + 1) % NUM_COLORS;
+          } else {
+            activeLanes[parentLane] = parentHash;
+            laneColors[parentLane] = nextColor;
           }
-          activeLanes[parentLane] = parentHash;
-          laneColors[parentLane] = nextColor;
           nextColor = (nextColor + 1) % NUM_COLORS;
         }
         lines.push({
