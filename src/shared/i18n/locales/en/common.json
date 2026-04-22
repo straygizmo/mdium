@@ -21,6 +21,7 @@
   "noFolderOpen": "Ctrl + D : Open folder",
   "unsavedChanges": "You have unsaved changes. Close without saving?",
   "error": "Error",
+  "retry": "Retry",
   "loading": "Loading...",
   "untitled": "Untitled",
   "createNewMdFile": "Create new .md file",

@@ -105,4 +105,39 @@
   color: var(--accent-red, #e53e3e);
   font-size: 14px;
   text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.office-preview__error-message {
+  word-break: break-word;
+}
+
+.office-preview__retry-btn {
+  padding: 6px 16px;
+  font-size: 13px;
+  border: 1px solid var(--border, #dfe2e5);
+  background: var(--bg-overlay, #f6f8fa);
+  color: var(--text, #333);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+
+.office-preview__retry-btn:hover {
+  border-color: var(--primary, #9333ea);
+  color: var(--primary, #9333ea);
+}
+
+.office-preview--dark .office-preview__retry-btn {
+  background: #2d2d2d;
+  color: #d4d4d4;
+  border-color: #444;
+}
+
+.office-preview--dark .office-preview__retry-btn:hover {
+  border-color: var(--primary, #9333ea);
+  color: var(--primary, #9333ea);
 }

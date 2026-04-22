@@ -8,6 +8,8 @@ interface OfficePreviewProps {
   themeType: "light" | "dark";
 }
 
+const AUTO_RETRY_DELAY_MS = 200;
+
 export function OfficePreview({ fileData, fileType, themeType }: OfficePreviewProps) {
   const { t } = useTranslation("common");
   const containerRef = useRef<HTMLDivElement>(null);
@@ -15,6 +17,19 @@ export function OfficePreview({ fileData, fileType, themeType }: OfficePreviewPr
   const [activeSheet, setActiveSheet] = useState(0);
   const [sheetHtml, setSheetHtml] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
+  const autoRetriedRef = useRef(false);
+
+  // Reset auto-retry budget when the source file changes
+  useEffect(() => {
+    autoRetriedRef.current = false;
+  }, [fileData, fileType]);
+
+  const handleManualRetry = () => {
+    autoRetriedRef.current = false;
+    setError(null);
+    setRetryKey((k) => k + 1);
+  };
 
   // .docx rendering
   useEffect(() => {
@@ -23,6 +38,7 @@ export function OfficePreview({ fileData, fileType, themeType }: OfficePreviewPr
     if (!container || !fileData) return;
 
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
     (async () => {
       try {
         const { renderAsync } = await import("docx-preview");
@@ -41,14 +57,23 @@ export function OfficePreview({ fileData, fileType, themeType }: OfficePreviewPr
         });
         setError(null);
       } catch (e) {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : String(e));
+        if (cancelled) return;
+        if (!autoRetriedRef.current) {
+          autoRetriedRef.current = true;
+          retryTimer = setTimeout(() => {
+            if (!cancelled) setRetryKey((k) => k + 1);
+          }, AUTO_RETRY_DELAY_MS);
+          return;
         }
+        setError(e instanceof Error ? e.message : String(e));
       }
     })();
 
-    return () => { cancelled = true; };
-  }, [fileData, fileType]);
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [fileData, fileType, retryKey]);
 
   // .xlsx / .xlsm rendering
   useEffect(() => {
@@ -56,6 +81,7 @@ export function OfficePreview({ fileData, fileType, themeType }: OfficePreviewPr
     if (!fileData) return;
 
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
     (async () => {
       try {
         const XLSX = await import("xlsx");
@@ -70,14 +96,23 @@ export function OfficePreview({ fileData, fileType, themeType }: OfficePreviewPr
         }
         setError(null);
       } catch (e) {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : String(e));
+        if (cancelled) return;
+        if (!autoRetriedRef.current) {
+          autoRetriedRef.current = true;
+          retryTimer = setTimeout(() => {
+            if (!cancelled) setRetryKey((k) => k + 1);
+          }, AUTO_RETRY_DELAY_MS);
+          return;
         }
+        setError(e instanceof Error ? e.message : String(e));
       }
     })();
 
-    return () => { cancelled = true; };
-  }, [fileData, fileType]);
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [fileData, fileType, retryKey]);
 
   // Sheet tab switch
   const handleSheetChange = async (index: number) => {
@@ -97,7 +132,16 @@ export function OfficePreview({ fileData, fileType, themeType }: OfficePreviewPr
   if (error) {
     return (
       <div className={`office-preview office-preview--${themeType}`}>
-        <div className="office-preview__error">{t("error")}: {error}</div>
+        <div className="office-preview__error">
+          <div className="office-preview__error-message">{t("error")}: {error}</div>
+          <button
+            type="button"
+            className="office-preview__retry-btn"
+            onClick={handleManualRetry}
+          >
+            {t("retry")}
+          </button>
+        </div>
       </div>
     );
   }
