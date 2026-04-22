@@ -99,6 +99,17 @@
   font-weight: 600;
 }
 
+/* empty sheet placeholder */
+.office-preview__empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  font-size: 13px;
+  color: var(--text-muted, #666);
+}
+
 /* error */
 .office-preview__error {
   padding: 24px;

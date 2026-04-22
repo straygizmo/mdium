@@ -22,6 +22,7 @@
   "unsavedChanges": "未保存の変更があります。保存せずに閉じますか？",
   "error": "エラー",
   "retry": "再試行",
+  "emptySheet": "このシートには表示できるデータがありません",
   "loading": "読み込み中...",
   "untitled": "無題",
   "createNewMdFile": "新規 .md ファイルを作成",

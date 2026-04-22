@@ -22,6 +22,7 @@
   "unsavedChanges": "You have unsaved changes. Close without saving?",
   "error": "Error",
   "retry": "Retry",
+  "emptySheet": "This sheet has no data to display",
   "loading": "Loading...",
   "untitled": "Untitled",
   "createNewMdFile": "Create new .md file",

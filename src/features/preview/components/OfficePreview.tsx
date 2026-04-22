@@ -16,6 +16,7 @@ export function OfficePreview({ fileData, fileType, themeType }: OfficePreviewPr
   const [sheets, setSheets] = useState<string[]>([]);
   const [activeSheet, setActiveSheet] = useState(0);
   const [sheetHtml, setSheetHtml] = useState("");
+  const [emptySheet, setEmptySheet] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [retryKey, setRetryKey] = useState(0);
   const autoRetriedRef = useRef(false);
@@ -91,8 +92,15 @@ export function OfficePreview({ fileData, fileType, themeType }: OfficePreviewPr
         setActiveSheet(0);
 
         const sheet = workbook.Sheets[workbook.SheetNames[0]];
-        if (sheet) {
+        // SheetJS sheet_to_html crashes ("Cannot read properties of undefined
+        // (reading 'indexOf')") when ws['!ref'] is missing — common for empty
+        // sheets, chart sheets, and dialog sheets.
+        if (sheet && sheet["!ref"]) {
           setSheetHtml(XLSX.utils.sheet_to_html(sheet, { editable: false }));
+          setEmptySheet(false);
+        } else {
+          setSheetHtml("");
+          setEmptySheet(true);
         }
         setError(null);
       } catch (e) {
@@ -121,8 +129,12 @@ export function OfficePreview({ fileData, fileType, themeType }: OfficePreviewPr
       const XLSX = await import("xlsx");
       const workbook = XLSX.read(fileData, { type: "array" });
       const sheet = workbook.Sheets[workbook.SheetNames[index]];
-      if (sheet) {
+      if (sheet && sheet["!ref"]) {
         setSheetHtml(XLSX.utils.sheet_to_html(sheet, { editable: false }));
+        setEmptySheet(false);
+      } else {
+        setSheetHtml("");
+        setEmptySheet(true);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -184,10 +196,14 @@ export function OfficePreview({ fileData, fileType, themeType }: OfficePreviewPr
           ))}
         </div>
       )}
-      <div
-        className="office-preview__xlsx-container"
-        dangerouslySetInnerHTML={{ __html: sheetHtml }}
-      />
+      {emptySheet ? (
+        <div className="office-preview__empty">{t("emptySheet")}</div>
+      ) : (
+        <div
+          className="office-preview__xlsx-container"
+          dangerouslySetInnerHTML={{ __html: sheetHtml }}
+        />
+      )}
     </div>
   );
 }
