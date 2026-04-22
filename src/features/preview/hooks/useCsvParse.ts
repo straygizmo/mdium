@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
-import { parseCsv, type CsvParseResult } from "../lib/csv-parse";
+import { useEffect, useState } from "react";
+import { parseCsvAsync, type CsvParseResult } from "../lib/csv-parse";
+
+const EMPTY_RESULT: CsvParseResult = { rows: [], errors: [], maxColumns: 0 };
 
 export function useCsvParse(
   content: string,
@@ -7,14 +9,22 @@ export function useCsvParse(
   debounceMs = 150,
 ): CsvParseResult {
   const [debounced, setDebounced] = useState(content);
+  const [result, setResult] = useState<CsvParseResult>(EMPTY_RESULT);
 
   useEffect(() => {
     const handle = setTimeout(() => setDebounced(content), debounceMs);
     return () => clearTimeout(handle);
   }, [content, debounceMs]);
 
-  return useMemo(
-    () => parseCsv(debounced, delimiter),
-    [debounced, delimiter],
-  );
+  useEffect(() => {
+    let cancelled = false;
+    parseCsvAsync(debounced, delimiter).then((r) => {
+      if (!cancelled) setResult(r);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [debounced, delimiter]);
+
+  return result;
 }

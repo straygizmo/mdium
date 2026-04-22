@@ -54,13 +54,13 @@ export function CodeEditorPanel() {
           onMount={handleEditorDidMount}
           options={{
             fontSize: 14,
-            minimap: { enabled: true },
-            wordWrap: "on",
+            minimap: { enabled: !isCsv },
+            wordWrap: isCsv ? "off" : "on",
             automaticLayout: true,
             scrollBeyondLastLine: false,
             lineNumbers: "on",
             renderLineHighlight: "line",
-            bracketPairColorization: { enabled: true },
+            bracketPairColorization: { enabled: !isCsv },
             tabSize: 4,
             insertSpaces: true,
           }}
