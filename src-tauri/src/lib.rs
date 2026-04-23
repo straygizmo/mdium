@@ -256,6 +256,7 @@ pub fn run() {
             // Active xlsm state
             commands::active_xlsm::set_active_xlsm_path,
             commands::active_xlsm::get_active_xlsm_path,
+            commands::active_xlsm::get_http_bridge_info,
             // Medium operations
             commands::medium::medium_test_connection,
             commands::medium::medium_upload_image,
