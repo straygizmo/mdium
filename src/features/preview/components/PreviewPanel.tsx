@@ -27,7 +27,7 @@ import { splitNarration } from "@/features/video/lib/narration-splitter";
 import { videoFilePrefix } from "@/features/video/lib/audio-filename";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
-import { useChatUIStore, consumePendingVideoOutput, doConnect, doCreateNewSession, doSendMessage, setPendingVideoOutput } from "@/features/opencode-config/hooks/useOpencodeChat";
+import { useChatUIStore, consumePendingVideoOutput, doConnect, doCreateNewSession, doSendMessage, setPendingVideoOutput, syncMdiumVbaMcpConfig } from "@/features/opencode-config/hooks/useOpencodeChat";
 import { BUILTIN_COMMANDS } from "@/features/opencode-config/lib/builtin-commands";
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 import { docxToMarkdown } from "@/features/export/lib/docxToMarkdown";
@@ -1176,7 +1176,10 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
                 <input
                   type="checkbox"
                   checked={allowLlmVbaImport}
-                  onChange={(e) => setAllowLlmVbaImport(e.target.checked)}
+                  onChange={(e) => {
+                    setAllowLlmVbaImport(e.target.checked);
+                    syncMdiumVbaMcpConfig().catch(() => {});
+                  }}
                 />
                 <span title={t("allowLlmVbaImportHint") ?? ""}>
                   {t("allowLlmVbaImport")}
