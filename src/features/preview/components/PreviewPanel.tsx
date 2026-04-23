@@ -246,7 +246,19 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
 
   const content = activeTab?.content ?? "";
   const filePath = activeTab?.filePath ?? null;
-  const isSlidev = useMemo(() => isSlidevMarkdown(content), [content]);
+  // Hooks run before the component's early-return branches, so any effect or
+  // memo that processes `content` would otherwise fire for CSV / binary tabs
+  // too — feeding a 50MB CSV into marked or regex scans freezes the UI.
+  const isRenderableMarkdown = !!activeTab
+    && !activeTab.csvFileType
+    && !activeTab.officeFileType
+    && !activeTab.mindmapFileType
+    && !activeTab.imageFileType
+    && !activeTab.binaryData;
+  const isSlidev = useMemo(
+    () => (isRenderableMarkdown ? isSlidevMarkdown(content) : false),
+    [content, isRenderableMarkdown],
+  );
 
   const setIsVideoMode = useVideoStore((s) => s.setIsVideoMode);
   const setVideoProject = useVideoStore((s) => s.setVideoProject);
@@ -637,6 +649,11 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
 
   // Markdown rendering with source-line annotation (front matter → preprocess chain → marked)
   useEffect(() => {
+    if (!isRenderableMarkdown) {
+      setFrontMatter(null);
+      setHtml("");
+      return;
+    }
     try {
       const { meta, body, bodyLineOffset } = splitFrontMatter(content);
       setFrontMatter(meta);
@@ -647,7 +664,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
       console.error("Markdown rendering error:", error);
       setHtml(`<p>${t("renderError")}</p>`);
     }
-  }, [content]);
+  }, [content, isRenderableMarkdown, t]);
 
   // Manually write HTML to contentRef and convert relative image paths to blob URLs
   const blobUrlsRef = useRef<string[]>([]);

@@ -18,9 +18,15 @@ export function useCsvParse(
 
   useEffect(() => {
     let cancelled = false;
-    parseCsvAsync(debounced, delimiter).then((r) => {
-      if (!cancelled) setResult(r);
-    });
+    parseCsvAsync(debounced, delimiter)
+      .then((r) => {
+        if (!cancelled) setResult(r);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error("CSV worker parse failed:", err);
+        setResult(EMPTY_RESULT);
+      });
     return () => {
       cancelled = true;
     };
