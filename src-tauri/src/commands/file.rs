@@ -159,7 +159,9 @@ fn build_tree_filtered(
 
         // Skip hidden files and common non-essential directories.
         // `.mdium` is allow-listed so its contents (e.g. converted .md files) are visible.
+        // `~$` prefix skips Office owner/lock files created while a document is open.
         if (name.starts_with('.') && name != ".mdium")
+            || name.starts_with("~$")
             || name == "node_modules"
             || name == "target"
             || name == "dist"
@@ -225,6 +227,7 @@ fn build_tree_all(dir: &Path, depth: u32) -> Vec<FileEntry> {
         let name = entry.file_name().to_string_lossy().to_string();
 
         if (name.starts_with('.') && name != ".mdium")
+            || name.starts_with("~$")
             || name == "node_modules"
             || name == "target"
             || name == "dist"
