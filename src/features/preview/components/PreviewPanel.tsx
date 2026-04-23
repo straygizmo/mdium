@@ -232,6 +232,8 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   const [convertError, setConvertError] = useState<string | null>(null);
   const [macroExporting, setMacroExporting] = useState(false);
   const [macroImporting, setMacroImporting] = useState(false);
+  const allowLlmVbaImport = useSettingsStore((s) => s.allowLlmVbaImport);
+  const setAllowLlmVbaImport = useSettingsStore((s) => s.setAllowLlmVbaImport);
   const [macroError, setMacroError] = useState<string | null>(null);
   const [macroSuccess, setMacroSuccess] = useState<string | null>(null);
   const [macrosDirExists, setMacrosDirExists] = useState(false);
@@ -1003,6 +1005,18 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
     );
   }, [isMacroEnabled, activeTab?.filePath]);
 
+  // Sync active xlsm/xlam path to Rust state for LLM bridge
+  useEffect(() => {
+    const fp = activeTab?.filePath ?? null;
+    const isMacroFile =
+      fp !== null &&
+      (fp.toLowerCase().endsWith(".xlsm") ||
+        fp.toLowerCase().endsWith(".xlam"));
+    invoke("set_active_xlsm_path", {
+      path: isMacroFile ? fp : null,
+    }).catch(() => {});
+  }, [activeTab?.filePath]);
+
   const handleConvertToMarkdown = useCallback(async () => {
     if (!activeTab?.binaryData || !activeTab?.filePath) return;
     setConverting(true);
@@ -1090,7 +1104,22 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
         await invoke("open_in_default_app", { path: filePath });
       }
     } catch (e) {
-      setMacroError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      // Try to parse structured error from Rust (module_set_changed carries JSON)
+      try {
+        const parsed = JSON.parse(msg);
+        if (parsed?.error === "module_set_changed") {
+          const newList = (parsed.newInFiles ?? []).join(", ") || "-";
+          const missingList = (parsed.missingInFiles ?? []).join(", ") || "-";
+          setMacroError(
+            t("macroModuleSetChanged", { new: newList, missing: missingList })
+          );
+          return;
+        }
+      } catch {
+        // Not JSON; fall through to raw message
+      }
+      setMacroError(msg);
     } finally {
       setMacroImporting(false);
     }
@@ -1141,6 +1170,18 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
               >
                 {macroImporting ? t("importingMacros") : t("importMacros")}
               </button>
+            )}
+            {isMacroEnabled && (
+              <label className="preview-panel__llm-toggle">
+                <input
+                  type="checkbox"
+                  checked={allowLlmVbaImport}
+                  onChange={(e) => setAllowLlmVbaImport(e.target.checked)}
+                />
+                <span title={t("allowLlmVbaImportHint") ?? ""}>
+                  {t("allowLlmVbaImport")}
+                </span>
+              </label>
             )}
             {convertError && (
               <span className="preview-panel__convert-error">{convertError}</span>
