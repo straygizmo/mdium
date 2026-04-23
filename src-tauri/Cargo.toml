@@ -32,6 +32,8 @@ http = "1"
 zip = "2"
 cfb = "0.10"
 encoding_rs = "0.8"
+tiny_http = "0.12"
+rand = "0.8"
 
 [profile.release]
 panic = "abort"
