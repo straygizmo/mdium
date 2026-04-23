@@ -1,5 +1,7 @@
 # MDium
 
+[![SafeSkill 78/100](https://img.shields.io/badge/SafeSkill-78%2F100_Passes%20with%20Notes-yellow)](https://safeskill.dev/scan/straygizmo-mdium)
+
 **A Markdown-centric document foundation designed for the AI era.**
 
 MDium is built on the premise that Markdown — the format most naturally understood by AI — should be at the heart of every document workflow. By converting traditional Office documents (Word, Excel, PDF) into Markdown and providing rich editing capabilities on top of it, MDium achieves an "AI & human-friendly" document experience.
