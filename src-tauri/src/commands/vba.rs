@@ -27,6 +27,14 @@ pub struct InjectResult {
     pub updated_modules: Vec<String>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListResult {
+    pub macros_dir: String,
+    pub exists: bool,
+    pub modules: Vec<VbaModule>,
+}
+
 // ---------------------------------------------------------------------------
 // MS-OVBA 2.4.1  VBA Compression / Decompression
 // ---------------------------------------------------------------------------
@@ -1070,6 +1078,92 @@ pub fn inject_vba_modules(xlsm_path: String, macros_dir: String) -> Result<Injec
     Ok(InjectResult {
         backup_path,
         updated_modules,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Command: list_vba_modules
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn list_vba_modules(xlsm_path: String) -> Result<ListResult, String> {
+    let path = Path::new(&xlsm_path);
+    if !path.exists() {
+        return Err(format!("File not found: {}", xlsm_path));
+    }
+
+    // Derive macros_dir from xlsm path ({stem}_macros/)
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or("Invalid file name")?;
+    let parent = path
+        .parent()
+        .ok_or("Cannot determine parent directory")?;
+    let macros_dir = parent.join(format!("{}_macros", stem));
+    let exists = macros_dir.exists() && macros_dir.is_dir();
+
+    // Read vbaProject.bin and parse dir stream (same as extract, but no writes)
+    let file = fs::File::open(&xlsm_path)
+        .map_err(|e| format!("Failed to open file: {}", e))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| format!("Failed to read ZIP archive: {}", e))?;
+
+    let vba_bin = {
+        let mut entry = archive
+            .by_name("xl/vbaProject.bin")
+            .map_err(|_| "No VBA macros found in this file (xl/vbaProject.bin not present)".to_string())?;
+        let mut buf = Vec::new();
+        entry.read_to_end(&mut buf)
+            .map_err(|e| format!("Failed to read vbaProject.bin: {}", e))?;
+        buf
+    };
+
+    let mut comp = cfb::CompoundFile::open(Cursor::new(&vba_bin))
+        .map_err(|e| format!("Failed to parse vbaProject.bin as OLE2: {}", e))?;
+
+    let mut dir_compressed = Vec::new();
+    comp.open_stream("/VBA/dir")
+        .map_err(|e| format!("Failed to open /VBA/dir stream: {}", e))?
+        .read_to_end(&mut dir_compressed)
+        .map_err(|e| format!("Failed to read /VBA/dir stream: {}", e))?;
+
+    let dir_data = vba_decompress(&dir_compressed)?;
+    let project = parse_dir_stream(&dir_data)?;
+
+    // Build module list. path is only populated when the extracted file exists.
+    let modules: Vec<VbaModule> = project
+        .modules
+        .iter()
+        .map(|m| {
+            let (ext, type_str) = if m.module_type == "standard" {
+                (".bas", "standard")
+            } else {
+                let lower = m.name.to_lowercase();
+                if lower.starts_with("sheet") || lower == "thisworkbook" {
+                    (".cls", "document")
+                } else {
+                    (".cls", "class")
+                }
+            };
+            let file_path = macros_dir.join(format!("{}{}", m.name, ext));
+            let path_str = if file_path.exists() {
+                file_path.to_string_lossy().into_owned()
+            } else {
+                String::new()
+            };
+            VbaModule {
+                name: m.name.clone(),
+                module_type: type_str.to_string(),
+                path: path_str,
+            }
+        })
+        .collect();
+
+    Ok(ListResult {
+        macros_dir: macros_dir.to_string_lossy().into_owned(),
+        exists,
+        modules,
     })
 }
 

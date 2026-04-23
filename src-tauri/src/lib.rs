@@ -236,6 +236,7 @@ pub fn run() {
             // VBA macro operations
             commands::vba::extract_vba_modules,
             commands::vba::inject_vba_modules,
+            commands::vba::list_vba_modules,
             // Medium operations
             commands::medium::medium_test_connection,
             commands::medium::medium_upload_image,
