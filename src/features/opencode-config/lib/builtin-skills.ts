@@ -208,4 +208,40 @@ Before outputting VBA code, verify:
 13. No \`On Error Resume Next\` without immediate \`On Error GoTo 0\` restore
 `,
   },
+  "vba-mdium-flow": {
+    name: "vba-mdium-flow",
+    description:
+      "Use when the MDium mdium-vba MCP server is available — guides the LLM through the extract / edit / import workflow and warns about module-set constraints.",
+    content: `# MDium マクロ編集フロー
+
+このセッションでは MDium の \`mdium-vba\` MCP サーバーが利用可能です。
+
+## 標準フロー
+
+1. \`list_vba_modules\` で既存の \`_macros/\` 状態を確認
+2. \`_macros/\` が未エクスポートなら \`extract_vba_modules\` を呼ぶ
+3. Read/Edit ツールで \`.bas\` / \`.cls\` を編集
+4. **編集が完了したら必ず \`import_vba_macros\` を呼ぶ**
+5. 応答の \`updatedModules\` をユーザーに報告
+
+## 重要な制約
+
+- このツールは **ツール呼び出しの瞬間のアクティブタブ** に対して動作します
+- 毎ターン、ユーザーメッセージ先頭の \`<mdium_context>\` タグで現在のアクティブファイルが分かります
+- ツール応答の \`activeFile\` と \`<mdium_context>\` の \`active_file\` が一致することを確認してください
+- 会話中にユーザーがタブを切り替えたら \`active_file\` が変わります。ユーザーの意図を必ず確認してください:
+  「アクティブタブが {old} から {new} に変わりましたが、このまま続けますか？」
+- \`error: "active_tab_changed"\` が返った場合は race condition です。1 回だけ retry してください
+
+## モジュール構成を変えてはいけない
+
+**\`.bas\` / \`.cls\` ファイルの新規作成・削除・リネームはしないでください。** MDium の取り込みは**既存モジュールの中身差し替えのみ**サポートします。
+
+- 新規モジュールを作りたい → ユーザーに Excel の VBE で手動追加してもらい、再度 \`extract_vba_modules\` を呼んで取得
+- モジュールを削除したい → ユーザーに Excel の VBE で手動削除してもらう
+- リネームしたい → 同様にユーザーに VBE で行ってもらう
+
+\`import_vba_macros\` が \`error: "module_set_changed"\` を返した場合、\`newInFiles\` と \`missingInFiles\` の内容を見て、どちらの変更を戻すべきかをユーザーに確認してください。
+`,
+  },
 };
