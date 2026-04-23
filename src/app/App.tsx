@@ -90,6 +90,59 @@ export function App() {
   useScrollSync(editorRef, previewRef, editorVisible, activeTab?.id ?? "");
   const handleEditorDividerMouseDown = useDividerDrag(editorAreaRef, editorRatio, setEditorRatio);
 
+  // Per-tab editor/preview scroll position memory. React unmounts and remounts
+  // the editor/preview DOM when switching between file types (e.g., .md ↔ .xlsm)
+  // because the render branches differ, so scrollTop is lost. We save it on scroll
+  // and restore it on activation, keyed by tab id.
+  const scrollPositionsRef = useRef<Map<string, { preview: number; editor: number }>>(new Map());
+  const activeTabIdForScroll = activeTab?.id ?? "";
+  useEffect(() => {
+    if (!activeTabIdForScroll) return;
+    const previewEl = previewRef.current;
+    const editorEl = editorRef.current;
+
+    const saved = scrollPositionsRef.current.get(activeTabIdForScroll);
+    if (saved) {
+      if (editorEl) editorEl.scrollTop = saved.editor;
+      // Preview content renders asynchronously (innerHTML set in child's useEffect,
+      // plus async image/mermaid layout). Retry across a few frames until the
+      // container is tall enough to accept the saved offset.
+      let attempts = 0;
+      const applyPreview = () => {
+        const el = previewRef.current;
+        if (!el) return;
+        const max = el.scrollHeight - el.clientHeight;
+        if (max + 1 >= saved.preview || attempts >= 30) {
+          el.scrollTop = saved.preview;
+          return;
+        }
+        attempts++;
+        requestAnimationFrame(applyPreview);
+      };
+      requestAnimationFrame(applyPreview);
+    }
+
+    const savePreview = () => {
+      const el = previewRef.current;
+      if (!el) return;
+      const cur = scrollPositionsRef.current.get(activeTabIdForScroll) ?? { preview: 0, editor: 0 };
+      scrollPositionsRef.current.set(activeTabIdForScroll, { ...cur, preview: el.scrollTop });
+    };
+    const saveEditor = () => {
+      const el = editorRef.current;
+      if (!el) return;
+      const cur = scrollPositionsRef.current.get(activeTabIdForScroll) ?? { preview: 0, editor: 0 };
+      scrollPositionsRef.current.set(activeTabIdForScroll, { ...cur, editor: el.scrollTop });
+    };
+    previewEl?.addEventListener("scroll", savePreview, { passive: true });
+    editorEl?.addEventListener("scroll", saveEditor, { passive: true });
+
+    return () => {
+      previewEl?.removeEventListener("scroll", savePreview);
+      editorEl?.removeEventListener("scroll", saveEditor);
+    };
+  }, [activeTabIdForScroll]);
+
   // Watch active tab file for external changes (e.g., opencode edits)
   useFileWatcher(activeTab?.filePath ?? null, useCallback(async (changedPath: string) => {
     if (!activeTab || activeTab.filePath !== changedPath) return;
