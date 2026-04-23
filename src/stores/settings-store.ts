@@ -46,6 +46,7 @@ interface SettingsState {
   speechEnabled: boolean;
   speechModel: SpeechModel;
   mediumSettings: MediumSettings;
+  allowLlmVbaImport: boolean;
 
   setThemeId: (id: string) => void;
   setLanguage: (lang: Language) => void;
@@ -62,6 +63,7 @@ interface SettingsState {
   setSpeechEnabled: (enabled: boolean) => void;
   setSpeechModel: (model: SpeechModel) => void;
   setMediumSettings: (settings: MediumSettings) => void;
+  setAllowLlmVbaImport: (enabled: boolean) => void;
   initializeTheme: () => void;
 }
 
@@ -82,6 +84,7 @@ export const useSettingsStore = create<SettingsState>()(
       speechEnabled: false,
       speechModel: "Xenova/whisper-small" as SpeechModel,
       mediumSettings: DEFAULT_MEDIUM_SETTINGS,
+      allowLlmVbaImport: false,
 
       setThemeId: (id) => {
         const theme = getThemeById(id);
@@ -121,6 +124,7 @@ export const useSettingsStore = create<SettingsState>()(
       setSpeechEnabled: (enabled) => set({ speechEnabled: enabled }),
       setSpeechModel: (model) => set({ speechModel: model }),
       setMediumSettings: (settings) => set({ mediumSettings: settings }),
+      setAllowLlmVbaImport: (enabled) => set({ allowLlmVbaImport: enabled }),
 
       initializeTheme: () => {
         const theme = getThemeById(get().themeId);
@@ -144,6 +148,7 @@ export const useSettingsStore = create<SettingsState>()(
         speechEnabled: state.speechEnabled,
         speechModel: state.speechModel,
         mediumSettings: state.mediumSettings,
+        allowLlmVbaImport: state.allowLlmVbaImport,
       }),
     }
   )
