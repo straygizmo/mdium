@@ -2,6 +2,7 @@ mod commands;
 mod file_watcher;
 mod markdown_parser;
 
+use commands::active_xlsm::{new_state as new_active_xlsm_state, ActiveXlsmState};
 use file_watcher::{FileWatcherState, FolderWatcherState};
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
@@ -27,6 +28,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .manage(Arc::new(Mutex::new(FileWatcherState::new())))
         .manage(Arc::new(Mutex::new(FolderWatcherState::new())))
+        .manage::<ActiveXlsmState>(new_active_xlsm_state())
         .setup(|app| {
             use tauri::Manager;
             let icon_bytes = include_bytes!("../icons/icon.png");
@@ -237,6 +239,9 @@ pub fn run() {
             commands::vba::extract_vba_modules,
             commands::vba::inject_vba_modules,
             commands::vba::list_vba_modules,
+            // Active xlsm state
+            commands::active_xlsm::set_active_xlsm_path,
+            commands::active_xlsm::get_active_xlsm_path,
             // Medium operations
             commands::medium::medium_test_connection,
             commands::medium::medium_upload_image,
