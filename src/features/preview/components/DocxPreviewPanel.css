@@ -60,14 +60,26 @@
   animation: docx-spin 1s linear infinite;
 }
 
-/* Loading */
-.docx-preview-panel__loading {
+/* Body wrapper keeps content mounted so containerRef stays valid during generation */
+.docx-preview-panel__body {
+  position: relative;
   flex: 1;
+  display: flex;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* Loading overlay (content stays mounted underneath) */
+.docx-preview-panel__loading {
+  position: absolute;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   color: var(--text-muted);
   font-size: 14px;
+  background: color-mix(in srgb, var(--bg-base) 85%, transparent);
+  pointer-events: none;
 }
 
 /* DOCX content viewer */

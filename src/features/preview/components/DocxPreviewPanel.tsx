@@ -142,13 +142,14 @@ export function DocxPreviewPanel({ previewRef, content, filePath }: DocxPreviewP
         </button>
       </div>
 
-      {generating && !docxDataRef.current ? (
-        <div className="docx-preview-panel__loading">
-          <span>{t("generatingDocx")}</span>
-        </div>
-      ) : (
+      <div className="docx-preview-panel__body">
         <div className="docx-preview-panel__content" ref={containerRef} />
-      )}
+        {generating && !docxDataRef.current && (
+          <div className="docx-preview-panel__loading">
+            <span>{t("generatingDocx")}</span>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
