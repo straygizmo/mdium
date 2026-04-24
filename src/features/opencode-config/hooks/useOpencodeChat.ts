@@ -10,6 +10,7 @@ import type {
 } from "@opencode-ai/sdk/client";
 import { invoke } from "@tauri-apps/api/core";
 import { marked } from "marked";
+import i18n from "@/shared/i18n";
 import { useOpencodeServerStore } from "@/stores/opencode-server-store";
 import { BUILTIN_AGENTS } from "../lib/builtin-registry";
 import { isAzureRefusal, isAzureProviderActive } from "../lib/provider-detection";
@@ -193,6 +194,93 @@ function tryParseQuestions(text: string): PendingQuestion[] | null {
   }
 
   return null;
+}
+
+/**
+ * Format a session/message error object (as returned by opencode SSE events
+ * or AssistantMessage.error) into a user-facing string.
+ *
+ * The opencode SDK surfaces these shapes:
+ *   - ApiError (HTTP errors from the provider, e.g. 429 rate limit)
+ *   - ProviderAuthError
+ *   - MessageOutputLengthError
+ *   - MessageAbortedError
+ *   - UnknownError
+ */
+function formatSessionError(err: unknown): string {
+  if (!err || typeof err !== "object") {
+    return i18n.t("ocChatErrorUnknown", { ns: "opencode-config" });
+  }
+  const e = err as { name?: string; data?: any };
+  const ns = "opencode-config" as const;
+  switch (e.name) {
+    case "APIError": {
+      const status = e.data?.statusCode;
+      const message = typeof e.data?.message === "string" ? e.data.message : "";
+      if (status === 429) {
+        return message
+          ? `${i18n.t("ocChatErrorRateLimit", { ns })} (${message})`
+          : i18n.t("ocChatErrorRateLimit", { ns });
+      }
+      const head = i18n.t("ocChatErrorApi", { ns });
+      const parts = [head];
+      if (status !== undefined) {
+        parts.push(i18n.t("ocChatErrorStatus", { ns, status }));
+      }
+      if (message) parts.push(message);
+      return parts.join(" — ");
+    }
+    case "ProviderAuthError": {
+      const provider = e.data?.providerID ?? "?";
+      const head = i18n.t("ocChatErrorProviderAuth", { ns, provider });
+      const message = typeof e.data?.message === "string" ? e.data.message : "";
+      return message ? `${head} — ${message}` : head;
+    }
+    case "MessageOutputLengthError":
+      return i18n.t("ocChatErrorOutputLength", { ns });
+    case "MessageAbortedError":
+      return i18n.t("ocChatErrorAborted", { ns });
+    case "UnknownError": {
+      const message = typeof e.data?.message === "string" ? e.data.message : "";
+      const head = i18n.t("ocChatErrorUnknown", { ns });
+      return message ? `${head} — ${message}` : head;
+    }
+    default: {
+      const message = typeof e.data?.message === "string" ? e.data.message : "";
+      const head = e.name
+        ? `${i18n.t("ocChatErrorUnknown", { ns })} (${e.name})`
+        : i18n.t("ocChatErrorUnknown", { ns });
+      return message ? `${head} — ${message}` : head;
+    }
+  }
+}
+
+/**
+ * Finalize the UI when a session-level error arrives. Clears the pending
+ * empty assistant bubble, unlocks the loading spinner, and sets the error
+ * state so the error banner is rendered.
+ *
+ * Treats MessageAbortedError as a user-initiated abort (no error banner).
+ */
+function applySessionError(err: unknown) {
+  const name = (err as { name?: string } | null | undefined)?.name;
+  const isAbort = name === "MessageAbortedError";
+  const errorText = isAbort ? null : formatSessionError(err);
+
+  useChatUIStore.setState((s) => {
+    // Drop the trailing empty assistant placeholder if no content was rendered
+    const last = s.messages[s.messages.length - 1];
+    const messages =
+      last?.role === "assistant" && !last.content && (!last.parts || last.parts.length === 0)
+        ? s.messages.slice(0, -1)
+        : s.messages;
+    return {
+      messages,
+      loading: false,
+      pendingQuestions: null,
+      error: errorText,
+    };
+  });
 }
 
 // ─── Helper: process SSE event stream (runs in background) ───
@@ -447,6 +535,13 @@ function processSSEStream(stream: AsyncIterable<unknown>) {
               useChatUIStore.setState({ loading: false });
             }
           }
+        } else if (ev.type === "session.error") {
+          // Provider/API-level errors (rate limits, auth, etc.) that opencode
+          // surfaces out-of-band. Without this handler the UI would stay in
+          // the "Thinking..." state forever when session.idle is suppressed.
+          const props = (ev as any).properties ?? {};
+          if (props.sessionID && props.sessionID !== _currentSessionId) continue;
+          applySessionError(props.error);
         } else if (ev.type === "message.updated") {
           // Completion (loading: false) is handled exclusively by session.idle
           // to avoid premature "Done" toast when intermediate messages complete
@@ -461,6 +556,13 @@ function processSSEStream(stream: AsyncIterable<unknown>) {
             msgInfo.role === "assistant" &&
             msgInfo.sessionID === _currentSessionId
           ) {
+            // If the assistant message carries an error (e.g. 429 rate limit,
+            // provider auth failure), surface it immediately — session.idle
+            // may not fire in this case.
+            if (msgInfo.error) {
+              applySessionError(msgInfo.error);
+              continue;
+            }
             useChatUIStore.setState((s) => {
               const last = s.messages[s.messages.length - 1];
               if (last && last.role === "assistant" && !last.content && (!last.parts || last.parts.length === 0)) {
