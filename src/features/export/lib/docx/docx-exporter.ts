@@ -314,12 +314,24 @@ export async function exportMarkdownToDocx(
       const displayH = Math.round(origH / 4);
       const { width, height } = calculateImageDimensions(displayW, displayH);
 
+      // Embed SVG (with PNG fallback) so Word 2016+ renders it as a vector
+      // graphic — no pixelation on zoom, editable as an object. Older Word
+      // versions fall back to the PNG.
+      //
+      // NOTE: docx's standardizeData() assumes any string passed as `data`
+      // is a base64 data URL and runs atob() on it, which throws on a raw
+      // SVG XML string. Pass the SVG as bytes to keep it verbatim.
+      const svgBytes = new TextEncoder().encode(svgString);
       return new Paragraph({
         children: [
           new ImageRun({
-            data: pngBuffer,
+            type: 'svg',
+            data: svgBytes,
             transformation: { width: width || 100, height: height || 100 },
-            type: 'png',
+            fallback: {
+              type: 'png',
+              data: pngBuffer,
+            },
             altText: {
               title: 'Mermaid Diagram',
               description: code.slice(0, 100),
