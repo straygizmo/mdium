@@ -3,6 +3,7 @@ use encoding_rs::*;
 use std::io::{Read, Write, Cursor};
 use std::path::Path;
 use std::fs;
+use serde_json;
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -24,6 +25,14 @@ pub struct ExtractResult {
 pub struct InjectResult {
     pub backup_path: String,
     pub updated_modules: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListResult {
+    pub macros_dir: String,
+    pub exists: bool,
+    pub modules: Vec<VbaModule>,
 }
 
 // ---------------------------------------------------------------------------
@@ -848,11 +857,6 @@ pub fn inject_vba_modules(xlsm_path: String, macros_dir: String) -> Result<Injec
         get_code_page_from_xlsm(&xlsm_path)?
     };
 
-    // 3. Create backup
-    let backup_path = format!("{}.bak", xlsm_path);
-    fs::copy(&xlsm_path, &backup_path)
-        .map_err(|e| format!("Failed to create backup: {}", e))?;
-
     // 4. Read the entire xlsm file and extract vbaProject.bin from it
     let xlsm_data = fs::read(&xlsm_path)
         .map_err(|e| format!("Failed to read file: {}", e))?;
@@ -881,6 +885,42 @@ pub fn inject_vba_modules(xlsm_path: String, macros_dir: String) -> Result<Injec
 
     let dir_data = vba_decompress(&dir_compressed)?;
     let project = parse_dir_stream(&dir_data)?;
+
+    // 5.5. Strict module-set check: refuse if _macros/ and vbaProject.bin disagree.
+    //      Matches on dir-stream module name only (not stream_name, not VB_Name).
+    //      This mirrors the public-facing file naming used by extract_vba_modules.
+    {
+        let macros_names: std::collections::HashSet<String> =
+            macro_files.iter().map(|(n, _)| n.clone()).collect();
+        let project_names: std::collections::HashSet<String> =
+            project.modules.iter().map(|m| m.name.clone()).collect();
+
+        let mut new_in_files: Vec<String> = macros_names
+            .difference(&project_names)
+            .cloned()
+            .collect();
+        let mut missing_in_files: Vec<String> = project_names
+            .difference(&macros_names)
+            .cloned()
+            .collect();
+        new_in_files.sort();
+        missing_in_files.sort();
+
+        if !new_in_files.is_empty() || !missing_in_files.is_empty() {
+            let payload = serde_json::json!({
+                "error": "module_set_changed",
+                "newInFiles": new_in_files,
+                "missingInFiles": missing_in_files,
+                "message": "Adding or removing modules is not supported. Revert the additions/deletions, or ask the user to add/remove modules in Excel's VBE first, then re-run extract_vba_modules."
+            });
+            return Err(payload.to_string());
+        }
+    }
+
+    // 5.6. Strict check passed; now safe to create backup.
+    let backup_path = format!("{}.bak", xlsm_path);
+    fs::copy(&xlsm_path, &backup_path)
+        .map_err(|e| format!("Failed to create backup: {}", e))?;
 
     // Build mappings: by module name and by stream name
     let name_map: std::collections::HashMap<String, &VbaModuleInfo> = project
@@ -1038,6 +1078,92 @@ pub fn inject_vba_modules(xlsm_path: String, macros_dir: String) -> Result<Injec
     Ok(InjectResult {
         backup_path,
         updated_modules,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Command: list_vba_modules
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn list_vba_modules(xlsm_path: String) -> Result<ListResult, String> {
+    let path = Path::new(&xlsm_path);
+    if !path.exists() {
+        return Err(format!("File not found: {}", xlsm_path));
+    }
+
+    // Derive macros_dir from xlsm path ({stem}_macros/)
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or("Invalid file name")?;
+    let parent = path
+        .parent()
+        .ok_or("Cannot determine parent directory")?;
+    let macros_dir = parent.join(format!("{}_macros", stem));
+    let exists = macros_dir.exists() && macros_dir.is_dir();
+
+    // Read vbaProject.bin and parse dir stream (same as extract, but no writes)
+    let file = fs::File::open(&xlsm_path)
+        .map_err(|e| format!("Failed to open file: {}", e))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| format!("Failed to read ZIP archive: {}", e))?;
+
+    let vba_bin = {
+        let mut entry = archive
+            .by_name("xl/vbaProject.bin")
+            .map_err(|_| "No VBA macros found in this file (xl/vbaProject.bin not present)".to_string())?;
+        let mut buf = Vec::new();
+        entry.read_to_end(&mut buf)
+            .map_err(|e| format!("Failed to read vbaProject.bin: {}", e))?;
+        buf
+    };
+
+    let mut comp = cfb::CompoundFile::open(Cursor::new(&vba_bin))
+        .map_err(|e| format!("Failed to parse vbaProject.bin as OLE2: {}", e))?;
+
+    let mut dir_compressed = Vec::new();
+    comp.open_stream("/VBA/dir")
+        .map_err(|e| format!("Failed to open /VBA/dir stream: {}", e))?
+        .read_to_end(&mut dir_compressed)
+        .map_err(|e| format!("Failed to read /VBA/dir stream: {}", e))?;
+
+    let dir_data = vba_decompress(&dir_compressed)?;
+    let project = parse_dir_stream(&dir_data)?;
+
+    // Build module list. path is only populated when the extracted file exists.
+    let modules: Vec<VbaModule> = project
+        .modules
+        .iter()
+        .map(|m| {
+            let (ext, type_str) = if m.module_type == "standard" {
+                (".bas", "standard")
+            } else {
+                let lower = m.name.to_lowercase();
+                if lower.starts_with("sheet") || lower == "thisworkbook" {
+                    (".cls", "document")
+                } else {
+                    (".cls", "class")
+                }
+            };
+            let file_path = macros_dir.join(format!("{}{}", m.name, ext));
+            let path_str = if file_path.exists() {
+                file_path.to_string_lossy().into_owned()
+            } else {
+                String::new()
+            };
+            VbaModule {
+                name: m.name.clone(),
+                module_type: type_str.to_string(),
+                path: path_str,
+            }
+        })
+        .collect();
+
+    Ok(ListResult {
+        macros_dir: macros_dir.to_string_lossy().into_owned(),
+        exists,
+        modules,
     })
 }
 
@@ -1354,5 +1480,85 @@ mod tests {
         assert!(result.contains("Attribute VB_Name = \"mdlMain\""));
         assert!(result.contains("Attribute VB_Exposed = False"));
         assert!(result.contains("Sub Test()"));
+    }
+
+    #[test]
+    fn test_inject_error_new_in_files() {
+        // Given: macros_dir has Module1.bas and a NEW Module2.bas
+        // When: inject_vba_modules is called
+        // Then: returns JSON error with error="module_set_changed" and newInFiles includes "Module2"
+        let tmp = std::env::temp_dir().join(format!("mdium_vba_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let xlsm_path = tmp.join("Book1.xlsm");
+        let macros_dir = tmp.join("Book1_macros");
+        std::fs::create_dir_all(&macros_dir).unwrap();
+
+        // Use a real xlsm fixture that has exactly Module1 defined.
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("minimal_macro.xlsm");
+        if !fixture.exists() {
+            eprintln!("Skipping test: fixture {:?} missing", fixture);
+            return;
+        }
+        std::fs::copy(&fixture, &xlsm_path).unwrap();
+        std::fs::write(macros_dir.join("Module1.bas"), b"Attribute VB_Name = \"Module1\"\r\nSub A()\r\nEnd Sub\r\n").unwrap();
+        std::fs::write(macros_dir.join("Module2.bas"), b"Attribute VB_Name = \"Module2\"\r\nSub B()\r\nEnd Sub\r\n").unwrap();
+
+        let err = inject_vba_modules(
+            xlsm_path.to_string_lossy().to_string(),
+            macros_dir.to_string_lossy().to_string(),
+        )
+        .err()
+        .expect("expected error for added module");
+
+        assert!(err.contains("\"error\":\"module_set_changed\""), "got: {}", err);
+        assert!(err.contains("\"newInFiles\""), "got: {}", err);
+        assert!(err.contains("Module2"), "got: {}", err);
+
+        // xlsm must NOT have been modified (no .bak created either)
+        let bak = xlsm_path.with_extension("xlsm.bak");
+        assert!(!bak.exists(), "backup was created for a refused inject");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_inject_error_missing_in_files() {
+        // Given: vbaProject.bin has Module1 and Module2, but macros_dir only has Module1.bas
+        let tmp = std::env::temp_dir().join(format!("mdium_vba_test_miss_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("two_module.xlsm");
+        if !fixture.exists() {
+            eprintln!("Skipping test: fixture {:?} missing", fixture);
+            return;
+        }
+        let xlsm_path = tmp.join("Book2.xlsm");
+        std::fs::copy(&fixture, &xlsm_path).unwrap();
+
+        let macros_dir = tmp.join("Book2_macros");
+        std::fs::create_dir_all(&macros_dir).unwrap();
+        std::fs::write(macros_dir.join("Module1.bas"), b"Attribute VB_Name = \"Module1\"\r\nSub A()\r\nEnd Sub\r\n").unwrap();
+
+        let err = inject_vba_modules(
+            xlsm_path.to_string_lossy().to_string(),
+            macros_dir.to_string_lossy().to_string(),
+        )
+        .err()
+        .expect("expected error for missing module");
+
+        assert!(err.contains("\"error\":\"module_set_changed\""), "got: {}", err);
+        assert!(err.contains("\"missingInFiles\""), "got: {}", err);
+        assert!(err.contains("Module2"), "got: {}", err);
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

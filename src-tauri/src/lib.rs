@@ -1,7 +1,10 @@
 mod commands;
 mod file_watcher;
+mod http_bridge;
 mod markdown_parser;
 
+use commands::active_xlsm::{new_state as new_active_xlsm_state, ActiveXlsmState};
+use http_bridge::{new_state as new_http_bridge_state, HttpBridgeState};
 use file_watcher::{FileWatcherState, FolderWatcherState};
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
@@ -27,12 +30,25 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .manage(Arc::new(Mutex::new(FileWatcherState::new())))
         .manage(Arc::new(Mutex::new(FolderWatcherState::new())))
+        .manage::<ActiveXlsmState>(new_active_xlsm_state())
+        .manage::<HttpBridgeState>(new_http_bridge_state())
         .setup(|app| {
             use tauri::Manager;
             let icon_bytes = include_bytes!("../icons/icon.png");
             let icon = tauri::image::Image::from_bytes(icon_bytes)?;
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_icon(icon.clone());
+            }
+            // Start local HTTP bridge for MCP server callback
+            let handle = app.handle().clone();
+            let bridge_state = app.state::<HttpBridgeState>().inner().clone();
+            match http_bridge::start_bridge(handle, bridge_state) {
+                Ok(info) => {
+                    eprintln!("VBA HTTP bridge listening on 127.0.0.1:{}", info.port);
+                }
+                Err(e) => {
+                    eprintln!("Failed to start VBA HTTP bridge: {}", e);
+                }
             }
             Ok(())
         })
@@ -236,6 +252,11 @@ pub fn run() {
             // VBA macro operations
             commands::vba::extract_vba_modules,
             commands::vba::inject_vba_modules,
+            commands::vba::list_vba_modules,
+            // Active xlsm state
+            commands::active_xlsm::set_active_xlsm_path,
+            commands::active_xlsm::get_active_xlsm_path,
+            commands::active_xlsm::get_http_bridge_info,
             // Medium operations
             commands::medium::medium_test_connection,
             commands::medium::medium_upload_image,
