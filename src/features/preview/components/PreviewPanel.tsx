@@ -1159,6 +1159,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
               <button
                 onClick={handleExportMacros}
                 disabled={macroExporting || macroImporting}
+                title={t("exportMacrosHint") ?? ""}
               >
                 {macroExporting ? t("exportingMacros") : t("exportMacros")}
               </button>
@@ -1167,22 +1168,37 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
               <button
                 onClick={handleImportMacros}
                 disabled={macroImporting || macroExporting}
+                title={t("importMacrosHint") ?? ""}
               >
                 {macroImporting ? t("importingMacros") : t("importMacros")}
               </button>
             )}
             {isMacroEnabled && (
-              <label className="preview-panel__llm-toggle">
-                <input
-                  type="checkbox"
-                  checked={allowLlmVbaImport}
-                  onChange={(e) => {
-                    setAllowLlmVbaImport(e.target.checked);
+              <label
+                className="preview-panel__llm-toggle"
+                title={t("allowLlmVbaImportHint") ?? ""}
+              >
+                <span className="preview-panel__llm-toggle-label">
+                  {t("allowLlmVbaImport")}
+                </span>
+                <span
+                  className={`preview-panel__switch${allowLlmVbaImport ? " preview-panel__switch--on" : ""}`}
+                  role="switch"
+                  aria-checked={allowLlmVbaImport}
+                  tabIndex={0}
+                  onClick={() => {
+                    setAllowLlmVbaImport(!allowLlmVbaImport);
                     syncMdiumVbaMcpConfig().catch(() => {});
                   }}
-                />
-                <span title={t("allowLlmVbaImportHint") ?? ""}>
-                  {t("allowLlmVbaImport")}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setAllowLlmVbaImport(!allowLlmVbaImport);
+                      syncMdiumVbaMcpConfig().catch(() => {});
+                    }
+                  }}
+                >
+                  <span className="preview-panel__switch-thumb" />
                 </span>
               </label>
             )}

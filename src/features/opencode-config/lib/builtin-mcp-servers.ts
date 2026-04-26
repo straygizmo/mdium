@@ -18,8 +18,8 @@ export const BUILTIN_MCP_SERVERS: Record<string, BuiltinMcpServer> = {
     command: ["node", "<mcp_servers_path>\\mdium-vba\\dist\\index.js"],
     enabled: false,
     environment: {
-      MDIUM_VBA_PORT: "<placeholder>",
-      MDIUM_VBA_TOKEN: "<placeholder>",
+      MDIUM_VBA_PORT: "__RESERVED__",
+      MDIUM_VBA_TOKEN: "__RESERVED__",
     },
   },
 };
