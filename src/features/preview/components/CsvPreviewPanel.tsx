@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTranslation } from "react-i18next";
 import { useTabStore } from "@/stores/tab-store";
+import type { CsvDelimiter } from "../lib/delimiter";
 import { useCsvParse } from "../hooks/useCsvParse";
 import "./CsvPreviewPanel.css";
 
@@ -29,7 +30,7 @@ export function CsvPreviewPanel() {
 
   const headerMode = activeTab?.csvHeaderMode ?? true;
 
-  const delimiter: "," | "\t" = activeTab?.csvFileType === ".tsv" ? "\t" : ",";
+  const delimiter: CsvDelimiter = activeTab?.csvDelimiter ?? ",";
   const { rows, errors, maxColumns } = useCsvParse(
     activeTab?.content ?? "",
     delimiter,
