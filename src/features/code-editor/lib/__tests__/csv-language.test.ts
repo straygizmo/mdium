@@ -83,3 +83,29 @@ describe("tokenizeCsvLine (tab)", () => {
     ]);
   });
 });
+
+describe("tokenizeCsvLine (semicolon, pipe, colon)", () => {
+  it("uses semicolon as delimiter", () => {
+    const { tokens } = tokenizeCsvLine("a;b;c", new CsvTokenState(0, false), ";");
+    const cellTokens = tokens.filter((t) => t.type.startsWith("col"));
+    expect([...new Set(cellTokens.map((t) => t.type))]).toEqual([
+      "col0", "col1", "col2",
+    ]);
+  });
+
+  it("uses pipe as delimiter", () => {
+    const { tokens } = tokenizeCsvLine("a|b|c", new CsvTokenState(0, false), "|");
+    const cellTokens = tokens.filter((t) => t.type.startsWith("col"));
+    expect([...new Set(cellTokens.map((t) => t.type))]).toEqual([
+      "col0", "col1", "col2",
+    ]);
+  });
+
+  it("uses colon as delimiter", () => {
+    const { tokens } = tokenizeCsvLine("a:b:c", new CsvTokenState(0, false), ":");
+    const cellTokens = tokens.filter((t) => t.type.startsWith("col"));
+    expect([...new Set(cellTokens.map((t) => t.type))]).toEqual([
+      "col0", "col1", "col2",
+    ]);
+  });
+});

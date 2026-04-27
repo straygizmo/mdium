@@ -41,7 +41,7 @@ function colToken(column: number): string {
 export function tokenizeCsvLine(
   line: string,
   startState: CsvTokenState,
-  delimiter: "," | "\t",
+  delimiter: string,
 ): CsvLineResult {
   const tokens: CsvToken[] = [];
   // If the previous line ended outside a quote, this line is a new CSV row —
@@ -110,7 +110,7 @@ export function tokenizeCsvLine(
 }
 
 export function registerCsvLanguages(monacoInstance: typeof monaco): void {
-  const register = (id: string, delimiter: "," | "\t") => {
+  const register = (id: string, delimiter: string) => {
     if (monacoInstance.languages.getLanguages().some((l) => l.id === id)) return;
     monacoInstance.languages.register({ id });
     monacoInstance.languages.setTokensProvider(id, {
