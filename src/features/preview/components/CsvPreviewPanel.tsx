@@ -7,6 +7,7 @@ import "./CsvPreviewPanel.css";
 
 const HEADER_HEIGHT = 30;
 const SCROLL_THROTTLE_MS = 200;
+const ROW_NUM_WIDTH = 48;
 
 function makeThrottle<T extends (...args: never[]) => void>(fn: T, ms: number) {
   let pending: ReturnType<typeof setTimeout> | null = null;
@@ -108,7 +109,7 @@ export function CsvPreviewPanel() {
   }
 
   const columnCount = maxColumns;
-  const gridTemplate = `repeat(${columnCount}, minmax(80px, 1fr))`;
+  const gridTemplate = `${ROW_NUM_WIDTH}px repeat(${columnCount}, minmax(80px, 1fr))`;
 
   return (
     <div className="csv-preview">
