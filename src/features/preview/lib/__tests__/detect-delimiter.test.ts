@@ -27,11 +27,17 @@ describe("detectDelimiter", () => {
     expect(detectDelimiter("a|b|c\n1|2|3")).toBe("|");
   });
 
-  it("falls back to ',' for colon-delimited input (PapaParse does not probe ':')", () => {
-    // PapaParse's auto-detection probes ',', '\t', '|', and ';' but not ':'.
-    // detectDelimiter cannot detect what PapaParse does not expose; colon
-    // files fall back to comma and must be set manually by the user.
-    expect(detectDelimiter("a:b:c\n1:2:3")).toBe(",");
+  it("detects colon via the fallback heuristic", () => {
+    // PapaParse's auto-detector does not probe ':'. The fallback kicks in
+    // when comma-based parse yields single-column rows.
+    expect(detectDelimiter("a:b:c\n1:2:3")).toBe(":");
+  });
+
+  it("does not misclassify comma CSV containing timestamp colons", () => {
+    // Each line has 2 colons in the timestamp, but comma is the real
+    // delimiter — must return ',' not ':'.
+    const csv = "1,2026-04-28 10:30:00,event_a\n2,2026-04-28 11:45:00,event_b";
+    expect(detectDelimiter(csv)).toBe(",");
   });
 
   it("detects tab even when extension would suggest csv", () => {
