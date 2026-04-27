@@ -41,11 +41,16 @@
 
 .csv-preview__warning {
   padding: 6px 10px;
-  background: var(--warn-bg, #fff4e5);
-  color: var(--warn-fg, #995c00);
-  border-bottom: 1px solid var(--border, #e5e5e5);
+  background: #fff4e5;
+  color: #995c00;
+  border-bottom: 1px solid var(--border);
   cursor: help;
   flex-shrink: 0;
+}
+
+[data-theme-type="dark"] .csv-preview__warning {
+  background: #3a2a10;
+  color: #ffb454;
 }
 
 .csv-preview__scroll {
