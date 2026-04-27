@@ -11,27 +11,31 @@ import { type CsvDelimiter } from "./delimiter";
  */
 export function detectDelimiter(text: string): CsvDelimiter {
   if (text.trim() === "") return ",";
-  const result = Papa.parse<string[]>(text, {
-    preview: 10,
-    skipEmptyLines: false,
-  });
-  const detected = result.meta.delimiter;
+  try {
+    const result = Papa.parse<string[]>(text, {
+      preview: 10,
+      skipEmptyLines: false,
+    });
+    const detected = result.meta.delimiter;
 
-  // Trust PapaParse for the four delimiters it actually probes (other than
-  // comma, which is its default fallback and may not reflect real intent).
-  if (detected === "\t" || detected === ";" || detected === "|") {
-    return detected;
+    // Trust PapaParse for the four delimiters it actually probes (other than
+    // comma, which is its default fallback and may not reflect real intent).
+    if (detected === "\t" || detected === ";" || detected === "|") {
+      return detected;
+    }
+
+    // PapaParse said comma (or something we don't ship a tokenizer for).
+    // If the comma-parse produced multi-column rows, comma is real.
+    const rows = result.data;
+    if (rows.some((r) => r.length > 1)) return ",";
+
+    // Otherwise check whether colon is the actual delimiter.
+    if (looksLikeColonDelimited(text)) return ":";
+
+    return ",";
+  } catch {
+    return ",";
   }
-
-  // PapaParse said comma (or something we don't ship a tokenizer for).
-  // If the comma-parse produced multi-column rows, comma is real.
-  const rows = result.data;
-  if (rows.some((r) => r.length > 1)) return ",";
-
-  // Otherwise check whether colon is the actual delimiter.
-  if (looksLikeColonDelimited(text)) return ":";
-
-  return ",";
 }
 
 /**
@@ -47,7 +51,10 @@ function looksLikeColonDelimited(text: string): boolean {
     .slice(0, 10);
   if (lines.length === 0) return false;
   const counts = lines.map(countColonsOutsideQuotes);
-  if (counts[0] < 1) return false;
+  // Require ≥ 2 colons per line. PapaParse uses the same threshold for its
+  // own auto-detection — a single colon (e.g. a list of URLs) is too weak a
+  // signal to override the comma fallback.
+  if (counts[0] < 2) return false;
   return counts.every((c) => c === counts[0]);
 }
 

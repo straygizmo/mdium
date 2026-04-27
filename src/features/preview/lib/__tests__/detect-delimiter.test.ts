@@ -70,4 +70,26 @@ describe("detectDelimiter", () => {
     const tail = "\nx\ty\tz";
     expect(detectDelimiter(head + tail)).toBe(",");
   });
+
+  it("does not misclassify a list of URLs as colon-delimited (single colon per line)", () => {
+    // Each line has exactly one colon (`http:`). With only one colon per
+    // line the fallback must NOT fire — the file should be treated as
+    // single-column comma CSV.
+    const urls = "http://example.com\nhttp://other.com\nhttp://third.com";
+    expect(detectDelimiter(urls)).toBe(",");
+  });
+
+  it("counts colons correctly through RFC 4180 escaped quotes in colon-fallback", () => {
+    // `""` inside a quoted region must NOT toggle the in-quote state. Both
+    // lines have 2 colons outside quotes, so the fallback returns ":".
+    const text = '"a""b":c:d\n"e""f":g:h';
+    expect(detectDelimiter(text)).toBe(":");
+  });
+
+  it("returns ',' when colons appear alongside a real comma delimiter", () => {
+    // `a:1,b` and `c:2,d`: PapaParse splits on comma → 2-column rows, the
+    // multi-column gate rejects the colon heuristic.
+    const text = "a:1,b\nc:2,d";
+    expect(detectDelimiter(text)).toBe(",");
+  });
 });
