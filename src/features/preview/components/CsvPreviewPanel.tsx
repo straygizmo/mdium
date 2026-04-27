@@ -78,15 +78,12 @@ export function CsvPreviewPanel() {
       restoringRef.current = true;
       el.scrollTop = saved;
       restoredForTabRef.current = tabId;
-      // Clear the suppression flag on the next frame so the echo scroll event
-      // (dispatched async after the assignment) is filtered out.
-      const raf2 = requestAnimationFrame(() => {
+      // Browsers guarantee scroll events from a programmatic scrollTop=
+      // assignment are dispatched before the next rAF callback, so clearing
+      // the suppression flag here filters out the echo event.
+      requestAnimationFrame(() => {
         restoringRef.current = false;
       });
-      // Note: nested raf cleanup is best-effort; the outer raf cleanup below
-      // covers the common case where the effect is re-fired before the inner
-      // raf runs.
-      return () => cancelAnimationFrame(raf2);
     });
     return () => cancelAnimationFrame(raf);
   }, [tabId, totalSize]);
