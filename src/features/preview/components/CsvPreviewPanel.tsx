@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTranslation } from "react-i18next";
 import { useTabStore } from "@/stores/tab-store";
@@ -6,11 +6,27 @@ import { useCsvParse } from "../hooks/useCsvParse";
 import "./CsvPreviewPanel.css";
 
 const HEADER_HEIGHT = 30;
+const SCROLL_THROTTLE_MS = 200;
+
+function makeThrottle<T extends (...args: never[]) => void>(fn: T, ms: number) {
+  let pending: ReturnType<typeof setTimeout> | null = null;
+  let lastArgs: Parameters<T> | null = null;
+  return (...args: Parameters<T>) => {
+    lastArgs = args;
+    if (pending !== null) return;
+    pending = setTimeout(() => {
+      pending = null;
+      if (lastArgs) fn(...lastArgs);
+    }, ms);
+  };
+}
 
 export function CsvPreviewPanel() {
   const { t } = useTranslation("csv");
   const activeTab = useTabStore((s) => s.getActiveTab());
-  const [headerMode, setHeaderMode] = useState(true);
+  const updateTabCsvPreview = useTabStore((s) => s.updateTabCsvPreview);
+
+  const headerMode = activeTab?.csvHeaderMode ?? true;
 
   const delimiter: "," | "\t" = activeTab?.csvFileType === ".tsv" ? "\t" : ",";
   const { rows, errors, maxColumns } = useCsvParse(
@@ -35,6 +51,29 @@ export function CsvPreviewPanel() {
     overscan: 12,
   });
 
+  // Restore scroll position after the virtualizer has measured rows for this tab.
+  // Re-runs whenever the active tab id changes.
+  const tabId = activeTab?.id;
+  useEffect(() => {
+    if (!tabId || !parentRef.current) return;
+    const target = useTabStore.getState().tabs.find((t) => t.id === tabId)?.csvPreviewScrollTop ?? 0;
+    const el = parentRef.current;
+    const raf = requestAnimationFrame(() => {
+      el.scrollTop = target;
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [tabId]);
+
+  // Throttled scroll writeback. Re-create when the active tab changes so the closure
+  // captures the correct tabId.
+  const onScroll = useMemo(() => {
+    if (!tabId) return undefined;
+    const save = makeThrottle((scrollTop: number) => {
+      useTabStore.getState().updateTabCsvPreview(tabId, { scrollTop });
+    }, SCROLL_THROTTLE_MS);
+    return (e: React.UIEvent<HTMLDivElement>) => save(e.currentTarget.scrollTop);
+  }, [tabId]);
+
   if (!activeTab) return null;
 
   if (rows.length === 0) {
@@ -51,7 +90,7 @@ export function CsvPreviewPanel() {
           <input
             type="checkbox"
             checked={headerMode}
-            onChange={(e) => setHeaderMode(e.target.checked)}
+            onChange={(e) => updateTabCsvPreview(activeTab.id, { headerMode: e.target.checked })}
           />
           {t("treatFirstRowAsHeader")}
         </label>
@@ -68,7 +107,7 @@ export function CsvPreviewPanel() {
           ⚠ {t("parseWarning", { count: errors.length })}
         </div>
       )}
-      <div className="csv-preview__scroll" ref={parentRef}>
+      <div className="csv-preview__scroll" ref={parentRef} onScroll={onScroll}>
         <div
           className="csv-preview__grid"
           style={{ height: rowVirtualizer.getTotalSize() + HEADER_HEIGHT }}
