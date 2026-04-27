@@ -145,6 +145,9 @@ export function CsvPreviewPanel() {
               className="csv-preview__row csv-preview__row--header"
               style={{ gridTemplateColumns: gridTemplate }}
             >
+              <div className="csv-preview__rownum csv-preview__rownum--corner">
+                {headerMode ? "1" : ""}
+              </div>
               {Array.from({ length: columnCount }, (_, i) => (
                 <div
                   key={i}
