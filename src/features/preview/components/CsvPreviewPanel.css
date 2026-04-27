@@ -91,6 +91,23 @@
   color: var(--text-muted);
 }
 
+.csv-preview__rownum {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  padding: 4px 8px;
+  background: var(--bg-base);
+  color: var(--text-muted);
+  border-right: 1px solid var(--border);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.csv-preview__rownum--corner {
+  z-index: 3;
+}
+
 /* Rainbow palette — matches Monaco theme tokens col0..col9 (light) */
 .csv-preview__cell[data-col-index="0"] { color: #d73a49; }
 .csv-preview__cell[data-col-index="1"] { color: #e36209; }
