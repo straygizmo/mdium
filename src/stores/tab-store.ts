@@ -4,6 +4,7 @@ import { useOpencodeServerStore } from "./opencode-server-store";
 import { useOpencodeConfigStore } from "./opencode-config-store";
 import { useUiStore, type LeftPanel } from "./ui-store";
 import type { editor } from "monaco-editor";
+import type { CsvDelimiter } from "@/features/preview/lib/delimiter";
 
 export interface Tab {
   id: string;
@@ -24,6 +25,8 @@ export interface Tab {
   imageFileType?: string;
   /** CSV/TSV file extension (e.g., ".csv") */
   csvFileType?: ".csv" | ".tsv";
+  /** Detected column delimiter for CSV-family files. Set once at open time. */
+  csvDelimiter?: CsvDelimiter;
   /** Image file blob URL (for preview) */
   imageBlobUrl?: string;
   /** Fabric.js JSON for image canvas (for preserving state across tab switches) */
