@@ -130,7 +130,7 @@ export function CsvPreviewPanel() {
       {errors.length > 0 && (
         <div
           className="csv-preview__warning"
-          title={errors.map((e) => `row ${e.row}: ${e.message}`).join("\n")}
+          title={errors.map((e) => `row ${e.row + 1}: ${e.message}`).join("\n")}
         >
           ⚠ {t("parseWarning", { count: errors.length })}
         </div>
