@@ -1,3 +1,8 @@
+// Shared by both `features/preview` (PapaParse adapters, detect-delimiter)
+// and `features/code-editor` (Monaco language id selection). Keep this
+// module dependency-free — it is a leaf type/constants module so either
+// feature can import it without pulling in the other's runtime code.
+
 /**
  * Set of column delimiters the CSV viewer auto-detects and renders with
  * rainbow column coloring. Limited to a small enumerated set so that we

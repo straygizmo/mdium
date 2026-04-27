@@ -25,7 +25,14 @@ export interface Tab {
   imageFileType?: string;
   /** CSV/TSV file extension (e.g., ".csv") */
   csvFileType?: ".csv" | ".tsv";
-  /** Detected column delimiter for CSV-family files. Set once at open time. */
+  /**
+   * Detected column delimiter for CSV-family files. Set once at open time.
+   *
+   * Invariant: `csvDelimiter` and `csvFileType` are always set together
+   * (both undefined for non-CSV tabs, both populated for CSV-family tabs).
+   * Theme keys on `csvFileType`; language keys on `csvDelimiter`. Keeping
+   * them in lock-step prevents inconsistent editor states.
+   */
   csvDelimiter?: CsvDelimiter;
   /** Image file blob URL (for preview) */
   imageBlobUrl?: string;
