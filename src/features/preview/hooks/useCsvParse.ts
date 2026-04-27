@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { parseCsvAsync, type CsvParseResult } from "../lib/csv-parse";
+import type { CsvDelimiter } from "../lib/delimiter";
 
 const EMPTY_RESULT: CsvParseResult = { rows: [], errors: [], maxColumns: 0 };
 
 export function useCsvParse(
   content: string,
-  delimiter: "," | "\t",
+  delimiter: CsvDelimiter,
   debounceMs = 150,
 ): CsvParseResult {
   const [debounced, setDebounced] = useState(content);

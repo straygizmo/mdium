@@ -1,9 +1,10 @@
 import Papa from "papaparse";
+import type { CsvDelimiter } from "./delimiter";
 
 export interface CsvWorkerRequest {
   id: number;
   text: string;
-  delimiter: "," | "\t";
+  delimiter: CsvDelimiter;
 }
 
 export interface CsvWorkerResponse {

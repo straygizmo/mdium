@@ -1,6 +1,7 @@
 import Papa from "papaparse";
 import CsvParseWorker from "./csv-parse.worker?worker";
 import type { CsvWorkerRequest, CsvWorkerResponse } from "./csv-parse.worker";
+import type { CsvDelimiter } from "./delimiter";
 
 export interface CsvParseError {
   row: number;
@@ -25,7 +26,7 @@ function toResult(rows: string[][], parseErrors: Papa.ParseError[]): CsvParseRes
   return { rows, errors, maxColumns };
 }
 
-export function parseCsv(text: string, delimiter: "," | "\t"): CsvParseResult {
+export function parseCsv(text: string, delimiter: CsvDelimiter): CsvParseResult {
   if (text === "") {
     return { rows: [], errors: [], maxColumns: 0 };
   }
@@ -51,7 +52,7 @@ function getWorker(): Worker {
 // stays responsive for large files (e.g. 50k+ row CSVs).
 export function parseCsvAsync(
   text: string,
-  delimiter: "," | "\t",
+  delimiter: CsvDelimiter,
 ): Promise<CsvParseResult> {
   if (text === "") {
     return Promise.resolve({ rows: [], errors: [], maxColumns: 0 });
