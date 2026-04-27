@@ -52,8 +52,13 @@ export function CodeEditorPanel() {
       if (saved) ed.restoreViewState(saved);
 
       const save = makeThrottle(() => {
+        // Editor may be disposed by the time this trailing-throttle fires
+        // (e.g. user switched tabs within the throttle window). A disposed
+        // editor returns null from saveViewState(), which would clobber the
+        // previously-saved good state. Skip the write if disposed or null.
+        if (ed.getModel() == null) return;
         const state = ed.saveViewState();
-        useTabStore.getState().updateTabEditorViewState(tabId, state);
+        if (state) useTabStore.getState().updateTabEditorViewState(tabId, state);
       }, VIEW_STATE_THROTTLE_MS);
 
       ed.onDidScrollChange(save);
