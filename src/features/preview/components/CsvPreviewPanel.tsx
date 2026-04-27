@@ -44,6 +44,8 @@ export function CsvPreviewPanel() {
   }, [rows, maxColumns, headerMode, t]);
 
   const parentRef = useRef<HTMLDivElement>(null);
+  const restoredForTabRef = useRef<string | null>(null);
+  const restoringRef = useRef(false);
   const rowVirtualizer = useVirtualizer({
     count: bodyRows.length,
     getScrollElement: () => parentRef.current,
@@ -51,18 +53,43 @@ export function CsvPreviewPanel() {
     overscan: 12,
   });
 
-  // Restore scroll position after the virtualizer has measured rows for this tab.
-  // Re-runs whenever the active tab id changes.
   const tabId = activeTab?.id;
+  const totalSize = rowVirtualizer.getTotalSize();
+
+  // Reset restoration tracking when the active tab changes.
+  useEffect(() => {
+    restoredForTabRef.current = null;
+  }, [tabId]);
+
+  // Restore scroll position once the virtualizer has measured rows.
+  // We re-run whenever totalSize changes so a late-arriving measurement triggers
+  // the restore. The restoringRef suppresses the echo scroll event from the
+  // programmatic assignment, which would otherwise persist a clamped value back
+  // to the store and corrupt the saved scrollTop.
   useEffect(() => {
     if (!tabId || !parentRef.current) return;
-    const target = useTabStore.getState().tabs.find((t) => t.id === tabId)?.csvPreviewScrollTop ?? 0;
+    if (restoredForTabRef.current === tabId) return;
+    if (totalSize === 0) return;
+
+    const saved = useTabStore.getState().tabs.find((t) => t.id === tabId)?.csvPreviewScrollTop ?? 0;
     const el = parentRef.current;
+
     const raf = requestAnimationFrame(() => {
-      el.scrollTop = target;
+      restoringRef.current = true;
+      el.scrollTop = saved;
+      restoredForTabRef.current = tabId;
+      // Clear the suppression flag on the next frame so the echo scroll event
+      // (dispatched async after the assignment) is filtered out.
+      const raf2 = requestAnimationFrame(() => {
+        restoringRef.current = false;
+      });
+      // Note: nested raf cleanup is best-effort; the outer raf cleanup below
+      // covers the common case where the effect is re-fired before the inner
+      // raf runs.
+      return () => cancelAnimationFrame(raf2);
     });
     return () => cancelAnimationFrame(raf);
-  }, [tabId]);
+  }, [tabId, totalSize]);
 
   // Throttled scroll writeback. Re-create when the active tab changes so the closure
   // captures the correct tabId.
@@ -71,7 +98,10 @@ export function CsvPreviewPanel() {
     const save = makeThrottle((scrollTop: number) => {
       useTabStore.getState().updateTabCsvPreview(tabId, { scrollTop });
     }, SCROLL_THROTTLE_MS);
-    return (e: React.UIEvent<HTMLDivElement>) => save(e.currentTarget.scrollTop);
+    return (e: React.UIEvent<HTMLDivElement>) => {
+      if (restoringRef.current) return;
+      save(e.currentTarget.scrollTop);
+    };
   }, [tabId]);
 
   if (!activeTab) return null;
