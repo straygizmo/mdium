@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 import { useOpencodeServerStore } from "./opencode-server-store";
 import { useOpencodeConfigStore } from "./opencode-config-store";
 import { useUiStore, type LeftPanel } from "./ui-store";
+import type { editor } from "monaco-editor";
 
 export interface Tab {
   id: string;
@@ -45,6 +46,12 @@ export interface Tab {
   diffModifiedLabel?: string;
   /** Git status code for display in tab (e.g. "M", "A", "D") */
   diffStatus?: string;
+  /** Monaco view state (scroll/cursor/selection). Set by CodeEditorPanel; restored on remount. */
+  editorViewState?: editor.ICodeEditorViewState | null;
+  /** CSV preview scroll position in pixels. */
+  csvPreviewScrollTop?: number;
+  /** CSV preview "treat first row as header" toggle. Defaults to true when undefined. */
+  csvHeaderMode?: boolean;
 }
 
 interface TabState {
@@ -67,6 +74,8 @@ interface TabState {
   redoContent: (id: string) => void;
   markClean: (id: string) => void;
   updateImageCanvasState: (id: string, canvasJson: string) => void;
+  updateTabEditorViewState: (id: string, state: editor.ICodeEditorViewState | null) => void;
+  updateTabCsvPreview: (id: string, partial: { scrollTop?: number; headerMode?: boolean }) => void;
   updateTabFilePath: (id: string, filePath: string, fileName: string) => void;
   /** Update only the tab display name (preserves dirty state) */
   updateTabFileName: (id: string, fileName: string) => void;
@@ -245,6 +254,24 @@ export const useTabStore = create<TabState>()(
       tabs: s.tabs.map((t) =>
         t.id === id ? { ...t, imageCanvasJson: canvasJson, dirty: true } : t
       ),
+    }));
+  },
+
+  updateTabEditorViewState: (id, state) => {
+    set((s) => ({
+      tabs: s.tabs.map((t) => (t.id === id ? { ...t, editorViewState: state } : t)),
+    }));
+  },
+
+  updateTabCsvPreview: (id, partial) => {
+    set((s) => ({
+      tabs: s.tabs.map((t) => {
+        if (t.id !== id) return t;
+        const next = { ...t };
+        if (partial.scrollTop !== undefined) next.csvPreviewScrollTop = partial.scrollTop;
+        if (partial.headerMode !== undefined) next.csvHeaderMode = partial.headerMode;
+        return next;
+      }),
     }));
   },
 
