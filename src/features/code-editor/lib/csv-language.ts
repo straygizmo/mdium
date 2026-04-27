@@ -133,4 +133,7 @@ export function registerCsvLanguages(monacoInstance: typeof monaco): void {
   };
   register("csv", ",");
   register("tsv", "\t");
+  register("scsv", ";");
+  register("psv", "|");
+  register("colsv", ":");
 }
