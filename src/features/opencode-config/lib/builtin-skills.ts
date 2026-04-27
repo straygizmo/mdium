@@ -212,36 +212,36 @@ Before outputting VBA code, verify:
     name: "vba-mdium-flow",
     description:
       "Use when the MDium mdium-vba MCP server is available — guides the LLM through the extract / edit / import workflow and warns about module-set constraints.",
-    content: `# MDium マクロ編集フロー
+    content: `# MDium Macro Editing Flow
 
-このセッションでは MDium の \`mdium-vba\` MCP サーバーが利用可能です。
+The MDium \`mdium-vba\` MCP server is available in this session.
 
-## 標準フロー
+## Standard Flow
 
-1. \`list_vba_modules\` で既存の \`_macros/\` 状態を確認
-2. \`_macros/\` が未エクスポートなら \`extract_vba_modules\` を呼ぶ
-3. Read/Edit ツールで \`.bas\` / \`.cls\` を編集
-4. **編集が完了したら必ず \`import_vba_macros\` を呼ぶ**
-5. 応答の \`updatedModules\` をユーザーに報告
+1. Call \`list_vba_modules\` to check the current state of \`_macros/\`
+2. If \`_macros/\` has not been exported yet, call \`extract_vba_modules\`
+3. Use Read/Edit tools to modify \`.bas\` / \`.cls\` files
+4. **When editing is complete, you MUST call \`import_vba_macros\`**
+5. Report the \`updatedModules\` from the response back to the user
 
-## 重要な制約
+## Important Constraints
 
-- このツールは **ツール呼び出しの瞬間のアクティブタブ** に対して動作します
-- 毎ターン、ユーザーメッセージ先頭の \`<mdium_context>\` タグで現在のアクティブファイルが分かります
-- ツール応答の \`activeFile\` と \`<mdium_context>\` の \`active_file\` が一致することを確認してください
-- 会話中にユーザーがタブを切り替えたら \`active_file\` が変わります。ユーザーの意図を必ず確認してください:
-  「アクティブタブが {old} から {new} に変わりましたが、このまま続けますか？」
-- \`error: "active_tab_changed"\` が返った場合は race condition です。1 回だけ retry してください
+- This tool operates on the **tab that is active at the moment the tool is invoked**
+- Every turn, the user message begins with a \`<mdium_context>\` tag that tells you the currently active file
+- Verify that the \`activeFile\` in the tool response matches the \`active_file\` inside \`<mdium_context>\`
+- If the user switches tabs during the conversation, \`active_file\` changes. Always confirm the user's intent:
+  "The active tab changed from {old} to {new}. Do you want to continue?"
+- If you receive \`error: "active_tab_changed"\`, that is a race condition — retry exactly once
 
-## モジュール構成を変えてはいけない
+## Do Not Change the Module Set
 
-**\`.bas\` / \`.cls\` ファイルの新規作成・削除・リネームはしないでください。** MDium の取り込みは**既存モジュールの中身差し替えのみ**サポートします。
+**Do NOT create, delete, or rename \`.bas\` / \`.cls\` files.** MDium's import only supports **replacing the contents of existing modules**.
 
-- 新規モジュールを作りたい → ユーザーに Excel の VBE で手動追加してもらい、再度 \`extract_vba_modules\` を呼んで取得
-- モジュールを削除したい → ユーザーに Excel の VBE で手動削除してもらう
-- リネームしたい → 同様にユーザーに VBE で行ってもらう
+- To add a new module → ask the user to add it manually in Excel's VBE, then call \`extract_vba_modules\` again to pick it up
+- To delete a module → ask the user to delete it manually in Excel's VBE
+- To rename a module → ask the user to rename it in the VBE the same way
 
-\`import_vba_macros\` が \`error: "module_set_changed"\` を返した場合、\`newInFiles\` と \`missingInFiles\` の内容を見て、どちらの変更を戻すべきかをユーザーに確認してください。
+If \`import_vba_macros\` returns \`error: "module_set_changed"\`, inspect \`newInFiles\` and \`missingInFiles\` and ask the user which side of the discrepancy should be reverted.
 `,
   },
 };
