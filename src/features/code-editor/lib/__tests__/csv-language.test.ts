@@ -109,3 +109,38 @@ describe("tokenizeCsvLine (semicolon, pipe, colon)", () => {
     ]);
   });
 });
+
+describe("tokenizeCsvLine — quoted header / quoted string rainbow", () => {
+  it("colors quoted header cells with col0/col1/col2", () => {
+    const { tokens } = tokenizeCsvLine(
+      '"id","name","email"',
+      new CsvTokenState(0, false),
+      ",",
+    );
+    const cellTokens = tokens.filter((t) => t.type.startsWith("col"));
+    expect(cellTokens.map((t) => t.type)).toEqual(["col0", "col1", "col2"]);
+  });
+
+  it("colors a quoted body cell with the column's color, not a default token", () => {
+    // Mixed unquoted + quoted cells in the same row. Each cell should pick
+    // up its column index, regardless of quoting.
+    const { tokens } = tokenizeCsvLine(
+      'a,"b",c',
+      new CsvTokenState(0, false),
+      ",",
+    );
+    const cellTokens = tokens.filter((t) => t.type.startsWith("col"));
+    expect(cellTokens.map((t) => t.type)).toEqual(["col0", "col1", "col2"]);
+  });
+
+  it("first character of a quoted cell at column N emits colN token", () => {
+    const { tokens } = tokenizeCsvLine(
+      '"hello",world',
+      new CsvTokenState(0, false),
+      ",",
+    );
+    // First emitted token covers the opening quote — must be col0, not
+    // a default/string token.
+    expect(tokens[0]).toEqual({ startIndex: 0, type: "col0" });
+  });
+});
