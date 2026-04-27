@@ -161,6 +161,7 @@ export function CsvPreviewPanel() {
           )}
           {rowVirtualizer.getVirtualItems().map((v) => {
             const row = bodyRows[v.index];
+            const physicalRowNumber = v.index + (headerMode ? 2 : 1);
             return (
               <div
                 key={v.key}
@@ -172,6 +173,7 @@ export function CsvPreviewPanel() {
                 ref={rowVirtualizer.measureElement}
                 data-index={v.index}
               >
+                <div className="csv-preview__rownum">{physicalRowNumber}</div>
                 {Array.from({ length: columnCount }, (_, c) => {
                   const cell = row[c];
                   return (
