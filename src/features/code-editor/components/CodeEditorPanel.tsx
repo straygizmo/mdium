@@ -7,6 +7,7 @@ import { useTabStore } from "@/stores/tab-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import { getThemeById } from "@/shared/themes";
 import { getMonacoLanguage } from "../lib/language-map";
+import { DELIMITER_LANGUAGE_ID } from "@/features/preview/lib/delimiter";
 import "./CodeEditorPanel.css";
 
 const VIEW_STATE_THROTTLE_MS = 200;
@@ -32,9 +33,11 @@ export function CodeEditorPanel() {
 
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
 
-  const language = activeTab?.filePath
-    ? getMonacoLanguage(activeTab.filePath)
-    : "plaintext";
+  const language = activeTab?.csvDelimiter
+    ? DELIMITER_LANGUAGE_ID[activeTab.csvDelimiter]
+    : activeTab?.filePath
+      ? getMonacoLanguage(activeTab.filePath)
+      : "plaintext";
 
   const isCsv = !!activeTab?.csvFileType;
   const theme = themeType === "dark"
