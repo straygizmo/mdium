@@ -9,6 +9,21 @@ import { getThemeById } from "@/shared/themes";
 import { getMonacoLanguage } from "../lib/language-map";
 import "./CodeEditorPanel.css";
 
+const VIEW_STATE_THROTTLE_MS = 200;
+
+function makeThrottle<T extends (...args: never[]) => void>(fn: T, ms: number) {
+  let pending: ReturnType<typeof setTimeout> | null = null;
+  let lastArgs: Parameters<T> | null = null;
+  return (...args: Parameters<T>) => {
+    lastArgs = args;
+    if (pending !== null) return;
+    pending = setTimeout(() => {
+      pending = null;
+      if (lastArgs) fn(...lastArgs);
+    }, ms);
+  };
+}
+
 export function CodeEditorPanel() {
   const activeTab = useTabStore((s) => s.getActiveTab());
   const updateTabContent = useTabStore((s) => s.updateTabContent);
@@ -26,9 +41,27 @@ export function CodeEditorPanel() {
     ? (isCsv ? "mdium-csv-dark" : "vs-dark")
     : (isCsv ? "mdium-csv-light" : "vs");
 
-  const handleEditorDidMount: OnMount = useCallback((editor) => {
-    editorRef.current = editor;
-    editor.focus();
+  const handleEditorDidMount: OnMount = useCallback((ed) => {
+    editorRef.current = ed;
+
+    // Capture tabId at mount; the editor instance is keyed on activeTab.id,
+    // so this closure is stable for the lifetime of this Monaco instance.
+    const tabId = useTabStore.getState().activeTabId;
+    if (tabId) {
+      const saved = useTabStore.getState().tabs.find((t) => t.id === tabId)?.editorViewState;
+      if (saved) ed.restoreViewState(saved);
+
+      const save = makeThrottle(() => {
+        const state = ed.saveViewState();
+        useTabStore.getState().updateTabEditorViewState(tabId, state);
+      }, VIEW_STATE_THROTTLE_MS);
+
+      ed.onDidScrollChange(save);
+      ed.onDidChangeCursorPosition(save);
+      ed.onDidChangeCursorSelection(save);
+    }
+
+    ed.focus();
   }, []);
 
   const handleChange: OnChange = useCallback(
