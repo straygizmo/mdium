@@ -8,6 +8,7 @@ import { useTabStore } from "@/stores/tab-store";
 import { useGitStore } from "@/stores/git-store";
 import { useOpencodeServerStore } from "@/stores/opencode-server-store";
 import { getOfficeExt, getMindmapExt, getImageExt, getPdfExt, getCsvExt, isCodeFile } from "@/shared/lib/constants";
+import { detectDelimiter } from "@/features/preview/lib/detect-delimiter";
 import { useFileStore } from "@/stores/file-store";
 import { useUiStore } from "@/stores/ui-store";
 import { useRecentItems } from "@/shared/hooks/useRecentItems";
@@ -473,6 +474,10 @@ export function App() {
           // use the encoding-detecting reader so they open cleanly.
           const readCmd = csvExt ? "read_text_file_auto_encoding" : "read_text_file";
           const content = await invoke<string>(readCmd, { path: filePath });
+          // Detect the actual column delimiter from content so a .csv file
+          // containing TSV (or vice-versa) still gets correct rainbow
+          // coloring and column splitting.
+          const csvDelimiter = csvExt ? detectDelimiter(content) : undefined;
           openTab({
             filePath,
             folderPath: activeFolderPath ?? "",
@@ -480,6 +485,7 @@ export function App() {
             content,
             isCodeFile: isCodeFile(filePath),
             csvFileType: (csvExt as ".csv" | ".tsv" | null) ?? undefined,
+            csvDelimiter,
           });
         }
         setActiveFile(filePath);
