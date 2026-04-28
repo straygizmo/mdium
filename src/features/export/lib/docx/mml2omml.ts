@@ -2777,4 +2777,3 @@ const mml2omml = (mmlString, options) => {
 }
 
 export { mml2omml }
-//# sourceMappingURL=index.esm.js.map

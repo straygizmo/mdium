@@ -48,6 +48,7 @@ pub fn start_bridge(
     let addr = server.server_addr();
     let port = match addr {
         tiny_http::ListenAddr::IP(a) => a.port(),
+        #[allow(unreachable_patterns)]
         _ => return Err("Expected IP listen address".to_string()),
     };
     let token = generate_token();
