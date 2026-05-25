@@ -202,6 +202,29 @@ pub fn rag_scan_folder(folder_path: String, file_extensions: Option<String>, min
     Ok(chunks)
 }
 
+/// Recursively collect matching files from inside a `.mdium` folder.
+/// These are attributed to the parent folder so their chunks land in the
+/// parent's `<parent>/.mdium/rag_{model}.db` rather than a nested DB.
+fn collect_md_in_mdium(dir: &Path, extensions: &[String], result: &mut Vec<PathBuf>) {
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+
+        if path.is_dir() {
+            if name.starts_with('.') || name == "node_modules" || name == "target" {
+                continue;
+            }
+            collect_md_in_mdium(&path, extensions, result);
+        } else if extensions.iter().any(|ext| name.ends_with(ext.as_str())) {
+            result.push(path);
+        }
+    }
+}
+
 /// Scan files in each folder level and recurse into subfolders
 fn scan_folder_recursive(dir: &Path, chunks: &mut Vec<RagChunk>, extensions: &[String], min_chunk_length: usize, model_name: &str) -> Result<(), String> {
     let folder_str = dir.to_string_lossy().to_string();
@@ -212,37 +235,59 @@ fn scan_folder_recursive(dir: &Path, chunks: &mut Vec<RagChunk>, extensions: &[S
         .collect();
 
     // Recurse into subfolders
-    let mut md_entries = Vec::new();
+    let mut md_paths: Vec<PathBuf> = Vec::new();
     for entry in &entries {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
 
-        if name.starts_with('.') || name == "node_modules" || name == "target" {
+        if name == "node_modules" || name == "target" {
             continue;
         }
 
         if path.is_dir() {
+            if name == ".mdium" {
+                // Treat `.md` files inside `.mdium/` as belonging to this folder so
+                // their chunks are written to `<this folder>/.mdium/rag_{model}.db`
+                // instead of a nested `.mdium/.mdium/` DB.
+                collect_md_in_mdium(&path, extensions, &mut md_paths);
+                continue;
+            }
+            if name.starts_with('.') {
+                continue;
+            }
             scan_folder_recursive(&path, chunks, extensions, min_chunk_length, model_name)?;
         } else if extensions.iter().any(|ext| name.ends_with(ext.as_str())) {
-            md_entries.push(entry);
+            md_paths.push(path);
         }
     }
 
-    // Don't create rag_{model}.db if no .md files exist
+    // No .md files at this folder level: prune only rows for files that no
+    // longer exist on disk. Keep the DB file itself — a legacy layout may
+    // store chunks for subfolder files in this folder's DB, and dropping the
+    // file would silently destroy a still-valid index.
     let mdium_dir = Path::new(&folder_str).join(".mdium");
     let db_filename = model_db_name(model_name);
     let db_file = mdium_dir.join(&db_filename);
-    if md_entries.is_empty() {
-        // If existing rag_{model}.db is the only file in .mdium folder, delete the entire folder
+    if md_paths.is_empty() {
         if db_file.exists() {
-            let mdium_entries: Vec<_> = fs::read_dir(&mdium_dir)
-                .ok()
-                .map(|rd| rd.filter_map(|e| e.ok()).collect())
-                .unwrap_or_default();
-            if mdium_entries.len() == 1 {
-                fs::remove_dir_all(&mdium_dir).ok();
-            } else {
-                fs::remove_file(&db_file).ok();
+            if let Ok(conn) = Connection::open(&db_file) {
+                if ensure_tables(&conn).is_ok() {
+                    let stored_files: Vec<String> = conn
+                        .prepare("SELECT DISTINCT file FROM chunks")
+                        .ok()
+                        .and_then(|mut stmt| {
+                            stmt.query_map([], |row| row.get::<_, String>(0))
+                                .ok()
+                                .map(|rows| rows.flatten().collect())
+                        })
+                        .unwrap_or_default();
+                    for file in stored_files {
+                        if !Path::new(&file).exists() {
+                            let _ = conn.execute("DELETE FROM chunks WHERE file = ?1", [&file]);
+                            let _ = conn.execute("DELETE FROM file_hashes WHERE file = ?1", [&file]);
+                        }
+                    }
+                }
             }
         }
         return Ok(());
@@ -272,8 +317,7 @@ fn scan_folder_recursive(dir: &Path, chunks: &mut Vec<RagChunk>, extensions: &[S
 
     let mut current_files: HashSet<String> = HashSet::new();
 
-    for entry in md_entries {
-        let path = entry.path();
+    for path in md_paths {
         let content = fs::read_to_string(&path).unwrap_or_default();
         let file_path = path.to_string_lossy().to_string();
         let hash = format!("{:x}", Sha256::digest(content.as_bytes()));
