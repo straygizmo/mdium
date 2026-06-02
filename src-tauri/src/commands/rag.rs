@@ -229,8 +229,21 @@ fn collect_md_in_mdium(dir: &Path, extensions: &[String], result: &mut Vec<PathB
 fn scan_folder_recursive(dir: &Path, chunks: &mut Vec<RagChunk>, extensions: &[String], min_chunk_length: usize, model_name: &str) -> Result<(), String> {
     let folder_str = dir.to_string_lossy().to_string();
 
+    // Surface the offending path on read_dir failure. A bare e.to_string()
+    // produces "アクセスが拒否されました。 (os error 5)" with no location,
+    // making per-subfolder ACL/antivirus issues impossible to diagnose from
+    // the UI.
     let entries: Vec<_> = fs::read_dir(dir)
-        .map_err(|e| e.to_string())?
+        .map_err(|e| {
+            let hint = match e.kind() {
+                std::io::ErrorKind::PermissionDenied =>
+                    " (check folder permissions, antivirus exclusions, or whether another process is locking this folder)",
+                std::io::ErrorKind::NotFound =>
+                    " (folder no longer exists)",
+                _ => "",
+            };
+            format!("Failed to read folder '{}': {}{}", dir.display(), e, hint)
+        })?
         .filter_map(|e| e.ok())
         .collect();
 
