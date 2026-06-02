@@ -42,6 +42,7 @@
   "ragBuildError": "Index build failed",
   "ragNetworkError": "Failed to download model. Please check your internet connection.",
   "ragDownloadError": "An error occurred while downloading the model. Please try again later.",
+  "ragEngineError": "The embedding engine failed (it may have run out of memory). A file with very large text can be the cause. Try a multilingual-e5 model, or split the target folder.",
   "ragApiKeyMissing": "AI API key is not configured. Please set your API key in Settings.",
   "ragOpenSettings": "Open Settings",
   "noFolder": "No folder is open",

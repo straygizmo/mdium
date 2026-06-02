@@ -156,7 +156,16 @@ export function useRagFeatures({ folderPath, aiSettings, onOpenFile }: UseRagFea
       await checkStatus();
     } catch (e: any) {
       console.error("Build index failed:", e);
-      setBuildError(e.message ?? String(e));
+      // onnxruntime-web aborts surface as a bare number (a WASM heap address)
+      // with no usable message. Tag those so the UI can show actionable guidance
+      // instead of a meaningless code.
+      const msg =
+        e instanceof Error
+          ? e.message
+          : typeof e === "number"
+            ? `ENGINE_CRASH:${e}`
+            : String(e);
+      setBuildError(msg);
       setStatus((s) => ({ ...s, state: "none" }));
       setBuildProgress(null);
     }

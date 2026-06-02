@@ -81,6 +81,23 @@ export function useLocalEmbedding() {
             progress_callback: progressCallback,
           } as any
         );
+        // ModernBERT models (e.g. ruri-v3) declare model_max_length = 8192. The
+        // feature-extraction pipeline truncates only at that limit, so a long
+        // chunk can become a multi-thousand-token sequence. On the heavier
+        // ruri-v3-130m the global-attention layers then allocate an N^2 buffer
+        // that overruns the 32-bit WASM heap inside WebView2 and aborts with an
+        // opaque numeric error. Cap the sequence length to the e5 baseline (512),
+        // which is known to stay within the memory envelope. Only ever lower an
+        // existing limit, never raise it.
+        const MAX_SEQUENCE_LENGTH = 512;
+        const tokenizer = (pipe as any).tokenizer;
+        if (tokenizer && typeof tokenizer.model_max_length === "number") {
+          tokenizer.model_max_length = Math.min(
+            tokenizer.model_max_length,
+            MAX_SEQUENCE_LENGTH
+          );
+        }
+
         embedFn = async (input) => {
           const r = await pipe(input, { pooling: "mean", normalize: true });
           return r.data as Float32Array;
@@ -96,6 +113,9 @@ export function useLocalEmbedding() {
           setError("NETWORK_ERROR");
         } else if (msg.includes("DOWNLOAD_ERROR:")) {
           setError("DOWNLOAD_ERROR");
+        } else if (typeof e === "number") {
+          // A bare numeric throw is a WASM (onnxruntime-web) abort/heap address.
+          setError(`ENGINE_CRASH:${e}`);
         } else {
           setError(msg);
         }

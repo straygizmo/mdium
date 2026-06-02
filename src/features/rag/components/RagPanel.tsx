@@ -219,7 +219,9 @@ export function RagPanel({ folderPath, aiSettings, onOpenFile }: RagPanelProps) 
             ? t("ragNetworkError")
             : (embedError === "DOWNLOAD_ERROR" || buildError?.includes("DOWNLOAD_ERROR"))
               ? t("ragDownloadError")
-              : `${t("ragBuildError")}: ${buildError || embedError}`}
+              : (buildError?.includes("ENGINE_CRASH") || embedError?.includes("ENGINE_CRASH"))
+                ? t("ragEngineError")
+                : `${t("ragBuildError")}: ${buildError || embedError}`}
         </div>
       )}
 
