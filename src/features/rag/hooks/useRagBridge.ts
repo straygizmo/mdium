@@ -1,8 +1,10 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useLocalEmbedding } from "./useLocalEmbedding";
 import { useSettingsStore } from "@/stores/settings-store";
+import { useTabStore } from "@/stores/tab-store";
+import { useChatUIStore } from "@/features/opencode-config/hooks/useOpencodeChat";
 
 interface RagBridgeRequest {
   id: string;
@@ -31,6 +33,35 @@ interface BridgeResult {
  */
 export function useRagBridge() {
   const { load, embed } = useLocalEmbedding();
+  const connected = useChatUIStore((s) => s.connected);
+  const activeFolderPath = useTabStore((s) => s.activeFolderPath);
+  const warmedRef = useRef<string | null>(null);
+
+  // Pre-warm the embedding model when opencode connects so the first rag_search
+  // call from the agent doesn't pay the cold-load cost (which can exceed the
+  // tool's request timeout). Only warm when an index exists for this folder.
+  useEffect(() => {
+    if (!connected || !activeFolderPath) return;
+    const model = useSettingsStore.getState().ragSettings.embeddingModel;
+    const key = `${activeFolderPath}::${model}`;
+    if (warmedRef.current === key) return;
+    warmedRef.current = key;
+    (async () => {
+      try {
+        const status = await invoke<any>("rag_get_status", {
+          folderPath: activeFolderPath,
+          modelName: model,
+        });
+        if ((status?.total_chunks ?? 0) > 0) {
+          console.info("[rag-bridge] pre-warming embedding model:", model);
+          await load(model);
+          console.info("[rag-bridge] embedding model ready");
+        }
+      } catch {
+        // Best-effort pre-warm; the request path will load on demand otherwise.
+      }
+    })();
+  }, [connected, activeFolderPath, load]);
 
   useEffect(() => {
     let disposed = false;
