@@ -7,7 +7,7 @@ import { useSettingsStore } from "@/stores/settings-store";
 import { useTabStore } from "@/stores/tab-store";
 import { useGitStore } from "@/stores/git-store";
 import { useOpencodeServerStore } from "@/stores/opencode-server-store";
-import { getOfficeExt, getMindmapExt, getImageExt, getPdfExt, getCsvExt, isCodeFile } from "@/shared/lib/constants";
+import { getOfficeExt, getMindmapExt, getKityMinderImportExt, getImageExt, getPdfExt, getCsvExt, isCodeFile } from "@/shared/lib/constants";
 import { detectDelimiter } from "@/features/preview/lib/detect-delimiter";
 import { useFileStore } from "@/stores/file-store";
 import { useUiStore } from "@/stores/ui-store";
@@ -411,6 +411,7 @@ export function App() {
         const fileName = filePath.split(/[\\/]/).pop() ?? "untitled";
         const officeExt = getOfficeExt(filePath);
         const mindmapExt = getMindmapExt(filePath);
+        const kmImportExt = getKityMinderImportExt(filePath);
 
         const imageExt = getImageExt(filePath);
         const pdfExt = getPdfExt(filePath);
@@ -452,6 +453,40 @@ export function App() {
             binaryData,
             mindmapFileType: mindmapExt,
           });
+        } else if (kmImportExt) {
+          // KityMinder JSON is import-only: convert it to .xmind, write a sibling
+          // file, and open that. The original .km is left untouched on disk.
+          try {
+            const kmBytes = await invoke<number[]>("read_binary_file", { path: filePath });
+            const text = new TextDecoder().decode(new Uint8Array(kmBytes));
+            const json = JSON.parse(text) as KityMinderJson;
+            if (!json.root) throw new Error("missing root");
+            const xmindBytes = await serializeToXmind(json);
+            const xmindPath = filePath.replace(/\.km$/i, ".xmind");
+            const xmindName = xmindPath.split(/[\\/]/).pop() ?? "untitled";
+            const { writeFile } = await import("@tauri-apps/plugin-fs");
+            await writeFile(xmindPath, xmindBytes);
+            loadFileTree();
+            openTab({
+              filePath: xmindPath,
+              folderPath: activeFolderPath ?? "",
+              fileName: xmindName,
+              content: "",
+              binaryData: xmindBytes,
+              mindmapFileType: ".xmind",
+            });
+            setActiveFile(xmindPath);
+            addRecentFile(xmindPath);
+            useUiStore.getState().setEditorVisible(false);
+            await showMessage(t("mindmap.kmConverted", { file: xmindName }), { kind: "info" });
+          } catch (e) {
+            console.error("Failed to import KityMinder file:", e);
+            await showMessage(
+              t("mindmap.kmImportFailed", { error: e instanceof Error ? e.message : String(e) }),
+              { kind: "error" },
+            );
+          }
+          return;
         } else if (imageExt) {
           // Read image file as binary and create blob URL
           const { readFile } = await import("@tauri-apps/plugin-fs");
@@ -503,7 +538,7 @@ export function App() {
         console.error("Failed to open file:", e);
       }
     },
-    [openTab, activeFolderPath, setActiveFile, addRecentFile]
+    [openTab, activeFolderPath, setActiveFile, addRecentFile, loadFileTree, t]
   );
 
   // Mindmap save callback
