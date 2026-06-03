@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { configureLocalWasm } from "@/shared/lib/ort-wasm";
 
 type EmbedFn = (input: string) => Promise<Float32Array>;
 
@@ -57,6 +58,7 @@ export function useLocalEmbedding() {
 
         const transformers = await import("@huggingface/transformers");
         const { pipeline, env } = transformers;
+        configureLocalWasm(env);
 
         // Use custom "models" protocol registered in Rust to serve model files
         // On Windows: http://models.localhost/<path>
