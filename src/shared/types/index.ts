@@ -99,6 +99,10 @@ export interface RagSettings {
   fileExtensions: string;
   retrieveTopK: number;
   retrieveMinScore: number;
+  /** "vector" = embedding only, "hybrid" = embedding + BM25 fused via RRF. */
+  searchMode: "vector" | "hybrid";
+  /** RRF weight for the BM25 rank, 0..1 (vector weight = 1 - bm25Weight). */
+  bm25Weight: number;
 }
 
 /** Medium publishing settings */

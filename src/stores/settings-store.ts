@@ -4,6 +4,7 @@ import i18n from "@/shared/i18n";
 import { applyTheme } from "@/shared/themes/apply-theme";
 import { getThemeById, DEFAULT_THEME_ID } from "@/shared/themes";
 import { syncProviderToOpencode } from "@/shared/lib/opencode-auth-sync";
+import { DEFAULT_RAG_SETTINGS, normalizeRagSettings } from "@/features/rag/lib/rag-settings";
 import type { AiSettings, MediumSettings, RagSettings } from "@/shared/types";
 
 export type Language = "ja" | "en";
@@ -15,14 +16,6 @@ const DEFAULT_AI_SETTINGS: AiSettings = {
   baseUrl: "https://api.deepseek.com/v1",
   apiFormat: "openai",
   verifiedModels: {},
-};
-
-const DEFAULT_RAG_SETTINGS: RagSettings = {
-  embeddingModel: "Xenova/multilingual-e5-base",
-  minChunkLength: 0,
-  fileExtensions: ".md",
-  retrieveTopK: 5,
-  retrieveMinScore: 0.1,
 };
 
 const DEFAULT_MEDIUM_SETTINGS: MediumSettings = {
@@ -150,6 +143,15 @@ export const useSettingsStore = create<SettingsState>()(
         mediumSettings: state.mediumSettings,
         allowLlmVbaImport: state.allowLlmVbaImport,
       }),
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<SettingsState>;
+        return {
+          ...current,
+          ...p,
+          // Ensure RAG fields added in later versions get defaults.
+          ragSettings: normalizeRagSettings(p.ragSettings),
+        };
+      },
     }
   )
 );
