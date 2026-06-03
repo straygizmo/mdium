@@ -8,12 +8,19 @@ use http_bridge::{new_state as new_http_bridge_state, HttpBridgeState};
 use file_watcher::{FileWatcherState, FolderWatcherState};
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
+use tauri::Manager;
 
 /// Split a HuggingFace-style model id ("org/model") into a relative path
 /// (`org/model`). Shared by the RAG and speech model-directory resolvers.
 pub fn model_subpath(model_name: &str) -> Result<std::path::PathBuf, String> {
     let parts: Vec<&str> = model_name.splitn(2, '/').collect();
     if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
+        return Err(format!("Invalid model name: {}", model_name));
+    }
+    // Reject parent-directory traversal so a crafted model name cannot escape
+    // the models base dir (the download/dir-creation paths are not behind the
+    // protocol handler's canonicalize guard).
+    if parts[0] == ".." || parts[1].split('/').any(|c| c == "..") {
         return Err(format!("Invalid model name: {}", model_name));
     }
     Ok(std::path::PathBuf::from(parts[0]).join(parts[1]))
@@ -26,7 +33,6 @@ pub fn model_subpath(model_name: &str) -> Result<std::path::PathBuf, String> {
 pub fn embedding_models_base_dir(
     app: &tauri::AppHandle,
 ) -> Result<std::path::PathBuf, String> {
-    use tauri::Manager;
     let dir = app
         .path()
         .app_local_data_dir()
@@ -52,7 +58,6 @@ pub fn run() {
         .manage::<ActiveXlsmState>(new_active_xlsm_state())
         .manage::<HttpBridgeState>(new_http_bridge_state())
         .setup(|app| {
-            use tauri::Manager;
             let icon_bytes = include_bytes!("../icons/icon.png");
             let icon = tauri::image::Image::from_bytes(icon_bytes)?;
             if let Some(window) = app.get_webview_window("main") {
@@ -96,7 +101,10 @@ pub fn run() {
 
             let base = match embedding_models_base_dir(ctx.app_handle()) {
                 Ok(b) => b,
-                Err(_) => return error_response(500),
+                Err(e) => {
+                    eprintln!("models:// protocol: failed to resolve model dir: {e}");
+                    return error_response(500);
+                }
             };
             let file_path = base.join(&decoded);
 
@@ -302,5 +310,11 @@ mod tests {
     #[test]
     fn model_subpath_rejects_missing_slash() {
         assert!(model_subpath("no-slash").is_err());
+    }
+
+    #[test]
+    fn model_subpath_rejects_traversal() {
+        assert!(model_subpath("../escape").is_err());
+        assert!(model_subpath("org/../escape").is_err());
     }
 }

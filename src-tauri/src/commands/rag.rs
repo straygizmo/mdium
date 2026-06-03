@@ -602,6 +602,8 @@ pub fn rag_check_model(
 
 /// The relative paths the frontend must show the user for manual model
 /// placement when automatic download is unavailable (e.g. blocked network).
+/// The list is identical for every selectable RAG model, so `model_name` is
+/// accepted (the frontend passes it) but intentionally unused.
 #[tauri::command]
 pub fn rag_model_required_files(_model_name: Option<String>) -> Vec<String> {
     MODEL_FILES.iter().map(|s| s.to_string()).collect()
