@@ -45,4 +45,19 @@ describe("serializeToXmind image handling", () => {
     expect(resourceFiles.length).toBe(1);
     expect(resourceFiles[0]).toMatch(/^resources\/.+\.png$/);
   });
+
+  it("stores an svg+xml image with a .svg extension", async () => {
+    const JSZip = (await import("jszip")).default;
+    // Minimal valid base64 (content irrelevant for this test).
+    const SVG_B64 = "data:image/svg+xml;base64,PHN2Zy8+";
+    const json: KityMinderJson = {
+      template: "right",
+      theme: "fresh-blue",
+      root: { data: { text: "R", image: SVG_B64 }, children: [] },
+    };
+    const zip = await JSZip.loadAsync(await serializeToXmind(json));
+    const resourceFiles = Object.keys(zip.files).filter((k) => k.startsWith("resources/"));
+    expect(resourceFiles.length).toBe(1);
+    expect(resourceFiles[0]).toMatch(/^resources\/.+\.svg$/);
+  });
 });

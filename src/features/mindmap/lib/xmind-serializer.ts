@@ -1,7 +1,7 @@
 /**
  * Serialize a KityMinderJson into a .xmind ZIP (inverse of xmind-parser.ts).
  * Emits content.json (XMind Zen), content.xml (XMind 8), metadata.json, and
- * manifests. Images are stored under resources/ (see attachImages, added later).
+ * manifests. Images are stored under resources/ (see attachImages).
  */
 import JSZip from "jszip";
 import type { KityMinderJson, KityMinderNode } from "./types";
@@ -55,7 +55,7 @@ export function buildTopic(node: KityMinderNode, isRoot: boolean, layout: string
 
   if (d.expandState === "collapse") topic.branch = "folded";
 
-  // image is attached later (attachImages).
+  // image is attached by attachImages after buildTopic returns.
 
   if (node.children && node.children.length > 0) {
     topic.children = {
@@ -120,7 +120,7 @@ export async function serializeToXmind(json: KityMinderJson): Promise<Uint8Array
 
   const rootTopic = buildTopic(json.root, true, layout);
 
-  // Image extraction populates `resources` and rewrites topic.image (added later).
+  // Image extraction populates `resources` and rewrites topic.image.
   const resources: Record<string, Uint8Array> = {};
   attachImages(json.root, rootTopic, resources);
 
@@ -175,7 +175,8 @@ function attachImages(
   if (img) {
     const m = DATA_URL_RE.exec(img);
     if (m) {
-      const ext = m[1] === "jpeg" ? "jpg" : m[1];
+      const subtype = m[1].toLowerCase();
+      const ext = subtype === "jpeg" ? "jpg" : subtype === "svg+xml" ? "svg" : subtype;
       const name = `${topic.id}.${ext}`;
       try {
         resources[name] = base64ToBytes(m[2]);
