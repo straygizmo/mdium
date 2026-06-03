@@ -83,14 +83,18 @@ export function useRagBridge() {
         console.info("[rag-bridge] request:", req.query, "| model:", model, "| folder:", req.folderPath);
         // Never trigger a network download from this invisible path — in a
         // blocked/offline env that can hang indefinitely. Fail fast instead.
+        const t0 = performance.now();
         const exists = await invoke<boolean>("rag_check_model", { modelName: model });
         if (!exists) {
           throw new Error(
             `Embedding model "${model}" is not available locally. Open the mdium RAG panel and build the index first.`
           );
         }
+        const t1 = performance.now();
         await load(model);
+        const t2 = performance.now();
         const embedding = await embed(req.query, "query");
+        const t3 = performance.now();
         const allResults = await invoke<any[]>("rag_search", {
           folderPath: req.folderPath,
           embedding,
@@ -100,6 +104,11 @@ export function useRagBridge() {
           searchMode,
           bm25Weight,
         });
+        const t4 = performance.now();
+        // Per-phase timing. A large `load` here means the model was cold/reloaded.
+        console.info(
+          `[rag-bridge] timing(ms): check=${(t1 - t0) | 0} load=${(t2 - t1) | 0} embed=${(t3 - t2) | 0} search=${(t4 - t3) | 0}`
+        );
         // In hybrid mode `score` is an RRF score (different scale from cosine),
         // so the cosine-based minScore threshold only applies to vector mode.
         const filtered =

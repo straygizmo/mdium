@@ -56,6 +56,24 @@ pub fn new_state() -> HttpBridgeState {
     Arc::new(Mutex::new(None))
 }
 
+/// Write `~/.config/opencode/.mdium-bridge.json` with the bridge port/token.
+/// Best-effort: failures are ignored (the frontend also writes it on connect).
+fn write_bridge_sidecar(port: u16, token: &str) {
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return,
+    };
+    let path = home
+        .join(".config")
+        .join("opencode")
+        .join(".mdium-bridge.json");
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let body = format!("{{\n  \"port\": {},\n  \"token\": \"{}\"\n}}\n", port, token);
+    let _ = std::fs::write(&path, body);
+}
+
 /// Generate a 32-character alphanumeric bearer token.
 fn generate_token() -> String {
     const CHARSET: &[u8] =
@@ -94,6 +112,10 @@ pub fn start_bridge(
         let mut guard = state.lock().map_err(|e| format!("Lock failed: {}", e))?;
         *guard = Some(info.clone());
     }
+
+    // Write the sidecar the opencode rag_search tool reads, so it always points
+    // at THIS run's port/token even if the user never (re)connects opencode.
+    write_bridge_sidecar(port, &token);
 
     let expected_token = token.clone();
     thread::spawn(move || {
