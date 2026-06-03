@@ -82,6 +82,20 @@ function buildZenManifest(extraEntries: string[]): string {
   return JSON.stringify({ "file-entries": entries });
 }
 
+function mediaTypeForPath(path: string): string {
+  const ext = path.split(".").pop()?.toLowerCase();
+  switch (ext) {
+    case "png": return "image/png";
+    case "jpg":
+    case "jpeg": return "image/jpeg";
+    case "gif": return "image/gif";
+    case "webp": return "image/webp";
+    case "svg": return "image/svg+xml";
+    case "bmp": return "image/bmp";
+    default: return "application/octet-stream";
+  }
+}
+
 function buildXml8Manifest(extraEntries: string[]): string {
   const fileEntry = (path: string, media: string) =>
     `  <file-entry full-path="${path}" media-type="${media}"/>`;
@@ -93,7 +107,7 @@ function buildXml8Manifest(extraEntries: string[]): string {
     fileEntry("metadata.json", "application/json"),
     fileEntry("META-INF/", ""),
     fileEntry("META-INF/manifest.xml", "text/xml"),
-    ...extraEntries.map((e) => fileEntry(e, "image/png")),
+    ...extraEntries.map((e) => fileEntry(e, mediaTypeForPath(e))),
     "</manifest>",
   ];
   return lines.join("\n");
@@ -125,6 +139,11 @@ export async function serializeToXmind(json: KityMinderJson): Promise<Uint8Array
     zip.file(path, bytes);
     resourcePaths.push(path);
   }
+  // JSZip implicitly creates a directory entry ("resources/") when adding nested files.
+  // Remove it so zip.files only contains real file entries (test-verifiable and cleaner).
+  if (resourcePaths.length > 0) {
+    delete (zip.files as Record<string, unknown>)["resources/"];
+  }
 
   zip.file("manifest.json", buildZenManifest(resourcePaths));
   zip.file("META-INF/manifest.xml", buildXml8Manifest(resourcePaths));
@@ -132,12 +151,52 @@ export async function serializeToXmind(json: KityMinderJson): Promise<Uint8Array
   return zip.generateAsync({ type: "uint8array" });
 }
 
-// Placeholder; real image extraction is added in a later task. Defined as a function
-// declaration so it is hoisted above its use in serializeToXmind.
+const DATA_URL_RE = /^data:image\/([a-zA-Z0-9.+-]+);base64,(.+)$/;
+
+/** Decode a base64 string to bytes (no Buffer dependency). */
+function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+/**
+ * Walk node/topic in lockstep. For each node with a valid base64 image, write the
+ * bytes into `resources` and set topic.image to reference resources/<id>.<ext>.
+ * Invalid images are skipped (topic keeps no image).
+ */
 function attachImages(
-  _node: KityMinderNode,
-  _topic: SerializedTopic,
-  _resources: Record<string, Uint8Array>,
+  node: KityMinderNode,
+  topic: SerializedTopic,
+  resources: Record<string, Uint8Array>,
 ): void {
-  // no-op until images task
+  const img = node.data.image;
+  if (img) {
+    const m = DATA_URL_RE.exec(img);
+    if (m) {
+      const ext = m[1] === "jpeg" ? "jpg" : m[1];
+      const name = `${topic.id}.${ext}`;
+      try {
+        resources[name] = base64ToBytes(m[2]);
+        const size = node.data.imageSize;
+        topic.image = {
+          src: `xap:resources/${name}`,
+          width: size?.width ?? 200,
+          height: size?.height ?? 200,
+        };
+      } catch {
+        // invalid base64 -> skip image, keep node as text
+        console.warn("[xmind-serializer] skipping invalid image on node:", node.data.text);
+      }
+    } else {
+      console.warn("[xmind-serializer] skipping non-data-URL image on node:", node.data.text);
+    }
+  }
+
+  const kids = node.children ?? [];
+  const attached = topic.children?.attached ?? [];
+  for (let i = 0; i < kids.length; i++) {
+    if (attached[i]) attachImages(kids[i], attached[i], resources);
+  }
 }
