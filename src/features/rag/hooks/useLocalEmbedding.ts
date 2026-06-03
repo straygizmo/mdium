@@ -7,6 +7,7 @@ type EmbedFn = (input: string) => Promise<Float32Array>;
 let embedFn: EmbedFn | null = null;
 let loadedModelName: string | null = null;
 let pipelinePromise: Promise<void> | null = null;
+let manualPlacementInfo: { dir: string; files: string[] } | null = null;
 
 function getPrefix(modelName: string | null, type: "query" | "passage"): string {
   if (modelName && modelName.includes("ruri")) {
@@ -45,12 +46,21 @@ export function useLocalEmbedding() {
 
     pipelinePromise = (async () => {
       try {
-        // Check if model exists locally, download if not
+        // Check if model exists locally, download if not. When download is
+        // unavailable (offline / blocked network), surface the exact folder and
+        // files so the user can place the model manually.
         const modelExists = await invoke<boolean>("rag_check_model", { modelName });
         if (!modelExists) {
           setStatus("downloading");
           setProgress(0);
-          await invoke("rag_download_model", { modelName });
+          try {
+            await invoke("rag_download_model", { modelName });
+          } catch (dlErr) {
+            const dir = await invoke<string>("rag_get_model_dir", { modelName });
+            const files = await invoke<string[]>("rag_model_required_files", { modelName });
+            manualPlacementInfo = { dir, files };
+            throw new Error("MODEL_MISSING");
+          }
         }
 
         setStatus("loading");
@@ -111,7 +121,9 @@ export function useLocalEmbedding() {
       } catch (e: any) {
         console.error("[RAG] Model load failed:", e, "typeof:", typeof e, "stack:", e?.stack);
         const msg = e?.message ?? String(e);
-        if (msg.includes("NETWORK_ERROR:")) {
+        if (msg === "MODEL_MISSING" || msg.includes("MODEL_MISSING")) {
+          setError("MODEL_MISSING");
+        } else if (msg.includes("NETWORK_ERROR:")) {
           setError("NETWORK_ERROR");
         } else if (msg.includes("DOWNLOAD_ERROR:")) {
           setError("DOWNLOAD_ERROR");
@@ -148,5 +160,6 @@ export function useLocalEmbedding() {
     [embed]
   );
 
-  return { status, progress, error, load, embed, embedBatch } as const;
+  const getManualPlacement = useCallback(() => manualPlacementInfo, []);
+  return { status, progress, error, load, embed, embedBatch, getManualPlacement } as const;
 }

@@ -78,7 +78,7 @@ export function useRagFeatures({ folderPath, aiSettings, onOpenFile }: UseRagFea
   const [buildError, setBuildError] = useState<string | null>(null);
   const [buildProgress, setBuildProgress] = useState<BuildProgress | null>(null);
   const currentSessionId = useRef<string | null>(null);
-  const { status: embedStatus, progress: embedProgress, error: embedError, load: loadEmbed, embed, embedBatch } = useLocalEmbedding();
+  const { status: embedStatus, progress: embedProgress, error: embedError, load: loadEmbed, embed, embedBatch, getManualPlacement } = useLocalEmbedding();
   const ragSettings = useSettingsStore((s) => s.ragSettings);
 
   const persistSession = useCallback((msgs: RagMessage[]) => {
@@ -294,6 +294,7 @@ export function useRagFeatures({ folderPath, aiSettings, onOpenFile }: UseRagFea
     embedStatus,
     embedProgress,
     embedError,
+    getManualPlacement,
     checkStatus,
     buildIndex,
     deleteIndex,
