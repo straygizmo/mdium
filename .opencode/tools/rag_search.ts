@@ -8,9 +8,9 @@
 // the results. This keeps the tool dependency-free and always consistent with
 // the app's settings.
 import { tool } from "@opencode-ai/plugin";
-import { homedir } from "os";
-import { join } from "path";
-import { readFile } from "fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { readFile } from "node:fs/promises";
 
 interface BridgeInfo {
   port: number;
@@ -74,20 +74,29 @@ export default tool({
 
     let res: Response;
     try {
-      res = await fetch(`http://127.0.0.1:${bridge.port}/rag/search`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${bridge.token}`,
-        },
-        body: JSON.stringify({
-          folder_path: context.worktree,
-          query: args.query,
-          limit: args.top_k,
-          search_mode: args.search_mode,
-          bm25_weight: args.bm25_weight,
-        }),
-      });
+      // Bound the call so the tool never hangs if mdium is unreachable. The
+      // bridge resolves within ~120s even on a slow first model load.
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 150_000);
+      try {
+        res = await fetch(`http://127.0.0.1:${bridge.port}/rag/search`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${bridge.token}`,
+          },
+          body: JSON.stringify({
+            folder_path: context.worktree,
+            query: args.query,
+            limit: args.top_k,
+            search_mode: args.search_mode,
+            bm25_weight: args.bm25_weight,
+          }),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
     } catch (e: any) {
       return (
         `Failed to reach mdium RAG bridge: ${e?.message ?? e}.\n` +
