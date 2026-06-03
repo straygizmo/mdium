@@ -38,6 +38,7 @@ import { showMessage, showConfirm, showPrompt } from "@/stores/dialog-store";
 import type { ImageCanvasHandle } from "@/features/image/components/ImageCanvas";
 import type { MindmapEditorHandle } from "@/features/mindmap/components/MindmapEditor";
 import type { KityMinderJson } from "@/features/mindmap/lib/types";
+import { serializeToXmind } from "@/features/mindmap/lib/xmind-serializer";
 import appIconUrl from "../../app-icon.svg";
 import "./App.css";
 
@@ -509,16 +510,15 @@ export function App() {
   const handleMindmapSave = useCallback(async (json: KityMinderJson) => {
     if (!activeTab?.filePath) return;
     try {
-      const jsonStr = JSON.stringify(json, null, 2);
-      await invoke("write_text_file", {
-        path: activeTab.filePath,
-        content: jsonStr,
-      });
+      const bytes = await serializeToXmind(json);
+      const { writeFile } = await import("@tauri-apps/plugin-fs");
+      await writeFile(activeTab.filePath, bytes);
       markClean(activeTab.id);
     } catch (e) {
       console.error("Failed to save mindmap:", e);
+      await showMessage(t("mindmap.failedToSave", { error: e instanceof Error ? e.message : String(e) }), { kind: "error" });
     }
-  }, [activeTab, markClean]);
+  }, [activeTab, markClean, t]);
 
   const handleMindmapDirtyChange = useCallback((dirty: boolean) => {
     if (!activeTab) return;
@@ -550,23 +550,22 @@ export function App() {
       const selected = await save({
         defaultPath,
         filters: isMindmap
-          ? [{ name: "Mindmap", extensions: ["km"] }]
+          ? [{ name: "XMind", extensions: ["xmind"] }]
           : isCode
             ? [{ name: "Code", extensions: [ext] }, { name: "All", extensions: ["*"] }]
             : [{ name: "Markdown", extensions: ["md"] }],
       });
       if (!selected) return;
 
-      let text: string;
       if (isMindmap) {
         const json = mindmapEditorRef.current?.getJson();
         if (!json) return;
-        text = JSON.stringify(json, null, 2);
+        const bytes = await serializeToXmind(json);
+        const { writeFile } = await import("@tauri-apps/plugin-fs");
+        await writeFile(selected, bytes);
       } else {
-        text = activeTab.content;
+        await invoke("write_text_file", { path: selected, content: activeTab.content });
       }
-
-      await invoke("write_text_file", { path: selected, content: text });
       const fileName = selected.split(/[\\/]/).pop() ?? "untitled";
       updateTabFilePath(activeTab.id, selected, fileName);
       setActiveFile(selected);
@@ -590,11 +589,9 @@ export function App() {
       if (activeTab.mindmapFileType) {
         const json = mindmapEditorRef.current?.getJson();
         if (json) {
-          const jsonStr = JSON.stringify(json, null, 2);
-          await invoke("write_text_file", {
-            path: activeTab.filePath,
-            content: jsonStr,
-          });
+          const bytes = await serializeToXmind(json);
+          const { writeFile } = await import("@tauri-apps/plugin-fs");
+          await writeFile(activeTab.filePath, bytes);
         }
       } else if (activeTab.imageFileType) {
         // Image tab: save canvas as PNG to file
