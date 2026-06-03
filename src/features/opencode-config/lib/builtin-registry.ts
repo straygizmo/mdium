@@ -17,6 +17,12 @@ export interface BuiltinAgentEntry {
   description: string;
   /** Full content for ~/.config/opencode/agents/<name>.md (frontmatter + prompt) */
   agentMd: string;
+  /**
+   * Builtin custom tool names this agent needs to function (keys of
+   * BUILTIN_CUSTOM_TOOLS). Used to prompt the user to install the tool when the
+   * agent is added.
+   */
+  requiredBuiltinTools?: string[];
 }
 
 export interface BuiltinCustomToolEntry {
@@ -31,6 +37,7 @@ export interface BuiltinCustomToolEntry {
 export const BUILTIN_AGENTS: Record<string, BuiltinAgentEntry> = {
   rag: {
     description: "RAG - Document search agent powered by vector database",
+    requiredBuiltinTools: ["rag_search"],
     agentMd: `---
 description: RAG - Document search agent powered by vector database
 mode: all

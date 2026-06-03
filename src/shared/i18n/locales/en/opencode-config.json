@@ -169,6 +169,8 @@
   "customToolCommand": "Shell Command",
   "customToolDeleteConfirm": "Delete \"{{name}}\"?",
   "builtin": "Built-in",
+  "agentAddRequiredToolTitle": "Add required tool",
+  "agentAddRequiredToolConfirm": "The \"{{agent}}\" agent needs the {{tools}} custom tool to work. Add it now?",
   "ocChatMdContext": "MD File Context",
   "ocChatMdContextPrefix": "Instructions about the following file.",
   "ocChatMdToggleLabel": "Instruct about {{name}}",

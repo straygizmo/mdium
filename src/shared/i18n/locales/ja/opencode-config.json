@@ -169,6 +169,8 @@
   "customToolCommand": "シェルコマンド",
   "customToolDeleteConfirm": "「{{name}}」を削除しますか？",
   "builtin": "Built-in",
+  "agentAddRequiredToolTitle": "必要なツールを追加",
+  "agentAddRequiredToolConfirm": "「{{agent}}」エージェントの動作には {{tools}} カスタムツールが必要です。今すぐ追加しますか？",
   "ocChatMdContext": "MDファイル連携",
   "ocChatMdContextPrefix": "Instructions about the following file.",
   "ocChatMdToggleLabel": "{{name}}について指示する",

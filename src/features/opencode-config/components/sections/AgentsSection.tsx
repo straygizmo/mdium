@@ -8,8 +8,12 @@ import { marked } from "marked";
 import { useOpencodeConfigContext, toRelativeProjectPath } from "../OpencodeConfigContext";
 import {
   BUILTIN_AGENTS,
+  BUILTIN_CUSTOM_TOOLS,
   isBuiltinAgent,
+  isBuiltinCustomTool,
+  type BuiltinAgentEntry,
 } from "../../lib/builtin-registry";
+import { showConfirm } from "@/stores/dialog-store";
 import { ScopeToggle, type Scope } from "../shared/ScopeToggle";
 import { ScopeFormWrapper } from "../shared/ScopeFormWrapper";
 import { useScopeItems } from "../../hooks/useScopeItems";
@@ -236,6 +240,58 @@ export function AgentsSection() {
     setEditing(null); setAdding(false);
   };
 
+  // Global opencode tools directory (where builtin custom tools are installed).
+  const getGlobalToolsDir = useCallback(async (): Promise<string> => {
+    const home = await invoke<string>("get_home_dir");
+    const sep = home.includes("\\") ? "\\" : "/";
+    return `${home}${sep}.config${sep}opencode${sep}tools`;
+  }, []);
+
+  // Names of custom tools already installed in either scope.
+  const listInstalledToolNames = useCallback(async (): Promise<Set<string>> => {
+    const names = new Set<string>();
+    const dirs: string[] = [await getGlobalToolsDir()];
+    if (activeFolderPath) {
+      const sep = activeFolderPath.includes("\\") ? "\\" : "/";
+      dirs.push(`${activeFolderPath}${sep}.opencode${sep}tools`);
+    }
+    for (const dir of dirs) {
+      try {
+        const files = await invoke<{ tool_name: string }[]>("list_tool_files", { baseDir: dir });
+        files.forEach((f) => names.add(f.tool_name));
+      } catch {
+        // Directory may not exist yet — ignore.
+      }
+    }
+    return names;
+  }, [getGlobalToolsDir, activeFolderPath]);
+
+  // After adding an agent, offer to install any builtin custom tools it needs.
+  const promptInstallRequiredTools = useCallback(
+    async (agentName: string, entry: BuiltinAgentEntry) => {
+      const required = (entry.requiredBuiltinTools ?? []).filter(isBuiltinCustomTool);
+      if (required.length === 0) return;
+      const installed = await listInstalledToolNames();
+      const missing = required.filter((toolName) => !installed.has(toolName));
+      if (missing.length === 0) return;
+
+      const confirmed = await showConfirm(
+        t("agentAddRequiredToolConfirm", { agent: agentName, tools: missing.join(", ") }),
+        { title: t("agentAddRequiredToolTitle"), kind: "info" }
+      );
+      if (!confirmed) return;
+
+      const toolsDir = await getGlobalToolsDir();
+      for (const toolName of missing) {
+        const tool = BUILTIN_CUSTOM_TOOLS[toolName];
+        if (tool) {
+          await invoke("write_tool_file", { baseDir: toolsDir, fileName: tool.fileName, content: tool.content });
+        }
+      }
+    },
+    [listInstalledToolNames, getGlobalToolsDir, t]
+  );
+
   const handleAddBuiltin = async (name: string) => {
     const entry = BUILTIN_AGENTS[name];
     if (!entry || !entry.agentMd) return;
@@ -246,6 +302,7 @@ export function AgentsSection() {
     setShowBuiltinMenu(false);
     await loadAllAgentFiles();
     loadGlobalAgentFiles();
+    await promptInstallRequiredTools(name, entry);
   };
 
   // Close builtin dropdown on outside click
