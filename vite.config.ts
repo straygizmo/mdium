@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig, configDefaults } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import path from "path";
 import fs from "node:fs";
@@ -89,5 +89,10 @@ export default defineConfig({
       "@huggingface/transformers",
       "onnxruntime-web",
     ],
+  },
+  test: {
+    // Exclude git worktrees under .claude/ so their duplicated test files are
+    // not discovered alongside the real ones (which double-counts failures).
+    exclude: [...configDefaults.exclude, "**/.claude/**"],
   },
 });
