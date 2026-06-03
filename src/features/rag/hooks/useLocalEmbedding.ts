@@ -57,6 +57,7 @@ export function useLocalEmbedding() {
           try {
             await invoke("rag_download_model", { modelName });
           } catch (dlErr) {
+            console.warn("[RAG] model download failed, falling back to manual placement:", dlErr);
             const dir = await invoke<string>("rag_get_model_dir", { modelName });
             const files = await invoke<string[]>("rag_model_required_files", { modelName });
             manualPlacementInfo = { dir, files };

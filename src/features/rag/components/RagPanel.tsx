@@ -241,8 +241,15 @@ export function RagPanel({ folderPath, aiSettings, onOpenFile }: RagPanelProps) 
                     <button
                       className="rag-panel__btn"
                       onClick={async () => {
+                        // create_folder errors if the directory already exists
+                        // (a prior download attempt commonly created it), so
+                        // ignore that and always proceed to open the folder.
                         try {
                           await invoke("create_folder", { path: info.dir });
+                        } catch {
+                          // directory already exists — fine
+                        }
+                        try {
                           await invoke("open_in_default_app", { path: info.dir });
                         } catch (e) {
                           console.error("[RAG] Failed to open model folder:", e);
