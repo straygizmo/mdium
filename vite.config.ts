@@ -3,11 +3,16 @@ import react from "@vitejs/plugin-react";
 import path from "path";
 import fs from "node:fs";
 
-// Copy the onnxruntime-web WASM backend (the exact version bundled with
-// @huggingface/transformers) into public/ort so it is served from the app's
-// own local origin instead of the jsDelivr CDN. Runs in both `vite` (dev) and
-// `vite build` via the buildStart hook.
-function copyOrtWasm() {
+// Serve the onnxruntime-web WASM backend (the exact version bundled with
+// @huggingface/transformers) from the app's own local origin at `/ort/` instead
+// of the jsDelivr CDN, so model loading works on a network-restricted machine.
+//
+// ORT loads its `.mjs` glue via a dynamic `import()`. Vite dev cannot serve
+// `public/` assets through `import()` (it rewrites the request to `?import` and
+// resolves it through the module graph, which 404s for public files). So this
+// plugin serves `/ort/*` as a real dev-server route (configureServer) and emits
+// the files into `dist/ort/` for the production build (generateBundle).
+function ortWasm() {
   const files = [
     "ort-wasm-simd-threaded.jsep.wasm",
     "ort-wasm-simd-threaded.jsep.mjs",
@@ -16,24 +21,49 @@ function copyOrtWasm() {
     __dirname,
     "node_modules/@huggingface/transformers/dist"
   );
-  const destDir = path.resolve(__dirname, "public/ort");
+  const mimeFor = (name: string) =>
+    name.endsWith(".wasm") ? "application/wasm" : "text/javascript";
   return {
-    name: "copy-ort-wasm",
-    buildStart() {
-      fs.mkdirSync(destDir, { recursive: true });
+    name: "ort-wasm",
+    // Dev: serve /ort/<file> directly from node_modules. Registered here (not in
+    // the returned post-hook) so it runs BEFORE Vite's module-transform
+    // middleware and the dynamic import resolves to a real file, not the graph.
+    configureServer(server: any) {
+      server.middlewares.use((req: any, res: any, next: any) => {
+        const pathname = (req.url ?? "").split("?")[0];
+        if (pathname.startsWith("/ort/")) {
+          const name = pathname.slice("/ort/".length);
+          if (files.includes(name)) {
+            const full = path.join(srcDir, name);
+            if (fs.existsSync(full)) {
+              res.setHeader("Content-Type", mimeFor(name));
+              fs.createReadStream(full).pipe(res);
+              return;
+            }
+          }
+        }
+        next();
+      });
+    },
+    // Build: emit the files into dist/ort/ so the production app serves them.
+    generateBundle() {
       for (const f of files) {
         const src = path.join(srcDir, f);
         if (!fs.existsSync(src)) {
-          throw new Error(`copy-ort-wasm: missing source file ${src}`);
+          throw new Error(`ort-wasm: missing source file ${src}`);
         }
-        fs.copyFileSync(src, path.join(destDir, f));
+        (this as any).emitFile({
+          type: "asset",
+          fileName: `ort/${f}`,
+          source: fs.readFileSync(src),
+        });
       }
     },
   };
 }
 
 export default defineConfig({
-  plugins: [react(), copyOrtWasm()],
+  plugins: [react(), ortWasm()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
