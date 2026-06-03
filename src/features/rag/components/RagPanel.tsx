@@ -241,13 +241,21 @@ export function RagPanel({ folderPath, aiSettings, onOpenFile }: RagPanelProps) 
                     <button
                       className="rag-panel__btn"
                       onClick={async () => {
-                        await invoke("create_folder", { path: info.dir });
-                        await invoke("open_in_default_app", { path: info.dir });
+                        try {
+                          await invoke("create_folder", { path: info.dir });
+                          await invoke("open_in_default_app", { path: info.dir });
+                        } catch (e) {
+                          console.error("[RAG] Failed to open model folder:", e);
+                        }
                       }}
                     >
                       {t("ragOpenModelFolder")}
                     </button>
-                    <button className="rag-panel__btn" onClick={buildIndex}>
+                    <button
+                      className="rag-panel__btn"
+                      onClick={buildIndex}
+                      disabled={status.state === "building"}
+                    >
                       {t("ragModelRecheck")}
                     </button>
                   </div>

@@ -29,6 +29,7 @@ export function useLocalEmbedding() {
       embedFn = null;
       pipelinePromise = null;
       loadedModelName = null;
+      manualPlacementInfo = null;
     }
 
     if (embedFn) {
