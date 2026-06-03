@@ -250,7 +250,8 @@ interface InnerProps extends Props {
 function MindmapEditorInner({ fileData, fileType, filePath, theme, onSave, onDirtyChange, editorRef }: InnerProps) {
   const { t } = useTranslation("editor");
   const { t: tCommon } = useTranslation("common");
-  const readOnly = fileType === ".xmind";
+  // .xmind is now the editable native format.
+  const readOnly = false;
   const { fitView, setViewport, getNodes } = useReactFlow();
 
   // Core state
@@ -400,13 +401,8 @@ function MindmapEditorInner({ fileData, fileType, filePath, theme, onSave, onDir
   useEffect(() => {
     const load = async () => {
       try {
-        let jsonData: KityMinderJson;
-        if (fileType === ".xmind") {
-          jsonData = await parseXmindFile(fileData);
-        } else {
-          const text = new TextDecoder().decode(fileData);
-          jsonData = JSON.parse(text) as KityMinderJson;
-        }
+        // All mindmap files are .xmind now (.km is converted before opening).
+        const jsonData: KityMinderJson = await parseXmindFile(fileData);
 
         const internal = assignIds(jsonData.root);
         setTree(internal);
