@@ -5,6 +5,7 @@
 import JSZip from "jszip";
 import { xml2json } from "xml-js";
 import type { KityMinderJson, KityMinderNode, KityMinderNodeData } from "./types";
+import { structureToLayout } from "./xmind-structure";
 
 const TASK_MARKERS = ["start", "oct", "quarter", "3oct", "half", "5oct", "3quar", "7oct", "done", "pause"];
 
@@ -39,7 +40,7 @@ function convertNode(
   const markers = (data.markers as XmindMarker[]) || [];
   const markerRefs = (data["marker-refs"] as Record<string, XmindMarker | XmindMarker[]>) || {};
   const xmlInfo = data["xhtml:img"] as Record<string, Record<string, string>> | undefined;
-  const image = (data.image as Record<string, string>) || { src: "" };
+  const image = (data.image as Record<string, string | number>) || { src: "" };
 
   // Resolve text
   const text = typeof title === "object"
@@ -49,12 +50,20 @@ function convertNode(
   // Resolve image
   const imageAttr = xmlInfo?._attributes || {};
   const src = imageAttr["xhtml:src"];
-  const imageName = (src || image.src || "").split("/").pop() || "";
+  const imageName = ((src || (image.src as string) || "")).split("/").pop() || "";
   const imageData = imgFiles[imageName];
   const imageBase = imageData?.base64;
   const imageSize = {
-    width: imageAttr["svg:width"] ? Number(imageAttr["svg:width"]) : 200,
-    height: imageAttr["svg:height"] ? Number(imageAttr["svg:height"]) : 200,
+    width: imageAttr["svg:width"]
+      ? Number(imageAttr["svg:width"])
+      : image.width
+        ? Number(image.width)
+        : 200,
+    height: imageAttr["svg:height"]
+      ? Number(imageAttr["svg:height"])
+      : image.height
+        ? Number(image.height)
+        : 200,
   };
 
   // Resolve markers (priority & progress)
@@ -185,9 +194,29 @@ export async function parseXmindFile(data: ArrayBuffer | Uint8Array): Promise<Ki
     throw new Error("Failed to parse XMind file: root topic not found");
   }
 
+  // Restore layout from the root topic's structureClass.
+  const structureClass =
+    (rootTopic.structureClass as string | undefined) ||
+    ((rootTopic._attributes as Record<string, string> | undefined)?.["structure-class"]);
+  const template = structureToLayout(structureClass);
+
+  // Restore theme from metadata.json -> mdium.theme.
+  let theme = "fresh-blue";
+  const metaFile = files["metadata.json"];
+  if (metaFile) {
+    try {
+      const meta = JSON.parse(await metaFile.async("string")) as {
+        mdium?: { theme?: string };
+      };
+      if (meta?.mdium?.theme) theme = meta.mdium.theme;
+    } catch {
+      // ignore malformed metadata; keep default theme
+    }
+  }
+
   const result: KityMinderJson = {
-    template: "default",
-    theme: "fresh-blue",
+    template,
+    theme,
     root: convertNode(rootTopic, imgFiles),
   };
 
