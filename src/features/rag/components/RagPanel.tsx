@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { showConfirm } from "@/stores/dialog-store";
 import { useRagFeatures } from "../hooks/useRagFeatures";
 import type { ChatSession } from "../hooks/useRagFeatures";
+import { classifyRagError } from "../lib/model-error";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useUiStore } from "@/stores/ui-store";
 import { useSpeechToText } from "@/features/speech/hooks/useSpeechToText";
@@ -27,6 +28,7 @@ export function RagPanel({ folderPath, aiSettings, onOpenFile }: RagPanelProps) 
     embedStatus,
     embedProgress,
     embedError,
+    getManualPlacement,
     checkStatus,
     buildIndex,
     deleteIndex,
@@ -213,17 +215,74 @@ export function RagPanel({ folderPath, aiSettings, onOpenFile }: RagPanelProps) 
         </div>
       )}
 
-      {(buildError || embedError) && (
-        <div className="rag-panel__error">
-          {(embedError === "NETWORK_ERROR" || buildError?.includes("NETWORK_ERROR"))
-            ? t("ragNetworkError")
-            : (embedError === "DOWNLOAD_ERROR" || buildError?.includes("DOWNLOAD_ERROR"))
-              ? t("ragDownloadError")
-              : (buildError?.includes("ENGINE_CRASH") || embedError?.includes("ENGINE_CRASH"))
-                ? t("ragEngineError")
-                : `${t("ragBuildError")}: ${buildError || embedError}`}
-        </div>
-      )}
+      {(() => {
+        const kind = classifyRagError(buildError, embedError);
+        if (!kind) return null;
+        if (kind === "modelMissing") {
+          const info = getManualPlacement();
+          const sourceUrl = `https://huggingface.co/${ragSettings.embeddingModel}/tree/main`;
+          return (
+            <div className="rag-panel__error">
+              <div className="rag-panel__error-title">{t("ragModelMissingTitle")}</div>
+              <p>{t("ragModelMissingInstructions")}</p>
+              {info && (
+                <>
+                  <div>{t("ragModelMissingFolder")}:</div>
+                  <code className="rag-panel__error-path">{info.dir}</code>
+                  <div>{t("ragModelMissingFiles")}:</div>
+                  <ul className="rag-panel__error-files">
+                    {info.files.map((f) => (
+                      <li key={f}><code>{f}</code></li>
+                    ))}
+                  </ul>
+                  <div>{t("ragModelMissingSource")}</div>
+                  <code className="rag-panel__error-path">{sourceUrl}</code>
+                  <div className="rag-panel__error-actions">
+                    <button
+                      className="rag-panel__btn"
+                      onClick={async () => {
+                        // create_folder errors if the directory already exists
+                        // (a prior download attempt commonly created it), so
+                        // ignore that and always proceed to open the folder.
+                        try {
+                          await invoke("create_folder", { path: info.dir });
+                        } catch {
+                          // directory already exists — fine
+                        }
+                        try {
+                          await invoke("open_in_default_app", { path: info.dir });
+                        } catch (e) {
+                          console.error("[RAG] Failed to open model folder:", e);
+                        }
+                      }}
+                    >
+                      {t("ragOpenModelFolder")}
+                    </button>
+                    <button
+                      className="rag-panel__btn"
+                      onClick={buildIndex}
+                      disabled={status.state === "building"}
+                    >
+                      {t("ragModelRecheck")}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          );
+        }
+        return (
+          <div className="rag-panel__error">
+            {kind === "network"
+              ? t("ragNetworkError")
+              : kind === "download"
+                ? t("ragDownloadError")
+                : kind === "engine"
+                  ? t("ragEngineError")
+                  : `${t("ragBuildError")}: ${buildError || embedError}`}
+          </div>
+        );
+      })()}
 
       {apiKeyMissing && (
         <div className="rag-panel__warning">

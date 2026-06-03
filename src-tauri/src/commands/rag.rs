@@ -567,37 +567,46 @@ const MODEL_FILES: &[&str] = &[
     "onnx/model_quantized.onnx",
 ];
 
-fn embedding_model_dir_for(model_name: &str) -> Result<PathBuf, String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let exe_dir = exe.parent().ok_or("Cannot determine app directory")?;
-    // model_name is like "Xenova/multilingual-e5-large"
-    let parts: Vec<&str> = model_name.splitn(2, '/').collect();
-    if parts.len() != 2 {
-        return Err(format!("Invalid model name: {}", model_name));
-    }
-    Ok(exe_dir
-        .join(".embedding-models")
-        .join(parts[0])
-        .join(parts[1]))
+fn embedding_model_dir_for(
+    app: &tauri::AppHandle,
+    model_name: &str,
+) -> Result<PathBuf, String> {
+    let base = crate::embedding_models_base_dir(app)?;
+    Ok(base.join(crate::model_subpath(model_name)?))
 }
 
 #[tauri::command]
-pub fn rag_get_model_dir(model_name: Option<String>) -> Result<String, String> {
+pub fn rag_get_model_dir(
+    app: tauri::AppHandle,
+    model_name: Option<String>,
+) -> Result<String, String> {
     let name = model_name.as_deref().unwrap_or(DEFAULT_MODEL_NAME);
-    let dir = embedding_model_dir_for(name)?;
+    let dir = embedding_model_dir_for(&app, name)?;
     Ok(dir.to_string_lossy().to_string())
 }
 
 #[tauri::command]
-pub fn rag_check_model(model_name: Option<String>) -> Result<bool, String> {
+pub fn rag_check_model(
+    app: tauri::AppHandle,
+    model_name: Option<String>,
+) -> Result<bool, String> {
     let name = model_name.as_deref().unwrap_or(DEFAULT_MODEL_NAME);
-    let dir = embedding_model_dir_for(name)?;
+    let dir = embedding_model_dir_for(&app, name)?;
     for file in MODEL_FILES {
         if !dir.join(file).exists() {
             return Ok(false);
         }
     }
     Ok(true)
+}
+
+/// The relative paths the frontend must show the user for manual model
+/// placement when automatic download is unavailable (e.g. blocked network).
+/// The list is identical for every selectable RAG model, so `model_name` is
+/// accepted (the frontend passes it) but intentionally unused.
+#[tauri::command]
+pub fn rag_model_required_files(_model_name: Option<String>) -> Vec<String> {
+    MODEL_FILES.iter().map(|s| s.to_string()).collect()
 }
 
 #[derive(Clone, Serialize)]
@@ -612,7 +621,7 @@ struct ModelDownloadProgress {
 #[tauri::command]
 pub async fn rag_download_model(app: tauri::AppHandle, model_name: Option<String>) -> Result<(), String> {
     let name = model_name.as_deref().unwrap_or(DEFAULT_MODEL_NAME);
-    let dir = embedding_model_dir_for(name)?;
+    let dir = embedding_model_dir_for(&app, name)?;
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
         .timeout(std::time::Duration::from_secs(600))

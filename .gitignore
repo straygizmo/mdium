@@ -42,3 +42,6 @@ resources/mcp-servers/*/node_modules/
 resources/mcp-servers/*/dist/
 
 slides/
+
+# Copied at build time by the copy-ort-wasm Vite plugin
+public/ort/

@@ -6,6 +6,8 @@
  * to prevent concurrent execution when multiple messages arrive while awaiting.
  */
 
+import { configureLocalWasm } from "../../../shared/lib/ort-wasm";
+
 let transcriber: any = null;
 let loadedModelName: string | null = null;
 
@@ -32,6 +34,7 @@ self.onmessage = (e: MessageEvent) => {
         }
 
         const { pipeline, env } = await import("@huggingface/transformers");
+        configureLocalWasm(env);
         env.remoteHost = "http://models.localhost/";
         env.remotePathTemplate = "{model}/";
         env.allowRemoteModels = true;

@@ -24,17 +24,12 @@ const WHISPER_LARGE_V3_TURBO_FILES: &[&str] = &[
     "onnx/encoder_model_quantized.onnx",
 ];
 
-fn speech_model_dir_for(model_name: &str) -> Result<PathBuf, String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let exe_dir = exe.parent().ok_or("Cannot determine app directory")?;
-    let parts: Vec<&str> = model_name.splitn(2, '/').collect();
-    if parts.len() != 2 {
-        return Err(format!("Invalid model name: {}", model_name));
-    }
-    Ok(exe_dir
-        .join(".embedding-models")
-        .join(parts[0])
-        .join(parts[1]))
+fn speech_model_dir_for(
+    app: &tauri::AppHandle,
+    model_name: &str,
+) -> Result<PathBuf, String> {
+    let base = crate::embedding_models_base_dir(app)?;
+    Ok(base.join(crate::model_subpath(model_name)?))
 }
 
 fn files_for_model(model_name: &str) -> &'static [&'static str] {
@@ -46,8 +41,11 @@ fn files_for_model(model_name: &str) -> &'static [&'static str] {
 }
 
 #[tauri::command]
-pub fn speech_check_model(model_name: String) -> Result<bool, String> {
-    let dir = speech_model_dir_for(&model_name)?;
+pub fn speech_check_model(
+    app: tauri::AppHandle,
+    model_name: String,
+) -> Result<bool, String> {
+    let dir = speech_model_dir_for(&app, &model_name)?;
     let files = files_for_model(&model_name);
     for file in files {
         if !dir.join(file).exists() {
@@ -58,8 +56,11 @@ pub fn speech_check_model(model_name: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
-pub fn speech_get_model_dir(model_name: String) -> Result<String, String> {
-    let dir = speech_model_dir_for(&model_name)?;
+pub fn speech_get_model_dir(
+    app: tauri::AppHandle,
+    model_name: String,
+) -> Result<String, String> {
+    let dir = speech_model_dir_for(&app, &model_name)?;
     Ok(dir.to_string_lossy().to_string())
 }
 
@@ -77,7 +78,7 @@ pub async fn speech_download_model(
     app: tauri::AppHandle,
     model_name: String,
 ) -> Result<(), String> {
-    let dir = speech_model_dir_for(&model_name)?;
+    let dir = speech_model_dir_for(&app, &model_name)?;
     let files = files_for_model(&model_name);
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))

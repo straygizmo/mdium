@@ -8,11 +8,36 @@ use http_bridge::{new_state as new_http_bridge_state, HttpBridgeState};
 use file_watcher::{FileWatcherState, FolderWatcherState};
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
+use tauri::Manager;
 
-fn embedding_models_base_dir() -> Option<std::path::PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let exe_dir = exe.parent()?;
-    Some(exe_dir.join(".embedding-models"))
+/// Split a HuggingFace-style model id ("org/model") into a relative path
+/// (`org/model`). Shared by the RAG and speech model-directory resolvers.
+pub fn model_subpath(model_name: &str) -> Result<std::path::PathBuf, String> {
+    let parts: Vec<&str> = model_name.splitn(2, '/').collect();
+    if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
+        return Err(format!("Invalid model name: {}", model_name));
+    }
+    // Reject parent-directory traversal so a crafted model name cannot escape
+    // the models base dir (the download/dir-creation paths are not behind the
+    // protocol handler's canonicalize guard).
+    if parts[0] == ".." || parts[1].split('/').any(|c| c == "..") {
+        return Err(format!("Invalid model name: {}", model_name));
+    }
+    Ok(std::path::PathBuf::from(parts[0]).join(parts[1]))
+}
+
+/// Base directory that holds all downloaded/placed embedding & speech models.
+/// Stored under the per-user app local data dir so it is writable regardless of
+/// install location (MSI perMachine -> Program Files would otherwise be
+/// read-only) and is reachable for manual model placement.
+pub fn embedding_models_base_dir(
+    app: &tauri::AppHandle,
+) -> Result<std::path::PathBuf, String> {
+    let dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("Failed to resolve app local data dir: {}", e))?;
+    Ok(dir.join(".embedding-models"))
 }
 
 fn error_response(status: u16) -> http::Response<Cow<'static, [u8]>> {
@@ -33,7 +58,6 @@ pub fn run() {
         .manage::<ActiveXlsmState>(new_active_xlsm_state())
         .manage::<HttpBridgeState>(new_http_bridge_state())
         .setup(|app| {
-            use tauri::Manager;
             let icon_bytes = include_bytes!("../icons/icon.png");
             let icon = tauri::image::Image::from_bytes(icon_bytes)?;
             if let Some(window) = app.get_webview_window("main") {
@@ -52,7 +76,7 @@ pub fn run() {
             }
             Ok(())
         })
-        .register_uri_scheme_protocol("models", |_ctx, request| {
+        .register_uri_scheme_protocol("models", |ctx, request| {
             // Handle CORS preflight
             if request.method() == "OPTIONS" {
                 return http::Response::builder()
@@ -75,9 +99,12 @@ pub fn run() {
                 .decode_utf8_lossy()
                 .to_string();
 
-            let base = match embedding_models_base_dir() {
-                Some(b) => b,
-                None => return error_response(500),
+            let base = match embedding_models_base_dir(ctx.app_handle()) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("models:// protocol: failed to resolve model dir: {e}");
+                    return error_response(500);
+                }
             };
             let file_path = base.join(&decoded);
 
@@ -219,6 +246,7 @@ pub fn run() {
             commands::rag::rag_delete_index,
             commands::rag::rag_get_model_dir,
             commands::rag::rag_check_model,
+            commands::rag::rag_model_required_files,
             commands::rag::rag_download_model,
             // Speech operations
             commands::speech::speech_check_model,
@@ -264,4 +292,29 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::model_subpath;
+    use std::path::PathBuf;
+
+    #[test]
+    fn model_subpath_splits_org_and_model() {
+        assert_eq!(
+            model_subpath("Xenova/multilingual-e5-base").unwrap(),
+            PathBuf::from("Xenova").join("multilingual-e5-base")
+        );
+    }
+
+    #[test]
+    fn model_subpath_rejects_missing_slash() {
+        assert!(model_subpath("no-slash").is_err());
+    }
+
+    #[test]
+    fn model_subpath_rejects_traversal() {
+        assert!(model_subpath("../escape").is_err());
+        assert!(model_subpath("org/../escape").is_err());
+    }
 }
