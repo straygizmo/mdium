@@ -84,8 +84,36 @@ fn ensure_tables(conn: &Connection) -> rusqlite::Result<()> {
         CREATE TABLE IF NOT EXISTS file_hashes (
             file TEXT PRIMARY KEY,
             hash TEXT NOT NULL
-        );",
-    )
+        );
+        CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+            text,
+            content='chunks',
+            content_rowid='id',
+            tokenize='trigram'
+        );
+        CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
+            INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
+        END;
+        CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
+            INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES('delete', old.id, old.text);
+        END;",
+    )?;
+
+    // Backfill the FTS index for databases created before FTS existed.
+    // Runs exactly once per DB, tracked via PRAGMA user_version. We cannot use
+    // `SELECT count(*) FROM chunks_fts` as an emptiness probe: on an
+    // external-content FTS5 table that count is read straight from the content
+    // table (`chunks`), so it is non-zero even when the index is empty, which
+    // would skip the rebuild and leave legacy rows unsearchable.
+    let schema_version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if schema_version < 1 {
+        let chunk_count: i64 = conn.query_row("SELECT count(*) FROM chunks", [], |r| r.get(0))?;
+        if chunk_count > 0 {
+            conn.execute_batch("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild');")?;
+        }
+        conn.execute_batch("PRAGMA user_version = 1;")?;
+    }
+    Ok(())
 }
 
 fn cosine_similarity(a: &[f64], b: &[f64]) -> f64 {
@@ -724,4 +752,68 @@ pub async fn rag_download_model(app: tauri::AppHandle, model_name: Option<String
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    fn insert_chunk(conn: &Connection, file: &str, text: &str) {
+        conn.execute(
+            "INSERT INTO chunks (file, heading, text, line, hash, embedding) VALUES (?1,?2,?3,?4,?5,?6)",
+            rusqlite::params![file, "", text, 0i64, "h", Vec::<u8>::new()],
+        ).unwrap();
+    }
+
+    #[test]
+    fn fts_trigger_keeps_index_in_sync() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_tables(&conn).unwrap();
+
+        insert_chunk(&conn, "a.md", "rebase コマンドの使い方");
+        let hits: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM chunks_fts WHERE chunks_fts MATCH '\"rebase\"'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hits, 1, "inserted chunk should be searchable via FTS");
+
+        conn.execute("DELETE FROM chunks WHERE file = 'a.md'", []).unwrap();
+        let hits_after: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM chunks_fts WHERE chunks_fts MATCH '\"rebase\"'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hits_after, 0, "deleted chunk should be removed from FTS");
+    }
+
+    #[test]
+    fn ensure_tables_backfills_legacy_db() {
+        let conn = Connection::open_in_memory().unwrap();
+        // Simulate a pre-FTS DB: only the base tables exist, with one row.
+        conn.execute_batch(
+            "CREATE TABLE chunks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file TEXT NOT NULL, heading TEXT NOT NULL, text TEXT NOT NULL,
+                line INTEGER NOT NULL, hash TEXT NOT NULL, embedding BLOB);
+             CREATE TABLE file_hashes (file TEXT PRIMARY KEY, hash TEXT NOT NULL);",
+        ).unwrap();
+        insert_chunk(&conn, "old.md", "legacy rebase content");
+
+        // First call must create the FTS table AND backfill the existing row.
+        ensure_tables(&conn).unwrap();
+        let hits: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM chunks_fts WHERE chunks_fts MATCH '\"rebase\"'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hits, 1, "legacy rows must be backfilled into FTS");
+    }
 }
