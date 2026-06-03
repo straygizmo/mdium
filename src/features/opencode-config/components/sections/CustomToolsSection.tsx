@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { showConfirm } from "@/stores/dialog-store";
@@ -8,6 +8,11 @@ import { ScopeToggle, type Scope } from "../shared/ScopeToggle";
 import { ScopeFormWrapper } from "../shared/ScopeFormWrapper";
 import { useScopeItems } from "../../hooks/useScopeItems";
 import { useEditorKeyDown } from "../../hooks/useEditorKeyDown";
+import {
+  BUILTIN_CUSTOM_TOOLS,
+  getMissingBuiltinCustomTools,
+  isBuiltinCustomTool,
+} from "../../lib/builtin-registry";
 
 interface ToolFileEntry {
   file_name: string;
@@ -33,6 +38,9 @@ export function CustomToolsSection() {
   const [formName, setFormName] = useState("");
   const [formExt, setFormExt] = useState(".ts");
   const [formContent, setFormContent] = useState("");
+
+  const [showBuiltinMenu, setShowBuiltinMenu] = useState(false);
+  const builtinMenuRef = useRef<HTMLDivElement>(null);
 
   const getToolsDir = useCallback(
     async (targetScope: Scope): Promise<string | null> => {
@@ -93,6 +101,33 @@ export function CustomToolsSection() {
   }, [formScope, getToolsDir]);
 
   const scopedTools = useScopeItems(globalToolFiles, projectToolFiles);
+
+  // Builtin tools not yet present in either scope (compared by tool name).
+  const presentToolNames = [...globalToolFiles, ...projectToolFiles].map((f) => f.tool_name);
+  const missingBuiltins = getMissingBuiltinCustomTools(presentToolNames);
+
+  const handleAddBuiltin = async (name: string) => {
+    const entry = BUILTIN_CUSTOM_TOOLS[name];
+    if (!entry) return;
+    // Add to global scope, matching where the built-in agents are installed.
+    const dir = await getToolsDir("global");
+    if (!dir) return;
+    await invoke("write_tool_file", { baseDir: dir, fileName: entry.fileName, content: entry.content });
+    setShowBuiltinMenu(false);
+    await loadAllToolFiles();
+  };
+
+  // Close builtin dropdown on outside click
+  useEffect(() => {
+    if (!showBuiltinMenu) return;
+    const handleClick = (e: MouseEvent) => {
+      if (builtinMenuRef.current && !builtinMenuRef.current.contains(e.target as Node)) {
+        setShowBuiltinMenu(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [showBuiltinMenu]);
 
   const startAdd = () => {
     setAdding(true);
@@ -263,7 +298,12 @@ export function CustomToolsSection() {
               style={{ marginBottom: 4 }}
             >
               <div className="oc-section__item-info">
-                <span className="oc-section__item-name">{entry.file_name}</span>
+                <span className="oc-section__item-name">
+                  {entry.file_name}
+                  {isBuiltinCustomTool(entry.tool_name) && (
+                    <span className="oc-section__builtin-badge">{t("builtin")}</span>
+                  )}
+                </span>
                 <span className="oc-section__item-detail">{entry.tool_name}</span>
               </div>
               <div className="oc-section__item-actions">
@@ -276,10 +316,40 @@ export function CustomToolsSection() {
               </div>
             </div>
           ))}
-          <div style={{ display: "flex", alignItems: "center", marginTop: 4 }}>
+          <div style={{ display: "flex", alignItems: "center", marginTop: 4, position: "relative" }}>
             <button className="oc-section__add-btn" onClick={startAdd}>
               + {t("add")}
             </button>
+            {missingBuiltins.length > 0 && (
+              <div ref={builtinMenuRef} style={{ position: "relative" }}>
+                <button className="oc-section__builtin-btn" onClick={() => setShowBuiltinMenu((v) => !v)}>
+                  + {t("builtin")}
+                </button>
+                {showBuiltinMenu && (
+                  <div
+                    className="oc-section__builtin-dropdown"
+                    ref={(el) => {
+                      if (el?.parentElement) {
+                        let container: HTMLElement | null = el.parentElement;
+                        while (container && !container.classList.contains("oc-panel__body") && !container.classList.contains("oc-dialog__body")) {
+                          container = container.parentElement;
+                        }
+                        const containerTop = container ? container.getBoundingClientRect().top : 0;
+                        const buttonTop = el.parentElement.getBoundingClientRect().top;
+                        el.style.maxHeight = `${Math.max(buttonTop - containerTop - 8, 80)}px`;
+                      }
+                    }}
+                  >
+                    {missingBuiltins.map((name) => (
+                      <button key={name} className="oc-section__builtin-dropdown-item" onClick={() => handleAddBuiltin(name)}>
+                        <span className="oc-section__builtin-dropdown-name">{name}</span>
+                        <span className="oc-section__builtin-dropdown-desc">{BUILTIN_CUSTOM_TOOLS[name].description}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </>
       )}

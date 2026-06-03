@@ -104,13 +104,15 @@ pub struct ToolFileEntry {
 
 #[tauri::command]
 pub fn list_tool_files(base_dir: String) -> Result<Vec<ToolFileEntry>, String> {
-    let tools_dir = Path::new(&base_dir).join("tools");
+    // `base_dir` is the tools directory itself (e.g. ~/.config/opencode/tools),
+    // mirroring how list_agent_files treats `agents_dir`.
+    let tools_dir = Path::new(&base_dir);
     if !tools_dir.exists() {
         return Ok(vec![]);
     }
 
     let mut entries = vec![];
-    let read_dir = fs::read_dir(&tools_dir).map_err(|e| e.to_string())?;
+    let read_dir = fs::read_dir(tools_dir).map_err(|e| e.to_string())?;
 
     for entry in read_dir {
         let entry = match entry {
@@ -148,15 +150,17 @@ pub fn list_tool_files(base_dir: String) -> Result<Vec<ToolFileEntry>, String> {
 
 #[tauri::command]
 pub fn write_tool_file(base_dir: String, file_name: String, content: String) -> Result<(), String> {
-    let tools_dir = Path::new(&base_dir).join("tools");
-    fs::create_dir_all(&tools_dir).map_err(|e| e.to_string())?;
+    // `base_dir` is the tools directory itself (mirrors write_agent_file).
+    let tools_dir = Path::new(&base_dir);
+    fs::create_dir_all(tools_dir).map_err(|e| e.to_string())?;
     let file_path = tools_dir.join(&file_name);
     fs::write(file_path, content).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn delete_tool_file(base_dir: String, file_name: String) -> Result<(), String> {
-    let file_path = Path::new(&base_dir).join("tools").join(&file_name);
+    // `base_dir` is the tools directory itself (mirrors delete_agent_file).
+    let file_path = Path::new(&base_dir).join(&file_name);
     if file_path.exists() {
         fs::remove_file(&file_path).map_err(|e| e.to_string())?;
     }

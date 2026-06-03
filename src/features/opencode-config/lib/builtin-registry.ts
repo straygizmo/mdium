@@ -7,14 +7,25 @@ import type {
 import { BUILTIN_COMMANDS as SRC_COMMANDS } from "./builtin-commands";
 import { BUILTIN_MCP_SERVERS as SRC_MCP } from "./builtin-mcp-servers";
 import { BUILTIN_SKILLS as SRC_SKILLS } from "./builtin-skills";
+// Inline the canonical tool source at build time (?raw → string). This keeps the
+// builtin tool in sync with .opencode/tools/rag_search.ts without copying from
+// the user's project folder (which only exists when the mdium repo itself is open).
+import ragSearchToolSrc from "../../../../.opencode/tools/rag_search.ts?raw";
 
 export interface BuiltinAgentEntry {
   /** Agent description (used by UI badges and dropdown) */
   description: string;
   /** Full content for ~/.config/opencode/agents/<name>.md (frontmatter + prompt) */
   agentMd: string;
-  /** Source tool files to copy: project-relative path → global-relative path under ~/.config/opencode/ */
-  sourceToolFiles?: Record<string, string>;
+}
+
+export interface BuiltinCustomToolEntry {
+  /** Tool description (used by UI badges and the "+ Built-in" dropdown) */
+  description: string;
+  /** File name written under the opencode tools/ directory */
+  fileName: string;
+  /** Full TypeScript source of the tool */
+  content: string;
 }
 
 export const BUILTIN_AGENTS: Record<string, BuiltinAgentEntry> = {
@@ -65,9 +76,15 @@ Gather necessary information from the vector DB and documents within the folder 
   - Supplementary: Additional information based on general knowledge
 -->
 `,
-    sourceToolFiles: {
-      ".opencode/tools/rag_search.ts": "tools/rag_search.ts",
-    },
+  },
+};
+
+export const BUILTIN_CUSTOM_TOOLS: Record<string, BuiltinCustomToolEntry> = {
+  rag_search: {
+    description:
+      "RAG hybrid search (vector + BM25) over the project's .mdium indexes. Pairs with the built-in rag agent.",
+    fileName: "rag_search.ts",
+    content: ragSearchToolSrc,
   },
 };
 
@@ -97,6 +114,17 @@ export function getMissingBuiltinAgents(
   currentAgents: Record<string, OpencodeAgent>
 ): string[] {
   return Object.keys(BUILTIN_AGENTS).filter((name) => !(name in currentAgents));
+}
+
+/** Returns builtin custom tool names whose tool file is not present yet */
+export function getMissingBuiltinCustomTools(currentToolNames: string[]): string[] {
+  const present = new Set(currentToolNames);
+  return Object.keys(BUILTIN_CUSTOM_TOOLS).filter((name) => !present.has(name));
+}
+
+/** Check if a given tool name is a builtin custom tool */
+export function isBuiltinCustomTool(name: string): boolean {
+  return name in BUILTIN_CUSTOM_TOOLS;
 }
 
 /** Returns builtin command names not present in current config */

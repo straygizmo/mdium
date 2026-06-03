@@ -770,8 +770,10 @@ function doDisconnect() {
   });
 }
 
-// ─── Auto-register builtin agents as markdown files + copy tool files ───
-async function ensureBuiltinAgents(_folderPath: string): Promise<void> {
+// ─── Auto-register builtin agents as markdown files ───
+// Builtin custom tools (e.g. rag_search) are NOT copied here — they are added
+// explicitly by the user via the "+ Built-in" button in the Custom Tools panel.
+async function ensureBuiltinAgents(): Promise<void> {
   const home = await invoke<string>("get_home_dir");
   const sep = home.includes("\\") ? "\\" : "/";
   const configDir = `${home}${sep}.config${sep}opencode`;
@@ -788,25 +790,6 @@ async function ensureBuiltinAgents(_folderPath: string): Promise<void> {
           console.log(`[opencode] created builtin agent file: ${agentPath}`);
         } catch (e) {
           console.warn(`[opencode] failed to create agent file ${name}.md:`, e);
-        }
-      }
-    }
-
-    // Copy tool files from project source to global config
-    if (entry.sourceToolFiles) {
-      for (const [srcRel, destRel] of Object.entries(entry.sourceToolFiles)) {
-        const destPath = `${configDir}${sep}${destRel.replace(/\//g, sep)}`;
-        try {
-          await invoke<string>("read_text_file", { path: destPath });
-        } catch {
-          const srcPath = `${_folderPath}${sep}${srcRel.replace(/\//g, sep)}`;
-          try {
-            const content = await invoke<string>("read_text_file", { path: srcPath });
-            await invoke("write_text_file_with_dirs", { path: destPath, content });
-            console.log(`[opencode] copied builtin tool to ${destPath}`);
-          } catch (e) {
-            console.warn(`[opencode] failed to copy builtin tool ${srcRel}:`, e);
-          }
         }
       }
     }
@@ -836,7 +819,7 @@ export async function doConnect(folderPath?: string) {
   try {
     // Auto-register builtin agents before starting the server
     if (folderPath) {
-      await ensureBuiltinAgents(folderPath);
+      await ensureBuiltinAgents();
     }
 
     const baseUrl = await ensureOpencodeServer(folderPath);

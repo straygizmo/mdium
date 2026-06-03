@@ -168,6 +168,7 @@
   "customToolContent": "Content",
   "customToolCommand": "Shell Command",
   "customToolDeleteConfirm": "Delete \"{{name}}\"?",
+  "builtin": "Built-in",
   "ocChatMdContext": "MD File Context",
   "ocChatMdContextPrefix": "Instructions about the following file.",
   "ocChatMdToggleLabel": "Instruct about {{name}}",
