@@ -307,7 +307,7 @@ export function LeftPanel({
                   onClick={toggleFilterKm}
                   title={t("filterKm", { ns: "fileTree" })}
                 >
-                  .km
+                  .xmind
                 </button>
               )}
               {showPdfBtn && (

@@ -51,8 +51,8 @@ export function getFileIcon(name: string): string {
   if (lower.endsWith(".md")) return "📄";
   if (lower.endsWith(".docx")) return "📘";
   if (lower.match(/\.xls.?$/)) return "📗";
+  if (lower.endsWith(".xmind")) return "💡";
   if (lower.endsWith(".km")) return "💡";
-  if (lower.endsWith(".xmind")) return "📕";
   if (lower.match(/\.(png|jpe?g|gif|bmp|svg|webp)$/)) return "🖼️";
   if (lower.endsWith(".pdf")) return "📕";
   return "📄";

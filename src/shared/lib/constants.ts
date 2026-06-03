@@ -1,5 +1,7 @@
 export const OFFICE_EXTENSIONS = [".docx", ".xlsx", ".xlsm", ".xlam"];
-export const MINDMAP_EXTENSIONS = [".km", ".xmind"];
+export const MINDMAP_EXTENSIONS = [".xmind"];
+/** KityMinder JSON files, supported only as a one-way import (auto-converted to .xmind). */
+export const KITYMINDER_IMPORT_EXTENSIONS = [".km"];
 export const PDF_EXTENSIONS = [".pdf"];
 export const CSV_EXTENSIONS = [".csv", ".tsv"];
 export const IMAGE_EXTENSIONS = [
@@ -14,6 +16,11 @@ export function getOfficeExt(filePath: string): string | null {
 export function getMindmapExt(filePath: string): string | null {
   const lower = filePath.toLowerCase();
   return MINDMAP_EXTENSIONS.find((ext) => lower.endsWith(ext)) ?? null;
+}
+
+export function getKityMinderImportExt(filePath: string): string | null {
+  const lower = filePath.toLowerCase();
+  return KITYMINDER_IMPORT_EXTENSIONS.find((ext) => lower.endsWith(ext)) ?? null;
 }
 
 export function getPdfExt(filePath: string): string | null {
@@ -42,6 +49,7 @@ export function isCodeFile(filePath: string): boolean {
   if (getOfficeExt(lower)) return false;
   if (getPdfExt(lower)) return false;
   if (getMindmapExt(lower)) return false;
+  if (getKityMinderImportExt(lower)) return false;
   if (getCsvExt(lower)) return false;
   if (getImageExt(lower)) return false;
   return true;
