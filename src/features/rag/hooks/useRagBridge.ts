@@ -43,7 +43,21 @@ export function useRagBridge() {
       const bm25Weight = req.bm25Weight ?? rag.bm25Weight;
       const limit = req.limit ?? rag.retrieveTopK;
 
-      try {
+      const respond = (payload: any) =>
+        invoke("rag_bridge_respond", { id: req.id, payload }).catch((e) =>
+          console.error("[rag-bridge] respond failed:", e)
+        );
+
+      const work = async (): Promise<BridgeResult[]> => {
+        console.info("[rag-bridge] request:", req.query, "| model:", model, "| folder:", req.folderPath);
+        // Never trigger a network download from this invisible path — in a
+        // blocked/offline env that can hang indefinitely. Fail fast instead.
+        const exists = await invoke<boolean>("rag_check_model", { modelName: model });
+        if (!exists) {
+          throw new Error(
+            `Embedding model "${model}" is not available locally. Open the mdium RAG panel and build the index first.`
+          );
+        }
         await load(model);
         const embedding = await embed(req.query, "query");
         const allResults = await invoke<any[]>("rag_search", {
@@ -62,20 +76,32 @@ export function useRagBridge() {
             ? allResults
             : allResults.filter((r: any) => (r.score ?? 0) >= rag.retrieveMinScore);
 
-        const results: BridgeResult[] = filtered.map((r: any) => ({
+        return filtered.map((r: any) => ({
           file: r.file,
           heading: r.heading ?? "",
           content: r.text ?? "",
           line_number: r.line ?? 0,
           score: r.score ?? 0,
         }));
+      };
 
-        await invoke("rag_bridge_respond", { id: req.id, payload: { ok: true, results } });
+      // Always resolve the bridge request: a hard timeout guarantees the agent
+      // gets an answer even if model load or search stalls (shorter than the
+      // Rust-side 180s block so the message reaches the tool).
+      const timeout = new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error("RAG search timed out in mdium (model load or search took too long).")),
+          120_000
+        )
+      );
+
+      try {
+        const results = await Promise.race([work(), timeout]);
+        console.info("[rag-bridge] responding with", results.length, "results");
+        await respond({ ok: true, results });
       } catch (e: any) {
-        await invoke("rag_bridge_respond", {
-          id: req.id,
-          payload: { ok: false, error: e?.message ?? String(e) },
-        });
+        console.error("[rag-bridge] failed:", e);
+        await respond({ ok: false, error: e?.message ?? String(e) });
       }
     };
 
@@ -84,6 +110,7 @@ export function useRagBridge() {
       // Fire and forget; each request resolves independently via its id.
       void handle(event.payload);
     });
+    console.info("[rag-bridge] listener mounted");
 
     return () => {
       disposed = true;
