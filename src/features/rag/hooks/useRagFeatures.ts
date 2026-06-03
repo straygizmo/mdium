@@ -201,10 +201,18 @@ export function useRagFeatures({ folderPath, aiSettings, onOpenFile }: UseRagFea
         const allResults = await invoke<any[]>("rag_search", {
           folderPath,
           embedding: queryEmbed,
+          queryText: question,
           limit: ragSettings.retrieveTopK,
           modelName: ragSettings.embeddingModel,
+          searchMode: ragSettings.searchMode,
+          bm25Weight: ragSettings.bm25Weight,
         });
-        const results = allResults.filter((r: any) => (r.score ?? 0) >= ragSettings.retrieveMinScore);
+        // In hybrid mode `score` is an RRF score (different scale from cosine),
+        // so the cosine-based minScore threshold only applies to vector mode.
+        const results =
+          ragSettings.searchMode === "hybrid"
+            ? allResults
+            : allResults.filter((r: any) => (r.score ?? 0) >= ragSettings.retrieveMinScore);
 
         const context = results
           .map((r: any) => `[${r.file}#${r.heading}]\n${r.text}`)
