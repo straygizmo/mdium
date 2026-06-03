@@ -455,7 +455,7 @@ export function App() {
           });
         } else if (kmImportExt) {
           // KityMinder JSON is import-only: convert it to .xmind, write a sibling
-          // file, and open that. The original .km is left untouched on disk.
+          // file, open that, and remove the transient .km.
           try {
             const kmBytes = await invoke<number[]>("read_binary_file", { path: filePath });
             const text = new TextDecoder().decode(new Uint8Array(kmBytes));
@@ -464,8 +464,12 @@ export function App() {
             const xmindBytes = await serializeToXmind(json);
             const xmindPath = filePath.replace(/\.km$/i, ".xmind");
             const xmindName = xmindPath.split(/[\\/]/).pop() ?? "untitled";
-            const { writeFile } = await import("@tauri-apps/plugin-fs");
+            const { writeFile, remove } = await import("@tauri-apps/plugin-fs");
             await writeFile(xmindPath, xmindBytes);
+            // The .km is a transient intermediate; remove it now that the .xmind exists.
+            if (xmindPath !== filePath) {
+              await remove(filePath);
+            }
             loadFileTree();
             openTab({
               filePath: xmindPath,

@@ -185,9 +185,10 @@ Runner: `vitest` (`npm test`). JSZip, xml-js, @tauri-apps/plugin-fs already pres
 
 ## 8. KityMinder JSON Import Bridge (MD→mindmap command)
 
-The opencode builtin command `convert-to-km-mindmap` generates a KityMinder JSON
+The opencode builtin command `convert-to-xmind-mindmap` generates a KityMinder JSON
 file from Markdown. A text command cannot emit a binary `.xmind` ZIP, so the command
-keeps generating KityMinder JSON (extension `.km`), and mdium converts it on open.
+keeps generating KityMinder JSON (extension `.km`) as a transient intermediate, and
+mdium converts it on open and then removes it.
 
 **Flow when a `.km` file is opened:**
 
@@ -196,16 +197,20 @@ open .km
   -> read bytes -> TextDecoder -> JSON.parse  (KityMinderJson)
   -> serializeToXmind(json) -> Uint8Array
   -> writeFile(<dir>/<basename>.xmind, bytes)   // create sibling .xmind
-  -> open the new .xmind in the editor          // .km is left on disk untouched
+  -> remove(<.km>)                              // delete the transient intermediate (guarded: only if path differs)
+  -> open the new .xmind in the editor
   -> notify user (i18n: mindmap.kmConverted)
 ```
 
-This keeps `.km` strictly a one-way import source (no `.km` editing/saving). The
-KityMinder JSON shape is the same one `getJson()` already returns, so parsing is a
-plain `JSON.parse` — no separate schema code.
+This keeps `.km` strictly a one-way, transient import source (no `.km` editing/
+saving; the file is removed after a successful conversion). The KityMinder JSON shape
+is the same one `getJson()` already returns, so parsing is a plain `JSON.parse` — no
+separate schema code. Deletion happens inside the same try/catch, so a write/remove
+failure surfaces via `mindmap.kmImportFailed` and does not proceed.
 
-The command's description/instructions are updated to state the output is auto-
-converted to `.xmind` when opened in mdium. Output path/extension stays `.km`.
+The command's description/instructions are updated to state the output is a temporary
+intermediate that is auto-converted to `.xmind` (and removed) when opened in mdium.
+Output path/extension stays `.km`.
 
 **Error handling:** if JSON.parse fails or `root` is missing, show
 `mindmap.kmImportFailed` and do not create an `.xmind`.
