@@ -19,7 +19,7 @@ export interface Tab {
   binaryData?: Uint8Array;
   /** Office file extension (e.g., ".docx") */
   officeFileType?: string;
-  /** Mindmap file extension (e.g., ".km") */
+  /** Mindmap file extension (e.g., ".xmind") */
   mindmapFileType?: string;
   /** Image file extension (e.g., ".png") */
   imageFileType?: string;
