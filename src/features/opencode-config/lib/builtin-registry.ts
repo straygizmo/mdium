@@ -33,14 +33,14 @@ Gather necessary information from the vector DB and documents within the folder 
 
 ## Basic Behavior
 
-1. First, use the \`rag_search\` tool to perform vector search for relevant information
+1. First, use the \`rag_search\` tool to perform hybrid (vector + BM25 keyword) search for relevant information
 2. As needed, use \`glob\`, \`grep\`, \`read\` tools to directly inspect files
 3. Combine multiple searches and reads to make comprehensive judgments
 4. Always cite sources (file name and line number) in your answers
 
 ## Tool Usage Guidelines
 
-- **rag_search**: Use first. Vector search for relevant documents
+- **rag_search**: Use first. Hybrid search (vector similarity + BM25 keyword ranking, fused via RRF) for relevant documents. Defaults to hybrid mode; pass \`search_mode: "vector"\` for pure semantic search, or tune \`bm25_weight\` (0.0-1.0) to favor keyword vs. semantic matches
 - **glob**: Understand file structure, search for specific file patterns
 - **grep**: Full-text search for specific keywords or patterns
 - **read**: Read full file content, understand details
