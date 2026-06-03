@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from "vitest";
-import { getCsvExt, isCodeFile } from "../constants";
+import { getCsvExt, getMindmapExt, getKityMinderImportExt, isCodeFile } from "../constants";
 
 describe("getCsvExt", () => {
   it("returns .csv for .csv", () => expect(getCsvExt("data.csv")).toBe(".csv"));
@@ -15,4 +15,24 @@ describe("isCodeFile", () => {
   it("returns false for .tsv", () => expect(isCodeFile("x.tsv")).toBe(false));
   it("returns false for .md", () => expect(isCodeFile("x.md")).toBe(false));
   it("returns true for .ts", () => expect(isCodeFile("x.ts")).toBe(true));
+});
+
+describe("mindmap extension detection after .xmind migration", () => {
+  it("treats .xmind as the mindmap extension", () => {
+    expect(getMindmapExt("a.xmind")).toBe(".xmind");
+  });
+  it("no longer treats .km as an editable mindmap extension", () => {
+    expect(getMindmapExt("a.km")).toBeNull();
+  });
+  it("detects .km as a KityMinder import source", () => {
+    expect(getKityMinderImportExt("a.km")).toBe(".km");
+    expect(getKityMinderImportExt("a.xmind")).toBeNull();
+  });
+  it("is case-insensitive for import detection", () => {
+    expect(getKityMinderImportExt("A.KM")).toBe(".km");
+  });
+  it("does not treat .km or .xmind as code files", () => {
+    expect(isCodeFile("a.xmind")).toBe(false);
+    expect(isCodeFile("a.km")).toBe(false);
+  });
 });
