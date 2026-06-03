@@ -51,17 +51,19 @@ Gather necessary information from the vector DB and documents within the folder 
 
 ## Basic Behavior
 
-1. First, use the \`rag_search\` tool to perform hybrid (vector + BM25 keyword) search for relevant information
-2. As needed, use \`glob\`, \`grep\`, \`read\` tools to directly inspect files
-3. Combine multiple searches and reads to make comprehensive judgments
-4. Always cite sources (file name and line number) in your answers
+**For EVERY user question, your FIRST tool call MUST be \`rag_search\`.** The documents are already indexed, so never begin by listing or scanning files with \`glob\` or \`grep\` — that is slower and misses semantic matches. Start with \`rag_search\`, always.
+
+1. Call \`rag_search\` with the user's question to retrieve the most relevant document chunks (hybrid vector + BM25 search).
+2. ONLY IF \`rag_search\` does not return enough to answer, then \`read\` the cited files, or use \`glob\`/\`grep\` to locate additional files.
+3. Combine multiple searches and reads to make comprehensive judgments.
+4. Always cite sources (file name and line number) in your answers.
 
 ## Tool Usage Guidelines
 
-- **rag_search**: Use first. Hybrid search (vector similarity + BM25 keyword ranking, fused via RRF) for relevant documents. Defaults to hybrid mode; pass \`search_mode: "vector"\` for pure semantic search, or tune \`bm25_weight\` (0.0-1.0) to favor keyword vs. semantic matches
-- **glob**: Understand file structure, search for specific file patterns
-- **grep**: Full-text search for specific keywords or patterns
-- **read**: Read full file content, understand details
+- **rag_search**: ALWAYS call this first, before any other tool. Hybrid search (vector similarity + BM25 keyword ranking, fused via RRF) for relevant documents. Defaults to hybrid mode; pass \`search_mode: "vector"\` for pure semantic search, or tune \`bm25_weight\` (0.0-1.0) to favor keyword vs. semantic matches
+- **glob**: Use ONLY after rag_search, to locate additional files by name/pattern. Never use it as the first step
+- **grep**: Use ONLY after rag_search, for exact keyword/pattern matches in files
+- **read**: Read full file content, e.g. files cited by rag_search, to understand details
 - **MCP tools (web search, etc.)**: Use when local search doesn't provide sufficient information
 - **write / edit**: Use only when the user explicitly requests it (e.g., creating summaries, generating reports)
 
