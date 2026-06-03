@@ -1,7 +1,7 @@
 ---
 topic: Make local embedding (RAG) and speech-to-text work in network-restricted / MSI-installed environments
 date: 2026-06-03
-status: approved
+status: implemented
 ---
 
 # RAG & Speech: Offline / Blocked-Network Support
