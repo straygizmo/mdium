@@ -151,6 +151,51 @@ fn build_fts_query(query_text: &str) -> Option<String> {
     }
 }
 
+/// Reciprocal Rank Fusion of a vector score (cosine, larger = better) and an
+/// optional BM25 score (smaller = better, per SQLite `bm25()`).
+///
+/// `items[i] = (cosine, Option<bm25>)`. Returns item indices sorted by fused
+/// score descending, truncated to `limit`. `bm25_weight` in [0,1] splits weight
+/// between the two ranks (vector weight = 1 - bm25_weight); `k` is the RRF
+/// constant. Items without a BM25 match contribute only the vector term.
+fn fuse_rrf(items: &[(f64, Option<f64>)], bm25_weight: f64, k: f64, limit: usize) -> Vec<usize> {
+    let n = items.len();
+
+    // Vector ranks: sort indices by cosine descending (1-based).
+    let mut by_cos: Vec<usize> = (0..n).collect();
+    by_cos.sort_by(|&a, &b| {
+        items[b].0.partial_cmp(&items[a].0).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut vec_rank = vec![0usize; n];
+    for (rank, &idx) in by_cos.iter().enumerate() {
+        vec_rank[idx] = rank + 1;
+    }
+
+    // BM25 ranks: only matched items, sorted ascending (smaller = better).
+    let mut by_bm: Vec<usize> = (0..n).filter(|&i| items[i].1.is_some()).collect();
+    by_bm.sort_by(|&a, &b| {
+        items[a].1.unwrap().partial_cmp(&items[b].1.unwrap()).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut bm_rank = vec![0usize; n]; // 0 = no BM25 match
+    for (rank, &idx) in by_bm.iter().enumerate() {
+        bm_rank[idx] = rank + 1;
+    }
+
+    let w_v = 1.0 - bm25_weight;
+    let w_b = bm25_weight;
+    let mut scored: Vec<(usize, f64)> = (0..n)
+        .map(|i| {
+            let mut s = w_v / (k + vec_rank[i] as f64);
+            if bm_rank[i] > 0 {
+                s += w_b / (k + bm_rank[i] as f64);
+            }
+            (i, s)
+        })
+        .collect();
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    scored.into_iter().take(limit).map(|(i, _)| i).collect()
+}
+
 fn count_db_status(db_path: &Path) -> (usize, usize) {
     if !db_path.exists() {
         return (0, 0);
@@ -854,5 +899,27 @@ mod tests {
     fn build_fts_query_returns_none_when_no_term_qualifies() {
         assert!(build_fts_query("a b の").is_none());
         assert!(build_fts_query("   ").is_none());
+    }
+
+    #[test]
+    fn fuse_rrf_pure_vector_when_weight_zero() {
+        // (cosine, bm25 where smaller = better). bm25_weight = 0 => cosine order.
+        let items = vec![(0.9, None), (0.2, Some(-5.0)), (0.8, Some(-1.0))];
+        let order = fuse_rrf(&items, 0.0, 60.0, 3);
+        assert_eq!(order, vec![0, 2, 1]); // 0.9 > 0.8 > 0.2
+    }
+
+    #[test]
+    fn fuse_rrf_pure_bm25_when_weight_one() {
+        // bm25_weight = 1 => only matched items score; unmatched falls last.
+        let items = vec![(0.9, None), (0.2, Some(-5.0)), (0.8, Some(-1.0))];
+        let order = fuse_rrf(&items, 1.0, 60.0, 3);
+        assert_eq!(order, vec![1, 2, 0]); // -5.0 best, -1.0 next, None last
+    }
+
+    #[test]
+    fn fuse_rrf_respects_limit() {
+        let items = vec![(0.9, None), (0.2, Some(-5.0)), (0.8, Some(-1.0))];
+        assert_eq!(fuse_rrf(&items, 0.5, 60.0, 2).len(), 2);
     }
 }
