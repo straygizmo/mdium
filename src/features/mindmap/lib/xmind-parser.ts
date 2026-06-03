@@ -138,6 +138,9 @@ function convertNode(
     nodeData.image = imageBase;
     nodeData.imageSize = imageSize;
   }
+  // Restore collapse state from XMind Zen branch field.
+  const branch = data.branch as string | undefined;
+  if (branch === "folded") nodeData.expandState = "collapse";
 
   return { data: nodeData, children };
 }
