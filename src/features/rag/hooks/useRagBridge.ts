@@ -73,6 +73,11 @@ export function useRagBridge() {
       const searchMode = req.searchMode ?? rag.searchMode;
       const bm25Weight = req.bm25Weight ?? rag.bm25Weight;
       const limit = req.limit ?? rag.retrieveTopK;
+      // Use the folder mdium has open as the search root. opencode's
+      // context.worktree (req.folderPath) is unreliable — it can be "/", which
+      // makes rag_search recursively scan the entire filesystem for sub-indexes
+      // (tens of seconds). The active folder is where the index actually lives.
+      const folderPath = useTabStore.getState().activeFolderPath || req.folderPath;
 
       const respond = (payload: any) =>
         invoke("rag_bridge_respond", { id: req.id, payload }).catch((e) =>
@@ -80,7 +85,12 @@ export function useRagBridge() {
         );
 
       const work = async (): Promise<BridgeResult[]> => {
-        console.info("[rag-bridge] request:", req.query, "| model:", model, "| folder:", req.folderPath);
+        console.info("[rag-bridge] request:", req.query, "| model:", model, "| folder:", folderPath);
+        // Guard against a missing/root folder, which would make rag_search walk
+        // the whole filesystem looking for sub-indexes (tens of seconds).
+        if (!folderPath || folderPath === "/" || folderPath === "\\" || /^[A-Za-z]:[\\/]?$/.test(folderPath)) {
+          throw new Error("No document folder is open in mdium to search. Open the folder first.");
+        }
         // Never trigger a network download from this invisible path — in a
         // blocked/offline env that can hang indefinitely. Fail fast instead.
         const t0 = performance.now();
@@ -96,7 +106,7 @@ export function useRagBridge() {
         const embedding = await embed(req.query, "query");
         const t3 = performance.now();
         const allResults = await invoke<any[]>("rag_search", {
-          folderPath: req.folderPath,
+          folderPath,
           embedding,
           queryText: req.query,
           limit,
