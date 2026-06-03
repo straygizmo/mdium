@@ -455,7 +455,7 @@ export function App() {
           });
         } else if (kmImportExt) {
           // KityMinder JSON is import-only: convert it to .xmind, write a sibling
-          // file, and open that. The original .km is left untouched on disk.
+          // file, open that, and remove the transient .km.
           try {
             const kmBytes = await invoke<number[]>("read_binary_file", { path: filePath });
             const text = new TextDecoder().decode(new Uint8Array(kmBytes));
