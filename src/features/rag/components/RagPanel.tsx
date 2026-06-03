@@ -486,6 +486,33 @@ export function RagPanel({ folderPath, aiSettings, onOpenFile }: RagPanelProps) 
                 />
               </label>
 
+              <label className="rag-panel__settings-label">
+                {t("ragSearchMode")}
+                <select
+                  className="rag-panel__settings-select"
+                  value={localRagSettings.searchMode}
+                  onChange={(e) => setLocalRagSettings({ ...localRagSettings, searchMode: e.target.value as RagSettings["searchMode"] })}
+                >
+                  <option value="hybrid">{t("ragSearchModeHybrid")}</option>
+                  <option value="vector">{t("ragSearchModeVector")}</option>
+                </select>
+              </label>
+
+              {localRagSettings.searchMode === "hybrid" && (
+                <label className="rag-panel__settings-label">
+                  {t("ragBm25Weight")}: {localRagSettings.bm25Weight.toFixed(2)}
+                  <input
+                    className="rag-panel__settings-slider"
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={localRagSettings.bm25Weight}
+                    onChange={(e) => setLocalRagSettings({ ...localRagSettings, bm25Weight: parseFloat(e.target.value) })}
+                  />
+                </label>
+              )}
+
               <div className="rag-panel__settings-actions">
                 <button
                   className="rag-panel__settings-save"
