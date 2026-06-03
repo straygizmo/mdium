@@ -162,6 +162,25 @@ export async function syncMdiumVbaMcpConfig(): Promise<void> {
   }
 }
 
+/**
+ * Write the local HTTP bridge port/token to a sidecar the rag_search opencode
+ * tool reads (~/.config/opencode/.mdium-bridge.json). Port/token change every
+ * mdium run, so refresh it on each successful connection.
+ */
+export async function syncRagBridgeSidecar(): Promise<void> {
+  const bridge = await invoke<{ port: number; token: string } | null>(
+    "get_http_bridge_info"
+  ).catch(() => null);
+  if (!bridge) return;
+  const home = await invoke<string>("get_home_dir");
+  const sep = home.includes("\\") ? "\\" : "/";
+  const path = `${home}${sep}.config${sep}opencode${sep}.mdium-bridge.json`;
+  await invoke("write_text_file_with_dirs", {
+    path,
+    content: JSON.stringify({ port: bridge.port, token: bridge.token }, null, 2),
+  });
+}
+
 /** Get and clear the pending video output path (consumed once) */
 export function consumePendingVideoOutput(): string | null {
   const path = _pendingVideoOutput;
@@ -857,6 +876,11 @@ export async function doConnect(folderPath?: string) {
     // Sync mdium-vba MCP config on every successful connection (port/token may change per run)
     syncMdiumVbaMcpConfig().catch((e) => {
       console.warn("[mdium-vba] initial sync failed:", e);
+    });
+
+    // Write the HTTP bridge sidecar so the rag_search tool can call back into mdium.
+    syncRagBridgeSidecar().catch((e) => {
+      console.warn("[rag-bridge] sidecar write failed:", e);
     });
 
     // Subscribe to SSE events (await ensures connection is ready before returning)

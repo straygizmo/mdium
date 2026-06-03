@@ -4,7 +4,9 @@ mod http_bridge;
 mod markdown_parser;
 
 use commands::active_xlsm::{new_state as new_active_xlsm_state, ActiveXlsmState};
-use http_bridge::{new_state as new_http_bridge_state, HttpBridgeState};
+use http_bridge::{
+    new_rag_pending, new_state as new_http_bridge_state, HttpBridgeState, RagBridgePending,
+};
 use file_watcher::{FileWatcherState, FolderWatcherState};
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
@@ -57,6 +59,7 @@ pub fn run() {
         .manage(Arc::new(Mutex::new(FolderWatcherState::new())))
         .manage::<ActiveXlsmState>(new_active_xlsm_state())
         .manage::<HttpBridgeState>(new_http_bridge_state())
+        .manage::<RagBridgePending>(new_rag_pending())
         .setup(|app| {
             let icon_bytes = include_bytes!("../icons/icon.png");
             let icon = tauri::image::Image::from_bytes(icon_bytes)?;
@@ -285,6 +288,8 @@ pub fn run() {
             commands::active_xlsm::set_active_xlsm_path,
             commands::active_xlsm::get_active_xlsm_path,
             commands::active_xlsm::get_http_bridge_info,
+            // RAG bridge (opencode rag_search tool → webview embedding + search)
+            http_bridge::rag_bridge_respond,
             // Medium operations
             commands::medium::medium_test_connection,
             commands::medium::medium_upload_image,

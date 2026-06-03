@@ -1,6 +1,9 @@
 use rand::Rng;
+use std::collections::HashMap;
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 use tauri::AppHandle;
 use tiny_http::{Header, Response, Server};
 
@@ -8,7 +11,37 @@ use crate::commands::active_xlsm::ActiveXlsmState;
 use crate::commands::vba;
 use serde::Deserialize;
 use serde_json::json;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
+
+/// Pending RAG bridge requests, keyed by request id. The `/rag/search` handler
+/// inserts a sender, emits a `rag-bridge-request` event to the webview (which
+/// owns the embedding model), then blocks on the receiver. The frontend replies
+/// via the `rag_bridge_respond` command, which sends the result through here.
+pub type RagBridgePending = Arc<Mutex<HashMap<String, mpsc::Sender<serde_json::Value>>>>;
+
+pub fn new_rag_pending() -> RagBridgePending {
+    Arc::new(Mutex::new(HashMap::new()))
+}
+
+/// Frontend → backend reply for a pending `/rag/search` bridge request.
+#[tauri::command]
+pub fn rag_bridge_respond(
+    pending: tauri::State<RagBridgePending>,
+    id: String,
+    payload: serde_json::Value,
+) -> Result<(), String> {
+    let tx = {
+        let mut guard = pending.lock().map_err(|e| e.to_string())?;
+        guard.remove(&id)
+    };
+    match tx {
+        Some(tx) => {
+            let _ = tx.send(payload);
+            Ok(())
+        }
+        None => Err(format!("unknown rag bridge request id: {}", id)),
+    }
+}
 
 /// Runtime info for the local HTTP bridge. Exposed to the frontend via a Tauri command.
 #[derive(Clone)]
@@ -65,7 +98,12 @@ pub fn start_bridge(
     let expected_token = token.clone();
     thread::spawn(move || {
         for request in server.incoming_requests() {
-            handle_request(&app, &expected_token, request);
+            // Handle each request on its own thread. The /rag/search handler
+            // blocks while the webview computes an embedding and runs the search,
+            // so it must not stall the accept loop or the other endpoints.
+            let app = app.clone();
+            let token = expected_token.clone();
+            thread::spawn(move || handle_request(&app, &token, request));
         }
     });
 
@@ -81,6 +119,18 @@ struct XlsmRequest {
 struct InjectRequest {
     xlsm_path: String,
     macros_dir: String,
+}
+
+#[derive(Deserialize)]
+struct RagSearchRequest {
+    folder_path: String,
+    query: String,
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    search_mode: Option<String>,
+    #[serde(default)]
+    bm25_weight: Option<f64>,
 }
 
 fn cors_headers() -> Vec<Header> {
@@ -346,6 +396,77 @@ fn handle_request(app: &AppHandle, expected_token: &str, mut request: tiny_http:
                     let _ = request.respond(json_response(
                         500,
                         json!({ "error": "inject_failed", "message": e }),
+                    ));
+                }
+            }
+        }
+        "/rag/search" => {
+            let req: RagSearchRequest = match serde_json::from_str(&body_str) {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = request.respond(json_response(
+                        400,
+                        json!({ "error": "invalid_json", "message": e.to_string() }),
+                    ));
+                    return;
+                }
+            };
+
+            // Register a pending slot, then ask the webview to do the embedding +
+            // search (it owns the model and the user's configured settings).
+            let id = generate_token();
+            let (tx, rx) = mpsc::channel::<serde_json::Value>();
+            let pending: RagBridgePending = app.state::<RagBridgePending>().inner().clone();
+            {
+                match pending.lock() {
+                    Ok(mut g) => {
+                        g.insert(id.clone(), tx);
+                    }
+                    Err(e) => {
+                        let _ = request.respond(json_response(
+                            500,
+                            json!({ "ok": false, "error": format!("lock_failed: {}", e) }),
+                        ));
+                        return;
+                    }
+                }
+            }
+
+            let emitted = app.emit(
+                "rag-bridge-request",
+                json!({
+                    "id": id,
+                    "folderPath": req.folder_path,
+                    "query": req.query,
+                    "limit": req.limit,
+                    "searchMode": req.search_mode,
+                    "bm25Weight": req.bm25_weight,
+                }),
+            );
+            if emitted.is_err() {
+                if let Ok(mut g) = pending.lock() {
+                    g.remove(&id);
+                }
+                let _ = request.respond(json_response(
+                    500,
+                    json!({ "ok": false, "error": "failed to reach mdium webview" }),
+                ));
+                return;
+            }
+
+            // Block this request's thread until the webview replies or times out.
+            // First call loads the embedding model, which can take a while.
+            match rx.recv_timeout(Duration::from_secs(180)) {
+                Ok(value) => {
+                    let _ = request.respond(json_response(200, value));
+                }
+                Err(_) => {
+                    if let Ok(mut g) = pending.lock() {
+                        g.remove(&id);
+                    }
+                    let _ = request.respond(json_response(
+                        504,
+                        json!({ "ok": false, "error": "mdium did not respond (timeout). Is the RAG model available?" }),
                     ));
                 }
             }

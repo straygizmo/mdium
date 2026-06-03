@@ -16,6 +16,7 @@ import { useFileFilters } from "@/shared/hooks/useFileFilters";
 import { useScrollSync } from "@/shared/hooks/useScrollSync";
 import { useDividerDrag } from "@/shared/hooks/useDividerDrag";
 import { useFileWatcher } from "@/shared/hooks/useFileWatcher";
+import { useRagBridge } from "@/features/rag/hooks/useRagBridge";
 import { getThemeById } from "@/shared/themes";
 import { Toolbar } from "./components/Toolbar";
 import { FolderTabBar, TabBar } from "./components/TabBar";
@@ -46,6 +47,8 @@ const APP_TITLE = "MDium";
 
 export function App() {
   const { t } = useTranslation();
+  // Serve RAG search requests from the opencode rag_search tool.
+  useRagBridge();
   const initializeTheme = useSettingsStore((s) => s.initializeTheme);
   const activeTab = useTabStore((s) => s.getActiveTab());
   const openTab = useTabStore((s) => s.openTab);
