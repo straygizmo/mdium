@@ -43,6 +43,15 @@ pub struct RagSearchResult {
     pub score: f64,
 }
 
+struct ScoredCandidate {
+    file: String,
+    heading: String,
+    text: String,
+    line: usize,
+    cosine: f64,
+    bm25: Option<f64>,
+}
+
 fn model_db_name(model_name: &str) -> String {
     // "Xenova/multilingual-e5-large" → "rag_multilingual-e5-large.db"
     let short = model_name.rsplit('/').next().unwrap_or(model_name);
@@ -541,45 +550,83 @@ pub fn rag_save_chunks(_folder_path: String, chunks: Vec<RagChunkWithEmbedding>,
     Ok(count)
 }
 
-fn search_single_db(db_file: &Path, embedding: &[f64], results: &mut Vec<RagSearchResult>) -> Result<(), String> {
+/// Collect every chunk in `conn` as a candidate with its cosine score, and fill
+/// in BM25 scores for the rows matching `fts_query` (if any). rowid is unique
+/// only within a single DB, so BM25 is resolved here before results are merged
+/// across databases.
+fn search_collect_db(
+    conn: &Connection,
+    embedding: &[f64],
+    fts_query: Option<&str>,
+    out: &mut Vec<ScoredCandidate>,
+) -> Result<(), String> {
+    // rowid -> index into `out` for this DB, so we can attach BM25 scores below.
+    let mut rowid_to_idx: HashMap<i64, usize> = HashMap::new();
+
+    let mut stmt = conn
+        .prepare("SELECT id, file, heading, text, line, embedding FROM chunks")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            let id: i64 = row.get(0)?;
+            let file: String = row.get(1)?;
+            let heading: String = row.get(2)?;
+            let text: String = row.get(3)?;
+            let line: usize = row.get(4)?;
+            let emb_bytes: Vec<u8> = row.get(5)?;
+            Ok((id, file, heading, text, line, emb_bytes))
+        })
+        .map_err(|e| e.to_string())?;
+
+    for row in rows {
+        let (id, file, heading, text, line, emb_bytes) = row.map_err(|e| e.to_string())?;
+        let stored_emb: Vec<f64> = emb_bytes
+            .chunks(8)
+            .map(|c| {
+                let mut buf = [0u8; 8];
+                buf.copy_from_slice(c);
+                f64::from_le_bytes(buf)
+            })
+            .collect();
+        let cosine = cosine_similarity(embedding, &stored_emb);
+        rowid_to_idx.insert(id, out.len());
+        out.push(ScoredCandidate { file, heading, text, line, cosine, bm25: None });
+    }
+
+    if let Some(q) = fts_query {
+        let mut stmt = conn
+            .prepare("SELECT rowid, bm25(chunks_fts) FROM chunks_fts WHERE chunks_fts MATCH ?1")
+            .map_err(|e| e.to_string())?;
+        let matches = stmt
+            .query_map([q], |row| {
+                let rowid: i64 = row.get(0)?;
+                let score: f64 = row.get(1)?;
+                Ok((rowid, score))
+            })
+            .map_err(|e| e.to_string())?;
+        for m in matches {
+            let (rowid, score) = m.map_err(|e| e.to_string())?;
+            if let Some(&idx) = rowid_to_idx.get(&rowid) {
+                out[idx].bm25 = Some(score);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn search_single_db(
+    db_file: &Path,
+    embedding: &[f64],
+    fts_query: Option<&str>,
+    out: &mut Vec<ScoredCandidate>,
+) -> Result<(), String> {
     if !db_file.exists() {
         return Ok(());
     }
-
     let conn = Connection::open(db_file).map_err(|e| e.to_string())?;
     ensure_tables(&conn).map_err(|e| e.to_string())?;
-
-    let mut stmt = conn
-        .prepare("SELECT file, heading, text, line, embedding FROM chunks")
-        .map_err(|e| e.to_string())?;
-
-    let rows: Vec<RagSearchResult> = stmt
-        .query_map([], |row| {
-            let file: String = row.get(0)?;
-            let heading: String = row.get(1)?;
-            let text: String = row.get(2)?;
-            let line: usize = row.get(3)?;
-            let emb_bytes: Vec<u8> = row.get(4)?;
-
-            let stored_emb: Vec<f64> = emb_bytes
-                .chunks(8)
-                .map(|c| {
-                    let mut buf = [0u8; 8];
-                    buf.copy_from_slice(c);
-                    f64::from_le_bytes(buf)
-                })
-                .collect();
-
-            let score = cosine_similarity(embedding, &stored_emb);
-
-            Ok(RagSearchResult { file, heading, text, line, score })
-        })
-        .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    results.extend(rows);
-    Ok(())
+    search_collect_db(&conn, embedding, fts_query, out)
 }
 
 /// Recursively find rag_{model}.db in subfolders
@@ -605,25 +652,88 @@ fn find_sub_rag_dbs(dir: &Path, model_name: &str, dbs: &mut Vec<PathBuf>) {
     }
 }
 
+const RRF_K: f64 = 60.0;
+
 #[tauri::command]
-pub fn rag_search(folder_path: String, embedding: Vec<f64>, limit: usize, model_name: Option<String>) -> Result<Vec<RagSearchResult>, String> {
+pub fn rag_search(
+    folder_path: String,
+    embedding: Vec<f64>,
+    query_text: String,
+    limit: usize,
+    model_name: Option<String>,
+    search_mode: Option<String>,
+    bm25_weight: Option<f64>,
+) -> Result<Vec<RagSearchResult>, String> {
     let name = model_name.as_deref().unwrap_or(DEFAULT_MODEL_NAME);
-    let mut results = Vec::new();
+    let mode = search_mode.as_deref().unwrap_or("hybrid");
+    let weight = bm25_weight.unwrap_or(0.5).clamp(0.0, 1.0);
 
-    // Search rag_{model}.db in the current folder
+    // Only build an FTS query in hybrid mode; None disables BM25 collection.
+    let fts_query = if mode == "hybrid" {
+        build_fts_query(&query_text)
+    } else {
+        None
+    };
+
+    // Collect candidates from the current folder DB and every subfolder DB.
+    let mut candidates: Vec<ScoredCandidate> = Vec::new();
     let current_db = PathBuf::from(db_path(&folder_path, name));
-    search_single_db(&current_db, &embedding, &mut results)?;
-
-    // Also search rag_{model}.db in subfolders
+    search_single_db(&current_db, &embedding, fts_query.as_deref(), &mut candidates)?;
     let mut sub_dbs = Vec::new();
     find_sub_rag_dbs(Path::new(&folder_path), name, &mut sub_dbs);
     for sub_db in &sub_dbs {
-        search_single_db(sub_db, &embedding, &mut results)?;
+        search_single_db(sub_db, &embedding, fts_query.as_deref(), &mut candidates)?;
     }
 
-    // Sort by score and return top limit results
-    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-    results.truncate(limit);
+    // Vector-only mode (or no qualifying FTS terms): rank by cosine alone.
+    if mode != "hybrid" || fts_query.is_none() {
+        let mut results: Vec<RagSearchResult> = candidates
+            .into_iter()
+            .map(|c| RagSearchResult {
+                file: c.file,
+                heading: c.heading,
+                text: c.text,
+                line: c.line,
+                score: c.cosine,
+            })
+            .collect();
+        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.truncate(limit);
+        return Ok(results);
+    }
+
+    // Hybrid: fuse cosine + BM25 ranks with RRF.
+    let items: Vec<(f64, Option<f64>)> =
+        candidates.iter().map(|c| (c.cosine, c.bm25)).collect();
+    let order = fuse_rrf(&items, weight, RRF_K, limit);
+
+    // Recompute the fused score so the UI can display it.
+    let n = items.len();
+    let mut by_cos: Vec<usize> = (0..n).collect();
+    by_cos.sort_by(|&a, &b| items[b].0.partial_cmp(&items[a].0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut vec_rank = vec![0usize; n];
+    for (rank, &idx) in by_cos.iter().enumerate() { vec_rank[idx] = rank + 1; }
+    let mut by_bm: Vec<usize> = (0..n).filter(|&i| items[i].1.is_some()).collect();
+    by_bm.sort_by(|&a, &b| items[a].1.unwrap().partial_cmp(&items[b].1.unwrap()).unwrap_or(std::cmp::Ordering::Equal));
+    let mut bm_rank = vec![0usize; n];
+    for (rank, &idx) in by_bm.iter().enumerate() { bm_rank[idx] = rank + 1; }
+
+    let results: Vec<RagSearchResult> = order
+        .into_iter()
+        .map(|i| {
+            let mut score = (1.0 - weight) / (RRF_K + vec_rank[i] as f64);
+            if bm_rank[i] > 0 {
+                score += weight / (RRF_K + bm_rank[i] as f64);
+            }
+            RagSearchResult {
+                file: candidates[i].file.clone(),
+                heading: candidates[i].heading.clone(),
+                text: candidates[i].text.clone(),
+                line: candidates[i].line,
+                score,
+            }
+        })
+        .collect();
 
     Ok(results)
 }
@@ -921,5 +1031,37 @@ mod tests {
     fn fuse_rrf_respects_limit() {
         let items = vec![(0.9, None), (0.2, Some(-5.0)), (0.8, Some(-1.0))];
         assert_eq!(fuse_rrf(&items, 0.5, 60.0, 2).len(), 2);
+    }
+
+    #[test]
+    fn search_collect_db_populates_cosine_and_bm25() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_tables(&conn).unwrap();
+
+        // Two chunks; query embedding favors the first by cosine, but only the
+        // second contains the keyword "rebase".
+        let emb_a: Vec<f64> = vec![1.0, 0.0];
+        let emb_b: Vec<f64> = vec![0.0, 1.0];
+        let to_blob = |e: &[f64]| -> Vec<u8> { e.iter().flat_map(|f| f.to_le_bytes()).collect() };
+        conn.execute(
+            "INSERT INTO chunks (file, heading, text, line, hash, embedding) VALUES (?1,?2,?3,?4,?5,?6)",
+            rusqlite::params!["a.md", "", "general notes about git", 0i64, "h", to_blob(&emb_a)],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO chunks (file, heading, text, line, hash, embedding) VALUES (?1,?2,?3,?4,?5,?6)",
+            rusqlite::params!["b.md", "", "how to rebase a branch", 0i64, "h", to_blob(&emb_b)],
+        ).unwrap();
+
+        let query_emb: Vec<f64> = vec![1.0, 0.0];
+        let fts = build_fts_query("rebase branch");
+        let mut out: Vec<ScoredCandidate> = Vec::new();
+        search_collect_db(&conn, &query_emb, fts.as_deref(), &mut out).unwrap();
+
+        assert_eq!(out.len(), 2);
+        let a = out.iter().find(|c| c.file == "a.md").unwrap();
+        let b = out.iter().find(|c| c.file == "b.md").unwrap();
+        assert!(a.cosine > b.cosine, "a.md should win on cosine");
+        assert!(a.bm25.is_none(), "a.md has no keyword match");
+        assert!(b.bm25.is_some(), "b.md matches the FTS query");
     }
 }
