@@ -96,6 +96,8 @@ interface GitState {
   ) => Promise<void>;
   setCommitMessage: (msg: string) => void;
   clearError: () => void;
+  /** Clear all git state (e.g. when no folder is open) */
+  reset: () => void;
   refreshGraph: (folderPath: string) => Promise<void>;
   loadMoreGraph: (folderPath: string) => Promise<void>;
   toggleCommitExpand: (folderPath: string, hash: string) => Promise<void>;
@@ -349,6 +351,24 @@ export const useGitStore = create<GitState>()((set, get) => ({
 
   setCommitMessage: (msg) => set({ commitMessage: msg }),
   clearError: () => set({ error: null }),
+
+  reset: () =>
+    set({
+      files: [],
+      currentBranch: "",
+      branches: [],
+      commitMessage: "",
+      error: null,
+      isRepo: false,
+      remoteUrl: "",
+      commitsAhead: 0,
+      graphCommits: [],
+      graphOutgoing: [],
+      graphHasMore: true,
+      graphSkip: 0,
+      expandedCommit: null,
+      expandedFiles: [],
+    }),
 
   refreshGraph: async (folderPath) => {
     set({ graphLoading: true });

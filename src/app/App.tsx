@@ -355,7 +355,12 @@ export function App() {
 
   // Prefetch git state on folder change (deferred to avoid render storm)
   useEffect(() => {
-    if (!activeFolderPath) return;
+    // No folder open (e.g. all folder tabs closed): clear git state so the
+    // source-control badge does not linger with the previous folder's count.
+    if (!activeFolderPath) {
+      useGitStore.getState().reset();
+      return;
+    }
     const timer = setTimeout(() => {
       useGitStore.getState().refresh(activeFolderPath);
     }, 300);
