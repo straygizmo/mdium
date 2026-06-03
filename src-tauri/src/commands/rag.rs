@@ -163,11 +163,12 @@ fn build_fts_query(query_text: &str) -> Option<String> {
 /// Reciprocal Rank Fusion of a vector score (cosine, larger = better) and an
 /// optional BM25 score (smaller = better, per SQLite `bm25()`).
 ///
-/// `items[i] = (cosine, Option<bm25>)`. Returns item indices sorted by fused
-/// score descending, truncated to `limit`. `bm25_weight` in [0,1] splits weight
-/// between the two ranks (vector weight = 1 - bm25_weight); `k` is the RRF
-/// constant. Items without a BM25 match contribute only the vector term.
-fn fuse_rrf(items: &[(f64, Option<f64>)], bm25_weight: f64, k: f64, limit: usize) -> Vec<usize> {
+/// `items[i] = (cosine, Option<bm25>)`. Returns `(item_index, fused_score)`
+/// pairs sorted by fused score descending, truncated to `limit`. `bm25_weight`
+/// in [0,1] splits weight between the two ranks (vector weight = 1 -
+/// bm25_weight); `k` is the RRF constant. Items without a BM25 match contribute
+/// only the vector term.
+fn fuse_rrf(items: &[(f64, Option<f64>)], bm25_weight: f64, k: f64, limit: usize) -> Vec<(usize, f64)> {
     let n = items.len();
 
     // Vector ranks: sort indices by cosine descending (1-based).
@@ -201,8 +202,10 @@ fn fuse_rrf(items: &[(f64, Option<f64>)], bm25_weight: f64, k: f64, limit: usize
             (i, s)
         })
         .collect();
+    // Relies on Rust's stable sort: items with equal scores keep their original
+    // index order, giving deterministic tie-breaking.
     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    scored.into_iter().take(limit).map(|(i, _)| i).collect()
+    scored.into_iter().take(limit).collect()
 }
 
 fn count_db_status(db_path: &Path) -> (usize, usize) {
@@ -658,19 +661,22 @@ const RRF_K: f64 = 60.0;
 pub fn rag_search(
     folder_path: String,
     embedding: Vec<f64>,
-    query_text: String,
+    query_text: Option<String>,
     limit: usize,
     model_name: Option<String>,
     search_mode: Option<String>,
     bm25_weight: Option<f64>,
 ) -> Result<Vec<RagSearchResult>, String> {
+    // Tolerate callers that omit query_text (backward compatibility): an empty
+    // string makes build_fts_query return None, falling back to vector-only.
+    let query_text = query_text.as_deref().unwrap_or("");
     let name = model_name.as_deref().unwrap_or(DEFAULT_MODEL_NAME);
     let mode = search_mode.as_deref().unwrap_or("hybrid");
     let weight = bm25_weight.unwrap_or(0.5).clamp(0.0, 1.0);
 
     // Only build an FTS query in hybrid mode; None disables BM25 collection.
     let fts_query = if mode == "hybrid" {
-        build_fts_query(&query_text)
+        build_fts_query(query_text)
     } else {
         None
     };
@@ -705,33 +711,17 @@ pub fn rag_search(
     // Hybrid: fuse cosine + BM25 ranks with RRF.
     let items: Vec<(f64, Option<f64>)> =
         candidates.iter().map(|c| (c.cosine, c.bm25)).collect();
-    let order = fuse_rrf(&items, weight, RRF_K, limit);
+    let ranked = fuse_rrf(&items, weight, RRF_K, limit);
 
-    // Recompute the fused score so the UI can display it.
-    let n = items.len();
-    let mut by_cos: Vec<usize> = (0..n).collect();
-    by_cos.sort_by(|&a, &b| items[b].0.partial_cmp(&items[a].0).unwrap_or(std::cmp::Ordering::Equal));
-    let mut vec_rank = vec![0usize; n];
-    for (rank, &idx) in by_cos.iter().enumerate() { vec_rank[idx] = rank + 1; }
-    let mut by_bm: Vec<usize> = (0..n).filter(|&i| items[i].1.is_some()).collect();
-    by_bm.sort_by(|&a, &b| items[a].1.unwrap().partial_cmp(&items[b].1.unwrap()).unwrap_or(std::cmp::Ordering::Equal));
-    let mut bm_rank = vec![0usize; n];
-    for (rank, &idx) in by_bm.iter().enumerate() { bm_rank[idx] = rank + 1; }
-
-    let results: Vec<RagSearchResult> = order
+    // fuse_rrf already computed the fused score for each item; reuse it directly.
+    let results: Vec<RagSearchResult> = ranked
         .into_iter()
-        .map(|i| {
-            let mut score = (1.0 - weight) / (RRF_K + vec_rank[i] as f64);
-            if bm_rank[i] > 0 {
-                score += weight / (RRF_K + bm_rank[i] as f64);
-            }
-            RagSearchResult {
-                file: candidates[i].file.clone(),
-                heading: candidates[i].heading.clone(),
-                text: candidates[i].text.clone(),
-                line: candidates[i].line,
-                score,
-            }
+        .map(|(i, score)| RagSearchResult {
+            file: candidates[i].file.clone(),
+            heading: candidates[i].heading.clone(),
+            text: candidates[i].text.clone(),
+            line: candidates[i].line,
+            score,
         })
         .collect();
 
@@ -1015,7 +1005,7 @@ mod tests {
     fn fuse_rrf_pure_vector_when_weight_zero() {
         // (cosine, bm25 where smaller = better). bm25_weight = 0 => cosine order.
         let items = vec![(0.9, None), (0.2, Some(-5.0)), (0.8, Some(-1.0))];
-        let order = fuse_rrf(&items, 0.0, 60.0, 3);
+        let order: Vec<usize> = fuse_rrf(&items, 0.0, 60.0, 3).into_iter().map(|(i, _)| i).collect();
         assert_eq!(order, vec![0, 2, 1]); // 0.9 > 0.8 > 0.2
     }
 
@@ -1023,7 +1013,7 @@ mod tests {
     fn fuse_rrf_pure_bm25_when_weight_one() {
         // bm25_weight = 1 => only matched items score; unmatched falls last.
         let items = vec![(0.9, None), (0.2, Some(-5.0)), (0.8, Some(-1.0))];
-        let order = fuse_rrf(&items, 1.0, 60.0, 3);
+        let order: Vec<usize> = fuse_rrf(&items, 1.0, 60.0, 3).into_iter().map(|(i, _)| i).collect();
         assert_eq!(order, vec![1, 2, 0]); // -5.0 best, -1.0 next, None last
     }
 
