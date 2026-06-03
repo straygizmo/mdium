@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { DEFAULT_RAG_SETTINGS, normalizeRagSettings } from "./rag-settings";
+import {
+  DEFAULT_RAG_SETTINGS,
+  normalizeRagSettings,
+  getDefaultRagSettings,
+  defaultEmbeddingModelForLanguage,
+} from "./rag-settings";
 
 describe("normalizeRagSettings", () => {
   it("fills hybrid defaults for legacy settings without the new fields", () => {
@@ -24,5 +29,28 @@ describe("normalizeRagSettings", () => {
 
   it("returns the full default object for undefined input", () => {
     expect(normalizeRagSettings(undefined)).toEqual(DEFAULT_RAG_SETTINGS);
+  });
+});
+
+describe("language-aware embedding default", () => {
+  const RURI = "sirasagi62/ruri-v3-30m-ONNX";
+  const E5 = "Xenova/multilingual-e5-base";
+
+  it("defaults Japanese setups to ruri-v3-30m", () => {
+    expect(defaultEmbeddingModelForLanguage("ja")).toBe(RURI);
+    expect(getDefaultRagSettings("ja").embeddingModel).toBe(RURI);
+    expect(normalizeRagSettings(undefined, "ja").embeddingModel).toBe(RURI);
+  });
+
+  it("defaults non-Japanese (and unknown) setups to multilingual-e5-base", () => {
+    expect(defaultEmbeddingModelForLanguage("en")).toBe(E5);
+    expect(defaultEmbeddingModelForLanguage(undefined)).toBe(E5);
+    expect(getDefaultRagSettings("en").embeddingModel).toBe(E5);
+    expect(normalizeRagSettings(undefined, "en").embeddingModel).toBe(E5);
+  });
+
+  it("never overrides a persisted embeddingModel, even for Japanese", () => {
+    // An existing index must keep matching its model after a default change.
+    expect(normalizeRagSettings({ embeddingModel: E5 } as any, "ja").embeddingModel).toBe(E5);
   });
 });

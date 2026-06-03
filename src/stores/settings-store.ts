@@ -4,7 +4,7 @@ import i18n from "@/shared/i18n";
 import { applyTheme } from "@/shared/themes/apply-theme";
 import { getThemeById, DEFAULT_THEME_ID } from "@/shared/themes";
 import { syncProviderToOpencode } from "@/shared/lib/opencode-auth-sync";
-import { DEFAULT_RAG_SETTINGS, normalizeRagSettings } from "@/features/rag/lib/rag-settings";
+import { getDefaultRagSettings, normalizeRagSettings } from "@/features/rag/lib/rag-settings";
 import type { AiSettings, MediumSettings, RagSettings } from "@/shared/types";
 
 export type Language = "ja" | "en";
@@ -73,7 +73,8 @@ export const useSettingsStore = create<SettingsState>()(
       lineHeight: 1.6,
       showSettings: false,
       aiSettings: DEFAULT_AI_SETTINGS,
-      ragSettings: DEFAULT_RAG_SETTINGS,
+      // Default language is "ja", so default to the Japanese embedding model.
+      ragSettings: getDefaultRagSettings("ja"),
       speechEnabled: false,
       speechModel: "Xenova/whisper-small" as SpeechModel,
       mediumSettings: DEFAULT_MEDIUM_SETTINGS,
@@ -148,8 +149,10 @@ export const useSettingsStore = create<SettingsState>()(
         return {
           ...current,
           ...p,
-          // Ensure RAG fields added in later versions get defaults.
-          ragSettings: normalizeRagSettings(p.ragSettings),
+          // Ensure RAG fields added in later versions get defaults. Fresh installs
+          // pick the language-appropriate embedding model (ja → ruri-v3-30m); a
+          // persisted embeddingModel is preserved so existing indexes still match.
+          ragSettings: normalizeRagSettings(p.ragSettings, p.language ?? current.language),
         };
       },
     }
