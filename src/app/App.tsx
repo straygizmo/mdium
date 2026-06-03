@@ -464,8 +464,12 @@ export function App() {
             const xmindBytes = await serializeToXmind(json);
             const xmindPath = filePath.replace(/\.km$/i, ".xmind");
             const xmindName = xmindPath.split(/[\\/]/).pop() ?? "untitled";
-            const { writeFile } = await import("@tauri-apps/plugin-fs");
+            const { writeFile, remove } = await import("@tauri-apps/plugin-fs");
             await writeFile(xmindPath, xmindBytes);
+            // The .km is a transient intermediate; remove it now that the .xmind exists.
+            if (xmindPath !== filePath) {
+              await remove(filePath);
+            }
             loadFileTree();
             openTab({
               filePath: xmindPath,

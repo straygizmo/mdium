@@ -154,11 +154,11 @@ Write ONLY valid JSON (no markdown fences, no comments) to the output path.
 Include \`tts\` in \`audio\` with provider \`"voicevox"\`, speaker \`"1"\`, volume \`1.0\`, speed $7 as defaults.
 `,
   },
-  "convert-to-km-mindmap": {
-    name: "convert-to-km-mindmap",
+  "convert-to-xmind-mindmap": {
+    name: "convert-to-xmind-mindmap",
     description:
-      "Convert Markdown into a KityMinder mindmap JSON (.km); mdium auto-converts it to .xmind on open",
-    template: `# KityMinder Mindmap Converter
+      "Convert Markdown into a mindmap for mdium. Writes a temporary .km file that mdium auto-converts to .xmind (and removes the .km) when opened.",
+    template: `# XMind Mindmap Converter
 
 Read the Markdown file at \`$ARGUMENTS\`, analyze its content,
 and generate a KityMinder-compatible JSON file.
@@ -166,7 +166,7 @@ and generate a KityMinder-compatible JSON file.
 ## Instructions
 
 1. Read the Markdown file at \`$ARGUMENTS\`.
-2. Determine the output path by replacing the file extension with \`.km\` (e.g. \`notes.md\` → \`notes.km\`). When this file is opened in mdium it is automatically converted to a \`.xmind\` file.
+2. Determine the output path by replacing the file extension with \`.km\` (e.g. \`notes.md\` → \`notes.km\`). This \`.km\` is a temporary intermediate: when opened in mdium it is automatically converted to a \`.xmind\` file and the \`.km\` is removed.
 3. Analyze the content structure and topics.
 4. Generate a KityMinder JSON following the schema below.
 5. Write the JSON to the output path.
