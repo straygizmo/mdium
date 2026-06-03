@@ -132,6 +132,25 @@ fn cosine_similarity(a: &[f64], b: &[f64]) -> f64 {
     if denom == 0.0 { 0.0 } else { dot / denom }
 }
 
+/// Build an FTS5 MATCH query from free text for the trigram tokenizer.
+///
+/// Splits on whitespace, keeps terms of >= 3 Unicode chars (the trigram
+/// tokenizer needs at least 3 characters to index), wraps each term in double
+/// quotes (doubling any embedded quote to escape it), and joins with `OR`.
+/// Returns `None` when no term qualifies, so the caller can skip BM25 entirely.
+fn build_fts_query(query_text: &str) -> Option<String> {
+    let terms: Vec<String> = query_text
+        .split_whitespace()
+        .filter(|t| t.chars().count() >= 3)
+        .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
+        .collect();
+    if terms.is_empty() {
+        None
+    } else {
+        Some(terms.join(" OR "))
+    }
+}
+
 fn count_db_status(db_path: &Path) -> (usize, usize) {
     if !db_path.exists() {
         return (0, 0);
@@ -815,5 +834,25 @@ mod tests {
             )
             .unwrap();
         assert_eq!(hits, 1, "legacy rows must be backfilled into FTS");
+    }
+
+    #[test]
+    fn build_fts_query_extracts_terms() {
+        // "の" is 1 char (<3) and is dropped; the rest are kept and quoted.
+        let q = build_fts_query("git の rebase コマンド").unwrap();
+        assert_eq!(q, "\"git\" OR \"rebase\" OR \"コマンド\"");
+    }
+
+    #[test]
+    fn build_fts_query_escapes_double_quotes() {
+        // Internal double quotes are doubled, then the term is wrapped in quotes.
+        let q = build_fts_query("a\"b cde").unwrap();
+        assert_eq!(q, "\"a\"\"b\" OR \"cde\"");
+    }
+
+    #[test]
+    fn build_fts_query_returns_none_when_no_term_qualifies() {
+        assert!(build_fts_query("a b の").is_none());
+        assert!(build_fts_query("   ").is_none());
     }
 }
