@@ -15,6 +15,7 @@ interface BatchConvertTreeNodeProps {
   onToggleCollapse: (path: string) => void;
   skipExisting: boolean;
   saveToMdium: boolean;
+  deleteMode: boolean;
 }
 
 function collectDescendantFiles(
@@ -62,6 +63,7 @@ export function BatchConvertTreeNode({
   onToggleCollapse,
   skipExisting,
   saveToMdium,
+  deleteMode,
 }: BatchConvertTreeNodeProps) {
   const checkboxRef = useRef<HTMLInputElement>(null);
   const isCollapsed = collapsed.has(node.path);
@@ -96,11 +98,18 @@ export function BatchConvertTreeNode({
     }
   }, [node, onToggleCollapse]);
 
+  // In delete mode, file rows represent the generated .md file (the deletion
+  // target), so show the .md name/icon instead of the source (docx/pdf) name.
+  const displayName =
+    !node.isDir && deleteMode
+      ? `${node.name.replace(/\.\w+$/i, "")}.md`
+      : node.name;
+
   const icon = node.isDir
     ? isCollapsed
       ? "+"
       : "−"
-    : getFileIcon(node.name);
+    : getFileIcon(displayName);
 
   return (
     <>
@@ -127,9 +136,9 @@ export function BatchConvertTreeNode({
           title={node.path}
           onClick={node.isDir ? handleNameClick : undefined}
         >
-          {node.name}
+          {displayName}
         </span>
-        {!node.isDir && effectiveExisting && (
+        {!node.isDir && !deleteMode && effectiveExisting && (
           <span className="batch-convert__item-badge">.md exists</span>
         )}
       </div>
@@ -147,6 +156,7 @@ export function BatchConvertTreeNode({
               onToggleCollapse={onToggleCollapse}
               skipExisting={skipExisting}
               saveToMdium={saveToMdium}
+              deleteMode={deleteMode}
             />
           ))}
         </div>

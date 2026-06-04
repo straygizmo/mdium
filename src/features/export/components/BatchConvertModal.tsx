@@ -430,6 +430,7 @@ export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, o
               onToggleFolder={handleToggleFolder}
               skipExisting={mode === "convert" ? skipExisting : false}
               saveToMdium={mode === "convert" ? saveToMdium : deleteInMdium}
+              deleteMode={mode === "delete"}
             />
           </div>
         )}
