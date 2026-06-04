@@ -20,7 +20,7 @@
   "ocChatErrorAborted": "処理が中止されました。",
   "ocChatErrorUnknown": "不明なエラー",
   "ocChatErrorStatus": "ステータス {{status}}",
-  "ocChatStalled": "応答が滞っています。レート制限の可能性があります。待機を続けています…",
+  "ocChatStalled": "応答が滞っています。レート制限の可能性があります。",
   "ocChatErrorTimeout": "応答がありませんでした（タイムアウト）。しばらく待ってから再試行してください。",
   "ocChatAutoReplyLabel": "(自動返答)",
   "noFolderOpen": "フォルダが開かれていません",
