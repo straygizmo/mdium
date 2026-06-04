@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { showConfirm } from "@/stores/dialog-store";
@@ -190,6 +190,7 @@ export function FileTree({
 }: FileTreeProps) {
   const { t } = useTranslation("fileTree");
   const [contextMenu, setContextMenu] = useState<ContextMenuInfo | null>(null);
+  const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const menuRef = useRef<HTMLDivElement>(null);
@@ -301,8 +302,26 @@ export function FileTree({
     }
   }, [contextMenu]);
 
+  // Clamp the context menu inside the viewport so it isn't cut off near the
+  // window edges (e.g. when right-clicking a file near the bottom).
+  useLayoutEffect(() => {
+    if (!contextMenu || !menuRef.current) return;
+    const rect = menuRef.current.getBoundingClientRect();
+    const margin = 4;
+    let x = contextMenu.x;
+    let y = contextMenu.y;
+    if (x + rect.width > window.innerWidth - margin) {
+      x = Math.max(margin, window.innerWidth - rect.width - margin);
+    }
+    if (y + rect.height > window.innerHeight - margin) {
+      y = Math.max(margin, window.innerHeight - rect.height - margin);
+    }
+    setMenuPos({ x, y });
+  }, [contextMenu]);
+
   const handleContextMenu = useCallback((e: React.MouseEvent, entry: FileEntry) => {
     setContextMenu({ x: e.clientX, y: e.clientY, entry });
+    setMenuPos({ x: e.clientX, y: e.clientY });
   }, []);
 
   const startRename = useCallback((entry: FileEntry) => {
@@ -630,7 +649,7 @@ export function FileTree({
         <div
           ref={menuRef}
           className="context-menu"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
+          style={{ left: menuPos?.x ?? contextMenu.x, top: menuPos?.y ?? contextMenu.y }}
         >
           {contextMenu.entry.is_dir && (
             <div className="ctx-group">
