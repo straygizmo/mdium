@@ -616,14 +616,9 @@ pub fn check_mdium_md_exists(paths: Vec<String>) -> HashMap<String, bool> {
     let mut result = HashMap::with_capacity(paths.len());
     for raw in paths {
         let src = Path::new(&raw);
-        let exists = match (src.parent(), src.file_stem()) {
-            (Some(parent), Some(stem)) => {
-                let mut md_path = parent.join(".mdium");
-                md_path.push(format!("{}.md", stem.to_string_lossy()));
-                md_path.is_file()
-            }
-            _ => false,
-        };
+        let exists = resolve_generated_md_path(src, true)
+            .map(|p| p.is_file())
+            .unwrap_or(false);
         result.insert(raw, exists);
     }
     result
@@ -644,11 +639,18 @@ fn resolve_generated_md_path(src: &Path, in_mdium: bool) -> Option<std::path::Pa
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DeleteMdStatus {
+    Deleted,
+    Notfound,
+    Failed,
+}
+
+#[derive(Serialize)]
 pub struct DeleteMdResult {
     pub source_path: String,
     pub md_path: String,
-    /// "deleted" | "notfound" | "failed"
-    pub status: String,
+    pub status: DeleteMdStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -668,18 +670,21 @@ pub fn delete_generated_md(paths: Vec<String>, in_mdium: bool) -> Vec<DeleteMdRe
                 results.push(DeleteMdResult {
                     source_path: raw,
                     md_path: String::new(),
-                    status: "failed".to_string(),
+                    status: DeleteMdStatus::Failed,
                     error: Some("Cannot resolve .md path".to_string()),
                 });
                 continue;
             }
         };
         let md_str = md_path.to_string_lossy().to_string();
+        // TOCTOU: there is a benign window between is_file() and trash::delete
+        // where another process could remove the file. If that happens, the Err
+        // arm below reports it as Failed, which is acceptable for a batch operation.
         if !md_path.is_file() {
             results.push(DeleteMdResult {
                 source_path: raw,
                 md_path: md_str,
-                status: "notfound".to_string(),
+                status: DeleteMdStatus::Notfound,
                 error: None,
             });
             continue;
@@ -688,13 +693,13 @@ pub fn delete_generated_md(paths: Vec<String>, in_mdium: bool) -> Vec<DeleteMdRe
             Ok(()) => results.push(DeleteMdResult {
                 source_path: raw,
                 md_path: md_str,
-                status: "deleted".to_string(),
+                status: DeleteMdStatus::Deleted,
                 error: None,
             }),
             Err(e) => results.push(DeleteMdResult {
                 source_path: raw,
                 md_path: md_str,
-                status: "failed".to_string(),
+                status: DeleteMdStatus::Failed,
                 error: Some(e.to_string()),
             }),
         }
