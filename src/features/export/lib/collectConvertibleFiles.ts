@@ -168,3 +168,29 @@ export function collectDescendantPaths(node: ConvertibleTreeNode): string[] {
   }
   return paths;
 }
+
+/**
+ * Prune the convertible tree to only files that have an existing generated .md
+ * in the selected location (sibling vs .mdium). Folders with no matching
+ * descendants are removed.
+ */
+export function pruneTreeByHasMd(
+  tree: ConvertibleTreeNode[],
+  inMdium: boolean
+): ConvertibleTreeNode[] {
+  const result: ConvertibleTreeNode[] = [];
+  for (const node of tree) {
+    if (node.isDir) {
+      const children = pruneTreeByHasMd(node.children ?? [], inMdium);
+      if (children.length > 0) {
+        result.push({ ...node, children });
+      }
+    } else {
+      const has = inMdium ? node.hasExistingMdInMdium : node.hasExistingMdSibling;
+      if (has) {
+        result.push(node);
+      }
+    }
+  }
+  return result;
+}
