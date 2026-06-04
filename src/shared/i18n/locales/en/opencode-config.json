@@ -20,6 +20,8 @@
   "ocChatErrorAborted": "The request was aborted.",
   "ocChatErrorUnknown": "Unknown error",
   "ocChatErrorStatus": "status {{status}}",
+  "ocChatStalled": "Waiting for a response… The provider may be rate-limiting. Still waiting…",
+  "ocChatErrorTimeout": "No response (timed out). Please wait a moment and try again.",
   "ocChatAutoReplyLabel": "(Auto-reply)",
   "noFolderOpen": "No folder is open",
   "tabRules": "Rules",

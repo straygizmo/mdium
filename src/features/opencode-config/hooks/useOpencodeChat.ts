@@ -58,6 +58,7 @@ interface UseOpencodeChatResult {
   error: string | null;
   messages: OpencodeMessage[];
   loading: boolean;
+  stallNotice: boolean;
   sessions: OpencodeSessionInfo[];
   currentSessionId: string | null;
   pendingQuestions: PendingQuestion[] | null;
@@ -222,6 +223,7 @@ interface OpencodeChatUIState {
   aborted: boolean;
   chatSplitRatio: number;
   azureAutoRetryCount: number;
+  stallNotice: boolean;
 }
 
 export const useChatUIStore = create<OpencodeChatUIState>()(() => ({
@@ -240,6 +242,7 @@ export const useChatUIStore = create<OpencodeChatUIState>()(() => ({
   aborted: false,
   chatSplitRatio: 75,
   azureAutoRetryCount: 0,
+  stallNotice: false,
 }));
 
 /**
@@ -1271,6 +1274,7 @@ export function useOpencodeChat(folderPath?: string): UseOpencodeChatResult {
     error,
     messages,
     loading,
+    stallNotice,
     sessions,
     currentSessionId,
     pendingQuestions,
@@ -1341,6 +1345,7 @@ export function useOpencodeChat(folderPath?: string): UseOpencodeChatResult {
     error,
     messages,
     loading,
+    stallNotice,
     sessions,
     currentSessionId,
     pendingQuestions,
