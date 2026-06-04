@@ -34,6 +34,11 @@ describe("evaluateStall", () => {
     expect(evaluateStall({ ...base, now: STALL_NOTICE_MS, noticeShown: true })).toBe("none");
   });
 
+  it("returns none mid-window when notice already shown", () => {
+    const mid = Math.floor((STALL_NOTICE_MS + STALL_GIVEUP_MS) / 2);
+    expect(evaluateStall({ ...base, now: mid, noticeShown: true })).toBe("none");
+  });
+
   it("returns giveup at the giveup threshold", () => {
     expect(evaluateStall({ ...base, now: STALL_GIVEUP_MS })).toBe("giveup");
   });
