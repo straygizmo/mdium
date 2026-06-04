@@ -50,11 +50,31 @@ fn error_response(status: u16) -> http::Response<Cow<'static, [u8]>> {
         .unwrap()
 }
 
+/// Ensure loopback traffic never goes through a configured proxy.
+///
+/// In proxy environments a system/PAC proxy can route requests to the local
+/// opencode server (127.0.0.1) through an authenticating proxy that never
+/// answers, hanging the connection. The opencode SDK calls now run through the
+/// reqwest-backed HTTP plugin, and reqwest honors NO_PROXY — so we append the
+/// loopback hosts here to force a direct connection regardless of how the
+/// corporate proxy is configured.
+fn ensure_loopback_no_proxy() {
+    const LOOPBACK: &str = "127.0.0.1,localhost,::1";
+    match std::env::var("NO_PROXY").ok().or_else(|| std::env::var("no_proxy").ok()) {
+        Some(existing) if !existing.trim().is_empty() => {
+            std::env::set_var("NO_PROXY", format!("{existing},{LOOPBACK}"));
+        }
+        _ => std::env::set_var("NO_PROXY", LOOPBACK),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    ensure_loopback_no_proxy();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_http::init())
         .manage(Arc::new(Mutex::new(FileWatcherState::new())))
         .manage(Arc::new(Mutex::new(FolderWatcherState::new())))
         .manage::<ActiveXlsmState>(new_active_xlsm_state())

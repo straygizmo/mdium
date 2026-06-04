@@ -24,6 +24,13 @@
       "identifier": "fs:scope",
       "allow": [{ "path": "**" }]
     },
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "http://127.0.0.1:*" },
+        { "url": "http://localhost:*" }
+      ]
+    },
     "core:window:allow-set-title",
     "core:window:allow-close",
     "core:window:allow-destroy",

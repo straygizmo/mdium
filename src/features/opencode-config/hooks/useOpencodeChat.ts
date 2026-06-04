@@ -9,6 +9,7 @@ import type {
   FilePartInput,
 } from "@opencode-ai/sdk/client";
 import { invoke } from "@tauri-apps/api/core";
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { marked } from "marked";
 import i18n from "@/shared/i18n";
 import { useOpencodeServerStore } from "@/stores/opencode-server-store";
@@ -697,6 +698,28 @@ function processSSEStream(stream: AsyncIterable<unknown>) {
   })();
 }
 
+/**
+ * Custom fetch for the opencode SDK and the connect probes.
+ *
+ * The WebView's global fetch() obeys the Windows system/WinINET proxy. In
+ * proxy environments that routes requests to the local opencode server
+ * (127.0.0.1) through an authenticating proxy that never answers a loopback
+ * request, so the awaited fetch hangs forever and the UI is stuck on
+ * "Connecting...". Tauri's HTTP plugin runs on reqwest, which honors NO_PROXY
+ * (loopback is forced direct in the Rust entrypoint) and ignores the WinINET
+ * proxy — so every opencode call, including the SSE event stream, connects
+ * directly. connectTimeout also guarantees we surface an error instead of
+ * hanging if the local server is unreachable.
+ */
+function opencodeFetch(req: Request): Promise<Response> {
+  return tauriFetch(req, { connectTimeout: 15000 });
+}
+
+/** Loopback probe fetch (reqwest-backed, bypasses the system proxy). */
+function probeFetch(url: string): Promise<Response> {
+  return tauriFetch(url, { method: "GET", connectTimeout: 8000 });
+}
+
 // ─── ensureOpencodeServer ───
 async function ensureOpencodeServer(cwd?: string): Promise<string> {
   const store = useOpencodeServerStore.getState();
@@ -706,7 +729,7 @@ async function ensureOpencodeServer(cwd?: string): Promise<string> {
   if (existing) {
     const baseUrl = `http://127.0.0.1:${existing.port}`;
     try {
-      const res = await fetch(`${baseUrl}/session`, { method: "GET" });
+      const res = await probeFetch(`${baseUrl}/session`);
       if (res.ok) {
         console.log("[opencode] server already running on", baseUrl);
         return baseUrl;
@@ -722,7 +745,7 @@ async function ensureOpencodeServer(cwd?: string): Promise<string> {
   // Check if the allocated port is already occupied (e.g., by a zombie server)
   let port = store.allocatePort(folderKey);
   try {
-    const probe = await fetch(`http://127.0.0.1:${port}/session`, { method: "GET" });
+    const probe = await probeFetch(`http://127.0.0.1:${port}/session`);
     if (probe.ok) {
       // Port is already in use — remove the just-created entry and allocate a fresh one
       console.warn("[opencode] port", port, "already occupied, reallocating...");
@@ -751,7 +774,7 @@ async function ensureOpencodeServer(cwd?: string): Promise<string> {
   for (let i = 0; i < 20; i++) {
     await new Promise((r) => setTimeout(r, 500));
     try {
-      const res = await fetch(`${baseUrl}/session`, { method: "GET" });
+      const res = await probeFetch(`${baseUrl}/session`);
       if (res.ok) {
         console.log("[opencode] server started on", baseUrl, "cwd:", cwd);
         return baseUrl;
@@ -842,7 +865,7 @@ export async function doConnect(folderPath?: string) {
     }
 
     const baseUrl = await ensureOpencodeServer(folderPath);
-    const client = createOpencodeClient({ baseUrl });
+    const client = createOpencodeClient({ baseUrl, fetch: opencodeFetch });
     _client = client;
     _connectedFolder = folderPath;
 
