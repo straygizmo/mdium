@@ -628,3 +628,99 @@ pub fn check_mdium_md_exists(paths: Vec<String>) -> HashMap<String, bool> {
     }
     result
 }
+
+/// Resolve the generated `.md` path for a source file.
+/// - in_mdium == true:  {parent}/.mdium/{stem}.md
+/// - in_mdium == false: {parent}/{stem}.md
+fn resolve_generated_md_path(src: &Path, in_mdium: bool) -> Option<std::path::PathBuf> {
+    let parent = src.parent()?;
+    let stem = src.file_stem()?;
+    let mut md_path = parent.to_path_buf();
+    if in_mdium {
+        md_path.push(".mdium");
+    }
+    md_path.push(format!("{}.md", stem.to_string_lossy()));
+    Some(md_path)
+}
+
+#[derive(Serialize)]
+pub struct DeleteMdResult {
+    pub source_path: String,
+    pub md_path: String,
+    /// "deleted" | "notfound" | "failed"
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// For each source file path, resolve its generated `.md` (sibling or `.mdium`)
+/// and move it to the OS recycle bin. Files whose `.md` does not exist are
+/// reported as "notfound". Per-file results are returned so the UI can show a
+/// summary with partial failures.
+#[tauri::command]
+pub fn delete_generated_md(paths: Vec<String>, in_mdium: bool) -> Vec<DeleteMdResult> {
+    let mut results = Vec::with_capacity(paths.len());
+    for raw in paths {
+        let src = Path::new(&raw);
+        let md_path = match resolve_generated_md_path(src, in_mdium) {
+            Some(p) => p,
+            None => {
+                results.push(DeleteMdResult {
+                    source_path: raw,
+                    md_path: String::new(),
+                    status: "failed".to_string(),
+                    error: Some("Cannot resolve .md path".to_string()),
+                });
+                continue;
+            }
+        };
+        let md_str = md_path.to_string_lossy().to_string();
+        if !md_path.is_file() {
+            results.push(DeleteMdResult {
+                source_path: raw,
+                md_path: md_str,
+                status: "notfound".to_string(),
+                error: None,
+            });
+            continue;
+        }
+        match trash::delete(&md_path) {
+            Ok(()) => results.push(DeleteMdResult {
+                source_path: raw,
+                md_path: md_str,
+                status: "deleted".to_string(),
+                error: None,
+            }),
+            Err(e) => results.push(DeleteMdResult {
+                source_path: raw,
+                md_path: md_str,
+                status: "failed".to_string(),
+                error: Some(e.to_string()),
+            }),
+        }
+    }
+    results
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn resolves_sibling_md_path() {
+        let p = resolve_generated_md_path(Path::new("/tmp/docs/report.docx"), false).unwrap();
+        assert_eq!(p, PathBuf::from("/tmp/docs/report.md"));
+    }
+
+    #[test]
+    fn resolves_mdium_md_path() {
+        let p = resolve_generated_md_path(Path::new("/tmp/docs/report.pdf"), true).unwrap();
+        assert_eq!(p, PathBuf::from("/tmp/docs/.mdium/report.md"));
+    }
+
+    #[test]
+    fn returns_none_for_root_without_stem() {
+        assert!(resolve_generated_md_path(Path::new("/"), false).is_none());
+    }
+}

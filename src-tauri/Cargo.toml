@@ -35,6 +35,7 @@ cfb = "0.10"
 encoding_rs = "0.8"
 tiny_http = "0.12"
 rand = "0.8"
+trash = "5"
 
 [profile.release]
 panic = "abort"
