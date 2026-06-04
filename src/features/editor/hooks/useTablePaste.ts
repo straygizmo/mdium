@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import { htmlTableToMarkdown } from "../lib/htmlTableToMarkdown";
+import { restoreEditorSelection } from "../lib/restoreEditorSelection";
 
 interface UseTablePasteParams {
   editorRef: React.RefObject<HTMLTextAreaElement | null>;
@@ -30,6 +31,7 @@ export function useTablePaste({
       e.preventDefault();
 
       const textarea = editorRef.current;
+      const savedScrollTop = textarea?.scrollTop ?? 0;
       const start = textarea?.selectionStart ?? 0;
       const end = textarea?.selectionEnd ?? 0;
 
@@ -45,12 +47,7 @@ export function useTablePaste({
 
       // Move cursor after inserted table
       const newPos = start + nlBefore.length + markdown.length + nlAfter.length;
-      setTimeout(() => {
-        if (textarea) {
-          textarea.focus();
-          textarea.setSelectionRange(newPos, newPos);
-        }
-      }, 0);
+      restoreEditorSelection(editorRef, newPos, newPos, savedScrollTop);
 
       return true;
     },

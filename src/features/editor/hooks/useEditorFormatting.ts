@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import { makeHeadingId } from "@/shared/lib/markdown/heading-id";
+import { restoreEditorSelection } from "../lib/restoreEditorSelection";
 
 interface UseEditorFormattingParams {
   editorRef: React.RefObject<HTMLTextAreaElement | null>;
@@ -17,6 +18,7 @@ export function useEditorFormatting({
       const textarea = editorRef.current;
       if (!textarea) return;
 
+      const savedScrollTop = textarea.scrollTop;
       const start = textarea.selectionStart;
       const end = textarea.selectionEnd;
       const selected = content.substring(start, end);
@@ -136,10 +138,7 @@ export function useEditorFormatting({
       }
 
       onContentChange(newContent);
-      setTimeout(() => {
-        textarea.focus();
-        textarea.setSelectionRange(newSelStart, newSelEnd);
-      }, 0);
+      restoreEditorSelection(editorRef, newSelStart, newSelEnd, savedScrollTop);
     },
     [content, onContentChange, editorRef]
   );
@@ -149,6 +148,7 @@ export function useEditorFormatting({
       const textarea = editorRef.current;
       if (!textarea) return;
 
+      const savedScrollTop = textarea.scrollTop;
       const start = textarea.selectionStart;
       const before = content.substring(0, start);
       const after = content.substring(start);
@@ -166,10 +166,7 @@ export function useEditorFormatting({
 
       const cursorTarget =
         before.length + nl.length + `|${headers}|\n|${separator}|\n|`.length + 1;
-      setTimeout(() => {
-        textarea.focus();
-        textarea.setSelectionRange(cursorTarget, cursorTarget);
-      }, 0);
+      restoreEditorSelection(editorRef, cursorTarget, cursorTarget, savedScrollTop);
     },
     [content, onContentChange, editorRef]
   );
@@ -195,6 +192,7 @@ export function useEditorFormatting({
     const tocBlock = `## Table of Contents\n\n${toc}\n\n`;
 
     const textarea = editorRef.current;
+    const savedScrollTop = textarea?.scrollTop ?? 0;
     let insertPosition = textarea ? textarea.selectionStart : 0;
 
     if (content.startsWith("---\n") || content.startsWith("---\r\n")) {
@@ -207,6 +205,9 @@ export function useEditorFormatting({
       tocBlock +
       content.substring(insertPosition);
     onContentChange(newContent);
+
+    const cursorTarget = insertPosition + tocBlock.length;
+    restoreEditorSelection(editorRef, cursorTarget, cursorTarget, savedScrollTop);
   }, [content, onContentChange, editorRef]);
 
   const handleInsertMermaidTemplate = useCallback(
@@ -214,6 +215,7 @@ export function useEditorFormatting({
       const textarea = editorRef.current;
       if (!textarea) return;
 
+      const savedScrollTop = textarea.scrollTop;
       const start = textarea.selectionStart;
       const before = content.substring(0, start);
       const after = content.substring(start);
@@ -225,10 +227,7 @@ export function useEditorFormatting({
       onContentChange(newContent);
 
       const cursorTarget = before.length + block.length;
-      setTimeout(() => {
-        textarea.focus();
-        textarea.setSelectionRange(cursorTarget, cursorTarget);
-      }, 0);
+      restoreEditorSelection(editorRef, cursorTarget, cursorTarget, savedScrollTop);
     },
     [content, onContentChange, editorRef]
   );

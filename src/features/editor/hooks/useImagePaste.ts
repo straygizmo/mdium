@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef } from "react";
 import { mkdir, writeFile } from "@tauri-apps/plugin-fs";
+import { restoreEditorSelection } from "../lib/restoreEditorSelection";
 
 interface PasteDialogState {
   visible: boolean;
@@ -134,6 +135,10 @@ export function useImagePaste({
         );
       }
 
+      // Capture the scroll position before the content change so the view can
+      // be restored after caret repositioning (see restoreEditorSelection).
+      const savedScrollTop = editorRef.current?.scrollTop ?? 0;
+
       // Insert markdown link at cursor position
       const pos = pasteDialogState.cursorPos;
       const newContent =
@@ -142,13 +147,7 @@ export function useImagePaste({
 
       // Move cursor after inserted link
       const newPos = pos + markdownLink.length;
-      setTimeout(() => {
-        const textarea = editorRef.current;
-        if (textarea) {
-          textarea.focus();
-          textarea.setSelectionRange(newPos, newPos);
-        }
-      }, 0);
+      restoreEditorSelection(editorRef, newPos, newPos, savedScrollTop);
 
       closePasteDialog();
     },

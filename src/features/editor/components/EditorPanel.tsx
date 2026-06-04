@@ -4,6 +4,7 @@ import { useTabStore } from "@/stores/tab-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useEditorContextStore } from "@/stores/editor-context-store";
 import { useEditorFormatting } from "../hooks/useEditorFormatting";
+import { restoreEditorSelection } from "../lib/restoreEditorSelection";
 import { useImagePaste } from "../hooks/useImagePaste";
 import { useTablePaste } from "../hooks/useTablePaste";
 import TableGridSelector from "@/features/table/components/TableGridSelector";
@@ -53,15 +54,14 @@ export function EditorPanel({ editorRef }: EditorPanelProps) {
   useEffect(() => {
     if (!transcript || !editorRef.current) return;
     const textarea = editorRef.current;
+    const savedScrollTop = textarea.scrollTop;
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
     const newContent = content.substring(0, start) + transcript + content.substring(end);
     handleContentChange(newContent);
     setTranscript("");
     const newPos = start + transcript.length;
-    setTimeout(() => {
-      textarea.selectionStart = textarea.selectionEnd = newPos;
-    }, 0);
+    restoreEditorSelection(editorRef, newPos, newPos, savedScrollTop);
   }, [transcript]); // eslint-disable-line react-hooks/exhaustive-deps
 
 
@@ -132,17 +132,16 @@ export function EditorPanel({ editorRef }: EditorPanelProps) {
       if (e.key === "Tab") {
         e.preventDefault();
         const textarea = e.currentTarget;
+        const savedScrollTop = textarea.scrollTop;
         const start = textarea.selectionStart;
         const end = textarea.selectionEnd;
         const newContent =
           content.substring(0, start) + "  " + content.substring(end);
         handleContentChange(newContent);
-        setTimeout(() => {
-          textarea.selectionStart = textarea.selectionEnd = start + 2;
-        }, 0);
+        restoreEditorSelection(editorRef, start + 2, start + 2, savedScrollTop);
       }
     },
-    [content, handleContentChange, handleInsertFormatting, speechEnabled, speechStatus, toggleSpeech]
+    [content, handleContentChange, handleInsertFormatting, speechEnabled, speechStatus, toggleSpeech, editorRef]
   );
 
   const handleKeyUp = useCallback(
@@ -188,32 +187,22 @@ export function EditorPanel({ editorRef }: EditorPanelProps) {
   const handleCtxCut = useCallback(() => {
     const { selStart, selEnd } = ctxMenu;
     if (selStart === selEnd) return;
+    const savedScrollTop = editorRef.current?.scrollTop ?? 0;
     navigator.clipboard.writeText(content.substring(selStart, selEnd));
     const newContent = content.substring(0, selStart) + content.substring(selEnd);
     handleContentChange(newContent);
-    setTimeout(() => {
-      const textarea = editorRef.current;
-      if (textarea) {
-        textarea.focus();
-        textarea.setSelectionRange(selStart, selStart);
-      }
-    }, 0);
+    restoreEditorSelection(editorRef, selStart, selStart, savedScrollTop);
   }, [ctxMenu, content, handleContentChange, editorRef]);
 
   const handleCtxPaste = useCallback(async () => {
+    const savedScrollTop = editorRef.current?.scrollTop ?? 0;
     const text = await navigator.clipboard.readText();
     if (!text) return;
     const { selStart, selEnd } = ctxMenu;
     const newContent = content.substring(0, selStart) + text + content.substring(selEnd);
     handleContentChange(newContent);
     const newPos = selStart + text.length;
-    setTimeout(() => {
-      const textarea = editorRef.current;
-      if (textarea) {
-        textarea.focus();
-        textarea.setSelectionRange(newPos, newPos);
-      }
-    }, 0);
+    restoreEditorSelection(editorRef, newPos, newPos, savedScrollTop);
   }, [ctxMenu, content, handleContentChange, editorRef]);
 
   const handleCtxSelectAll = useCallback(() => {
@@ -227,10 +216,14 @@ export function EditorPanel({ editorRef }: EditorPanelProps) {
   const handleInsertGeneratedImage = useCallback((markdownImage: string) => {
     const textarea = editorRef.current;
     if (!textarea) return;
+    const savedScrollTop = textarea.scrollTop;
     const start = textarea.selectionStart;
     const before = content.substring(0, start);
     const after = content.substring(start);
-    handleContentChange(before + markdownImage + "\n" + after);
+    const inserted = markdownImage + "\n";
+    handleContentChange(before + inserted + after);
+    const newPos = start + inserted.length;
+    restoreEditorSelection(editorRef, newPos, newPos, savedScrollTop);
   }, [content, handleContentChange, editorRef]);
 
   const handleInsertImageFromClipboard = useCallback(async () => {
@@ -271,13 +264,16 @@ export function EditorPanel({ editorRef }: EditorPanelProps) {
     const buf = await pasteDialogFromCtx.imageBlob.arrayBuffer();
     const { writeFile } = await import("@tauri-apps/plugin-fs");
     await writeFile(savePath, new Uint8Array(buf));
+    const savedScrollTop = editorRef.current?.scrollTop ?? 0;
     const pos = pasteDialogFromCtx.cursorPos;
     const markdownLink = `![${altText}](images/${fileName})`;
     const newContent = content.substring(0, pos) + markdownLink + content.substring(pos);
     handleContentChange(newContent);
     if (pasteDialogFromCtx.imageUrl) URL.revokeObjectURL(pasteDialogFromCtx.imageUrl);
     setPasteDialogFromCtx({ visible: false, imageBlob: null, imageUrl: null, cursorPos: 0 });
-  }, [activeTab?.filePath, pasteDialogFromCtx, content, handleContentChange]);
+    const newPos = pos + markdownLink.length;
+    restoreEditorSelection(editorRef, newPos, newPos, savedScrollTop);
+  }, [activeTab?.filePath, pasteDialogFromCtx, content, handleContentChange, editorRef]);
 
   const handleInsertImageFromFile = useCallback(async () => {
     const filePath = activeTab?.filePath;
@@ -297,10 +293,13 @@ export function EditorPanel({ editorRef }: EditorPanelProps) {
     const destPath = `${imagesDir}/${srcName}`;
     await copyFile(srcPath, destPath);
     const textarea = editorRef.current;
+    const savedScrollTop = textarea?.scrollTop ?? 0;
     const pos = textarea?.selectionStart ?? 0;
     const markdownLink = `![${srcName}](images/${srcName})`;
     const newContent = content.substring(0, pos) + markdownLink + content.substring(pos);
     handleContentChange(newContent);
+    const newPos = pos + markdownLink.length;
+    restoreEditorSelection(editorRef, newPos, newPos, savedScrollTop);
   }, [activeTab?.filePath, editorRef, content, handleContentChange, handleNoFile]);
 
   useEffect(() => {
