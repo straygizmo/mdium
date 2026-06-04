@@ -228,26 +228,29 @@ export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, o
     });
   }, [mode, skipExisting, saveToMdium, files, effectiveHasExistingMd]);
 
-  // Reset selection when switching modes.
+  // Seed the default selection when switching to convert mode. Convert-mode
+  // selection is driven by hasExistingMdSibling, which is known synchronously,
+  // so this only needs to fire on the mode switch (the skip-existing effect
+  // above reconciles later saveToMdium/files changes).
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
+    if (mode !== "convert") return;
     const set = new Set<string>();
-    if (mode === "delete") {
-      for (const f of files) if (hasMdInLocation(f)) set.add(f.path);
-    } else {
-      for (const f of files) if (!effectiveHasExistingMd(f)) set.add(f.path);
-    }
+    for (const f of files) if (!effectiveHasExistingMd(f)) set.add(f.path);
     setSelected(set);
   }, [mode]);
 
-  // Reselect all matching files when delete location toggles (delete mode).
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // Seed the delete-mode selection from the files that have a .md in the
+  // selected location. `files` is included so that when the async
+  // check_mdium_md_exists flags arrive (which populate hasExistingMdInMdium),
+  // the selection re-seeds instead of staying empty. `files` only changes once
+  // after mount, so this wholesale re-seed does not clobber ongoing edits.
   useEffect(() => {
     if (mode !== "delete") return;
     const set = new Set<string>();
     for (const f of files) if (hasMdInLocation(f)) set.add(f.path);
     setSelected(set);
-  }, [deleteInMdium]);
+  }, [mode, deleteInMdium, files, hasMdInLocation]);
 
   const activeSummary = mode === "delete" ? deleteSummary : summary;
 
