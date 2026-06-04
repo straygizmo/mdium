@@ -154,22 +154,24 @@ Write ONLY valid JSON (no markdown fences, no comments) to the output path.
 Include \`tts\` in \`audio\` with provider \`"voicevox"\`, speaker \`"1"\`, volume \`1.0\`, speed $7 as defaults.
 `,
   },
-  "convert-to-xmind-mindmap": {
-    name: "convert-to-xmind-mindmap",
+  "convert-specmd-to-xmind": {
+    name: "convert-specmd-to-xmind",
     description:
-      "Convert Markdown into a mindmap for mdium. Writes a temporary .km file that mdium auto-converts to .xmind (and removes the .km) when opened.",
-    template: `# XMind Mindmap Converter
+      "Convert a specification Markdown file into a KityMinder (.km) testcase document. mdium auto-converts the .km to .xmind (and removes the .km) when opened.",
+    template: `# KityMinder Testcase Mindmap Converter
 
-Read the Markdown file at \`$ARGUMENTS\`, analyze its content,
-and generate a KityMinder-compatible JSON file.
+The Markdown file at \`$ARGUMENTS\` is a specification document. Analyze its
+content and, for each specification item, identify the items that should be
+tested. Output the test items as a KityMinder-compatible JSON file.
 
 ## Instructions
 
 1. Read the Markdown file at \`$ARGUMENTS\`.
 2. Determine the output path by replacing the file extension with \`.km\` (e.g. \`notes.md\` → \`notes.km\`). This \`.km\` is a temporary intermediate: when opened in mdium it is automatically converted to a \`.xmind\` file and the \`.km\` is removed.
 3. Analyze the content structure and topics.
-4. Generate a KityMinder JSON following the schema below.
-5. Write the JSON to the output path.
+4. Identify every item that should be tested.
+5. Generate the test items as KityMinder JSON following the schema below.
+6. Write the JSON to the output path.
 
 ## Output Format
 
@@ -225,20 +227,19 @@ Every node follows this shape:
 | \`template\` | Layout direction | \`"right"\` |
 
 ### Available Themes
-\`fresh-blue\`, \`fresh-green\`, \`fresh-pink\`, \`fresh-purple\`, \`fresh-red\`, \`fresh-soil\`, \`snow\`, \`fish\`, \`wire\`
+\`fresh-blue\`
 
 ### Available Templates
-\`default\` (both sides), \`right\` (right only), \`structure\` (org-chart), \`filetree\` (file-tree style), \`fish-bone\` (fishbone diagram)
+\`default\` (both sides), \`right\` (right only)
 
 ## Structuring Guidelines
 
 1. **Central topic** — one root node that captures the overall subject
-2. **Main topics** — direct children of root; aim for 3–7 branches
-3. **Subtopics** — children of main topics; keep depth ≤ 4 levels
-4. **Leaf nodes** — concrete facts, examples, or action items
+2. **Main topics** — direct children of root; aim for 3–10 branches
+3. **Subtopics** — children of main topics; keep depth ≤ 8 levels
+4. **Leaf nodes** — concrete check items or procedure steps
 5. **Language** — match the language of the source Markdown content
-6. **Conciseness** — keep node labels short (ideally ≤ 10 words)
-7. **Balance** — distribute content evenly across branches when possible
+6. **Conciseness** — write each node label as a concise expected result for the check item (e.g. "{check item} should be {expected value}")
 
 ## Output
 
