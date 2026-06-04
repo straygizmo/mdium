@@ -208,6 +208,7 @@ let _pendingFolder: { path: string | undefined } | null = null;
 let _pendingVideoOutput: string | null = null;
 let _lastEventAt = 0;
 let _watchdogTimer: ReturnType<typeof setInterval> | null = null;
+let _watchdogGeneration = 0;
 
 // ─── Zustand store for UI state (persists across mount/unmount) ───
 interface OpencodeChatUIState {
@@ -396,6 +397,7 @@ function applySessionError(err: unknown) {
 
 /** Start (or restart) the stall watchdog for a freshly-sent turn. */
 function startWatchdog() {
+  _watchdogGeneration++;
   _lastEventAt = Date.now();
   if (_watchdogTimer) clearInterval(_watchdogTimer);
   _watchdogTimer = setInterval(watchdogTick, STALL_TICK_MS);
@@ -438,6 +440,9 @@ function watchdogTick() {
  * the cancel; the banner still renders because `error` is set explicitly.
  */
 async function triggerStallGiveup() {
+  // Capture the turn's generation; if a new turn starts during the abort
+  // round-trip below, bail out so we don't stomp its fresh state.
+  const generation = _watchdogGeneration;
   if (_client && _currentSessionId) {
     try {
       await _client.session.abort({ path: { id: _currentSessionId } });
@@ -445,6 +450,7 @@ async function triggerStallGiveup() {
       console.error("[opencode] stall give-up abort failed:", e);
     }
   }
+  if (_watchdogGeneration !== generation) return;
   useChatUIStore.setState((s) => {
     const last = s.messages[s.messages.length - 1];
     const messages =
