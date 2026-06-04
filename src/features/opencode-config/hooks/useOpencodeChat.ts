@@ -394,6 +394,24 @@ function processSSEStream(stream: AsyncIterable<unknown>) {
     try {
       for await (const event of stream) {
         const ev = event as OcEvent;
+        // TEMP DIAGNOSTIC (rate-limit hang investigation): log every incoming
+        // event type, and for the error-bearing events dump the sessionID (vs
+        // the active one) and the error payload. This tells us whether a 429
+        // arrives as session.error / message.updated.error at all, whether its
+        // sessionID matches _currentSessionId (the :648 filter would drop it),
+        // or whether opencode stays silent while retrying. Remove once resolved.
+        if (ev.type === "session.error" || ev.type === "message.updated") {
+          const p = (ev as any).properties ?? {};
+          // eslint-disable-next-line no-console
+          console.warn("[opencode][diag]", ev.type, {
+            sessionID: p.sessionID ?? p.info?.sessionID,
+            currentSessionId: _currentSessionId,
+            error: p.error ?? p.info?.error,
+          });
+        } else {
+          // eslint-disable-next-line no-console
+          console.debug("[opencode][diag]", ev.type);
+        }
         if (ev.type === "message.part.updated") {
           const part = ev.properties.part;
           if (part.sessionID !== _currentSessionId) continue;
