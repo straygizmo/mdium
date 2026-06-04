@@ -19,6 +19,7 @@ import { resolveMdiumVbaMcpServer } from "../lib/builtin-mcp-servers";
 import type { OpencodeMcpServer } from "@/shared/types";
 import { BUILTIN_AGENTS } from "../lib/builtin-registry";
 import { isAzureRefusal, isAzureProviderActive } from "../lib/provider-detection";
+import { evaluateStall, STALL_TICK_MS } from "./stall-watchdog";
 
 export interface OpencodeMessage {
   role: "user" | "assistant";
@@ -205,6 +206,8 @@ let _currentSessionId: string | null = null;
 let _pendingFolder: { path: string | undefined } | null = null;
 /** Output path to auto-open when a generate-video-scenario command completes */
 let _pendingVideoOutput: string | null = null;
+let _lastEventAt = 0;
+let _watchdogTimer: ReturnType<typeof setInterval> | null = null;
 
 // ─── Zustand store for UI state (persists across mount/unmount) ───
 interface OpencodeChatUIState {
@@ -391,12 +394,86 @@ function applySessionError(err: unknown) {
   });
 }
 
+/** Start (or restart) the stall watchdog for a freshly-sent turn. */
+function startWatchdog() {
+  _lastEventAt = Date.now();
+  if (_watchdogTimer) clearInterval(_watchdogTimer);
+  _watchdogTimer = setInterval(watchdogTick, STALL_TICK_MS);
+}
+
+/** Stop the stall watchdog. */
+function stopWatchdog() {
+  if (_watchdogTimer) {
+    clearInterval(_watchdogTimer);
+    _watchdogTimer = null;
+  }
+}
+
+/** Periodic check: surface a notice, give up, or self-stop. */
+function watchdogTick() {
+  const s = useChatUIStore.getState();
+  if (!s.loading) {
+    stopWatchdog();
+    return;
+  }
+  const action = evaluateStall({
+    now: Date.now(),
+    lastEventAt: _lastEventAt,
+    loading: s.loading,
+    aborted: s.aborted,
+    noticeShown: s.stallNotice,
+  });
+  if (action === "notice") {
+    useChatUIStore.setState({ stallNotice: true });
+  } else if (action === "giveup") {
+    stopWatchdog();
+    void triggerStallGiveup();
+  }
+}
+
+/**
+ * Give up after prolonged silence: cancel the in-flight turn on the opencode
+ * side, unlock the UI, and show a timeout error banner. `aborted: true`
+ * suppresses normal-completion handling of any session.idle that arrives after
+ * the cancel; the banner still renders because `error` is set explicitly.
+ */
+async function triggerStallGiveup() {
+  if (_client && _currentSessionId) {
+    try {
+      await _client.session.abort({ path: { id: _currentSessionId } });
+    } catch (e: any) {
+      console.error("[opencode] stall give-up abort failed:", e);
+    }
+  }
+  useChatUIStore.setState((s) => {
+    const last = s.messages[s.messages.length - 1];
+    const messages =
+      last?.role === "assistant" && !last.content && (!last.parts || last.parts.length === 0)
+        ? s.messages.slice(0, -1)
+        : s.messages;
+    return {
+      messages,
+      loading: false,
+      stallNotice: false,
+      pendingQuestions: null,
+      aborted: true,
+      error: i18n.t("ocChatErrorTimeout", { ns: "opencode-config" }),
+    };
+  });
+}
+
 // ─── Helper: process SSE event stream (runs in background) ───
 function processSSEStream(stream: AsyncIterable<unknown>) {
   (async () => {
     try {
       for await (const event of stream) {
         const ev = event as OcEvent;
+        // Watchdog: any event proves opencode is alive — reset the silence
+        // timer and clear a shown stall notice so the UI recovers on its own.
+        _lastEventAt = Date.now();
+        if (useChatUIStore.getState().stallNotice) {
+          useChatUIStore.setState({ stallNotice: false });
+        }
         // TEMP DIAGNOSTIC (rate-limit hang investigation): log every incoming
         // event type, and for the error-bearing events dump the sessionID (vs
         // the active one) and the error payload. This tells us whether a 429
@@ -1032,7 +1109,9 @@ export async function doSendMessage(
     loading: true,
     pendingQuestions: null,
     aborted: false,
+    stallNotice: false,
   }));
+  startWatchdog();
 
   try {
     const agent = agentOverride ?? useChatUIStore.getState().selectedAgent ?? undefined;
@@ -1087,7 +1166,8 @@ export async function doAbortSession() {
   } catch (e: any) {
     console.error("[opencode] abort failed:", e);
   } finally {
-    useChatUIStore.setState({ loading: false, pendingQuestions: null });
+    stopWatchdog();
+    useChatUIStore.setState({ loading: false, pendingQuestions: null, stallNotice: false });
   }
 }
 
@@ -1123,7 +1203,9 @@ export async function doExecuteCommand(commandName: string, args?: string) {
     loading: true,
     pendingQuestions: null,
     aborted: false,
+    stallNotice: false,
   }));
+  startWatchdog();
 
   try {
     const res = await _client.session.command({
