@@ -596,6 +596,16 @@
   color: var(--text-primary);
 }
 
+.oc-chat__stall {
+  margin-left: 8px;
+  font-size: 12px;
+  color: #8a6d00;
+  background: rgba(255, 196, 0, 0.12);
+  border: 1px solid rgba(255, 196, 0, 0.35);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
 /* Input area */
 .oc-chat__input-area {
   position: relative;

@@ -34,6 +34,7 @@ export function OpencodeChat() {
     error,
     messages,
     loading,
+    stallNotice,
     pendingQuestions,
     sessions,
     currentSessionId,
@@ -581,6 +582,9 @@ export function OpencodeChat() {
                 <span className="oc-chat__loading-dot" />
               </span>
               <span className="oc-chat__loading-label">{t("ocChatThinking", "Thinking...")}</span>
+              {stallNotice && (
+                <span className="oc-chat__stall">{t("ocChatStalled")}</span>
+              )}
               <button
                 className="oc-chat__abort-btn"
                 onClick={abortSession}
