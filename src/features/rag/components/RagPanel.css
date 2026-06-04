@@ -497,6 +497,7 @@
 /* Settings dialog */
 .rag-panel__dialog--settings {
   width: 360px;
+  max-height: calc(60vh + 30px);
 }
 
 .rag-panel__settings-body {
