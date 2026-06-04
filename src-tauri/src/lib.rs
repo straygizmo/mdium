@@ -206,6 +206,7 @@ pub fn run() {
             commands::file::move_file,
             commands::file::open_in_default_app,
             commands::file::check_mdium_md_exists,
+            commands::file::delete_generated_md,
             // File watcher
             file_watcher::watch_file,
             file_watcher::unwatch_file,
