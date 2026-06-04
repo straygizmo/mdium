@@ -5,13 +5,16 @@ import type { ConvertibleFile } from "../lib/collectConvertibleFiles";
 import type { ConvertibleTreeNode } from "../lib/collectConvertibleFiles";
 import {
   pruneTreeByFilter,
+  pruneTreeByHasMd,
   collectFilePaths,
 } from "../lib/collectConvertibleFiles";
 import { useBatchConvert } from "../hooks/useBatchConvert";
+import { useBatchDeleteMd } from "../hooks/useBatchDeleteMd";
 import { BatchConvertTree } from "./BatchConvertTree";
 import "./BatchConvertModal.css";
 
 type FilterTab = "all" | "docx" | "pdf" | "xlsx";
+type BatchMode = "convert" | "delete";
 
 interface BatchConvertModalProps {
   files: ConvertibleFile[];
@@ -43,20 +46,36 @@ function patchTreeWithMdiumFlags(
 export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, onComplete }: BatchConvertModalProps) {
   const { t } = useTranslation("common");
   const { isConverting, progress, summary, convert, reset } = useBatchConvert();
+  const {
+    isDeleting,
+    summary: deleteSummary,
+    deleteMd,
+    reset: resetDelete,
+  } = useBatchDeleteMd();
 
   const [files, setFiles] = useState<ConvertibleFile[]>(() => propFiles);
   const [tree, setTree] = useState<ConvertibleTreeNode[]>(() => propTree);
 
+  const [mode, setMode] = useState<BatchMode>("convert");
   const [filter, setFilter] = useState<FilterTab>("all");
   const [skipExisting, setSkipExisting] = useState(true);
   const [saveToMdium, setSaveToMdium] = useState(false);
+  const [deleteInMdium, setDeleteInMdium] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
   const effectiveHasExistingMd = useCallback(
     (f: ConvertibleFile) =>
       saveToMdium ? f.hasExistingMdInMdium : f.hasExistingMdSibling,
     [saveToMdium]
   );
+  const hasMdInLocation = useCallback(
+    (f: ConvertibleFile) =>
+      deleteInMdium ? f.hasExistingMdInMdium : f.hasExistingMdSibling,
+    [deleteInMdium]
+  );
+
   const [selected, setSelected] = useState<Set<string>>(() => {
-    // Initially select all files that don't have existing .md
+    // Initially select all files that don't have existing .md (convert mode).
     const set = new Set<string>();
     for (const f of propFiles) {
       if (!f.hasExistingMdSibling) {
@@ -98,21 +117,26 @@ export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, o
     };
   }, []);
 
-  const filteredTree = useMemo(
-    () => pruneTreeByFilter(tree, filter),
-    [tree, filter]
-  );
+  const filteredTree = useMemo(() => {
+    if (mode === "delete") {
+      return pruneTreeByFilter(pruneTreeByHasMd(tree, deleteInMdium), filter);
+    }
+    return pruneTreeByFilter(tree, filter);
+  }, [tree, filter, mode, deleteInMdium]);
 
   const totalSelected = useMemo(() => {
+    if (mode === "delete") {
+      return files.filter((f) => selected.has(f.path) && hasMdInLocation(f)).length;
+    }
     return files.filter((f) => selected.has(f.path)).length;
-  }, [files, selected]);
+  }, [files, selected, mode, hasMdInLocation]);
 
   const handleSelectAll = useCallback(() => {
     setSelected((prev) => {
       const next = new Set(prev);
       const paths = collectFilePaths(filteredTree);
       for (const p of paths) {
-        if (skipExisting) {
+        if (mode === "convert" && skipExisting) {
           const file = files.find((f) => f.path === p);
           if (file && effectiveHasExistingMd(file)) continue;
         }
@@ -120,7 +144,7 @@ export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, o
       }
       return next;
     });
-  }, [filteredTree, skipExisting, files, effectiveHasExistingMd]);
+  }, [filteredTree, mode, skipExisting, files, effectiveHasExistingMd]);
 
   const handleDeselectAll = useCallback(() => {
     setSelected((prev) => {
@@ -150,7 +174,7 @@ export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, o
       setSelected((prev) => {
         const next = new Set(prev);
         for (const p of paths) {
-          if (skipExisting) {
+          if (mode === "convert" && skipExisting) {
             const file = files.find((f) => f.path === p);
             if (file && effectiveHasExistingMd(file)) continue;
           }
@@ -163,7 +187,7 @@ export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, o
         return next;
       });
     },
-    [skipExisting, files, effectiveHasExistingMd]
+    [mode, skipExisting, files, effectiveHasExistingMd]
   );
 
   const handleConvert = useCallback(async () => {
@@ -172,52 +196,93 @@ export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, o
     await convert(selectedFiles, skipExisting, saveToMdium);
   }, [files, selected, skipExisting, saveToMdium, convert]);
 
+  const handleDelete = useCallback(async () => {
+    const selectedFiles = files.filter(
+      (f) => selected.has(f.path) && hasMdInLocation(f)
+    );
+    setConfirmOpen(false);
+    if (selectedFiles.length === 0) return;
+    await deleteMd(selectedFiles, deleteInMdium);
+  }, [files, selected, hasMdInLocation, deleteMd, deleteInMdium]);
+
   const handleClose = useCallback(() => {
-    if (summary) {
+    if (summary || deleteSummary) {
       onComplete();
     }
     reset();
+    resetDelete();
     onClose();
-  }, [summary, onComplete, reset, onClose]);
+  }, [summary, deleteSummary, onComplete, reset, resetDelete, onClose]);
 
-  // Update selection when skipExisting changes
+  // Update selection when skipExisting / saveToMdium changes (convert mode).
   useEffect(() => {
-    if (skipExisting) {
-      setSelected((prev) => {
-        const next = new Set(prev);
-        for (const f of files) {
-          if (effectiveHasExistingMd(f)) {
-            next.delete(f.path);
-          }
+    if (mode !== "convert" || !skipExisting) return;
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const f of files) {
+        if (effectiveHasExistingMd(f)) {
+          next.delete(f.path);
         }
-        return next;
-      });
-    }
-  }, [skipExisting, saveToMdium, files, effectiveHasExistingMd]);
+      }
+      return next;
+    });
+  }, [mode, skipExisting, saveToMdium, files, effectiveHasExistingMd]);
+
+  // Seed the default selection when switching to convert mode. Convert-mode
+  // selection is driven by hasExistingMdSibling, which is known synchronously,
+  // so this only needs to fire on the mode switch (the skip-existing effect
+  // above reconciles later saveToMdium/files changes).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (mode !== "convert") return;
+    const set = new Set<string>();
+    for (const f of files) if (!effectiveHasExistingMd(f)) set.add(f.path);
+    setSelected(set);
+  }, [mode]);
+
+  // Seed the delete-mode selection from the files that have a .md in the
+  // selected location. `files` is included so that when the async
+  // check_mdium_md_exists flags arrive (which populate hasExistingMdInMdium),
+  // the selection re-seeds instead of staying empty. `files` only changes once
+  // after mount, so this wholesale re-seed does not clobber ongoing edits.
+  useEffect(() => {
+    if (mode !== "delete") return;
+    const set = new Set<string>();
+    for (const f of files) if (hasMdInLocation(f)) set.add(f.path);
+    setSelected(set);
+  }, [mode, deleteInMdium, files, hasMdInLocation]);
+
+  const activeSummary = mode === "delete" ? deleteSummary : summary;
 
   // --- Result view ---
-  if (summary) {
+  if (activeSummary) {
     return (
       <div className="batch-convert__overlay" onClick={handleClose}>
         <div className="batch-convert__dialog" onClick={(e) => e.stopPropagation()}>
           <div className="batch-convert__header">
-            <span>{t("batchConvertTitle")}</span>
+            <span>{mode === "delete" ? t("batchDeleteTitle") : t("batchConvertTitle")}</span>
             <button className="batch-convert__close" onClick={handleClose}>×</button>
           </div>
           <div className="batch-convert__result-summary">
-            {t("batchConvertComplete", {
-              success: summary.success,
-              failed: summary.failed,
-              skipped: summary.skipped,
-            })}
+            {mode === "delete"
+              ? t("batchDeleteComplete", {
+                  deleted: activeSummary.success,
+                  failed: activeSummary.failed,
+                  skipped: activeSummary.skipped,
+                })
+              : t("batchConvertComplete", {
+                  success: activeSummary.success,
+                  failed: activeSummary.failed,
+                  skipped: activeSummary.skipped,
+                })}
           </div>
           <ul className="batch-convert__list">
-            {summary.results.map((r) => (
+            {activeSummary.results.map((r) => (
               <li key={r.file.path} className="batch-convert__result-item">
                 <span className={`batch-convert__result-icon batch-convert__result-icon--${r.status}`}>
                   {r.status === "success" ? "✓" : r.status === "failed" ? "✗" : "–"}
                 </span>
-                <span className="batch-convert__result-name" title={r.file.path}>
+                <span className="batch-convert__result-name" title={r.mdPath || r.file.path}>
                   {r.file.name}
                 </span>
                 {r.error && (
@@ -263,13 +328,45 @@ export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, o
     );
   }
 
+  // --- Deleting view ---
+  if (isDeleting) {
+    return (
+      <div className="batch-convert__overlay">
+        <div className="batch-convert__dialog" onClick={(e) => e.stopPropagation()}>
+          <div className="batch-convert__header">
+            <span>{t("batchDeleteTitle")}</span>
+          </div>
+          <div className="batch-convert__progress">
+            <div className="batch-convert__progress-text">
+              {t("batchDeleteDeleting")}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // --- Selection view ---
   return (
     <div className="batch-convert__overlay" onClick={handleClose}>
       <div className="batch-convert__dialog" onClick={(e) => e.stopPropagation()}>
         <div className="batch-convert__header">
-          <span>{t("batchConvertTitle")}</span>
+          <span>{mode === "delete" ? t("batchDeleteTitle") : t("batchConvertTitle")}</span>
           <button className="batch-convert__close" onClick={handleClose}>×</button>
+        </div>
+        <div className="batch-convert__mode-switch">
+          <button
+            className={`batch-convert__mode-btn ${mode === "convert" ? "batch-convert__mode-btn--active" : ""}`}
+            onClick={() => setMode("convert")}
+          >
+            {t("batchConvertModeConvert")}
+          </button>
+          <button
+            className={`batch-convert__mode-btn ${mode === "delete" ? "batch-convert__mode-btn--active" : ""}`}
+            onClick={() => setMode("delete")}
+          >
+            {t("batchConvertModeDelete")}
+          </button>
         </div>
         <div className="batch-convert__toolbar">
           {(["all", "docx", "xlsx", "pdf"] as FilterTab[]).map((tab) => (
@@ -290,25 +387,40 @@ export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, o
               {t("batchConvertDeselectAll")}
             </button>
           </div>
-          <label className="batch-convert__skip-label">
-            <input
-              type="checkbox"
-              checked={saveToMdium}
-              onChange={(e) => setSaveToMdium(e.target.checked)}
-            />
-            {t("batchConvertSaveToMdium")}
-          </label>
-          <label className="batch-convert__skip-label">
-            <input
-              type="checkbox"
-              checked={skipExisting}
-              onChange={(e) => setSkipExisting(e.target.checked)}
-            />
-            {t("batchConvertSkipExisting")}
-          </label>
+          {mode === "convert" ? (
+            <>
+              <label className="batch-convert__skip-label">
+                <input
+                  type="checkbox"
+                  checked={saveToMdium}
+                  onChange={(e) => setSaveToMdium(e.target.checked)}
+                />
+                {t("batchConvertSaveToMdium")}
+              </label>
+              <label className="batch-convert__skip-label">
+                <input
+                  type="checkbox"
+                  checked={skipExisting}
+                  onChange={(e) => setSkipExisting(e.target.checked)}
+                />
+                {t("batchConvertSkipExisting")}
+              </label>
+            </>
+          ) : (
+            <label className="batch-convert__skip-label">
+              <input
+                type="checkbox"
+                checked={deleteInMdium}
+                onChange={(e) => setDeleteInMdium(e.target.checked)}
+              />
+              {t("batchDeleteLocationMdium")}
+            </label>
+          )}
         </div>
         {filteredTree.length === 0 ? (
-          <div className="batch-convert__empty">{t("batchConvertNoFiles")}</div>
+          <div className="batch-convert__empty">
+            {mode === "delete" ? t("batchDeleteNoFiles") : t("batchConvertNoFiles")}
+          </div>
         ) : (
           <div className="batch-convert__list">
             <BatchConvertTree
@@ -316,8 +428,8 @@ export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, o
               selected={selected}
               onToggleFile={handleToggle}
               onToggleFolder={handleToggleFolder}
-              skipExisting={skipExisting}
-              saveToMdium={saveToMdium}
+              skipExisting={mode === "convert" ? skipExisting : false}
+              saveToMdium={mode === "convert" ? saveToMdium : deleteInMdium}
             />
           </div>
         )}
@@ -325,15 +437,58 @@ export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, o
           <button className="batch-convert__btn-cancel" onClick={handleClose}>
             {t("cancel")}
           </button>
-          <button
-            className="batch-convert__btn-convert"
-            disabled={totalSelected === 0}
-            onClick={handleConvert}
-          >
-            {t("batchConvertStart")} ({totalSelected})
-          </button>
+          {mode === "delete" ? (
+            <button
+              className="batch-convert__btn-delete"
+              disabled={totalSelected === 0}
+              onClick={() => setConfirmOpen(true)}
+            >
+              {t("batchDeleteStart")} ({totalSelected})
+            </button>
+          ) : (
+            <button
+              className="batch-convert__btn-convert"
+              disabled={totalSelected === 0}
+              onClick={handleConvert}
+            >
+              {t("batchConvertStart")} ({totalSelected})
+            </button>
+          )}
         </div>
       </div>
+
+      {confirmOpen && (
+        <div
+          className="batch-convert__overlay batch-convert__overlay--confirm"
+          onClick={(e) => {
+            e.stopPropagation();
+            setConfirmOpen(false);
+          }}
+        >
+          <div
+            className="batch-convert__confirm-dialog"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="batch-convert__header">
+              <span>{t("batchDeleteConfirmTitle")}</span>
+            </div>
+            <div className="batch-convert__confirm-message">
+              {t("batchDeleteConfirmMessage", { count: totalSelected })}
+            </div>
+            <div className="batch-convert__footer">
+              <button
+                className="batch-convert__btn-cancel"
+                onClick={() => setConfirmOpen(false)}
+              >
+                {t("cancel")}
+              </button>
+              <button className="batch-convert__btn-delete" onClick={handleDelete}>
+                {t("batchDeleteConfirmButton")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
