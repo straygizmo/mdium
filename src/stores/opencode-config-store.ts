@@ -160,8 +160,8 @@ export const useOpencodeConfigStore = create<OpencodeConfigState>()((set) => ({
       const home = await invoke<string>("get_home_dir");
       const sep = home.includes("\\") ? "\\" : "/";
       const baseDir = `${home}${sep}.config${sep}opencode`;
-      const entries = await invoke<{ dir_name: string; name: string }[]>("list_skills", { baseDir });
-      set({ globalSkillNames: entries.map((e) => e.name || e.dir_name) });
+      const entries = await invoke<{ dir_name: string; name: string; enabled?: boolean }[]>("list_skills", { baseDir });
+      set({ globalSkillNames: entries.filter((e) => e.enabled !== false).map((e) => e.name || e.dir_name) });
     } catch {
       set({ globalSkillNames: [] });
     }
@@ -302,8 +302,8 @@ export const useOpencodeConfigStore = create<OpencodeConfigState>()((set) => ({
     const sep = folderPath.includes("\\") ? "\\" : "/";
     const baseDir = `${folderPath}${sep}.opencode`;
     try {
-      const entries = await invoke<{ dir_name: string; name: string }[]>("list_skills", { baseDir });
-      set({ projectSkillNames: entries.map((e) => e.name || e.dir_name) });
+      const entries = await invoke<{ dir_name: string; name: string; enabled?: boolean }[]>("list_skills", { baseDir });
+      set({ projectSkillNames: entries.filter((e) => e.enabled !== false).map((e) => e.name || e.dir_name) });
     } catch {
       set({ projectSkillNames: [] });
     }

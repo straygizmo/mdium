@@ -257,6 +257,7 @@ pub fn run() {
             commands::claude_config::list_skills,
             commands::claude_config::write_skill,
             commands::claude_config::delete_skill,
+            commands::claude_config::set_skill_enabled,
             commands::claude_config::list_tool_files,
             commands::claude_config::write_tool_file,
             commands::claude_config::delete_tool_file,

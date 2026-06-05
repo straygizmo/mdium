@@ -26,6 +26,7 @@ interface SkillEntry {
   user_invocable: boolean;
   allowed_tools: string[];
   content: string;
+  enabled: boolean;
 }
 
 const SKILL_NAME_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
@@ -233,6 +234,17 @@ export function SkillsSection() {
     }
   };
 
+  const handleToggleEnabled = async (dirName: string, targetScope: Scope, nowEnabled: boolean) => {
+    const base = await getSkillsDir(targetScope);
+    if (!base) return;
+    await invoke("set_skill_enabled", { baseDir: base, dirName, enabled: nowEnabled });
+    await loadAllSkills();
+    loadGlobalSkills();
+    if (activeFolderPath) {
+      loadProjectSkills(activeFolderPath);
+    }
+  };
+
   // --- Preview (same pattern as AgentsSection) ---
   const { frontMatter: skillFrontMatter, previewHtml } = useMemo(() => {
     if (!formContent) return { frontMatter: null, previewHtml: "" };
@@ -428,7 +440,7 @@ export function SkillsSection() {
           {scopedSkills.map(({ scope: itemScope, data: skill }) => (
             <div
               key={`${itemScope}-${skill.dir_name}`}
-              className={`oc-section__item oc-section__item--${itemScope}`}
+              className={`oc-section__item oc-section__item--${itemScope}${skill.enabled === false ? " oc-section__item--disabled" : ""}`}
               style={{ marginBottom: 4 }}
             >
               <div className="oc-section__item-info">
@@ -441,6 +453,13 @@ export function SkillsSection() {
                 <span className="oc-section__item-detail">{skill.description}</span>
               </div>
               <div className="oc-section__item-actions">
+                <label className="oc-section__toggle" style={{ padding: 0 }}>
+                  <input
+                    type="checkbox"
+                    checked={skill.enabled !== false}
+                    onChange={(e) => handleToggleEnabled(skill.dir_name, itemScope, e.target.checked)}
+                  />
+                </label>
                 <button className="oc-section__edit-btn" onClick={() => startEdit(skill, itemScope)}>
                   {t("edit")}
                 </button>

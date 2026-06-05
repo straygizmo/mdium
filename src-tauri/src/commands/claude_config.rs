@@ -10,6 +10,9 @@ pub struct SkillEntry {
     pub user_invocable: bool,
     pub allowed_tools: Vec<String>,
     pub content: String,
+    /// Whether opencode discovers this skill (i.e. SKILL.md exists). A disabled
+    /// skill keeps its content in SKILL.md.disabled so opencode ignores it.
+    pub enabled: bool,
 }
 
 #[tauri::command]
@@ -56,10 +59,18 @@ pub fn list_skills(base_dir: String) -> Result<Vec<SkillEntry>, String> {
         if !path.is_dir() {
             continue;
         }
-        let skill_file = path.join("SKILL.md");
-        if !skill_file.exists() {
+        // A skill is enabled when opencode can discover it (SKILL.md present).
+        // When disabled, mdium parks its content in SKILL.md.disabled so opencode
+        // ignores it while we still list it (with its toggle off).
+        let active_file = path.join("SKILL.md");
+        let disabled_file = path.join("SKILL.md.disabled");
+        let (skill_file, enabled) = if active_file.exists() {
+            (active_file, true)
+        } else if disabled_file.exists() {
+            (disabled_file, false)
+        } else {
             continue;
-        }
+        };
         let content = match fs::read_to_string(&skill_file) {
             Ok(c) => c,
             Err(_) => continue,
@@ -69,7 +80,8 @@ pub fn list_skills(base_dir: String) -> Result<Vec<SkillEntry>, String> {
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
-        let skill = parse_skill_frontmatter(&dir_name, &content);
+        let mut skill = parse_skill_frontmatter(&dir_name, &content);
+        skill.enabled = enabled;
         entries.push(skill);
     }
 
@@ -81,7 +93,32 @@ pub fn write_skill(base_dir: String, dir_name: String, content: String) -> Resul
     let skill_dir = Path::new(&base_dir).join("skills").join(&dir_name);
     fs::create_dir_all(&skill_dir).map_err(|e| e.to_string())?;
     let skill_file = skill_dir.join("SKILL.md");
-    fs::write(skill_file, content).map_err(|e| e.to_string())
+    fs::write(skill_file, content).map_err(|e| e.to_string())?;
+    // Saving produces an authoritative SKILL.md, so drop any stale disabled copy
+    // to avoid both files coexisting (which would re-disable on next toggle).
+    let disabled_file = skill_dir.join("SKILL.md.disabled");
+    if disabled_file.exists() {
+        let _ = fs::remove_file(&disabled_file);
+    }
+    Ok(())
+}
+
+/// Toggle whether opencode discovers a skill by renaming SKILL.md <-> SKILL.md.disabled.
+/// opencode only loads `skills/<name>/SKILL.md`, so the `.disabled` suffix hides
+/// the skill without deleting its content.
+#[tauri::command]
+pub fn set_skill_enabled(base_dir: String, dir_name: String, enabled: bool) -> Result<(), String> {
+    let skill_dir = Path::new(&base_dir).join("skills").join(&dir_name);
+    let active = skill_dir.join("SKILL.md");
+    let disabled = skill_dir.join("SKILL.md.disabled");
+    if enabled {
+        if disabled.exists() && !active.exists() {
+            fs::rename(&disabled, &active).map_err(|e| e.to_string())?;
+        }
+    } else if active.exists() {
+        fs::rename(&active, &disabled).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -298,5 +335,6 @@ fn parse_skill_frontmatter(dir_name: &str, content: &str) -> SkillEntry {
         user_invocable,
         allowed_tools,
         content: content.to_string(),
+        enabled: true,
     }
 }
