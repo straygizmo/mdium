@@ -196,3 +196,8 @@ export function isBuiltinMcp(name: string): boolean {
 export function isBuiltinSkill(name: string): boolean {
   return name in BUILTIN_SKILLS;
 }
+
+// Built-in plugins (opencode `plugin` array entries). Re-exported here so
+// sections import all built-in catalogs from one module, matching BUILTIN_MCP etc.
+export { BUILTIN_PLUGINS, isBuiltinPlugin } from "./builtin-plugins";
+export type { BuiltinPluginEntry } from "./builtin-plugins";
