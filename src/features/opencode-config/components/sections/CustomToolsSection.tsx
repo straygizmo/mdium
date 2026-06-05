@@ -100,7 +100,13 @@ export function CustomToolsSection() {
     })();
   }, [formScope, getToolsDir]);
 
-  const scopedTools = useScopeItems(globalToolFiles, projectToolFiles);
+  // Deduplicate by tool name: when the same tool exists in both scopes, prefer
+  // the project copy (matches opencode's project-overrides-global resolution),
+  // so a built-in tool present both globally and in the open folder shows once.
+  const projectToolNames = new Set(projectToolFiles.map((f) => f.tool_name));
+  const scopedTools = useScopeItems(globalToolFiles, projectToolFiles).filter(
+    ({ scope, data }) => !(scope === "global" && projectToolNames.has(data.tool_name))
+  );
 
   // Builtin tools not yet present in either scope (compared by tool name).
   const presentToolNames = [...globalToolFiles, ...projectToolFiles].map((f) => f.tool_name);
