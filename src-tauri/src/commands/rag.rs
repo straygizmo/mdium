@@ -23,6 +23,13 @@ pub struct RagChunk {
     pub hash: String,
 }
 
+#[derive(Serialize, Clone)]
+struct RagScanProgress {
+    current: usize,
+    total: usize,
+    file: String,
+}
+
 #[derive(Deserialize)]
 pub struct RagChunkWithEmbedding {
     pub folder: String,
@@ -327,6 +334,42 @@ fn collect_md_in_mdium(dir: &Path, extensions: &[String], result: &mut Vec<PathB
             result.push(path);
         }
     }
+}
+
+/// Count files that `scan_folder_recursive` would process, using identical
+/// directory-traversal rules. Cheap: lists directories and matches extensions
+/// only — no file reads, no hashing. Best-effort: unreadable subfolders
+/// contribute 0 (the real scan would surface the error itself).
+fn count_files_recursive(dir: &Path, extensions: &[String]) -> usize {
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return 0,
+    };
+    let mut count = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+
+        if name == "node_modules" || name == "target" {
+            continue;
+        }
+
+        if path.is_dir() {
+            if name == ".mdium" {
+                let mut md = Vec::new();
+                collect_md_in_mdium(&path, extensions, &mut md);
+                count += md.len();
+                continue;
+            }
+            if name.starts_with('.') {
+                continue;
+            }
+            count += count_files_recursive(&path, extensions);
+        } else if extensions.iter().any(|ext| name.ends_with(ext.as_str())) {
+            count += 1;
+        }
+    }
+    count
 }
 
 /// Scan files in each folder level and recurse into subfolders
@@ -1053,5 +1096,44 @@ mod tests {
         assert!(a.cosine > b.cosine, "a.md should win on cosine");
         assert!(a.bm25.is_none(), "a.md has no keyword match");
         assert!(b.bm25.is_some(), "b.md matches the FTS query");
+    }
+
+    #[test]
+    fn count_files_recursive_mirrors_scan_traversal() {
+        use std::fs;
+        // Unique, std-only temp fixture (no tempfile crate dependency).
+        let root = std::env::temp_dir().join("mdium_rag_count_test");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+
+        // Counted: top-level .md files
+        fs::write(root.join("a.md"), "# A\nbody").unwrap();
+        fs::write(root.join("b.md"), "# B\nbody").unwrap();
+        // Not counted: wrong extension
+        fs::write(root.join("c.txt"), "nope").unwrap();
+
+        // Counted: .md inside a normal subfolder (recursed)
+        fs::create_dir_all(root.join("sub")).unwrap();
+        fs::write(root.join("sub").join("d.md"), "# D\nbody").unwrap();
+
+        // Not counted: node_modules and target are skipped
+        fs::create_dir_all(root.join("node_modules")).unwrap();
+        fs::write(root.join("node_modules").join("x.md"), "# X").unwrap();
+        fs::create_dir_all(root.join("target")).unwrap();
+        fs::write(root.join("target").join("y.md"), "# Y").unwrap();
+
+        // Not counted: hidden dir (other than .mdium) is skipped
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::write(root.join(".git").join("z.md"), "# Z").unwrap();
+
+        // Counted: files inside .mdium are attributed to the parent
+        fs::create_dir_all(root.join(".mdium")).unwrap();
+        fs::write(root.join(".mdium").join("e.md"), "# E\nbody").unwrap();
+
+        let extensions = vec![".md".to_string()];
+        let count = count_files_recursive(&root, &extensions);
+
+        let _ = fs::remove_dir_all(&root);
+        assert_eq!(count, 4, "should count a.md, b.md, sub/d.md, .mdium/e.md");
     }
 }
