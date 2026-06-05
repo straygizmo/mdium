@@ -213,9 +213,11 @@ export function RagPanel({ folderPath, aiSettings, onOpenFile }: RagPanelProps) 
               style={{ width: `${buildProgress.total > 0 ? Math.round((buildProgress.current / buildProgress.total) * 100) : 0}%` }}
             />
           </div>
-          <span className="rag-panel__build-progress-file" title={buildProgress.currentFile}>
-            {buildProgress.currentFile}
-          </span>
+          {buildProgress.currentFile && (
+            <span className="rag-panel__build-progress-file" title={buildProgress.currentFile}>
+              {buildProgress.currentFile}
+            </span>
+          )}
         </div>
       )}
 
