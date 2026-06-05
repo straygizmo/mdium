@@ -157,6 +157,7 @@ export function useRagFeatures({ folderPath, aiSettings, onOpenFile }: UseRagFea
 
       if (chunks.length === 0) {
         console.log("RAG: No changed files to index");
+        setBuildProgress(null);
         await checkStatus();
         return;
       }

@@ -321,7 +321,8 @@ pub fn rag_scan_folder(
     // scan below, progress may drift (e.g. stop at 198/200). Acceptable — this is
     // cosmetic progress, not a correctness guarantee.
     let total = count_files_recursive(Path::new(&folder_path), &extensions);
-    // Throttle to at most ~200 events for large trees.
+    // Throttle large trees to ~200 events. For <=200 files emit_step is 1
+    // (every file emits), which is well within acceptable IPC volume.
     let emit_step = (total / 200).max(1);
     let mut scanned = 0usize;
 
