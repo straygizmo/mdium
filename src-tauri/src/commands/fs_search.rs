@@ -71,6 +71,7 @@ fn is_excluded_dir(name: &str) -> bool {
 /// Collect file paths (relative to `root`, '/'-separated) matching `pattern`.
 /// A pattern containing no '/' matches against the file's basename at any depth;
 /// otherwise it matches against the full relative path. Capped at `limit`.
+/// (This basename-at-any-depth behavior is intentional and differs from standard shell glob, where `*.md` would match only the top level.)
 pub fn fs_glob(root: &Path, pattern: &str, limit: usize) -> Result<Vec<String>, String> {
     if !root.is_dir() {
         return Err(format!("Not a folder: {}", root.display()));
@@ -203,14 +204,15 @@ fn walk_grep(
                 continue;
             }
         }
-        if fs::metadata(&path).map(|m| m.len()).unwrap_or(0) > MAX_GREP_FILE_BYTES {
+        let bytes = match fs::read(&path) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        if bytes.len() as u64 > MAX_GREP_FILE_BYTES {
             continue;
         }
-        let content = match fs::read(&path) {
-            Ok(bytes) => match String::from_utf8(bytes) {
-                Ok(s) => s,
-                Err(_) => continue,
-            },
+        let content = match String::from_utf8(bytes) {
+            Ok(s) => s,
             Err(_) => continue,
         };
         for (idx, line) in content.lines().enumerate() {
