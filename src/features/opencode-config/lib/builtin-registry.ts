@@ -40,8 +40,8 @@ export const BUILTIN_AGENTS: Record<string, BuiltinAgentEntry> = {
   rag: {
     description: "RAG - Document search agent powered by vector database",
     requiredBuiltinTools: ["rag_search", "folder_glob", "folder_grep"],
-    agentMd: `<!-- mdium-agent-version: 2 -->
----
+    agentMd: `---
+# mdium-agent-version: 2
 description: RAG - Document search agent powered by vector database
 mode: all
 tools:
