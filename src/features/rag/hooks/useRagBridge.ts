@@ -63,6 +63,14 @@ export function useRagBridge() {
     })();
   }, [connected, activeFolderPath, load]);
 
+  // Keep the Rust ActiveFolderState in sync so the folder_glob/folder_grep
+  // bridge endpoints always scan the folder of the currently active tab.
+  useEffect(() => {
+    invoke("set_active_folder", { path: activeFolderPath ?? null }).catch((e) =>
+      console.warn("[fs-bridge] set_active_folder failed:", e)
+    );
+  }, [activeFolderPath]);
+
   useEffect(() => {
     let disposed = false;
 
