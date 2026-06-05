@@ -7,9 +7,8 @@ export interface BuiltinPluginEntry {
   docsUrl: string;
 }
 
-// NOTE: confirm the installable npm package name for oh-my-opencode
-// (`oh-my-openagent` vs `oh-my-opencode`) with `npm view` in a later task and
-// update the spec below if needed. Default is `oh-my-openagent`.
+// The oh-my-opencode plugin is published under the npm name `oh-my-openagent`
+// (the package was renamed; `oh-my-opencode` is an alias of the same release).
 export const BUILTIN_PLUGINS: Record<string, BuiltinPluginEntry> = {
   superpowers: {
     spec: "superpowers@git+https://github.com/obra/superpowers.git#v5.1.0",
