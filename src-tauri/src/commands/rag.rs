@@ -296,7 +296,13 @@ pub fn rag_list_files(folder_path: String, model_name: Option<String>) -> Result
 }
 
 #[tauri::command]
-pub fn rag_scan_folder(folder_path: String, file_extensions: Option<String>, min_chunk_length: Option<usize>, model_name: Option<String>) -> Result<Vec<RagChunk>, String> {
+pub fn rag_scan_folder(
+    app: tauri::AppHandle,
+    folder_path: String,
+    file_extensions: Option<String>,
+    min_chunk_length: Option<usize>,
+    model_name: Option<String>,
+) -> Result<Vec<RagChunk>, String> {
     let name = model_name.as_deref().unwrap_or(DEFAULT_MODEL_NAME);
     let extensions: Vec<String> = file_extensions
         .unwrap_or_else(|| ".md".to_string())
@@ -309,7 +315,24 @@ pub fn rag_scan_folder(folder_path: String, file_extensions: Option<String>, min
         .collect();
     let min_len = min_chunk_length.unwrap_or(0);
     let mut chunks = Vec::new();
-    scan_folder_recursive(Path::new(&folder_path), &mut chunks, &extensions, min_len, name)?;
+
+    // Pre-count so the frontend can show "current/total". Cheap directory walk.
+    let total = count_files_recursive(Path::new(&folder_path), &extensions);
+    // Throttle to at most ~200 events for large trees.
+    let emit_step = (total / 200).max(1);
+    let mut scanned = 0usize;
+
+    scan_folder_recursive(
+        Path::new(&folder_path),
+        &mut chunks,
+        &extensions,
+        min_len,
+        name,
+        &app,
+        total,
+        &mut scanned,
+        emit_step,
+    )?;
     Ok(chunks)
 }
 
@@ -373,7 +396,17 @@ fn count_files_recursive(dir: &Path, extensions: &[String]) -> usize {
 }
 
 /// Scan files in each folder level and recurse into subfolders
-fn scan_folder_recursive(dir: &Path, chunks: &mut Vec<RagChunk>, extensions: &[String], min_chunk_length: usize, model_name: &str) -> Result<(), String> {
+fn scan_folder_recursive(
+    dir: &Path,
+    chunks: &mut Vec<RagChunk>,
+    extensions: &[String],
+    min_chunk_length: usize,
+    model_name: &str,
+    app: &tauri::AppHandle,
+    total: usize,
+    scanned: &mut usize,
+    emit_step: usize,
+) -> Result<(), String> {
     let folder_str = dir.to_string_lossy().to_string();
 
     // Surface the offending path on read_dir failure. A bare e.to_string()
@@ -415,7 +448,7 @@ fn scan_folder_recursive(dir: &Path, chunks: &mut Vec<RagChunk>, extensions: &[S
             if name.starts_with('.') {
                 continue;
             }
-            scan_folder_recursive(&path, chunks, extensions, min_chunk_length, model_name)?;
+            scan_folder_recursive(&path, chunks, extensions, min_chunk_length, model_name, app, total, scanned, emit_step)?;
         } else if extensions.iter().any(|ext| name.ends_with(ext.as_str())) {
             md_paths.push(path);
         }
@@ -478,6 +511,18 @@ fn scan_folder_recursive(dir: &Path, chunks: &mut Vec<RagChunk>, extensions: &[S
     let mut current_files: HashSet<String> = HashSet::new();
 
     for path in md_paths {
+        *scanned += 1;
+        if *scanned % emit_step == 0 || *scanned == total {
+            app.emit(
+                "rag-scan-progress",
+                RagScanProgress {
+                    current: *scanned,
+                    total,
+                    file: path.to_string_lossy().to_string(),
+                },
+            )
+            .ok();
+        }
         let content = fs::read_to_string(&path).unwrap_or_default();
         let file_path = path.to_string_lossy().to_string();
         let hash = format!("{:x}", Sha256::digest(content.as_bytes()));
