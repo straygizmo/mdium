@@ -186,7 +186,9 @@ export const useTabStore = create<TabState>()(
       }
 
       const newActiveTab = newTabs.find((t) => t.id === newActiveId);
-      const newActiveFolderPath = newActiveTab?.folderPath ?? s.activeFolderPath;
+      // Use `||` (not `??`) so a folderless tab (folderPath === "") preserves the
+      // current folder instead of clobbering it — matching openTab's behavior.
+      const newActiveFolderPath = newActiveTab?.folderPath || s.activeFolderPath;
 
       // Update folderLastActiveTab
       const newFolderLast = { ...s.folderLastActiveTab };
@@ -211,7 +213,9 @@ export const useTabStore = create<TabState>()(
     useUiStore.getState().setEditorVisible(tab?.editorVisible ?? true);
     set((s) => ({
       activeTabId: id,
-      activeFolderPath: tab?.folderPath ?? s.activeFolderPath,
+      // Use `||` (not `??`) so switching to a folderless tab (folderPath === "")
+      // preserves the current folder instead of clobbering it — matching openTab.
+      activeFolderPath: tab?.folderPath || s.activeFolderPath,
       folderLastActiveTab: tab?.folderPath
         ? { ...s.folderLastActiveTab, [tab.folderPath]: id }
         : s.folderLastActiveTab,
