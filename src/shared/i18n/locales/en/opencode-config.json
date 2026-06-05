@@ -31,6 +31,7 @@
   "tabMcp": "MCP",
   "tabSkills": "Skills",
   "tabCustomTools": "Custom Tools",
+  "tabPlugins": "Plugins",
   "tabWebUi": "WebUI",
   "scopeGlobal": "Global",
   "save": "Save",
@@ -191,5 +192,19 @@
   "ocChatAgentSelect": "Agent",
   "ocChatQuestionsSubmit": "Submit",
   "ocChatRemoveImage": "Remove",
-  "ocChatReasoning": "Thinking"
+  "ocChatReasoning": "Thinking",
+  "pluginsDescription": "Manage opencode plugins. Plugins are loaded at server startup and can add agents, tools, and skills.",
+  "pluginsDocsUrl": "https://opencode.ai/docs/plugins/",
+  "pluginsEmpty": "No custom plugins",
+  "pluginsBuiltinTitle": "Built-in plugins",
+  "pluginsCustomTitle": "Custom plugins",
+  "pluginAdd": "Add",
+  "pluginSpec": "Package spec (npm name / git URL / local path)",
+  "pluginSpecPlaceholder": "e.g. my-plugin or my-plugin@git+https://github.com/user/repo.git",
+  "pluginDeleteConfirm": "Delete \"{{name}}\"?",
+  "pluginRestartNotice": "Restarting the opencode server is required to apply plugin changes. Restarting stops the server; it relaunches with the new plugin configuration on your next chat.",
+  "pluginRestart": "Restart",
+  "pluginRestarting": "Restarting...",
+  "pluginDesc_superpowers": "Superpowers — extends opencode with a library of skills (TDD, debugging, brainstorming, and more).",
+  "pluginDesc_oh-my-opencode": "Oh My OpenCode — a batteries-included plugin bundling curated agents, tools, and MCPs."
 }

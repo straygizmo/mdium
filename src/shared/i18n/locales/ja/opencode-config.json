@@ -31,6 +31,7 @@
   "tabMcp": "MCP",
   "tabSkills": "スキル",
   "tabCustomTools": "カスタムツール",
+  "tabPlugins": "プラグイン",
   "tabWebUi": "WebUI",
   "scopeGlobal": "グローバル",
   "save": "保存",
@@ -191,5 +192,19 @@
   "ocChatAgentSelect": "エージェント",
   "ocChatQuestionsSubmit": "送信",
   "ocChatRemoveImage": "削除",
-  "ocChatReasoning": "思考内容"
+  "ocChatReasoning": "思考内容",
+  "pluginsDescription": "opencode のプラグインを管理します。プラグインはサーバ起動時にロードされ、エージェント・ツール・スキルなどを追加できます。",
+  "pluginsDocsUrl": "https://opencode.ai/docs/plugins/",
+  "pluginsEmpty": "カスタムプラグインがありません",
+  "pluginsBuiltinTitle": "ビルトインプラグイン",
+  "pluginsCustomTitle": "カスタムプラグイン",
+  "pluginAdd": "追加",
+  "pluginSpec": "パッケージ仕様（npm名 / git URL / ローカルパス）",
+  "pluginSpecPlaceholder": "例: my-plugin または my-plugin@git+https://github.com/user/repo.git",
+  "pluginDeleteConfirm": "「{{name}}」を削除しますか？",
+  "pluginRestartNotice": "プラグインの変更を反映するには opencode サーバの再起動が必要です。再起動するとサーバが停止し、次回チャット時に新しいプラグイン構成で再起動します。",
+  "pluginRestart": "再起動",
+  "pluginRestarting": "再起動中...",
+  "pluginDesc_superpowers": "Superpowers — TDD・デバッグ・ブレインストーミングなどのスキル群で opencode を拡張します。",
+  "pluginDesc_oh-my-opencode": "Oh My OpenCode — キュレートされたエージェント・ツール・MCP を同梱したオールインワンプラグインです。"
 }
