@@ -4,6 +4,7 @@ mod http_bridge;
 mod markdown_parser;
 
 use commands::active_xlsm::{new_state as new_active_xlsm_state, ActiveXlsmState};
+use commands::fs_search::{new_active_folder_state, ActiveFolderState};
 use http_bridge::{
     new_rag_pending, new_state as new_http_bridge_state, HttpBridgeState, RagBridgePending,
 };
@@ -80,6 +81,7 @@ pub fn run() {
         .manage::<ActiveXlsmState>(new_active_xlsm_state())
         .manage::<HttpBridgeState>(new_http_bridge_state())
         .manage::<RagBridgePending>(new_rag_pending())
+        .manage::<ActiveFolderState>(new_active_folder_state())
         .setup(|app| {
             let icon_bytes = include_bytes!("../icons/icon.png");
             let icon = tauri::image::Image::from_bytes(icon_bytes)?;
@@ -311,6 +313,8 @@ pub fn run() {
             commands::active_xlsm::get_http_bridge_info,
             // RAG bridge (opencode rag_search tool → webview embedding + search)
             http_bridge::rag_bridge_respond,
+            // Folder-scoped search (opencode folder_glob/folder_grep tools)
+            commands::fs_search::set_active_folder,
             // Medium operations
             commands::medium::medium_test_connection,
             commands::medium::medium_upload_image,

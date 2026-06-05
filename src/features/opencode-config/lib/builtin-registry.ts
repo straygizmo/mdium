@@ -11,6 +11,8 @@ import { BUILTIN_SKILLS as SRC_SKILLS } from "./builtin-skills";
 // builtin tool in sync with .opencode/tools/rag_search.ts without copying from
 // the user's project folder (which only exists when the mdium repo itself is open).
 import ragSearchToolSrc from "../../../../.opencode/tools/rag_search.ts?raw";
+import folderGlobToolSrc from "../../../../.opencode/tools/folder_glob.ts?raw";
+import folderGrepToolSrc from "../../../../.opencode/tools/folder_grep.ts?raw";
 
 export interface BuiltinAgentEntry {
   /** Agent description (used by UI badges and dropdown) */
@@ -37,12 +39,18 @@ export interface BuiltinCustomToolEntry {
 export const BUILTIN_AGENTS: Record<string, BuiltinAgentEntry> = {
   rag: {
     description: "RAG - Document search agent powered by vector database",
-    requiredBuiltinTools: ["rag_search"],
+    requiredBuiltinTools: ["rag_search", "folder_glob", "folder_grep"],
     agentMd: `---
+# mdium-agent-version: 2
 description: RAG - Document search agent powered by vector database
 mode: all
 tools:
   rag_search: true
+  folder_glob: true
+  folder_grep: true
+  glob: false
+  grep: false
+  list: false
   bash: false
 ---
 
@@ -51,18 +59,18 @@ Gather necessary information from the vector DB and documents within the folder 
 
 ## Basic Behavior
 
-**For EVERY user question, your FIRST tool call MUST be \`rag_search\`.** The documents are already indexed, so never begin by listing or scanning files with \`glob\` or \`grep\` — that is slower and misses semantic matches. Start with \`rag_search\`, always.
+**For EVERY user question, your FIRST tool call MUST be \`rag_search\`.** The documents are already indexed, so never begin by listing or scanning files — that is slower and misses semantic matches. Start with \`rag_search\`, always.
 
 1. Call \`rag_search\` with the user's question to retrieve the most relevant document chunks (hybrid vector + BM25 search).
-2. ONLY IF \`rag_search\` does not return enough to answer, then \`read\` the cited files, or use \`glob\`/\`grep\` to locate additional files.
+2. ONLY IF \`rag_search\` does not return enough to answer, then \`read\` the cited files, or use \`folder_glob\`/\`folder_grep\` to locate additional files.
 3. Combine multiple searches and reads to make comprehensive judgments.
 4. Always cite sources (file name and line number) in your answers.
 
 ## Tool Usage Guidelines
 
 - **rag_search**: ALWAYS call this first, before any other tool. Hybrid search (vector similarity + BM25 keyword ranking, fused via RRF) for relevant documents. Defaults to hybrid mode; pass \`search_mode: "vector"\` for pure semantic search, or tune \`bm25_weight\` (0.0-1.0) to favor keyword vs. semantic matches
-- **glob**: Use ONLY after rag_search, to locate additional files by name/pattern. Never use it as the first step
-- **grep**: Use ONLY after rag_search, for exact keyword/pattern matches in files
+- **folder_glob**: Use ONLY after rag_search, to locate additional files by name/pattern. Searches ONLY the open folder (never its parents or other folders). Never use it as the first step
+- **folder_grep**: Use ONLY after rag_search, for exact keyword/pattern matches in files. Searches ONLY the open folder
 - **read**: Read full file content, e.g. files cited by rag_search, to understand details
 - **MCP tools (web search, etc.)**: Use when local search doesn't provide sufficient information
 - **write / edit**: Use only when the user explicitly requests it (e.g., creating summaries, generating reports)
@@ -94,6 +102,18 @@ export const BUILTIN_CUSTOM_TOOLS: Record<string, BuiltinCustomToolEntry> = {
       "RAG hybrid search (vector + BM25) over the project's .mdium indexes. Pairs with the built-in rag agent.",
     fileName: "rag_search.ts",
     content: ragSearchToolSrc,
+  },
+  folder_glob: {
+    description:
+      "Find files by glob pattern, scoped strictly to the open folder. Pairs with the built-in rag agent.",
+    fileName: "folder_glob.ts",
+    content: folderGlobToolSrc,
+  },
+  folder_grep: {
+    description:
+      "Search file contents by regex, scoped strictly to the open folder. Pairs with the built-in rag agent.",
+    fileName: "folder_grep.ts",
+    content: folderGrepToolSrc,
   },
 };
 

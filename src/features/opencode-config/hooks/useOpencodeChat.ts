@@ -17,7 +17,7 @@ import { useSettingsStore } from "@/stores/settings-store";
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 import { resolveMdiumVbaMcpServer } from "../lib/builtin-mcp-servers";
 import type { OpencodeMcpServer } from "@/shared/types";
-import { BUILTIN_AGENTS } from "../lib/builtin-registry";
+import { BUILTIN_AGENTS, BUILTIN_CUSTOM_TOOLS } from "../lib/builtin-registry";
 import { isAzureRefusal, isAzureProviderActive } from "../lib/provider-detection";
 import { evaluateStall, STALL_TICK_MS } from "./stall-watchdog";
 
@@ -917,27 +917,55 @@ function doDisconnect() {
 }
 
 // ─── Auto-register builtin agents as markdown files ───
-// Builtin custom tools (e.g. rag_search) are NOT copied here — they are added
-// explicitly by the user via the "+ Built-in" button in the Custom Tools panel.
 async function ensureBuiltinAgents(): Promise<void> {
   const home = await invoke<string>("get_home_dir");
   const sep = home.includes("\\") ? "\\" : "/";
   const configDir = `${home}${sep}.config${sep}opencode`;
+  const toolsDir = `${configDir}${sep}tools`;
+
+  // The rag agent depends on these custom tools to stay confined to the open
+  // folder, so (unlike opt-in tools) install them automatically when missing.
+  for (const toolName of ["rag_search", "folder_glob", "folder_grep"] as const) {
+    const entry = BUILTIN_CUSTOM_TOOLS[toolName];
+    if (!entry) continue;
+    const toolPath = `${toolsDir}${sep}${entry.fileName}`;
+    try {
+      await invoke<string>("read_text_file", { path: toolPath });
+    } catch {
+      try {
+        await invoke("write_tool_file", {
+          baseDir: toolsDir,
+          fileName: entry.fileName,
+          content: entry.content,
+        });
+        console.log(`[opencode] installed builtin tool: ${toolPath}`);
+      } catch (e) {
+        console.warn(`[opencode] failed to install tool ${entry.fileName}:`, e);
+      }
+    }
+  }
 
   for (const [name, entry] of Object.entries(BUILTIN_AGENTS)) {
-    // Write agent markdown file to ~/.config/opencode/agents/<name>.md
-    if (entry.agentMd) {
-      const agentPath = `${configDir}${sep}agents${sep}${name}.md`;
-      try {
-        await invoke<string>("read_text_file", { path: agentPath });
-      } catch {
-        try {
-          await invoke("write_text_file_with_dirs", { path: agentPath, content: entry.agentMd });
-          console.log(`[opencode] created builtin agent file: ${agentPath}`);
-        } catch (e) {
-          console.warn(`[opencode] failed to create agent file ${name}.md:`, e);
-        }
-      }
+    if (!entry.agentMd) continue;
+    const agentPath = `${configDir}${sep}agents${sep}${name}.md`;
+    // Overwrite when missing OR when the on-disk copy predates the current
+    // builtin version (so existing users pick up the folder_glob/grep change).
+    const versionMatch = entry.agentMd.match(/mdium-agent-version:\s*(\d+)/);
+    const wantVersion = versionMatch ? versionMatch[1] : null;
+    let needsWrite = false;
+    try {
+      const existing = await invoke<string>("read_text_file", { path: agentPath });
+      const existingVersion = existing.match(/mdium-agent-version:\s*(\d+)/)?.[1] ?? null;
+      needsWrite = wantVersion ? existingVersion !== wantVersion : false;
+    } catch {
+      needsWrite = true;
+    }
+    if (!needsWrite) continue;
+    try {
+      await invoke("write_text_file_with_dirs", { path: agentPath, content: entry.agentMd });
+      console.log(`[opencode] wrote builtin agent file: ${agentPath}`);
+    } catch (e) {
+      console.warn(`[opencode] failed to write agent file ${name}.md:`, e);
     }
   }
 }

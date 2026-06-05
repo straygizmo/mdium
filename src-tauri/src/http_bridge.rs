@@ -8,6 +8,7 @@ use tauri::AppHandle;
 use tiny_http::{Header, Response, Server};
 
 use crate::commands::active_xlsm::ActiveXlsmState;
+use crate::commands::fs_search::{fs_glob, fs_grep, ActiveFolderState};
 use crate::commands::vba;
 use serde::Deserialize;
 use serde_json::json;
@@ -153,6 +154,39 @@ struct RagSearchRequest {
     search_mode: Option<String>,
     #[serde(default)]
     bm25_weight: Option<f64>,
+}
+
+#[derive(Deserialize)]
+struct GlobRequest {
+    pattern: String,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
+struct GrepRequest {
+    pattern: String,
+    #[serde(default)]
+    include: Option<String>,
+    #[serde(default)]
+    case_insensitive: Option<bool>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+/// Read the live active folder, or return a ready-to-send error JSON.
+fn active_folder_or_error(app: &AppHandle) -> Result<String, serde_json::Value> {
+    let state = app.state::<ActiveFolderState>();
+    let guard = state
+        .lock()
+        .map_err(|e| json!({ "ok": false, "error": format!("lock_failed: {}", e) }))?;
+    match guard.as_ref() {
+        Some(p) if !p.is_empty() => Ok(p.clone()),
+        _ => Err(json!({
+            "ok": false,
+            "error": "No folder is open in mdium to search. Open a folder first."
+        })),
+    }
 }
 
 fn cors_headers() -> Vec<Header> {
@@ -489,6 +523,80 @@ fn handle_request(app: &AppHandle, expected_token: &str, mut request: tiny_http:
                     let _ = request.respond(json_response(
                         504,
                         json!({ "ok": false, "error": "mdium did not respond (timeout). Is the RAG model available?" }),
+                    ));
+                }
+            }
+        }
+        "/glob" => {
+            let req: GlobRequest = match serde_json::from_str(&body_str) {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = request.respond(json_response(
+                        400,
+                        json!({ "ok": false, "error": format!("invalid_json: {}", e) }),
+                    ));
+                    return;
+                }
+            };
+            let folder = match active_folder_or_error(app) {
+                Ok(f) => f,
+                Err(err_json) => {
+                    let _ = request.respond(json_response(400, err_json));
+                    return;
+                }
+            };
+            let limit = req.limit.unwrap_or(1000).min(5000);
+            match fs_glob(std::path::Path::new(&folder), &req.pattern, limit) {
+                Ok(files) => {
+                    let _ = request.respond(json_response(
+                        200,
+                        json!({ "ok": true, "folder": folder, "files": files }),
+                    ));
+                }
+                Err(e) => {
+                    let _ = request.respond(json_response(
+                        200,
+                        json!({ "ok": false, "error": e }),
+                    ));
+                }
+            }
+        }
+        "/grep" => {
+            let req: GrepRequest = match serde_json::from_str(&body_str) {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = request.respond(json_response(
+                        400,
+                        json!({ "ok": false, "error": format!("invalid_json: {}", e) }),
+                    ));
+                    return;
+                }
+            };
+            let folder = match active_folder_or_error(app) {
+                Ok(f) => f,
+                Err(err_json) => {
+                    let _ = request.respond(json_response(400, err_json));
+                    return;
+                }
+            };
+            let limit = req.limit.unwrap_or(500).min(2000);
+            match fs_grep(
+                std::path::Path::new(&folder),
+                &req.pattern,
+                req.include.as_deref(),
+                req.case_insensitive.unwrap_or(false),
+                limit,
+            ) {
+                Ok(matches) => {
+                    let _ = request.respond(json_response(
+                        200,
+                        json!({ "ok": true, "folder": folder, "matches": matches }),
+                    ));
+                }
+                Err(e) => {
+                    let _ = request.respond(json_response(
+                        200,
+                        json!({ "ok": false, "error": e }),
                     ));
                 }
             }
