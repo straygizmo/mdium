@@ -157,7 +157,11 @@ export function RagPanel({ folderPath, aiSettings, onOpenFile }: RagPanelProps) 
                 : embedStatus === "loading"
                   ? `Building... (${embedProgress}%)`
                   : buildProgress
-                    ? `${buildProgress.currentIndex}/${buildProgress.totalChunks}`
+                    ? buildProgress.phase === "scanning"
+                      ? `${t("ragPhaseScanning")} ${buildProgress.current}/${buildProgress.total}`
+                      : buildProgress.phase === "embedding"
+                        ? `${t("ragPhaseEmbedding")} ${buildProgress.current}/${buildProgress.total}`
+                        : t("ragPhaseSaving")
                     : "Building..."
               : "No index"}
         </span>
@@ -206,7 +210,7 @@ export function RagPanel({ folderPath, aiSettings, onOpenFile }: RagPanelProps) 
           <div className="rag-panel__build-progress-bar">
             <div
               className="rag-panel__build-progress-fill"
-              style={{ width: `${Math.round((buildProgress.currentIndex / buildProgress.totalChunks) * 100)}%` }}
+              style={{ width: `${buildProgress.total > 0 ? Math.round((buildProgress.current / buildProgress.total) * 100) : 0}%` }}
             />
           </div>
           <span className="rag-panel__build-progress-file" title={buildProgress.currentFile}>
