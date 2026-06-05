@@ -33,6 +33,9 @@ export function OpencodeConfigBadges() {
     // Custom Tools
     const allCustomTools = Object.keys(config.customTools ?? {});
 
+    // Plugins (global plugin array)
+    const allPlugins = config.plugin ?? [];
+
     return [
       {
         key: "commands",
@@ -57,6 +60,12 @@ export function OpencodeConfigBadges() {
         label: t("tabCustomTools"),
         count: allCustomTools.length,
         items: allCustomTools,
+      },
+      {
+        key: "plugins",
+        label: t("tabPlugins"),
+        count: allPlugins.length,
+        items: allPlugins,
       },
     ];
   }, [config, projectCommands, projectMcpServers, projectSkillNames, globalSkillNames, t]);

@@ -12,6 +12,7 @@ import { CommandsSection } from "./sections/CommandsSection";
 import { McpServersSection } from "./sections/McpServersSection";
 import { SkillsSection } from "./sections/SkillsSection";
 import { CustomToolsSection } from "./sections/CustomToolsSection";
+import { PluginsSection } from "./sections/PluginsSection";
 import { WebUiSection } from "./sections/WebUiSection";
 import { OpencodeChat } from "./OpencodeChat";
 import "./OpencodeConfigPanel.css";
@@ -25,6 +26,7 @@ const TABS: { key: OpencodeConfigTab; labelKey: string }[] = [
   { key: "mcp", labelKey: "tabMcp" },
   { key: "skills", labelKey: "tabSkills" },
   { key: "custom-tools", labelKey: "tabCustomTools" },
+  { key: "plugins", labelKey: "tabPlugins" },
   // { key: "webui", labelKey: "tabWebUi" }, // May be used in the future, hidden for now
 ];
 
@@ -65,6 +67,7 @@ export function OpencodeConfigPanel() {
     mcp: <McpServersSection />,
     skills: <SkillsSection />,
     "custom-tools": <CustomToolsSection />,
+    plugins: <PluginsSection />,
     webui: <WebUiSection />,
   };
 
