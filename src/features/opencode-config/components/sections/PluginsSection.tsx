@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { showConfirm } from "@/stores/dialog-store";
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
+import { useOpencodePluginStateStore } from "@/stores/opencode-plugin-state-store";
 import { useTabStore } from "@/stores/tab-store";
 import { useOpencodeServerStore } from "@/stores/opencode-server-store";
 import {
@@ -17,6 +18,9 @@ export function PluginsSection() {
   const loadConfig = useOpencodeConfigStore((s) => s.loadConfig);
   const addPlugin = useOpencodeConfigStore((s) => s.addPlugin);
   const removePlugin = useOpencodeConfigStore((s) => s.removePlugin);
+  const disabledSpecs = useOpencodePluginStateStore((s) => s.disabledSpecs);
+  const disableSpec = useOpencodePluginStateStore((s) => s.disable);
+  const clearDisabled = useOpencodePluginStateStore((s) => s.clearDisabled);
   const activeFolderPath = useTabStore((s) => s.activeFolderPath);
   const removeServer = useOpencodeServerStore((s) => s.removeServer);
 
@@ -48,15 +52,32 @@ export function PluginsSection() {
     return () => document.removeEventListener("mousedown", handleClick);
   }, [showBuiltinMenu]);
 
-  const plugins = config.plugin ?? [];
-  const missingBuiltins = getMissingBuiltinPlugins(plugins);
+  // Enabled = present in opencode.jsonc's plugin array. Disabled = remembered
+  // in mdium-local state but absent from the array. The listed set is the union.
+  const enabledSpecs = config.plugin ?? [];
+  const listedSpecs = [
+    ...enabledSpecs,
+    ...disabledSpecs.filter((spec) => !enabledSpecs.includes(spec)),
+  ];
+  const missingBuiltins = getMissingBuiltinPlugins(listedSpecs);
 
   const openUrl = (url: string) => invoke("open_external_url", { url });
+
+  const handleToggle = async (spec: string, nowEnabled: boolean) => {
+    if (nowEnabled) {
+      await addPlugin(spec);
+      clearDisabled(spec);
+    } else {
+      await removePlugin(spec);
+      disableSpec(spec);
+    }
+  };
 
   const handleAdd = async () => {
     const spec = formSpec.trim();
     if (!spec) return;
     await addPlugin(spec);
+    clearDisabled(spec);
     setFormSpec("");
     setAdding(false);
   };
@@ -65,6 +86,7 @@ export function PluginsSection() {
     const entry = BUILTIN_PLUGINS[id];
     if (!entry) return;
     await addPlugin(entry.spec);
+    clearDisabled(entry.spec);
     setShowBuiltinMenu(false);
   };
 
@@ -73,6 +95,7 @@ export function PluginsSection() {
     const confirmed = await showConfirm(t("pluginDeleteConfirm", { name: id ?? spec }), { kind: "warning" });
     if (!confirmed) return;
     await removePlugin(spec);
+    clearDisabled(spec);
   };
 
   const handleRestart = async () => {
@@ -115,12 +138,17 @@ export function PluginsSection() {
         </button>
       </div>
 
-      {plugins.length === 0 && <div className="oc-section__empty">{t("pluginsEmpty")}</div>}
-      {plugins.map((spec) => {
+      {listedSpecs.length === 0 && <div className="oc-section__empty">{t("pluginsEmpty")}</div>}
+      {listedSpecs.map((spec) => {
         const builtinId = getBuiltinPluginIdBySpec(spec);
         const entry = builtinId ? BUILTIN_PLUGINS[builtinId] : undefined;
+        const enabled = enabledSpecs.includes(spec);
         return (
-          <div key={spec} className="oc-section__item" style={{ marginBottom: 4 }}>
+          <div
+            key={spec}
+            className={`oc-section__item${!enabled ? " oc-section__item--disabled" : ""}`}
+            style={{ marginBottom: 4 }}
+          >
             <div className="oc-section__item-info">
               <span className="oc-section__item-name">
                 {builtinId ?? spec}
@@ -146,6 +174,13 @@ export function PluginsSection() {
               )}
             </div>
             <div className="oc-section__item-actions">
+              <label className="oc-section__toggle" style={{ padding: 0 }}>
+                <input
+                  type="checkbox"
+                  checked={enabled}
+                  onChange={(e) => handleToggle(spec, e.target.checked)}
+                />
+              </label>
               <button className="oc-section__delete-btn" onClick={() => handleDelete(spec)}>×</button>
             </div>
           </div>
