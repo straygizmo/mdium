@@ -15,6 +15,7 @@ import i18n from "@/shared/i18n";
 import { useOpencodeServerStore } from "@/stores/opencode-server-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
+import { useTabStore } from "@/stores/tab-store";
 import { resolveMdiumVbaMcpServer } from "../lib/builtin-mcp-servers";
 import type { OpencodeMcpServer } from "@/shared/types";
 import { BUILTIN_AGENTS, BUILTIN_CUSTOM_TOOLS } from "../lib/builtin-registry";
@@ -1110,13 +1111,30 @@ interface SendOptions {
   isAutoReply?: boolean;
 }
 
+/**
+ * Ensure the active opencode client is the one for the folder that is active
+ * RIGHT NOW. The hook's auto-connect effect is debounced (500ms), so without
+ * this a message sent immediately after a folder switch could be delivered to
+ * the previous folder's server — and its tools (folder_glob/grep) would then
+ * run against the wrong folder. Reconnecting here keeps the agent's server and
+ * the active-folder scope consistent.
+ */
+async function ensureConnectedToActiveFolder(): Promise<void> {
+  const active = useTabStore.getState().activeFolderPath || undefined;
+  if (active && _connectedFolder !== active) {
+    await doConnect(active);
+  }
+}
+
 export async function doSendMessage(
   text: string,
   agentOverride?: string,
   images?: ImageAttachment[],
   options?: SendOptions,
 ) {
-  if (!_client || (!text.trim() && (!images || images.length === 0))) return;
+  if (!text.trim() && (!images || images.length === 0)) return;
+  await ensureConnectedToActiveFolder();
+  if (!_client) return;
 
   // L1: inject active tab context into every user message payload (SDK call only)
   const wrappedText = await wrapWithMdiumContext(text);
@@ -1206,6 +1224,7 @@ export async function doAbortSession() {
 }
 
 export async function doExecuteCommand(commandName: string, args?: string) {
+  await ensureConnectedToActiveFolder();
   if (!_client) return;
 
   useChatUIStore.setState({ error: null });
