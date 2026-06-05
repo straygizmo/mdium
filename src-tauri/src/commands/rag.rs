@@ -1102,7 +1102,7 @@ mod tests {
     fn count_files_recursive_mirrors_scan_traversal() {
         use std::fs;
         // Unique, std-only temp fixture (no tempfile crate dependency).
-        let root = std::env::temp_dir().join("mdium_rag_count_test");
+        let root = std::env::temp_dir().join(format!("mdium_rag_count_test_{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
 
