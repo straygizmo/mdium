@@ -116,6 +116,11 @@ pub fn set_skill_enabled(base_dir: String, dir_name: String, enabled: bool) -> R
             fs::rename(&disabled, &active).map_err(|e| e.to_string())?;
         }
     } else if active.exists() {
+        // On Windows fs::rename errors if the destination exists, so clear any
+        // stale disabled copy first (the active file is authoritative).
+        if disabled.exists() {
+            let _ = fs::remove_file(&disabled);
+        }
         fs::rename(&active, &disabled).map_err(|e| e.to_string())?;
     }
     Ok(())
