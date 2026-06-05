@@ -317,6 +317,9 @@ pub fn rag_scan_folder(
     let mut chunks = Vec::new();
 
     // Pre-count so the frontend can show "current/total". Cheap directory walk.
+    // Best-effort: if files are added/removed on disk between this count and the
+    // scan below, progress may drift (e.g. stop at 198/200). Acceptable — this is
+    // cosmetic progress, not a correctness guarantee.
     let total = count_files_recursive(Path::new(&folder_path), &extensions);
     // Throttle to at most ~200 events for large trees.
     let emit_step = (total / 200).max(1);
