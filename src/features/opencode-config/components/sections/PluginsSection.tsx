@@ -1,17 +1,15 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { showConfirm } from "@/stores/dialog-store";
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 import { useTabStore } from "@/stores/tab-store";
 import { useOpencodeServerStore } from "@/stores/opencode-server-store";
-import { BUILTIN_PLUGINS, isBuiltinPlugin } from "../../lib/builtin-registry";
-
-const subtitleStyle: React.CSSProperties = {
-  fontWeight: 600,
-  marginTop: 12,
-  marginBottom: 4,
-};
+import {
+  BUILTIN_PLUGINS,
+  getMissingBuiltinPlugins,
+  getBuiltinPluginIdBySpec,
+} from "../../lib/builtin-registry";
 
 export function PluginsSection() {
   const { t } = useTranslation("opencode-config");
@@ -26,6 +24,8 @@ export function PluginsSection() {
   const [adding, setAdding] = useState(false);
   const [formSpec, setFormSpec] = useState("");
   const [restarting, setRestarting] = useState(false);
+  const [showBuiltinMenu, setShowBuiltinMenu] = useState(false);
+  const builtinMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { loadConfig(); }, [loadConfig]);
 
@@ -36,15 +36,22 @@ export function PluginsSection() {
     }).catch(() => {});
   }, []);
 
+  // Close builtin dropdown on outside click
+  useEffect(() => {
+    if (!showBuiltinMenu) return;
+    const handleClick = (e: MouseEvent) => {
+      if (builtinMenuRef.current && !builtinMenuRef.current.contains(e.target as Node)) {
+        setShowBuiltinMenu(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [showBuiltinMenu]);
+
   const plugins = config.plugin ?? [];
-  const customPlugins = plugins.filter((spec) => !isBuiltinPlugin(spec));
+  const missingBuiltins = getMissingBuiltinPlugins(plugins);
 
   const openUrl = (url: string) => invoke("open_external_url", { url });
-
-  const handleToggle = async (spec: string, enabled: boolean) => {
-    if (enabled) await addPlugin(spec);
-    else await removePlugin(spec);
-  };
 
   const handleAdd = async () => {
     const spec = formSpec.trim();
@@ -54,8 +61,16 @@ export function PluginsSection() {
     setAdding(false);
   };
 
+  const handleAddBuiltin = async (id: string) => {
+    const entry = BUILTIN_PLUGINS[id];
+    if (!entry) return;
+    await addPlugin(entry.spec);
+    setShowBuiltinMenu(false);
+  };
+
   const handleDelete = async (spec: string) => {
-    const confirmed = await showConfirm(t("pluginDeleteConfirm", { name: spec }), { kind: "warning" });
+    const id = getBuiltinPluginIdBySpec(spec);
+    const confirmed = await showConfirm(t("pluginDeleteConfirm", { name: id ?? spec }), { kind: "warning" });
     if (!confirmed) return;
     await removePlugin(spec);
   };
@@ -100,60 +115,44 @@ export function PluginsSection() {
         </button>
       </div>
 
-      {/* Built-in plugins */}
-      <div style={subtitleStyle}>{t("pluginsBuiltinTitle")}</div>
-      {Object.entries(BUILTIN_PLUGINS).map(([id, entry]) => {
-        const enabled = plugins.includes(entry.spec);
+      {plugins.length === 0 && <div className="oc-section__empty">{t("pluginsEmpty")}</div>}
+      {plugins.map((spec) => {
+        const builtinId = getBuiltinPluginIdBySpec(spec);
+        const entry = builtinId ? BUILTIN_PLUGINS[builtinId] : undefined;
         return (
-          <div
-            key={id}
-            className={`oc-section__item${!enabled ? " oc-section__item--disabled" : ""}`}
-            style={{ marginBottom: 4 }}
-          >
+          <div key={spec} className="oc-section__item" style={{ marginBottom: 4 }}>
             <div className="oc-section__item-info">
               <span className="oc-section__item-name">
-                {id}
-                <span className="oc-section__builtin-badge">Built-in</span>
-                <a
-                  href="#"
-                  onClick={(e) => { e.preventDefault(); openUrl(entry.docsUrl); }}
-                  style={{ textDecoration: "none", cursor: "pointer", marginLeft: 6 }}
-                  title={entry.docsUrl}
-                >
-                  🔗
-                </a>
+                {builtinId ?? spec}
+                {entry && (
+                  <>
+                    <span className="oc-section__builtin-badge">{t("builtin")}</span>
+                    <a
+                      href="#"
+                      onClick={(e) => { e.preventDefault(); openUrl(entry.docsUrl); }}
+                      style={{ textDecoration: "none", cursor: "pointer", marginLeft: 6 }}
+                      title={entry.docsUrl}
+                    >
+                      🔗
+                    </a>
+                  </>
+                )}
               </span>
-              <span className="oc-section__item-detail">{t(entry.descriptionKey)}</span>
-              <span className="oc-section__item-detail" style={{ opacity: 0.6 }}>{entry.spec}</span>
+              <span className="oc-section__item-detail">
+                {entry ? t(entry.descriptionKey) : spec}
+              </span>
+              {entry && (
+                <span className="oc-section__item-detail" style={{ opacity: 0.6 }}>{spec}</span>
+              )}
             </div>
             <div className="oc-section__item-actions">
-              <label className="oc-section__toggle" style={{ padding: 0 }}>
-                <input
-                  type="checkbox"
-                  checked={enabled}
-                  onChange={(e) => handleToggle(entry.spec, e.target.checked)}
-                />
-              </label>
+              <button className="oc-section__delete-btn" onClick={() => handleDelete(spec)}>×</button>
             </div>
           </div>
         );
       })}
 
-      {/* Custom plugins */}
-      <div style={subtitleStyle}>{t("pluginsCustomTitle")}</div>
-      {customPlugins.length === 0 && <div className="oc-section__empty">{t("pluginsEmpty")}</div>}
-      {customPlugins.map((spec) => (
-        <div key={spec} className="oc-section__item" style={{ marginBottom: 4 }}>
-          <div className="oc-section__item-info">
-            <span className="oc-section__item-detail">{spec}</span>
-          </div>
-          <div className="oc-section__item-actions">
-            <button className="oc-section__delete-btn" onClick={() => handleDelete(spec)}>×</button>
-          </div>
-        </div>
-      ))}
-
-      {adding ? (
+      {adding && (
         <div className="oc-section__field" style={{ marginTop: 8 }}>
           <label className="oc-section__label">{t("pluginSpec")}</label>
           <input
@@ -163,7 +162,7 @@ export function PluginsSection() {
             placeholder={t("pluginSpecPlaceholder")}
           />
           <div className="oc-section__form-actions" style={{ marginTop: 8 }}>
-            <button className="oc-section__save-btn" onClick={handleAdd}>{t("save")}</button>
+            <button className="oc-section__save-btn" onClick={handleAdd} disabled={!formSpec.trim()}>{t("save")}</button>
             <button
               className="oc-section__cancel-btn"
               onClick={() => { setAdding(false); setFormSpec(""); }}
@@ -172,9 +171,41 @@ export function PluginsSection() {
             </button>
           </div>
         </div>
-      ) : (
-        <div style={{ marginTop: 4 }}>
-          <button className="oc-section__add-btn" onClick={() => setAdding(true)}>+ {t("pluginAdd")}</button>
+      )}
+
+      {!adding && (
+        <div style={{ display: "flex", alignItems: "center", marginTop: 4, position: "relative" }}>
+          <button className="oc-section__add-btn" onClick={() => setAdding(true)}>+ {t("add")}</button>
+          {missingBuiltins.length > 0 && (
+            <div ref={builtinMenuRef} style={{ position: "relative" }}>
+              <button className="oc-section__builtin-btn" onClick={() => setShowBuiltinMenu((v) => !v)}>
+                + {t("builtin")}
+              </button>
+              {showBuiltinMenu && (
+                <div
+                  className="oc-section__builtin-dropdown"
+                  ref={(el) => {
+                    if (el?.parentElement) {
+                      let container: HTMLElement | null = el.parentElement;
+                      while (container && !container.classList.contains("oc-panel__body") && !container.classList.contains("oc-dialog__body")) {
+                        container = container.parentElement;
+                      }
+                      const containerTop = container ? container.getBoundingClientRect().top : 0;
+                      const buttonTop = el.parentElement.getBoundingClientRect().top;
+                      el.style.maxHeight = `${Math.max(buttonTop - containerTop - 8, 80)}px`;
+                    }
+                  }}
+                >
+                  {missingBuiltins.map((id) => (
+                    <button key={id} className="oc-section__builtin-dropdown-item" onClick={() => handleAddBuiltin(id)}>
+                      <span className="oc-section__builtin-dropdown-name">{id}</span>
+                      <span className="oc-section__builtin-dropdown-desc">{t(BUILTIN_PLUGINS[id].descriptionKey)}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 

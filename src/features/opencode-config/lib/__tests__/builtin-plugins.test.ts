@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   BUILTIN_PLUGINS,
   isBuiltinPlugin,
+  getMissingBuiltinPlugins,
+  getBuiltinPluginIdBySpec,
   addPluginSpec,
   removePluginSpec,
 } from "../builtin-plugins";
@@ -30,6 +32,37 @@ describe("isBuiltinPlugin", () => {
 
   it("returns false for an unknown spec", () => {
     expect(isBuiltinPlugin("some-random-plugin")).toBe(false);
+  });
+});
+
+describe("getMissingBuiltinPlugins", () => {
+  it("returns all built-in ids when none are present", () => {
+    expect(getMissingBuiltinPlugins([])).toEqual(
+      expect.arrayContaining(["superpowers", "oh-my-opencode"]),
+    );
+  });
+
+  it("omits a built-in whose spec is already present", () => {
+    const missing = getMissingBuiltinPlugins([BUILTIN_PLUGINS.superpowers.spec]);
+    expect(missing).not.toContain("superpowers");
+    expect(missing).toContain("oh-my-opencode");
+  });
+
+  it("ignores unrelated custom specs", () => {
+    const missing = getMissingBuiltinPlugins(["my-custom-plugin"]);
+    expect(missing).toEqual(
+      expect.arrayContaining(["superpowers", "oh-my-opencode"]),
+    );
+  });
+});
+
+describe("getBuiltinPluginIdBySpec", () => {
+  it("returns the id for a built-in spec", () => {
+    expect(getBuiltinPluginIdBySpec(BUILTIN_PLUGINS.superpowers.spec)).toBe("superpowers");
+  });
+
+  it("returns undefined for an unknown spec", () => {
+    expect(getBuiltinPluginIdBySpec("my-custom-plugin")).toBeUndefined();
   });
 });
 

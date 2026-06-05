@@ -27,6 +27,17 @@ export function isBuiltinPlugin(spec: string): boolean {
   return Object.values(BUILTIN_PLUGINS).some((e) => e.spec === spec);
 }
 
+/** Built-in plugin ids whose spec is not present in the current plugin array. */
+export function getMissingBuiltinPlugins(currentPlugins: string[]): string[] {
+  const present = new Set(currentPlugins);
+  return Object.keys(BUILTIN_PLUGINS).filter((id) => !present.has(BUILTIN_PLUGINS[id].spec));
+}
+
+/** Find the built-in plugin id whose spec matches, or undefined if none. */
+export function getBuiltinPluginIdBySpec(spec: string): string | undefined {
+  return Object.keys(BUILTIN_PLUGINS).find((id) => BUILTIN_PLUGINS[id].spec === spec);
+}
+
 /** Return a new array with `spec` appended if not already present (dedup). */
 export function addPluginSpec(list: string[], spec: string): string[] {
   return list.includes(spec) ? [...list] : [...list, spec];
