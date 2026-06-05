@@ -54,7 +54,7 @@ export function PluginsSection() {
 
   // Enabled = present in opencode.jsonc's plugin array. Disabled = remembered
   // in mdium-local state but absent from the array. The listed set is the union.
-  const enabledSpecs = config.plugin ?? [];
+  const enabledSpecs = [...new Set(config.plugin ?? [])];
   const listedSpecs = [
     ...enabledSpecs,
     ...disabledSpecs.filter((spec) => !enabledSpecs.includes(spec)),
