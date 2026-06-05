@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { marked } from "marked";
 import { useLocalEmbedding } from "./useLocalEmbedding";
 import { useSettingsStore } from "@/stores/settings-store";
@@ -66,9 +67,10 @@ async function callAI(
 }
 
 interface BuildProgress {
+  phase: "scanning" | "embedding" | "saving";
+  current: number;
+  total: number;
   currentFile: string;
-  currentIndex: number;
-  totalChunks: number;
 }
 
 export function useRagFeatures({ folderPath, aiSettings, onOpenFile }: UseRagFeaturesParams) {
@@ -124,16 +126,38 @@ export function useRagFeatures({ folderPath, aiSettings, onOpenFile }: UseRagFea
     setStatus((s) => ({ ...s, state: "building" }));
     setBuildError(null);
 
+    let unlisten: UnlistenFn | null = null;
     try {
       await loadEmbed(ragSettings.embeddingModel);
+
+      unlisten = await listen<{ current: number; total: number; file: string }>(
+        "rag-scan-progress",
+        (e) => {
+          const fileName = e.payload.file.split(/[\\/]/).pop() ?? "";
+          setBuildProgress({
+            phase: "scanning",
+            current: e.payload.current,
+            total: e.payload.total,
+            currentFile: fileName,
+          });
+        },
+      );
+
       const chunks = await invoke<any[]>("rag_scan_folder", {
         folderPath,
         fileExtensions: ragSettings.fileExtensions,
         minChunkLength: ragSettings.minChunkLength,
         modelName: ragSettings.embeddingModel,
       });
+
+      if (unlisten) {
+        unlisten();
+        unlisten = null;
+      }
+
       if (chunks.length === 0) {
         console.log("RAG: No changed files to index");
+        setBuildProgress(null);
         await checkStatus();
         return;
       }
@@ -142,10 +166,11 @@ export function useRagFeatures({ folderPath, aiSettings, onOpenFile }: UseRagFea
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
         const fileName = (chunk.file as string).split(/[\\/]/).pop() ?? "";
-        setBuildProgress({ currentFile: fileName, currentIndex: i + 1, totalChunks: chunks.length });
+        setBuildProgress({ phase: "embedding", current: i + 1, total: chunks.length, currentFile: fileName });
         embeddings.push(await embed(chunk.text, "passage"));
       }
-      setBuildProgress(null);
+
+      setBuildProgress({ phase: "saving", current: chunks.length, total: chunks.length, currentFile: "" });
 
       const withEmbed = chunks.map((c: any, i: number) => ({
         ...c,
@@ -153,6 +178,7 @@ export function useRagFeatures({ folderPath, aiSettings, onOpenFile }: UseRagFea
       }));
       const saved = await invoke<number>("rag_save_chunks", { folderPath, chunks: withEmbed, modelName: ragSettings.embeddingModel });
       console.log(`RAG: Saved ${saved} chunks to index`);
+      setBuildProgress(null);
       await checkStatus();
     } catch (e: any) {
       console.error("Build index failed:", e);
@@ -168,6 +194,8 @@ export function useRagFeatures({ folderPath, aiSettings, onOpenFile }: UseRagFea
       setBuildError(msg);
       setStatus((s) => ({ ...s, state: "none" }));
       setBuildProgress(null);
+    } finally {
+      if (unlisten) unlisten();
     }
   }, [folderPath, loadEmbed, embedBatch, checkStatus, ragSettings]);
 

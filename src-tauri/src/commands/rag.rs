@@ -23,6 +23,13 @@ pub struct RagChunk {
     pub hash: String,
 }
 
+#[derive(Serialize, Clone)]
+struct RagScanProgress {
+    current: usize,
+    total: usize,
+    file: String,
+}
+
 #[derive(Deserialize)]
 pub struct RagChunkWithEmbedding {
     pub folder: String,
@@ -289,7 +296,13 @@ pub fn rag_list_files(folder_path: String, model_name: Option<String>) -> Result
 }
 
 #[tauri::command]
-pub fn rag_scan_folder(folder_path: String, file_extensions: Option<String>, min_chunk_length: Option<usize>, model_name: Option<String>) -> Result<Vec<RagChunk>, String> {
+pub fn rag_scan_folder(
+    app: tauri::AppHandle,
+    folder_path: String,
+    file_extensions: Option<String>,
+    min_chunk_length: Option<usize>,
+    model_name: Option<String>,
+) -> Result<Vec<RagChunk>, String> {
     let name = model_name.as_deref().unwrap_or(DEFAULT_MODEL_NAME);
     let extensions: Vec<String> = file_extensions
         .unwrap_or_else(|| ".md".to_string())
@@ -302,7 +315,28 @@ pub fn rag_scan_folder(folder_path: String, file_extensions: Option<String>, min
         .collect();
     let min_len = min_chunk_length.unwrap_or(0);
     let mut chunks = Vec::new();
-    scan_folder_recursive(Path::new(&folder_path), &mut chunks, &extensions, min_len, name)?;
+
+    // Pre-count so the frontend can show "current/total". Cheap directory walk.
+    // Best-effort: if files are added/removed on disk between this count and the
+    // scan below, progress may drift (e.g. stop at 198/200). Acceptable — this is
+    // cosmetic progress, not a correctness guarantee.
+    let total = count_files_recursive(Path::new(&folder_path), &extensions);
+    // Throttle large trees to ~200 events. For <=200 files emit_step is 1
+    // (every file emits), which is well within acceptable IPC volume.
+    let emit_step = (total / 200).max(1);
+    let mut scanned = 0usize;
+
+    scan_folder_recursive(
+        Path::new(&folder_path),
+        &mut chunks,
+        &extensions,
+        min_len,
+        name,
+        &app,
+        total,
+        &mut scanned,
+        emit_step,
+    )?;
     Ok(chunks)
 }
 
@@ -329,8 +363,54 @@ fn collect_md_in_mdium(dir: &Path, extensions: &[String], result: &mut Vec<PathB
     }
 }
 
+/// Count files that `scan_folder_recursive` would process, using identical
+/// directory-traversal rules. Cheap: lists directories and matches extensions
+/// only — no file reads, no hashing. Best-effort: unreadable subfolders
+/// contribute 0 (the real scan would surface the error itself).
+fn count_files_recursive(dir: &Path, extensions: &[String]) -> usize {
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return 0,
+    };
+    let mut count = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+
+        if name == "node_modules" || name == "target" {
+            continue;
+        }
+
+        if path.is_dir() {
+            if name == ".mdium" {
+                let mut md = Vec::new();
+                collect_md_in_mdium(&path, extensions, &mut md);
+                count += md.len();
+                continue;
+            }
+            if name.starts_with('.') {
+                continue;
+            }
+            count += count_files_recursive(&path, extensions);
+        } else if extensions.iter().any(|ext| name.ends_with(ext.as_str())) {
+            count += 1;
+        }
+    }
+    count
+}
+
 /// Scan files in each folder level and recurse into subfolders
-fn scan_folder_recursive(dir: &Path, chunks: &mut Vec<RagChunk>, extensions: &[String], min_chunk_length: usize, model_name: &str) -> Result<(), String> {
+fn scan_folder_recursive(
+    dir: &Path,
+    chunks: &mut Vec<RagChunk>,
+    extensions: &[String],
+    min_chunk_length: usize,
+    model_name: &str,
+    app: &tauri::AppHandle,
+    total: usize,
+    scanned: &mut usize,
+    emit_step: usize,
+) -> Result<(), String> {
     let folder_str = dir.to_string_lossy().to_string();
 
     // Surface the offending path on read_dir failure. A bare e.to_string()
@@ -372,7 +452,7 @@ fn scan_folder_recursive(dir: &Path, chunks: &mut Vec<RagChunk>, extensions: &[S
             if name.starts_with('.') {
                 continue;
             }
-            scan_folder_recursive(&path, chunks, extensions, min_chunk_length, model_name)?;
+            scan_folder_recursive(&path, chunks, extensions, min_chunk_length, model_name, app, total, scanned, emit_step)?;
         } else if extensions.iter().any(|ext| name.ends_with(ext.as_str())) {
             md_paths.push(path);
         }
@@ -435,6 +515,18 @@ fn scan_folder_recursive(dir: &Path, chunks: &mut Vec<RagChunk>, extensions: &[S
     let mut current_files: HashSet<String> = HashSet::new();
 
     for path in md_paths {
+        *scanned += 1;
+        if *scanned % emit_step == 0 || *scanned == total {
+            app.emit(
+                "rag-scan-progress",
+                RagScanProgress {
+                    current: *scanned,
+                    total,
+                    file: path.to_string_lossy().to_string(),
+                },
+            )
+            .ok();
+        }
         let content = fs::read_to_string(&path).unwrap_or_default();
         let file_path = path.to_string_lossy().to_string();
         let hash = format!("{:x}", Sha256::digest(content.as_bytes()));
@@ -1053,5 +1145,44 @@ mod tests {
         assert!(a.cosine > b.cosine, "a.md should win on cosine");
         assert!(a.bm25.is_none(), "a.md has no keyword match");
         assert!(b.bm25.is_some(), "b.md matches the FTS query");
+    }
+
+    #[test]
+    fn count_files_recursive_mirrors_scan_traversal() {
+        use std::fs;
+        // Unique, std-only temp fixture (no tempfile crate dependency).
+        let root = std::env::temp_dir().join(format!("mdium_rag_count_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+
+        // Counted: top-level .md files
+        fs::write(root.join("a.md"), "# A\nbody").unwrap();
+        fs::write(root.join("b.md"), "# B\nbody").unwrap();
+        // Not counted: wrong extension
+        fs::write(root.join("c.txt"), "nope").unwrap();
+
+        // Counted: .md inside a normal subfolder (recursed)
+        fs::create_dir_all(root.join("sub")).unwrap();
+        fs::write(root.join("sub").join("d.md"), "# D\nbody").unwrap();
+
+        // Not counted: node_modules and target are skipped
+        fs::create_dir_all(root.join("node_modules")).unwrap();
+        fs::write(root.join("node_modules").join("x.md"), "# X").unwrap();
+        fs::create_dir_all(root.join("target")).unwrap();
+        fs::write(root.join("target").join("y.md"), "# Y").unwrap();
+
+        // Not counted: hidden dir (other than .mdium) is skipped
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::write(root.join(".git").join("z.md"), "# Z").unwrap();
+
+        // Counted: files inside .mdium are attributed to the parent
+        fs::create_dir_all(root.join(".mdium")).unwrap();
+        fs::write(root.join(".mdium").join("e.md"), "# E\nbody").unwrap();
+
+        let extensions = vec![".md".to_string()];
+        let count = count_files_recursive(&root, &extensions);
+
+        let _ = fs::remove_dir_all(&root);
+        assert_eq!(count, 4, "should count a.md, b.md, sub/d.md, .mdium/e.md");
     }
 }
