@@ -68,6 +68,31 @@ fn is_excluded_dir(name: &str) -> bool {
     EXCLUDED_DIRS.contains(&name)
 }
 
+/// True if the entry is a symlink or (on Windows) a reparse point such as a
+/// junction. Following these could escape the active-folder boundary — a
+/// junction/symlink pointing at a parent would let a scan walk outside the open
+/// folder — so the walkers skip them entirely.
+fn is_reparse(entry: &fs::DirEntry, ft: &std::fs::FileType) -> bool {
+    if ft.is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        // DirEntry::metadata() does not traverse the link, so this reflects the
+        // entry itself (catches junctions, which are not reported as symlinks).
+        if let Ok(meta) = entry.metadata() {
+            return meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = entry;
+    }
+    false
+}
+
 /// Collect file paths (relative to `root`, '/'-separated) matching `pattern`.
 /// A pattern containing no '/' matches against the file's basename at any depth;
 /// otherwise it matches against the full relative path. Capped at `limit`.
@@ -107,7 +132,14 @@ fn walk_glob(
         }
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
-        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        let ft = match entry.file_type() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        if is_reparse(&entry, &ft) {
+            continue;
+        }
+        let is_dir = ft.is_dir();
         if is_dir {
             if is_excluded_dir(&name) {
                 continue;
@@ -186,7 +218,14 @@ fn walk_grep(
         }
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
-        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        let ft = match entry.file_type() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        if is_reparse(&entry, &ft) {
+            continue;
+        }
+        let is_dir = ft.is_dir();
         if is_dir {
             if is_excluded_dir(&name) {
                 continue;

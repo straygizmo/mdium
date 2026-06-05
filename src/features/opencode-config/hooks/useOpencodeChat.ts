@@ -955,7 +955,8 @@ async function ensureBuiltinAgents(): Promise<void> {
     let needsWrite = false;
     try {
       const existing = await invoke<string>("read_text_file", { path: agentPath });
-      needsWrite = wantVersion ? !existing.includes(`mdium-agent-version: ${wantVersion}`) : false;
+      const existingVersion = existing.match(/mdium-agent-version:\s*(\d+)/)?.[1] ?? null;
+      needsWrite = wantVersion ? existingVersion !== wantVersion : false;
     } catch {
       needsWrite = true;
     }
