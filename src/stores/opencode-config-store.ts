@@ -9,6 +9,7 @@ import type {
   OpencodeSkill,
   OpencodeWebUi,
 } from "@/shared/types";
+import { addPluginSpec, removePluginSpec } from "@/features/opencode-config/lib/builtin-plugins";
 
 export interface AgentFileEntry {
   file_name: string;
@@ -62,6 +63,9 @@ interface OpencodeConfigState {
   deleteCustomTool: (name: string) => Promise<void>;
   // WebUI
   setWebUi: (webui: OpencodeWebUi) => Promise<void>;
+  // Plugins (Global only)
+  addPlugin: (spec: string) => Promise<void>;
+  removePlugin: (spec: string) => Promise<void>;
 }
 
 async function getConfigPath(): Promise<string> {
@@ -338,6 +342,20 @@ export const useOpencodeConfigStore = create<OpencodeConfigState>()((set) => ({
   setWebUi: async (webui) => {
     const fresh = await readConfig();
     fresh.webui = webui;
+    await writeConfig(fresh);
+    set({ config: fresh });
+  },
+
+  addPlugin: async (spec) => {
+    const fresh = await readConfig();
+    fresh.plugin = addPluginSpec(fresh.plugin ?? [], spec);
+    await writeConfig(fresh);
+    set({ config: fresh });
+  },
+
+  removePlugin: async (spec) => {
+    const fresh = await readConfig();
+    fresh.plugin = removePluginSpec(fresh.plugin ?? [], spec);
     await writeConfig(fresh);
     set({ config: fresh });
   },
