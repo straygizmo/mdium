@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 import { useUiStore } from "@/stores/ui-store";
 import type { OpencodeConfigTab } from "@/shared/types";
+import { getBuiltinPluginIdBySpec } from "../lib/builtin-registry";
 
 export function OpencodeConfigBadges() {
   const { t } = useTranslation("opencode-config");
@@ -33,8 +34,11 @@ export function OpencodeConfigBadges() {
     // Custom Tools
     const allCustomTools = Object.keys(config.customTools ?? {});
 
-    // Plugins (global plugin array)
-    const allPlugins = config.plugin ?? [];
+    // Plugins (global plugin array). Show the built-in id (e.g. "superpowers")
+    // in the tooltip when the spec is a built-in, otherwise the raw spec.
+    const allPlugins = (config.plugin ?? []).map(
+      (spec) => getBuiltinPluginIdBySpec(spec) ?? spec
+    );
 
     return [
       {
