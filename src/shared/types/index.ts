@@ -178,10 +178,12 @@ export interface OpencodeConfig {
   skills?: Record<string, OpencodeSkill>;
   customTools?: Record<string, OpencodeCustomTool>;
   webui?: OpencodeWebUi;
+  /** opencode native plugin array: package specs (npm name / git URL / local path) */
+  plugin?: string[];
 }
 
 /** Opencode config tab */
-export type OpencodeConfigTab = "rules" | "tools" | "agents" | "commands" | "mcp" | "skills" | "custom-tools" | "webui";
+export type OpencodeConfigTab = "rules" | "tools" | "agents" | "commands" | "mcp" | "skills" | "custom-tools" | "webui" | "plugins";
 
 /** Opencode top-level tab */
 export type OpencodeTopTab = "chat" | "settings";
