@@ -18,7 +18,7 @@
     "@monaco-editor/react": "^4.7.0",
     "@open-motion/components": "file:packages/open-motion/components",
     "@open-motion/core": "file:packages/open-motion/core",
-    "@opencode-ai/sdk": "^1.2.27",
+    "@opencode-ai/sdk": "^1.16.2",
     "@tanstack/react-virtual": "^3.13.24",
     "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/plugin-dialog": "^2.6.0",
