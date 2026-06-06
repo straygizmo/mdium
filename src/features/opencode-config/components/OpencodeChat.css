@@ -1117,6 +1117,49 @@
   cursor: default;
 }
 
+.oc-chat__question-custom-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
+.oc-chat__question-custom-input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.oc-chat__questions-actions {
+  display: flex;
+  align-self: flex-end;
+  gap: 8px;
+}
+
+.oc-chat__questions-reject {
+  padding: 6px 16px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.oc-chat__questions-reject:hover:not(:disabled) {
+  opacity: 0.7;
+}
+
+.oc-chat__questions-reject:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 /* Image preview strip */
 .oc-chat__image-preview {
   display: flex;

@@ -39,6 +39,10 @@ export interface PendingQuestion {
   question: string;
   header?: string;
   options: QuestionOption[];
+  /** Allow selecting more than one option (opencode question.asked `multiple`). */
+  multiple?: boolean;
+  /** Allow typing a free-text answer (opencode question.asked `custom`, default true). */
+  custom?: boolean;
 }
 
 export interface OpencodeSessionInfo {
@@ -73,6 +77,8 @@ interface UseOpencodeChatResult {
   disconnect: () => void;
   abortSession: () => Promise<void>;
   sendMessage: (text: string, agent?: string, images?: ImageAttachment[]) => Promise<void>;
+  answerQuestions: (answers: string[][]) => Promise<void>;
+  rejectQuestions: () => Promise<void>;
   executeCommand: (commandName: string, args?: string) => Promise<void>;
   createNewSession: () => Promise<void>;
   loadSession: (sessionId: string) => Promise<void>;
@@ -199,8 +205,13 @@ export function setPendingVideoOutput(path: string | null) {
 
 // ─── Module-level connection state (persists across mount/unmount) ───
 let _client: OpencodeClient | null = null;
+let _baseUrl: string | null = null;
 let _abort: AbortController | null = null;
 let _connectedFolder: string | undefined;
+// Active opencode `question.asked` request id awaiting a /reply (null when the
+// pending questions came from the legacy question tool / inline JSON, which are
+// answered as a normal prompt instead).
+let _pendingQuestionRequestId: string | null = null;
 let _connectLock = false;
 let _currentSessionId: string | null = null;
 /** Pending folder path requested while a connection was in progress */
@@ -745,6 +756,55 @@ function processSSEStream(stream: AsyncIterable<unknown>) {
               useChatUIStore.setState({ loading: false });
             }
           }
+        } else if ((ev as any).type === "question.asked") {
+          // opencode (>=1.2.x) asks interactive questions via a dedicated
+          // `question.asked` bus event carrying a QuestionRequest:
+          //   { id, sessionID, questions: QuestionInfo[], tool? }
+          // The v1 SDK client we use doesn't type this event, so it arrives as
+          // raw JSON and must be cast. Without this branch the UI would stay on
+          // "Thinking..." forever (no part/idle event ever clears `loading`).
+          const props = (ev as any).properties ?? {};
+          if (props.sessionID && props.sessionID !== _currentSessionId) continue;
+          const questions: PendingQuestion[] = Array.isArray(props.questions)
+            ? props.questions
+                .map((q: any): PendingQuestion => ({
+                  question: String(q?.question ?? ""),
+                  header: typeof q?.header === "string" ? q.header : undefined,
+                  options: Array.isArray(q?.options)
+                    ? q.options
+                        .map((o: any): QuestionOption => {
+                          if (typeof o === "string") return { label: o };
+                          return {
+                            label: String(o?.label ?? o?.value ?? ""),
+                            description:
+                              typeof o?.description === "string" ? o.description : undefined,
+                          };
+                        })
+                        .filter((o: QuestionOption) => o.label)
+                    : [],
+                  multiple: q?.multiple === true,
+                  custom: q?.custom !== false,
+                }))
+                .filter((q: PendingQuestion) => q.question)
+            : [];
+          if (questions.length > 0) {
+            _pendingQuestionRequestId =
+              typeof props.id === "string" ? props.id : null;
+            useChatUIStore.setState({ pendingQuestions: questions, loading: false });
+          }
+        } else if (
+          (ev as any).type === "question.replied" ||
+          (ev as any).type === "question.rejected"
+        ) {
+          // The question was answered/rejected (possibly out-of-band, e.g. via
+          // the opencode TUI). Clear our pending card so it doesn't linger; the
+          // assistant turn resumes and session.idle will settle `loading`.
+          const props = (ev as any).properties ?? {};
+          if (props.sessionID && props.sessionID !== _currentSessionId) continue;
+          _pendingQuestionRequestId = null;
+          if (useChatUIStore.getState().pendingQuestions) {
+            useChatUIStore.setState({ pendingQuestions: null });
+          }
         } else if (ev.type === "session.error") {
           // Provider/API-level errors (rate limits, auth, etc.) that opencode
           // surfaces out-of-band. Without this handler the UI would stay in
@@ -900,10 +960,12 @@ function doDisconnect() {
     _abort = null;
   }
   _client = null;
+  _baseUrl = null;
   _connectedFolder = undefined;
   _currentSessionId = null;
   _connectLock = false;
   _pendingFolder = null;
+  _pendingQuestionRequestId = null;
   useChatUIStore.setState({
     connected: false,
     connecting: false,
@@ -1000,6 +1062,7 @@ export async function doConnect(folderPath?: string) {
     const baseUrl = await ensureOpencodeServer(folderPath);
     const client = createOpencodeClient({ baseUrl, fetch: opencodeFetch });
     _client = client;
+    _baseUrl = baseUrl;
     _connectedFolder = folderPath;
 
     const testRes = await client.session.list();
@@ -1136,6 +1199,9 @@ export async function doSendMessage(
   await ensureConnectedToActiveFolder();
   if (!_client) return;
 
+  // A fresh prompt supersedes any pending question request.
+  _pendingQuestionRequestId = null;
+
   // L1: inject active tab context into every user message payload (SDK call only)
   const wrappedText = await wrapWithMdiumContext(text);
 
@@ -1219,7 +1285,87 @@ export async function doAbortSession() {
     console.error("[opencode] abort failed:", e);
   } finally {
     stopWatchdog();
+    _pendingQuestionRequestId = null;
     useChatUIStore.setState({ loading: false, pendingQuestions: null, stallNotice: false });
+  }
+}
+
+/**
+ * Submit answers to a pending opencode question.
+ *
+ * `answers[i]` holds the selected option labels (or a single free-text entry)
+ * for question `i`, in order. When the questions came from a `question.asked`
+ * event we POST to `/question/{id}/reply`; otherwise (legacy question tool or
+ * inline-JSON questions) we fall back to sending the answer as a normal prompt.
+ */
+export async function doAnswerQuestions(answers: string[][]) {
+  const reqId = _pendingQuestionRequestId;
+
+  if (!reqId || !_baseUrl) {
+    // Legacy fallback: no question request to reply to — send as a prompt.
+    const flat = answers.map((a) => a.join(", ")).filter(Boolean);
+    const text =
+      flat.length <= 1
+        ? (flat[0] ?? "")
+        : flat.map((a, i) => `${i + 1}. ${a}`).join("\n");
+    useChatUIStore.setState({ pendingQuestions: null });
+    if (text.trim()) await doSendMessage(text);
+    return;
+  }
+
+  _pendingQuestionRequestId = null;
+  useChatUIStore.setState({
+    pendingQuestions: null,
+    loading: true,
+    aborted: false,
+    stallNotice: false,
+  });
+  startWatchdog();
+  try {
+    const res = await opencodeFetch(
+      new Request(`${_baseUrl}/question/${encodeURIComponent(reqId)}/reply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ answers }),
+      }),
+    );
+    if (!res.ok) {
+      throw new Error(`question reply failed: ${res.status}`);
+    }
+  } catch (e: any) {
+    console.error("[opencode] question reply failed:", e);
+    stopWatchdog();
+    useChatUIStore.setState({ loading: false, error: e?.message ?? String(e) });
+  }
+}
+
+/**
+ * Dismiss a pending opencode question without answering. For `question.asked`
+ * requests this POSTs to `/question/{id}/reject`; legacy questions are simply
+ * cleared from the UI.
+ */
+export async function doRejectQuestions() {
+  const reqId = _pendingQuestionRequestId;
+  _pendingQuestionRequestId = null;
+  useChatUIStore.setState({ pendingQuestions: null });
+
+  if (!reqId || !_baseUrl) return;
+
+  useChatUIStore.setState({ loading: true, aborted: false, stallNotice: false });
+  startWatchdog();
+  try {
+    const res = await opencodeFetch(
+      new Request(`${_baseUrl}/question/${encodeURIComponent(reqId)}/reject`, {
+        method: "POST",
+      }),
+    );
+    if (!res.ok) {
+      throw new Error(`question reject failed: ${res.status}`);
+    }
+  } catch (e: any) {
+    console.error("[opencode] question reject failed:", e);
+    stopWatchdog();
+    useChatUIStore.setState({ loading: false, error: e?.message ?? String(e) });
   }
 }
 
@@ -1284,6 +1430,7 @@ export async function doExecuteCommand(commandName: string, args?: string) {
 
 export async function doCreateNewSession() {
   _currentSessionId = null;
+  _pendingQuestionRequestId = null;
   useChatUIStore.setState({
     messages: [],
     currentSessionId: null,
@@ -1328,9 +1475,11 @@ async function doLoadSession(sessionId: string) {
         }
       }
       _currentSessionId = sessionId;
+      _pendingQuestionRequestId = null;
       useChatUIStore.setState({
         messages: loaded,
         currentSessionId: sessionId,
+        pendingQuestions: null,
         azureAutoRetryCount: 0,
       });
     }
@@ -1437,6 +1586,14 @@ export function useOpencodeChat(folderPath?: string): UseOpencodeChatResult {
     await doSendMessage(text, agent, images);
   }, []);
 
+  const answerQuestions = useCallback(async (answers: string[][]) => {
+    await doAnswerQuestions(answers);
+  }, []);
+
+  const rejectQuestions = useCallback(async () => {
+    await doRejectQuestions();
+  }, []);
+
   const executeCommand = useCallback(async (commandName: string, args?: string) => {
     await doExecuteCommand(commandName, args);
   }, []);
@@ -1493,6 +1650,8 @@ export function useOpencodeChat(folderPath?: string): UseOpencodeChatResult {
     disconnect,
     abortSession,
     sendMessage,
+    answerQuestions,
+    rejectQuestions,
     executeCommand,
     createNewSession,
     loadSession,

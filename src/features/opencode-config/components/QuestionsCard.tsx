@@ -4,77 +4,170 @@ import type { PendingQuestion } from "../hooks/useOpencodeChat";
 
 interface QuestionsCardProps {
   questions: PendingQuestion[];
-  onSubmit: (answers: string) => void;
+  /** answers[i] holds the selected option labels (or a free-text entry) for question i. */
+  onSubmit: (answers: string[][]) => void;
+  /** Dismiss the questions without answering (esc / reject). */
+  onReject?: () => void;
   disabled?: boolean;
 }
 
-export function QuestionsCard({ questions, onSubmit, disabled }: QuestionsCardProps) {
+export function QuestionsCard({ questions, onSubmit, onReject, disabled }: QuestionsCardProps) {
   const { t } = useTranslation("opencode-config");
-  // Map of question index → selected option index
-  const [selections, setSelections] = useState<Record<number, number>>({});
+  // Per-question selected option indices (a set supports `multiple`; for
+  // single-select it never holds more than one entry).
+  const [selected, setSelected] = useState<Record<number, Set<number>>>({});
+  // Per-question free-text answer state (only when `custom` is allowed).
+  const [customOn, setCustomOn] = useState<Record<number, boolean>>({});
+  const [customText, setCustomText] = useState<Record<number, string>>({});
 
-  const handleSelect = useCallback((qIndex: number, optIndex: number) => {
-    setSelections((prev) => ({ ...prev, [qIndex]: optIndex }));
+  const toggleOption = useCallback(
+    (qIndex: number, optIndex: number, multiple: boolean) => {
+      setSelected((prev) => {
+        const next = { ...prev };
+        const current = new Set(prev[qIndex] ?? []);
+        if (multiple) {
+          if (current.has(optIndex)) current.delete(optIndex);
+          else current.add(optIndex);
+        } else {
+          current.clear();
+          current.add(optIndex);
+        }
+        next[qIndex] = current;
+        return next;
+      });
+      if (!multiple) {
+        // Picking a concrete option clears the free-text choice in single mode.
+        setCustomOn((prev) => ({ ...prev, [qIndex]: false }));
+      }
+    },
+    []
+  );
+
+  const toggleCustom = useCallback((qIndex: number, multiple: boolean) => {
+    setCustomOn((prev) => ({ ...prev, [qIndex]: !prev[qIndex] }));
+    if (!multiple) {
+      // Choosing free-text clears option selections in single mode.
+      setSelected((prev) => ({ ...prev, [qIndex]: new Set() }));
+    }
   }, []);
 
-  const allAnswered = questions.every((_, i) => selections[i] !== undefined);
+  const setCustom = useCallback((qIndex: number, value: string) => {
+    setCustomText((prev) => ({ ...prev, [qIndex]: value }));
+  }, []);
+
+  const buildAnswer = useCallback(
+    (qIndex: number, q: PendingQuestion): string[] => {
+      const labels = [...(selected[qIndex] ?? [])]
+        .sort((a, b) => a - b)
+        .map((oi) => q.options[oi]?.label)
+        .filter((l): l is string => !!l);
+      if (customOn[qIndex]) {
+        const text = (customText[qIndex] ?? "").trim();
+        if (text) labels.push(text);
+      }
+      return labels;
+    },
+    [selected, customOn, customText]
+  );
+
+  const allAnswered = questions.every((q, i) => buildAnswer(i, q).length > 0);
 
   const handleSubmit = useCallback(() => {
     if (!allAnswered) return;
-    const answers = questions
-      .map((q, i) => {
-        const selected = q.options[selections[i]];
-        return selected ? selected.label : "";
-      })
-      .filter(Boolean);
-    // Single question → just the label; multiple → numbered list
-    const text = answers.length === 1
-      ? answers[0]
-      : answers.map((a, i) => `${i + 1}. ${a}`).join("\n");
-    onSubmit(text);
-  }, [allAnswered, questions, selections, onSubmit]);
+    onSubmit(questions.map((q, i) => buildAnswer(i, q)));
+  }, [allAnswered, questions, buildAnswer, onSubmit]);
 
   return (
     <div className="oc-chat__questions">
-      {questions.map((q, qIndex) => (
-        <div key={qIndex} className="oc-chat__question-card">
-          {q.header && (
-            <div className="oc-chat__question-header">{q.header}</div>
-          )}
-          <div className="oc-chat__question-text">{q.question}</div>
-          <div className="oc-chat__question-options">
-            {q.options.map((opt, optIndex) => (
-              <button
-                key={optIndex}
-                className={`oc-chat__question-option${
-                  selections[qIndex] === optIndex ? " oc-chat__question-option--selected" : ""
-                }`}
-                onClick={() => handleSelect(qIndex, optIndex)}
+      {questions.map((q, qIndex) => {
+        const multiple = q.multiple === true;
+        const allowCustom = q.custom !== false;
+        const isCustomOn = !!customOn[qIndex];
+        return (
+          <div key={qIndex} className="oc-chat__question-card">
+            {q.header && (
+              <div className="oc-chat__question-header">{q.header}</div>
+            )}
+            <div className="oc-chat__question-text">{q.question}</div>
+            <div className="oc-chat__question-options">
+              {q.options.map((opt, optIndex) => {
+                const isSelected = selected[qIndex]?.has(optIndex) ?? false;
+                return (
+                  <button
+                    key={optIndex}
+                    className={`oc-chat__question-option${
+                      isSelected ? " oc-chat__question-option--selected" : ""
+                    }`}
+                    onClick={() => toggleOption(qIndex, optIndex, multiple)}
+                    disabled={disabled}
+                    type="button"
+                  >
+                    <span className="oc-chat__question-option-radio">
+                      {isSelected ? "◉" : "○"}
+                    </span>
+                    <span className="oc-chat__question-option-body">
+                      <span className="oc-chat__question-option-label">{opt.label}</span>
+                      {opt.description && (
+                        <span className="oc-chat__question-option-desc">{opt.description}</span>
+                      )}
+                    </span>
+                  </button>
+                );
+              })}
+              {allowCustom && (
+                <button
+                  className={`oc-chat__question-option${
+                    isCustomOn ? " oc-chat__question-option--selected" : ""
+                  }`}
+                  onClick={() => toggleCustom(qIndex, multiple)}
+                  disabled={disabled}
+                  type="button"
+                >
+                  <span className="oc-chat__question-option-radio">
+                    {isCustomOn ? "◉" : "○"}
+                  </span>
+                  <span className="oc-chat__question-option-body">
+                    <span className="oc-chat__question-option-label">
+                      {t("ocChatQuestionsCustom", "Type your own answer")}
+                    </span>
+                  </span>
+                </button>
+              )}
+            </div>
+            {allowCustom && isCustomOn && (
+              <input
+                className="oc-chat__question-custom-input"
+                type="text"
+                value={customText[qIndex] ?? ""}
+                onChange={(e) => setCustom(qIndex, e.target.value)}
+                placeholder={t("ocChatQuestionsCustomPlaceholder", "Type your answer…")}
                 disabled={disabled}
-                type="button"
-              >
-                <span className="oc-chat__question-option-radio">
-                  {selections[qIndex] === optIndex ? "\u25C9" : "\u25CB"}
-                </span>
-                <span className="oc-chat__question-option-body">
-                  <span className="oc-chat__question-option-label">{opt.label}</span>
-                  {opt.description && (
-                    <span className="oc-chat__question-option-desc">{opt.description}</span>
-                  )}
-                </span>
-              </button>
-            ))}
+                autoFocus
+              />
+            )}
           </div>
-        </div>
-      ))}
-      <button
-        className="oc-chat__questions-submit"
-        onClick={handleSubmit}
-        disabled={!allAnswered || disabled}
-        type="button"
-      >
-        {t("ocChatQuestionsSubmit", "Submit")}
-      </button>
+        );
+      })}
+      <div className="oc-chat__questions-actions">
+        {onReject && (
+          <button
+            className="oc-chat__questions-reject"
+            onClick={onReject}
+            disabled={disabled}
+            type="button"
+          >
+            {t("ocChatQuestionsDismiss", "Dismiss")}
+          </button>
+        )}
+        <button
+          className="oc-chat__questions-submit"
+          onClick={handleSubmit}
+          disabled={!allAnswered || disabled}
+          type="button"
+        >
+          {t("ocChatQuestionsSubmit", "Submit")}
+        </button>
+      </div>
     </div>
   );
 }

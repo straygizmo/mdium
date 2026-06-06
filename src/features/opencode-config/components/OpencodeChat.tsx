@@ -42,6 +42,8 @@ export function OpencodeChat() {
     sendMessage,
     executeCommand,
     abortSession,
+    answerQuestions,
+    rejectQuestions,
     createNewSession,
     loadSession,
     deleteSession,
@@ -211,11 +213,15 @@ export function OpencodeChat() {
   }, [input, loading, sendMessage, mdContextActive, activeTabFilePath, resetHistoryNav, attachedImages, t]);
 
   const handleQuestionsSubmit = useCallback(
-    (answers: string) => {
-      sendMessage(answers);
+    (answers: string[][]) => {
+      answerQuestions(answers);
     },
-    [sendMessage]
+    [answerQuestions]
   );
+
+  const handleQuestionsReject = useCallback(() => {
+    rejectQuestions();
+  }, [rejectQuestions]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -600,6 +606,7 @@ export function OpencodeChat() {
                 key={JSON.stringify(pendingQuestions)}
                 questions={pendingQuestions}
                 onSubmit={handleQuestionsSubmit}
+                onReject={handleQuestionsReject}
               />
             </div>
           )}
