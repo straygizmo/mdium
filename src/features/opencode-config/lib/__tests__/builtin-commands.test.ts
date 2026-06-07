@@ -4,9 +4,11 @@ import { BUILTIN_COMMANDS } from "../builtin-commands";
 describe("deploy-zenn-article frontmatter completion", () => {
   const tpl = BUILTIN_COMMANDS["deploy-zenn-article"].template;
 
-  it("checks all required Zenn frontmatter fields", () => {
+  it("declares all required Zenn frontmatter fields", () => {
+    const requiredLine = tpl.split("\n").find((l) => l.includes("Required fields:"));
+    expect(requiredLine).toBeDefined();
     for (const field of ["title", "emoji", "type", "topics", "published"]) {
-      expect(tpl).toContain(field);
+      expect(requiredLine).toContain(field);
     }
   });
 
