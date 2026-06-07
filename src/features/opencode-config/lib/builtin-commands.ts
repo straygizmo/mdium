@@ -428,18 +428,36 @@ Deploy the work-in-progress article to the Zenn publishing directories.
 
 1. Read the article at \`$ARGUMENTS\`.
 2. Determine the slug from the file path. The file should be at \`work/{slug}/index.md\`.
-3. Copy the article content to \`articles/{slug}.md\`.
-4. Copy all image files from \`work/{slug}/images/\` to \`images/\` (flat copy, no subdirectories).
-5. In the copied \`articles/{slug}.md\`, rewrite image paths:
+3. **Validate and complete the Zenn frontmatter.**
+   - Required fields: \`title\`, \`emoji\`, \`type\`, \`topics\`, \`published\`.
+   - Field rules:
+     - \`title\`: non-empty string.
+     - \`emoji\`: a single emoji.
+     - \`type\`: either \`tech\` or \`idea\`.
+     - \`topics\`: 1–5 tags, each lowercase alphanumeric + hyphens.
+     - \`published\`: boolean.
+   - If the frontmatter block is missing, or any required field is absent, empty, or violates its rule, complete ONLY the missing/invalid fields:
+     - Infer candidate values from the article body:
+       - \`title\`: from the leading H1 or the opening content.
+       - \`type\`: judge \`tech\` vs \`idea\` from the content.
+       - \`topics\`: up to 5 keywords drawn from the content (lowercase alphanumeric + hyphens).
+       - \`emoji\`: propose a single emoji that fits the content.
+       - \`published\`: ALWAYS default to \`false\`. Never infer \`true\`; only set \`true\` if the user explicitly asks.
+     - Present the inferred values for the missing/invalid fields to the user and ask them to confirm or correct each one before proceeding.
+     - After the user confirms, update the article's frontmatter with the confirmed values. Write the updated content back to the source file \`work/{slug}/index.md\` (only if it exists), and use this updated content for the deploy copy in the steps below so that \`articles/{slug}.md\` also receives the completed frontmatter.
+   - If all required fields are already present and valid, preserve the frontmatter exactly as-is.
+4. Copy the (possibly frontmatter-completed) article content to \`articles/{slug}.md\`.
+5. Copy all image files from \`work/{slug}/images/\` to \`images/\` (flat copy, no subdirectories).
+6. In the copied \`articles/{slug}.md\`, rewrite image paths:
    - Replace relative paths like \`images/img1.png\` or \`./images/img1.png\` with \`/images/img1.png\`
-6. Report what was copied and any path transformations made.
+7. Report what was copied, any path transformations made, and any frontmatter fields that were completed.
 
 ## Important Notes
 
 - The \`work/\` directory is excluded from git. Only files in \`articles/\` and \`images/\` will be committed and pushed.
 - If \`articles/{slug}.md\` already exists, overwrite it (this is a re-deploy).
 - If there are no images in \`work/{slug}/images/\`, skip the image copy step.
-- Preserve the frontmatter exactly as-is.
+- \`published\` defaults to \`false\` to prevent accidental publishing; never set it to \`true\` without explicit user instruction.
 `,
   },
   "publish-to-medium": {
