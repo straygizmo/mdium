@@ -51,7 +51,7 @@ describe("convertMdToVideoProject", () => {
       type: "bullet-list",
       items: ["item one", "item two", "item three"],
       animation: "sequential",
-      delayPerItem: 30,
+      delayPerItem: 20,
     });
   });
 
@@ -207,6 +207,6 @@ describe("convertMdToVideoProject", () => {
   it("sets default transition on each scene", () => {
     const md = `# Scene`;
     const project = convertMdToVideoProject(md, FAKE_PATH);
-    expect(project.scenes[0].transition).toMatchObject({ type: "fade", durationInFrames: 15 });
+    expect(project.scenes[0].transition).toMatchObject({ type: "fade", durationInFrames: 30 });
   });
 });
