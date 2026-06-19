@@ -13,6 +13,7 @@ import { decorateWithLLM } from "../lib/scene-decorator";
 import { PromptEditDialog } from "./PromptEditDialog";
 import { useImageBlobUrls } from "../hooks/useImageBlobUrls";
 import type { ExportOptions } from "./ExportPanel";
+import { ensureCommand, NODE_INSTALL_URL } from "@/shared/lib/ensureCommand";
 import "./VideoPanel.css";
 
 export function VideoPanel() {
@@ -151,6 +152,14 @@ export function VideoPanel() {
   const handleExport = useCallback(
     async (options: ExportOptions) => {
       if (!videoProject) return;
+
+      // Rendering runs via npx (bundled with Node.js). Notify and bail if missing.
+      const nodeOk = await ensureCommand("node", {
+        messageKey: "nodeNotFound",
+        promptKey: "openInstallGuide",
+        installUrl: NODE_INSTALL_URL,
+      });
+      if (!nodeOk) return;
 
       // Check ffmpeg availability before starting export
       const ffmpegOk = await invoke<boolean>("video_check_ffmpeg").catch(() => false);

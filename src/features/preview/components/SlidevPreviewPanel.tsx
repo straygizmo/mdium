@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
 import { useSlidevStore } from "@/stores/slidev-store";
+import { ensureCommand, NODE_INSTALL_URL } from "@/shared/lib/ensureCommand";
 
 interface SlidevPreviewPanelProps {
   content: string;
@@ -29,6 +30,17 @@ export function SlidevPreviewPanel({ content, filePath }: SlidevPreviewPanelProp
   // Start Slidev dev server
   const startServer = useCallback(async () => {
     if (!filePath || !content) return;
+    // Slidev runs via npx (bundled with Node.js). Notify and stop if Node is
+    // missing — store an error session so the auto-start effect does not loop.
+    const nodeOk = await ensureCommand("node", {
+      messageKey: "nodeNotFound",
+      promptKey: "openInstallGuide",
+      installUrl: NODE_INSTALL_URL,
+    });
+    if (!nodeOk) {
+      setSession(filePath, { tempDir: "", port: 0, ready: false, error: t("nodeNotFound", { ns: "common" }) });
+      return;
+    }
     setStarting(true);
     try {
       const [tempDir, port] = await invoke<[string, number]>("slidev_start", {
@@ -43,7 +55,7 @@ export function SlidevPreviewPanel({ content, filePath }: SlidevPreviewPanelProp
     } finally {
       setStarting(false);
     }
-  }, [filePath, content, setSession]);
+  }, [filePath, content, setSession, t]);
 
   // Listen for server ready/error events
   // Rust emits: { "filePath": string, "port": number } and { "filePath": string, "error": string }
@@ -113,6 +125,13 @@ export function SlidevPreviewPanel({ content, filePath }: SlidevPreviewPanelProp
 
   const handleExport = async (format: "pptx" | "pdf") => {
     if (!filePath) return;
+    // Export also runs via npx; bail out with guidance if Node is missing.
+    const nodeOk = await ensureCommand("node", {
+      messageKey: "nodeNotFound",
+      promptKey: "openInstallGuide",
+      installUrl: NODE_INSTALL_URL,
+    });
+    if (!nodeOk) return;
     const ext = format === "pptx" ? "pptx" : "pdf";
     const baseName = filePath.replace(/[\\/]/g, "/").split("/").pop()?.replace(/\.[^.]+$/, "") ?? "slides";
     const outputPath = await save({

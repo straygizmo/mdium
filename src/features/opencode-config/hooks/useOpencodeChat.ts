@@ -13,6 +13,7 @@ import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { marked } from "marked";
 import i18n from "@/shared/i18n";
 import { useOpencodeServerStore } from "@/stores/opencode-server-store";
+import { ensureCommand, OPENCODE_INSTALL_URL } from "@/shared/lib/ensureCommand";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 import { useTabStore } from "@/stores/tab-store";
@@ -922,6 +923,18 @@ async function ensureOpencodeServer(cwd?: string): Promise<string> {
   }
 
   const baseUrl = `http://127.0.0.1:${port}`;
+
+  // The opencode CLI is required to launch the server. Without it, spawning via
+  // `cmd /C opencode` would succeed but exit immediately, leaving the connect
+  // flow to hang for ~10s. Pre-check and fail fast with a localized notice.
+  const opencodeOk = await ensureCommand("opencode", {
+    messageKey: "opencodeNotFound",
+    promptKey: "openInstallGuide",
+    installUrl: OPENCODE_INSTALL_URL,
+  });
+  if (!opencodeOk) {
+    throw new Error(i18n.t("opencodeNotFound", { ns: "common" }));
+  }
 
   console.log("[opencode] starting server via Tauri... cwd:", cwd, "port:", port);
   try {
