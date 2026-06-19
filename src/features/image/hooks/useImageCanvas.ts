@@ -535,6 +535,47 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
     setActiveTool("select");
   }, []);
 
+  const applyResize = useCallback(async (newW: number, newH: number): Promise<string | null> => {
+    const c = canvasRef.current;
+    const nat = naturalSizeRef.current;
+    if (!c || !nat || newW < 1 || newH < 1) return null;
+    const bg = c.backgroundImage as fabric.FabricImage | undefined;
+    if (!bg) return null;
+
+    pushUndo();
+
+    const rx = newW / nat.w;
+    const ry = newH / nat.h;
+    const el = bg.getElement() as HTMLImageElement;
+    const off = document.createElement("canvas");
+    off.width = newW;
+    off.height = newH;
+    const ctx = off.getContext("2d")!;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(el, 0, 0, el.naturalWidth || nat.w, el.naturalHeight || nat.h, 0, 0, newW, newH);
+    const resizedUrl = off.toDataURL("image/png");
+
+    const newImg = await fabric.FabricImage.fromURL(resizedUrl);
+    newImg.set({ scaleX: 1, scaleY: 1, left: 0, top: 0, originX: "left", originY: "top", selectable: false, evented: false });
+
+    // Scale annotation position and size proportionally.
+    c.getObjects().forEach((o) => {
+      o.set({
+        left: (o.left ?? 0) * rx,
+        top: (o.top ?? 0) * ry,
+        scaleX: (o.scaleX ?? 1) * rx,
+        scaleY: (o.scaleY ?? 1) * ry,
+      });
+      o.setCoords();
+    });
+
+    naturalSizeRef.current = { w: newW, h: newH };
+    c.backgroundImage = newImg;
+    fitToContainer();
+    c.renderAll();
+    return resizedUrl;
+  }, [pushUndo, fitToContainer]);
+
   const applyCrop = useCallback(async (): Promise<string | null> => {
     const c = canvasRef.current;
     const rect = cropRect.current;
@@ -613,6 +654,7 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
     cropActive,
     applyCrop,
     cancelCrop,
+    applyResize,
     strokeColor,
     setStrokeColor,
     fillColor,

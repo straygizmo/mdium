@@ -36,5 +36,17 @@
   "ocrClose": "Close",
   "ocrProcessing": "Processing OCR...",
   "ocrError": "An error occurred during OCR processing.",
-  "ocrNoText": "(No text detected)"
+  "ocrNoText": "(No text detected)",
+  "resize": {
+    "button": "⤢ Resize",
+    "title": "Resize Image",
+    "current": "Current: {{width}} × {{height}} px",
+    "width": "Width (px)",
+    "height": "Height (px)",
+    "keepAspect": "Keep aspect ratio",
+    "preset": "Scale:",
+    "ok": "OK",
+    "cancel": "Cancel",
+    "invalid": "Enter integers between 1 and 10000."
+  }
 }

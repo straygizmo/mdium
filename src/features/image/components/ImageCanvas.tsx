@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import Tesseract from "tesseract.js";
 import { useImageCanvas } from "../hooks/useImageCanvas";
 import { ImagePreviewToolbar } from "./ImagePreviewToolbar";
+import { ResizeDialog } from "./ResizeDialog";
 import "./ImageCanvas.css";
 
 export interface ImageCanvasHandle {
@@ -36,6 +37,7 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(funct
     zoomOut,
     resetZoom,
     refit,
+    getNaturalSize,
     getCanvasDataUrl,
     serializeCanvas,
     initCanvas,
@@ -47,6 +49,7 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(funct
     cropActive,
     applyCrop,
     cancelCrop,
+    applyResize,
     strokeColor,
     setStrokeColor,
     fillColor,
@@ -69,6 +72,8 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(funct
 
   const [ocrLoading, setOcrLoading] = useState(false);
   const [ocrResult, setOcrResult] = useState<string | null>(null);
+  const [resizeOpen, setResizeOpen] = useState(false);
+  const [resizeInit, setResizeInit] = useState<{ w: number; h: number } | null>(null);
   const prevUrlRef = useRef<string | null>(null);
   const initialLoadDone = useRef(false);
   // When we replace the image via crop/resize, the new imageSrc flows back in.
@@ -176,6 +181,19 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(funct
     if (url) await persistReplacedImage(url);
   }, [applyCrop, persistReplacedImage]);
 
+  const handleOpenResize = useCallback(() => {
+    const nat = getNaturalSize();
+    if (!nat) return;
+    setResizeInit({ w: nat.w, h: nat.h });
+    setResizeOpen(true);
+  }, [getNaturalSize]);
+
+  const handleApplyResize = useCallback(async (w: number, h: number) => {
+    setResizeOpen(false);
+    const url = await applyResize(w, h);
+    if (url) await persistReplacedImage(url);
+  }, [applyResize, persistReplacedImage]);
+
   const handleCopyOcr = useCallback(async () => {
     if (ocrResult) {
       await navigator.clipboard.writeText(ocrResult);
@@ -203,6 +221,7 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(funct
         onResetZoom={resetZoom}
         onOcr={handleOcr}
         ocrLoading={ocrLoading}
+        onResize={handleOpenResize}
         strokeColor={strokeColor}
         onStrokeColorChange={setStrokeColor}
         fillColor={fillColor}
@@ -247,6 +266,14 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(funct
         <div className="ocr-loading-overlay">
           <span>{t("ocrProcessing")}</span>
         </div>
+      )}
+      {resizeOpen && resizeInit && (
+        <ResizeDialog
+          initialWidth={resizeInit.w}
+          initialHeight={resizeInit.h}
+          onApply={handleApplyResize}
+          onCancel={() => setResizeOpen(false)}
+        />
       )}
     </>
   );

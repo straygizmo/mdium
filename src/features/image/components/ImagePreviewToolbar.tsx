@@ -17,6 +17,7 @@ interface Props {
   onResetZoom: () => void;
   onOcr: () => void;
   ocrLoading: boolean;
+  onResize: () => void;
   strokeColor: string;
   onStrokeColorChange: (color: string) => void;
   fillColor: string;
@@ -52,6 +53,7 @@ const ImagePreviewToolbar: FC<Props> = ({
   onResetZoom,
   onOcr: _onOcr,
   ocrLoading: _ocrLoading,
+  onResize,
   strokeColor,
   onStrokeColorChange,
   fillColor,
@@ -201,6 +203,10 @@ const ImagePreviewToolbar: FC<Props> = ({
           </button>
           <button className="im-tb-btn" onClick={onRedo} disabled={!canRedo} title={t("redo")}>
             {t("redoLabel")}
+          </button>
+          <span className="im-tb-sep" />
+          <button className="im-tb-btn" onClick={onResize} title={t("resize.button")}>
+            {t("resize.button")}
           </button>
         </>
       )}

@@ -1,0 +1,8 @@
+.resize-dialog { min-width: 320px; }
+.resize-dialog__current { font-size: 13px; opacity: 0.8; margin-bottom: 10px; }
+.resize-dialog__row { display: flex; gap: 12px; margin-bottom: 10px; }
+.resize-dialog__row label { display: flex; flex-direction: column; font-size: 12px; gap: 4px; }
+.resize-dialog__row input { width: 100px; }
+.resize-dialog__aspect { display: flex; align-items: center; gap: 6px; font-size: 13px; margin-bottom: 10px; }
+.resize-dialog__presets { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-bottom: 10px; }
+.resize-dialog__error { color: #e06c75; font-size: 12px; margin-bottom: 8px; }
