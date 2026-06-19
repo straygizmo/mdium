@@ -67,3 +67,16 @@
   text-align: center;
   z-index: 10;
 }
+
+.image-crop-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  background: var(--toolbar-bg, #2a2a2a);
+}
+
+.image-crop-hint {
+  font-size: 12px;
+  opacity: 0.8;
+}

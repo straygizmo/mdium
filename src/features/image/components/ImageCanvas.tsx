@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import Tesseract from "tesseract.js";
 import { useImageCanvas } from "../hooks/useImageCanvas";
 import { ImagePreviewToolbar } from "./ImagePreviewToolbar";
+import { ResizeDialog } from "./ResizeDialog";
 import "./ImageCanvas.css";
 
 export interface ImageCanvasHandle {
@@ -15,10 +16,11 @@ interface ImageCanvasProps {
   canvasJson?: string;
   onCanvasModified?: () => void;
   imageFileType?: string;
+  onImageReplaced?: (blobUrl: string) => void;
 }
 
 export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(function ImageCanvas(
-  { imageSrc, canvasJson, onCanvasModified, imageFileType },
+  { imageSrc, canvasJson, onCanvasModified, imageFileType, onImageReplaced },
   ref
 ) {
   const canvasElRef = useRef<HTMLCanvasElement | null>(null);
@@ -34,6 +36,8 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(funct
     zoomIn,
     zoomOut,
     resetZoom,
+    refit,
+    getNaturalSize,
     getCanvasDataUrl,
     serializeCanvas,
     initCanvas,
@@ -42,6 +46,10 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(funct
     setOcrRegionCallback,
     clearOcrRect,
     deleteSelected,
+    cropActive,
+    applyCrop,
+    cancelCrop,
+    applyResize,
     strokeColor,
     setStrokeColor,
     fillColor,
@@ -64,8 +72,13 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(funct
 
   const [ocrLoading, setOcrLoading] = useState(false);
   const [ocrResult, setOcrResult] = useState<string | null>(null);
+  const [resizeOpen, setResizeOpen] = useState(false);
+  const [resizeInit, setResizeInit] = useState<{ w: number; h: number } | null>(null);
   const prevUrlRef = useRef<string | null>(null);
   const initialLoadDone = useRef(false);
+  // When we replace the image via crop/resize, the new imageSrc flows back in.
+  // Skip the reload for that self-initiated change so annotations/undo survive.
+  const selfEditUrlRef = useRef<string | null>(null);
 
   // Init canvas on mount
   useEffect(() => {
@@ -78,6 +91,12 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(funct
 
   // Load background image when URL changes
   useEffect(() => {
+    if (imageSrc && imageSrc === selfEditUrlRef.current) {
+      // Self-initiated replacement: canvas already reflects it.
+      prevUrlRef.current = imageSrc;
+      selfEditUrlRef.current = null;
+      return;
+    }
     if (imageSrc && imageSrc !== prevUrlRef.current) {
       prevUrlRef.current = imageSrc;
       initialLoadDone.current = false;
@@ -90,19 +109,16 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(funct
     };
   }, [imageSrc, loadBackgroundImage]);
 
-  // Resize observer — preserve canvas objects on resize
+  // Re-fit display on container resize (objects/undo preserved; no reload).
   useEffect(() => {
     const container = containerElRef.current;
     if (!container) return;
     const observer = new ResizeObserver(() => {
-      if (imageSrc && initialLoadDone.current) {
-        const currentJson = serializeCanvas();
-        loadBackgroundImage(imageSrc, currentJson ?? undefined);
-      }
+      if (imageSrc && initialLoadDone.current) refit();
     });
     observer.observe(container);
     return () => observer.disconnect();
-  }, [imageSrc, loadBackgroundImage, serializeCanvas]);
+  }, [imageSrc, refit]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -122,6 +138,16 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(funct
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
   }, [undo, redo, deleteSelected]);
+
+  // Persist a crop/resize result: convert the data URL to a blob URL,
+  // mark it as a self-edit so the reload effect skips it, then notify App.
+  const persistReplacedImage = useCallback(async (dataUrl: string) => {
+    const blob = await (await fetch(dataUrl)).blob();
+    const blobUrl = URL.createObjectURL(blob);
+    selfEditUrlRef.current = blobUrl;
+    onImageReplaced?.(blobUrl);
+    onCanvasModified?.();
+  }, [onImageReplaced, onCanvasModified]);
 
   const runOcr = useCallback(async (dataUrl: string) => {
     setOcrLoading(true);
@@ -150,6 +176,24 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(funct
     setActiveTool("ocr");
   }, [setActiveTool]);
 
+  const handleApplyCrop = useCallback(async () => {
+    const url = await applyCrop();
+    if (url) await persistReplacedImage(url);
+  }, [applyCrop, persistReplacedImage]);
+
+  const handleOpenResize = useCallback(() => {
+    const nat = getNaturalSize();
+    if (!nat) return;
+    setResizeInit({ w: nat.w, h: nat.h });
+    setResizeOpen(true);
+  }, [getNaturalSize]);
+
+  const handleApplyResize = useCallback(async (w: number, h: number) => {
+    setResizeOpen(false);
+    const url = await applyResize(w, h);
+    if (url) await persistReplacedImage(url);
+  }, [applyResize, persistReplacedImage]);
+
   const handleCopyOcr = useCallback(async () => {
     if (ocrResult) {
       await navigator.clipboard.writeText(ocrResult);
@@ -177,6 +221,7 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(funct
         onResetZoom={resetZoom}
         onOcr={handleOcr}
         ocrLoading={ocrLoading}
+        onResize={handleOpenResize}
         strokeColor={strokeColor}
         onStrokeColorChange={setStrokeColor}
         fillColor={fillColor}
@@ -188,6 +233,13 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(funct
         strokeWidth={strokeWidth}
         onStrokeWidthChange={setStrokeWidth}
       />
+      {activeTool === "crop" && cropActive && (
+        <div className="image-crop-bar">
+          <span className="image-crop-hint">{t("crop.hint")}</span>
+          <button className="im-tb-btn im-tb-btn--active" onClick={handleApplyCrop}>{t("crop.apply")}</button>
+          <button className="im-tb-btn" onClick={cancelCrop}>{t("crop.cancel")}</button>
+        </div>
+      )}
       <div className="image-canvas-container" ref={containerElRef}>
         <div className="image-canvas-wrapper">
           <canvas ref={canvasElRef} />
@@ -214,6 +266,14 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(funct
         <div className="ocr-loading-overlay">
           <span>{t("ocrProcessing")}</span>
         </div>
+      )}
+      {resizeOpen && resizeInit && (
+        <ResizeDialog
+          initialWidth={resizeInit.w}
+          initialHeight={resizeInit.h}
+          onApply={handleApplyResize}
+          onCancel={() => setResizeOpen(false)}
+        />
       )}
     </>
   );

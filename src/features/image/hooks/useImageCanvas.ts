@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as fabric from "fabric";
+import { computeFitZoom } from "../lib/image-transform";
 
-export type ImageTool = "select" | "text" | "rect" | "circle" | "arrow" | "line" | "pen" | "ocr";
+export type ImageTool = "select" | "text" | "rect" | "circle" | "arrow" | "line" | "pen" | "ocr" | "crop";
 
 export const FONT_FAMILIES = [
   "sans-serif",
@@ -21,6 +22,10 @@ export const FONT_SIZES = [10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 64];
 
 const MAX_UNDO = 50;
 
+// A snapshot captures objects+background (via toJSON) and the natural size,
+// so crop/resize (which change dimensions) can be fully undone.
+type CanvasSnapshot = { json: string; w: number; h: number };
+
 interface UseImageCanvasOptions {
   onCanvasModified?: () => void;
 }
@@ -38,63 +43,42 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
   const [fontFamily, setFontFamily] = useState("sans-serif");
   const [strokeWidth, setStrokeWidth] = useState(2);
 
-  const undoStack = useRef<string[]>([]);
-  const redoStack = useRef<string[]>([]);
+  const undoStack = useRef<CanvasSnapshot[]>([]);
+  const redoStack = useRef<CanvasSnapshot[]>([]);
   const isRestoring = useRef(false);
   const drawingObj = useRef<fabric.FabricObject | null>(null);
   const drawOrigin = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const ocrRect = useRef<fabric.Rect | null>(null);
+  const cropRect = useRef<fabric.Rect | null>(null);
+  const [cropActive, setCropActive] = useState(false);
   const onOcrRegionRef = useRef<((region: { left: number; top: number; width: number; height: number }) => void) | null>(null);
+  // Scene coordinate space equals the original image's pixel size.
+  const naturalSizeRef = useRef<{ w: number; h: number } | null>(null);
 
   const onCanvasModifiedRef = useRef(options?.onCanvasModified);
   onCanvasModifiedRef.current = options?.onCanvasModified;
 
-  const pushUndo = useCallback(() => {
+  const makeSnapshot = useCallback((): CanvasSnapshot | null => {
     const c = canvasRef.current;
-    if (!c || isRestoring.current) return;
-    const json = JSON.stringify(c.toJSON());
-    undoStack.current.push(json);
+    const nat = naturalSizeRef.current;
+    if (!c || !nat) return null;
+    return { json: JSON.stringify(c.toJSON()), w: nat.w, h: nat.h };
+  }, []);
+
+  const pushUndo = useCallback(() => {
+    if (isRestoring.current) return;
+    const snap = makeSnapshot();
+    if (!snap) return;
+    undoStack.current.push(snap);
     if (undoStack.current.length > MAX_UNDO) undoStack.current.shift();
     redoStack.current = [];
     setCanUndo(true);
     setCanRedo(false);
-  }, []);
+  }, [makeSnapshot]);
 
   const notifyModified = useCallback(() => {
     onCanvasModifiedRef.current?.();
   }, []);
-
-  const undo = useCallback(() => {
-    const c = canvasRef.current;
-    if (!c || undoStack.current.length === 0) return;
-    isRestoring.current = true;
-    const current = JSON.stringify(c.toJSON());
-    redoStack.current.push(current);
-    const prev = undoStack.current.pop()!;
-    c.loadFromJSON(prev).then(() => {
-      c.renderAll();
-      isRestoring.current = false;
-      setCanUndo(undoStack.current.length > 0);
-      setCanRedo(true);
-      notifyModified();
-    });
-  }, [notifyModified]);
-
-  const redo = useCallback(() => {
-    const c = canvasRef.current;
-    if (!c || redoStack.current.length === 0) return;
-    isRestoring.current = true;
-    const current = JSON.stringify(c.toJSON());
-    undoStack.current.push(current);
-    const next = redoStack.current.pop()!;
-    c.loadFromJSON(next).then(() => {
-      c.renderAll();
-      isRestoring.current = false;
-      setCanUndo(true);
-      setCanRedo(redoStack.current.length > 0);
-      notifyModified();
-    });
-  }, [notifyModified]);
 
   const zoomIn = useCallback(() => {
     const c = canvasRef.current;
@@ -114,55 +98,109 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
     setZoomLevel(newZoom);
   }, [zoomLevel]);
 
-  const resetZoom = useCallback(() => {
+  // Size the canvas ELEMENT to the fit-display size and apply a viewport zoom
+  // that maps the natural-size scene into that element. Scene coords stay at
+  // real pixels; only the display is scaled.
+  const fitToContainer = useCallback(() => {
     const c = canvasRef.current;
-    if (!c) return;
-    c.setViewportTransform([1, 0, 0, 1, 0, 0]);
-    setZoomLevel(1);
+    const container = containerRef.current;
+    const nat = naturalSizeRef.current;
+    if (!c || !container || !nat) return;
+    const zoom = computeFitZoom(container.clientWidth, container.clientHeight, nat.w, nat.h);
+    c.setDimensions({ width: Math.round(nat.w * zoom), height: Math.round(nat.h * zoom) });
+    c.setViewportTransform([zoom, 0, 0, zoom, 0, 0]);
+    setZoomLevel(zoom);
   }, []);
 
-  const saveImage = useCallback(async () => {
+  const restoreSnapshot = useCallback(async (snap: CanvasSnapshot) => {
     const c = canvasRef.current;
     if (!c) return;
-    const vpt = c.viewportTransform;
-    c.setViewportTransform([1, 0, 0, 1, 0, 0]);
-    const dataUrl = c.toDataURL({ format: "png", multiplier: 1 });
-    c.setViewportTransform(vpt);
-    const link = document.createElement("a");
-    link.download = "annotated-image.png";
-    link.href = dataUrl;
-    link.click();
-  }, []);
+    isRestoring.current = true;
+    await c.loadFromJSON(snap.json);
+    naturalSizeRef.current = { w: snap.w, h: snap.h };
+    // Ensure the restored background is non-interactive.
+    const bg = c.backgroundImage;
+    if (bg) bg.set({ selectable: false, evented: false });
+    fitToContainer();
+    c.renderAll();
+    isRestoring.current = false;
+    notifyModified();
+  }, [fitToContainer, notifyModified]);
+
+  const undo = useCallback(() => {
+    if (undoStack.current.length === 0) return;
+    const current = makeSnapshot();
+    if (current) redoStack.current.push(current);
+    const prev = undoStack.current.pop()!;
+    restoreSnapshot(prev).then(() => {
+      setCanUndo(undoStack.current.length > 0);
+      setCanRedo(true);
+    });
+  }, [makeSnapshot, restoreSnapshot]);
+
+  const redo = useCallback(() => {
+    if (redoStack.current.length === 0) return;
+    const current = makeSnapshot();
+    if (current) undoStack.current.push(current);
+    if (undoStack.current.length > MAX_UNDO) undoStack.current.shift();
+    const next = redoStack.current.pop()!;
+    restoreSnapshot(next).then(() => {
+      setCanUndo(true);
+      setCanRedo(redoStack.current.length > 0);
+    });
+  }, [makeSnapshot, restoreSnapshot]);
+
+  const refit = useCallback(() => { fitToContainer(); }, [fitToContainer]);
+
+  const getNaturalSize = useCallback(() => naturalSizeRef.current, []);
+
+  const resetZoom = useCallback(() => {
+    fitToContainer();
+  }, [fitToContainer]);
 
   const getCanvasDataUrl = useCallback((region?: { left: number; top: number; width: number; height: number }) => {
     const c = canvasRef.current;
-    if (!c) return null;
+    const nat = naturalSizeRef.current;
+    if (!c || !nat) return null;
 
+    // Region is in scene (real-pixel) coordinates; background is scale 1.
     if (region) {
       const bgImg = c.backgroundImage;
       if (bgImg && bgImg instanceof fabric.FabricImage) {
         const imgEl = bgImg.getElement() as HTMLImageElement;
-        const sx = bgImg.scaleX ?? 1;
-        const sy = bgImg.scaleY ?? 1;
-        const srcLeft = region.left / sx;
-        const srcTop = region.top / sy;
-        const srcW = region.width / sx;
-        const srcH = region.height / sy;
-        const tmpCanvas = document.createElement("canvas");
-        tmpCanvas.width = region.width;
-        tmpCanvas.height = region.height;
-        const ctx = tmpCanvas.getContext("2d")!;
-        ctx.drawImage(imgEl, srcLeft, srcTop, srcW, srcH, 0, 0, region.width, region.height);
-        return tmpCanvas.toDataURL("image/png");
+        const tmp = document.createElement("canvas");
+        tmp.width = Math.round(region.width);
+        tmp.height = Math.round(region.height);
+        const ctx = tmp.getContext("2d")!;
+        ctx.drawImage(
+          imgEl,
+          region.left, region.top, region.width, region.height,
+          0, 0, region.width, region.height,
+        );
+        return tmp.toDataURL("image/png");
       }
     }
 
+    // Full export at natural resolution: temporarily set element to natural size
+    // with an identity viewport, export, then restore the fit display.
     const vpt = c.viewportTransform;
+    const dims = { width: c.getWidth(), height: c.getHeight() };
     c.setViewportTransform([1, 0, 0, 1, 0, 0]);
+    c.setDimensions({ width: nat.w, height: nat.h });
     const url = c.toDataURL({ format: "png", multiplier: 1 });
+    c.setDimensions(dims);
     c.setViewportTransform(vpt);
     return url;
   }, []);
+
+  const saveImage = useCallback(async () => {
+    const dataUrl = getCanvasDataUrl();
+    if (!dataUrl) return;
+    const link = document.createElement("a");
+    link.download = "annotated-image.png";
+    link.href = dataUrl;
+    link.click();
+  }, [getCanvasDataUrl]);
 
   const initCanvas = useCallback((canvasEl: HTMLCanvasElement, container: HTMLDivElement) => {
     if (canvasRef.current) {
@@ -219,41 +257,26 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
 
   const loadBackgroundImage = useCallback(async (url: string, savedCanvasJson?: string) => {
     const c = canvasRef.current;
-    const container = containerRef.current;
-    if (!c || !container) return;
+    if (!c || !containerRef.current) return;
 
     c.clear();
     undoStack.current = [];
     redoStack.current = [];
     setCanUndo(false);
     setCanRedo(false);
-    setZoomLevel(1);
-    c.viewportTransform = [1, 0, 0, 1, 0, 0];
 
     const img = await fabric.FabricImage.fromURL(url, { crossOrigin: "anonymous" });
-    const containerW = container.clientWidth;
-    const containerH = container.clientHeight;
-    const scaleX = containerW / img.width!;
-    const scaleY = containerH / img.height!;
-    const scale = Math.min(scaleX, scaleY, 1);
+    naturalSizeRef.current = { w: img.width!, h: img.height! };
 
-    const canvasW = img.width! * scale;
-    const canvasH = img.height! * scale;
-    c.setDimensions({ width: canvasW, height: canvasH });
-
+    // Background occupies the scene at real-pixel scale.
     img.set({
-      scaleX: scale,
-      scaleY: scale,
-      left: 0,
-      top: 0,
-      originX: "left",
-      originY: "top",
-      selectable: false,
-      evented: false,
+      scaleX: 1, scaleY: 1, left: 0, top: 0,
+      originX: "left", originY: "top",
+      selectable: false, evented: false,
     });
 
     if (savedCanvasJson) {
-      // Restore saved canvas state (safe because background image is not included)
+      // Objects are stored in scene (real-pixel) coordinates; background excluded.
       try {
         await c.loadFromJSON(savedCanvasJson);
       } catch (e) {
@@ -262,8 +285,9 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
     }
 
     c.backgroundImage = img;
+    fitToContainer();
     c.renderAll();
-  }, []);
+  }, [fitToContainer]);
 
   const setOcrRegionCallback = useCallback((cb: ((region: { left: number; top: number; width: number; height: number }) => void) | null) => {
     onOcrRegionRef.current = cb;
@@ -312,6 +336,13 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
       c.renderAll();
     }
 
+    if (cropRect.current && activeTool !== "crop") {
+      c.remove(cropRect.current);
+      cropRect.current = null;
+      setCropActive(false);
+      c.renderAll();
+    }
+
     const handleMouseDown = (opt: fabric.TPointerEventInfo) => {
       if (activeTool === "select" || activeTool === "pen") return;
       const pointer = c.getScenePoint(opt.e);
@@ -333,6 +364,25 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
         c.add(rect);
         ocrRect.current = rect;
         drawingObj.current = rect;
+        return;
+      }
+
+      if (activeTool === "crop") {
+        if (cropRect.current) {
+          c.remove(cropRect.current);
+          cropRect.current = null;
+        }
+        const rect = new fabric.Rect({
+          left: pointer.x, top: pointer.y, width: 0, height: 0,
+          originX: "left", originY: "top",
+          fill: "rgba(0, 120, 255, 0.12)", stroke: "#0078ff", strokeWidth: 2,
+          strokeDashArray: [6, 3],
+          selectable: true, evented: true,
+        });
+        c.add(rect);
+        cropRect.current = rect;
+        drawingObj.current = rect;
+        setCropActive(true);
         return;
       }
 
@@ -417,6 +467,14 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
         return;
       }
 
+      if (activeTool === "crop" && obj instanceof fabric.Rect) {
+        // Keep the rectangle interactive so the user can adjust it via handles.
+        c.setActiveObject(obj);
+        drawingObj.current = null;
+        c.renderAll();
+        return;
+      }
+
       if (activeTool === "arrow" && obj instanceof fabric.Line) {
         const x1 = obj.x1!, y1 = obj.y1!, x2 = obj.x2!, y2 = obj.y2!;
         const angle = Math.atan2(y2 - y1, x2 - x1);
@@ -467,6 +525,109 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
     notifyModified();
   }, [pushUndo, notifyModified]);
 
+  const cancelCrop = useCallback(() => {
+    const c = canvasRef.current;
+    if (c && cropRect.current) {
+      c.remove(cropRect.current);
+      cropRect.current = null;
+      c.renderAll();
+    }
+    setCropActive(false);
+    setActiveTool("select");
+  }, []);
+
+  const applyResize = useCallback(async (newW: number, newH: number): Promise<string | null> => {
+    const c = canvasRef.current;
+    const nat = naturalSizeRef.current;
+    if (!c || !nat || newW < 1 || newH < 1) return null;
+    const bg = c.backgroundImage as fabric.FabricImage | undefined;
+    if (!bg) return null;
+
+    pushUndo();
+
+    const rx = newW / nat.w;
+    const ry = newH / nat.h;
+    const el = bg.getElement() as HTMLImageElement;
+    const off = document.createElement("canvas");
+    off.width = newW;
+    off.height = newH;
+    const ctx = off.getContext("2d")!;
+    ctx.imageSmoothingQuality = "high";
+    // Source rect is the current scene size (real pixels), authoritative over the element's intrinsic size.
+    ctx.drawImage(el, 0, 0, nat.w, nat.h, 0, 0, newW, newH);
+    const resizedUrl = off.toDataURL("image/png");
+
+    const newImg = await fabric.FabricImage.fromURL(resizedUrl);
+    newImg.set({ scaleX: 1, scaleY: 1, left: 0, top: 0, originX: "left", originY: "top", selectable: false, evented: false });
+
+    // Scale annotation position and size proportionally.
+    c.getObjects().forEach((o) => {
+      o.set({
+        left: (o.left ?? 0) * rx,
+        top: (o.top ?? 0) * ry,
+        scaleX: (o.scaleX ?? 1) * rx,
+        scaleY: (o.scaleY ?? 1) * ry,
+      });
+      o.setCoords();
+    });
+
+    naturalSizeRef.current = { w: newW, h: newH };
+    c.backgroundImage = newImg;
+    fitToContainer();
+    c.renderAll();
+    return resizedUrl;
+  }, [pushUndo, fitToContainer]);
+
+  const applyCrop = useCallback(async (): Promise<string | null> => {
+    const c = canvasRef.current;
+    const rect = cropRect.current;
+    const nat = naturalSizeRef.current;
+    if (!c || !rect || !nat) return null;
+
+    // Crop rectangle bounds in scene (real-pixel) coordinates, clamped to image.
+    const rw = (rect.width ?? 0) * (rect.scaleX ?? 1);
+    const rh = (rect.height ?? 0) * (rect.scaleY ?? 1);
+    let left = Math.max(0, Math.round(rect.left ?? 0));
+    let top = Math.max(0, Math.round(rect.top ?? 0));
+    let width = Math.round(rw);
+    let height = Math.round(rh);
+    width = Math.min(width, nat.w - left);
+    height = Math.min(height, nat.h - top);
+    if (width < 1 || height < 1) return null;
+
+    // Remove the selection rect before snapshot/crop.
+    c.remove(rect);
+    cropRect.current = null;
+    setCropActive(false);
+
+    const bg = c.backgroundImage as fabric.FabricImage | undefined;
+    if (!bg) return null;
+
+    pushUndo();
+    const el = bg.getElement() as HTMLImageElement;
+    const off = document.createElement("canvas");
+    off.width = width;
+    off.height = height;
+    off.getContext("2d")!.drawImage(el, left, top, width, height, 0, 0, width, height);
+    const croppedUrl = off.toDataURL("image/png");
+
+    const newImg = await fabric.FabricImage.fromURL(croppedUrl);
+    newImg.set({ scaleX: 1, scaleY: 1, left: 0, top: 0, originX: "left", originY: "top", selectable: false, evented: false });
+
+    // Translate annotations so the cropped region becomes the new origin.
+    c.getObjects().forEach((o) => {
+      o.set({ left: (o.left ?? 0) - left, top: (o.top ?? 0) - top });
+      o.setCoords();
+    });
+
+    naturalSizeRef.current = { w: width, h: height };
+    c.backgroundImage = newImg;
+    fitToContainer();
+    c.renderAll();
+    setActiveTool("select");
+    return croppedUrl;
+  }, [pushUndo, fitToContainer]);
+
 
   return {
     canvasRef,
@@ -481,6 +642,8 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
     zoomIn,
     zoomOut,
     resetZoom,
+    refit,
+    getNaturalSize,
     saveImage,
     getCanvasDataUrl,
     serializeCanvas,
@@ -490,6 +653,10 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
     setOcrRegionCallback,
     clearOcrRect,
     deleteSelected,
+    cropActive,
+    applyCrop,
+    cancelCrop,
+    applyResize,
     strokeColor,
     setStrokeColor,
     fillColor,

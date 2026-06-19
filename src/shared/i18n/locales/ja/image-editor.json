@@ -7,7 +7,13 @@
     "arrow": "→ 矢印",
     "line": "/ 線",
     "pen": "✎ ペン",
+    "crop": "✂ トリミング",
     "ocr": "OCR 範囲選択"
+  },
+  "crop": {
+    "hint": "範囲をドラッグして調整",
+    "apply": "トリミング適用",
+    "cancel": "キャンセル"
   },
   "strokeColor": "線の色",
   "color": "色",
@@ -30,5 +36,17 @@
   "ocrClose": "閉じる",
   "ocrProcessing": "OCR処理中...",
   "ocrError": "OCR処理中にエラーが発生しました。",
-  "ocrNoText": "(テキストが検出されませんでした)"
+  "ocrNoText": "(テキストが検出されませんでした)",
+  "resize": {
+    "button": "⤢ リサイズ",
+    "title": "画像のリサイズ",
+    "current": "現在: {{width}} × {{height}} px",
+    "width": "幅 (px)",
+    "height": "高さ (px)",
+    "keepAspect": "縦横比を固定",
+    "preset": "倍率:",
+    "ok": "OK",
+    "cancel": "キャンセル",
+    "invalid": "1〜10000 の整数を入力してください。"
+  }
 }
