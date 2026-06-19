@@ -321,29 +321,35 @@ pub struct ZennArticleMeta {
 
 /// Tauri command to detect if a directory is a Zenn project
 #[tauri::command]
-pub fn detect_zenn_project(dir_path: String) -> Result<ZennProjectInfo, String> {
-    let path = Path::new(&dir_path);
-    if !path.exists() || !path.is_dir() {
-        return Err("Directory does not exist".to_string());
-    }
+pub async fn detect_zenn_project(dir_path: String) -> Result<ZennProjectInfo, String> {
+    // Off the main thread: the `exists()`/`is_dir()` probes hit the filesystem,
+    // and on a slow/unreachable UNC path they would block the UI until timeout.
+    tokio::task::spawn_blocking(move || {
+        let path = Path::new(&dir_path);
+        if !path.exists() || !path.is_dir() {
+            return Err("Directory does not exist".to_string());
+        }
 
-    let articles_path = path.join("articles");
-    let books_path = path.join("books");
-    let images_path = path.join("images");
-    let has_articles = articles_path.exists() && articles_path.is_dir();
-    let has_books = books_path.exists() && books_path.is_dir();
-    let has_images = images_path.exists() && images_path.is_dir();
+        let articles_path = path.join("articles");
+        let books_path = path.join("books");
+        let images_path = path.join("images");
+        let has_articles = articles_path.exists() && articles_path.is_dir();
+        let has_books = books_path.exists() && books_path.is_dir();
+        let has_images = images_path.exists() && images_path.is_dir();
 
-    // All three directories must exist to be considered a Zenn project
-    let is_zenn = has_articles && has_books && has_images;
+        // All three directories must exist to be considered a Zenn project
+        let is_zenn = has_articles && has_books && has_images;
 
-    Ok(ZennProjectInfo {
-        is_zenn_project: is_zenn,
-        project_root: dir_path,
-        has_articles,
-        has_books,
-        has_images,
+        Ok(ZennProjectInfo {
+            is_zenn_project: is_zenn,
+            project_root: dir_path,
+            has_articles,
+            has_books,
+            has_images,
+        })
     })
+    .await
+    .map_err(|e| format!("zenn detection task failed: {e}"))?
 }
 
 /// Tauri command to batch-retrieve front matter metadata from .md files in articles/
@@ -588,8 +594,12 @@ pub fn open_external_url(url: String) -> Result<(), String> {
 
 /// Check if a folder exists
 #[tauri::command]
-pub fn folder_exists(path: String) -> bool {
-    Path::new(&path).is_dir()
+pub async fn folder_exists(path: String) -> bool {
+    // Off the main thread: `is_dir()` on a slow/unreachable UNC path can block
+    // until the network timeout, which would freeze the UI.
+    tokio::task::spawn_blocking(move || Path::new(&path).is_dir())
+        .await
+        .unwrap_or(false)
 }
 
 /// Open folder in VSCode
