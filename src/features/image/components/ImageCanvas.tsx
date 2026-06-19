@@ -34,6 +34,7 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(funct
     zoomIn,
     zoomOut,
     resetZoom,
+    refit,
     getCanvasDataUrl,
     serializeCanvas,
     initCanvas,
@@ -90,19 +91,16 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(funct
     };
   }, [imageSrc, loadBackgroundImage]);
 
-  // Resize observer — preserve canvas objects on resize
+  // Re-fit display on container resize (objects/undo preserved; no reload).
   useEffect(() => {
     const container = containerElRef.current;
     if (!container) return;
     const observer = new ResizeObserver(() => {
-      if (imageSrc && initialLoadDone.current) {
-        const currentJson = serializeCanvas();
-        loadBackgroundImage(imageSrc, currentJson ?? undefined);
-      }
+      if (imageSrc && initialLoadDone.current) refit();
     });
     observer.observe(container);
     return () => observer.disconnect();
-  }, [imageSrc, loadBackgroundImage, serializeCanvas]);
+  }, [imageSrc, refit]);
 
   // Keyboard shortcuts
   useEffect(() => {

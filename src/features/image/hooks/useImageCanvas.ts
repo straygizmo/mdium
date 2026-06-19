@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as fabric from "fabric";
+import { computeFitZoom } from "../lib/image-transform";
 
 export type ImageTool = "select" | "text" | "rect" | "circle" | "arrow" | "line" | "pen" | "ocr";
 
@@ -45,6 +46,8 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
   const drawOrigin = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const ocrRect = useRef<fabric.Rect | null>(null);
   const onOcrRegionRef = useRef<((region: { left: number; top: number; width: number; height: number }) => void) | null>(null);
+  // Scene coordinate space equals the original image's pixel size.
+  const naturalSizeRef = useRef<{ w: number; h: number } | null>(null);
 
   const onCanvasModifiedRef = useRef(options?.onCanvasModified);
   onCanvasModifiedRef.current = options?.onCanvasModified;
@@ -114,55 +117,71 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
     setZoomLevel(newZoom);
   }, [zoomLevel]);
 
-  const resetZoom = useCallback(() => {
+  // Size the canvas ELEMENT to the fit-display size and apply a viewport zoom
+  // that maps the natural-size scene into that element. Scene coords stay at
+  // real pixels; only the display is scaled.
+  const fitToContainer = useCallback(() => {
     const c = canvasRef.current;
-    if (!c) return;
-    c.setViewportTransform([1, 0, 0, 1, 0, 0]);
-    setZoomLevel(1);
+    const container = containerRef.current;
+    const nat = naturalSizeRef.current;
+    if (!c || !container || !nat) return;
+    const zoom = computeFitZoom(container.clientWidth, container.clientHeight, nat.w, nat.h);
+    c.setDimensions({ width: Math.round(nat.w * zoom), height: Math.round(nat.h * zoom) });
+    c.setViewportTransform([zoom, 0, 0, zoom, 0, 0]);
+    setZoomLevel(zoom);
   }, []);
 
-  const saveImage = useCallback(async () => {
-    const c = canvasRef.current;
-    if (!c) return;
-    const vpt = c.viewportTransform;
-    c.setViewportTransform([1, 0, 0, 1, 0, 0]);
-    const dataUrl = c.toDataURL({ format: "png", multiplier: 1 });
-    c.setViewportTransform(vpt);
-    const link = document.createElement("a");
-    link.download = "annotated-image.png";
-    link.href = dataUrl;
-    link.click();
-  }, []);
+  const refit = useCallback(() => { fitToContainer(); }, [fitToContainer]);
+
+  const getNaturalSize = useCallback(() => naturalSizeRef.current, []);
+
+  const resetZoom = useCallback(() => {
+    fitToContainer();
+  }, [fitToContainer]);
 
   const getCanvasDataUrl = useCallback((region?: { left: number; top: number; width: number; height: number }) => {
     const c = canvasRef.current;
-    if (!c) return null;
+    const nat = naturalSizeRef.current;
+    if (!c || !nat) return null;
 
+    // Region is in scene (real-pixel) coordinates; background is scale 1.
     if (region) {
       const bgImg = c.backgroundImage;
       if (bgImg && bgImg instanceof fabric.FabricImage) {
         const imgEl = bgImg.getElement() as HTMLImageElement;
-        const sx = bgImg.scaleX ?? 1;
-        const sy = bgImg.scaleY ?? 1;
-        const srcLeft = region.left / sx;
-        const srcTop = region.top / sy;
-        const srcW = region.width / sx;
-        const srcH = region.height / sy;
-        const tmpCanvas = document.createElement("canvas");
-        tmpCanvas.width = region.width;
-        tmpCanvas.height = region.height;
-        const ctx = tmpCanvas.getContext("2d")!;
-        ctx.drawImage(imgEl, srcLeft, srcTop, srcW, srcH, 0, 0, region.width, region.height);
-        return tmpCanvas.toDataURL("image/png");
+        const tmp = document.createElement("canvas");
+        tmp.width = Math.round(region.width);
+        tmp.height = Math.round(region.height);
+        const ctx = tmp.getContext("2d")!;
+        ctx.drawImage(
+          imgEl,
+          region.left, region.top, region.width, region.height,
+          0, 0, region.width, region.height,
+        );
+        return tmp.toDataURL("image/png");
       }
     }
 
+    // Full export at natural resolution: temporarily set element to natural size
+    // with an identity viewport, export, then restore the fit display.
     const vpt = c.viewportTransform;
+    const dims = { width: c.getWidth(), height: c.getHeight() };
     c.setViewportTransform([1, 0, 0, 1, 0, 0]);
+    c.setDimensions({ width: nat.w, height: nat.h });
     const url = c.toDataURL({ format: "png", multiplier: 1 });
+    c.setDimensions(dims);
     c.setViewportTransform(vpt);
     return url;
   }, []);
+
+  const saveImage = useCallback(async () => {
+    const dataUrl = getCanvasDataUrl();
+    if (!dataUrl) return;
+    const link = document.createElement("a");
+    link.download = "annotated-image.png";
+    link.href = dataUrl;
+    link.click();
+  }, [getCanvasDataUrl]);
 
   const initCanvas = useCallback((canvasEl: HTMLCanvasElement, container: HTMLDivElement) => {
     if (canvasRef.current) {
@@ -219,41 +238,26 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
 
   const loadBackgroundImage = useCallback(async (url: string, savedCanvasJson?: string) => {
     const c = canvasRef.current;
-    const container = containerRef.current;
-    if (!c || !container) return;
+    if (!c || !containerRef.current) return;
 
     c.clear();
     undoStack.current = [];
     redoStack.current = [];
     setCanUndo(false);
     setCanRedo(false);
-    setZoomLevel(1);
-    c.viewportTransform = [1, 0, 0, 1, 0, 0];
 
     const img = await fabric.FabricImage.fromURL(url, { crossOrigin: "anonymous" });
-    const containerW = container.clientWidth;
-    const containerH = container.clientHeight;
-    const scaleX = containerW / img.width!;
-    const scaleY = containerH / img.height!;
-    const scale = Math.min(scaleX, scaleY, 1);
+    naturalSizeRef.current = { w: img.width!, h: img.height! };
 
-    const canvasW = img.width! * scale;
-    const canvasH = img.height! * scale;
-    c.setDimensions({ width: canvasW, height: canvasH });
-
+    // Background occupies the scene at real-pixel scale.
     img.set({
-      scaleX: scale,
-      scaleY: scale,
-      left: 0,
-      top: 0,
-      originX: "left",
-      originY: "top",
-      selectable: false,
-      evented: false,
+      scaleX: 1, scaleY: 1, left: 0, top: 0,
+      originX: "left", originY: "top",
+      selectable: false, evented: false,
     });
 
     if (savedCanvasJson) {
-      // Restore saved canvas state (safe because background image is not included)
+      // Objects are stored in scene (real-pixel) coordinates; background excluded.
       try {
         await c.loadFromJSON(savedCanvasJson);
       } catch (e) {
@@ -262,8 +266,9 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
     }
 
     c.backgroundImage = img;
+    fitToContainer();
     c.renderAll();
-  }, []);
+  }, [fitToContainer]);
 
   const setOcrRegionCallback = useCallback((cb: ((region: { left: number; top: number; width: number; height: number }) => void) | null) => {
     onOcrRegionRef.current = cb;
@@ -481,6 +486,8 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
     zoomIn,
     zoomOut,
     resetZoom,
+    refit,
+    getNaturalSize,
     saveImage,
     getCanvasDataUrl,
     serializeCanvas,
