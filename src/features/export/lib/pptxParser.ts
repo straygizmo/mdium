@@ -73,6 +73,22 @@ function shapeBullets(sp: Element): PptxBlock | null {
   return items.length ? { kind: "bullets", items } : null;
 }
 
+// Extract an <a:tbl> into a rows-of-cells matrix.
+function parseTable(tbl: Element): PptxBlock {
+  const rows: string[][] = [];
+  for (const tr of Array.from(tbl.getElementsByTagName("a:tr"))) {
+    const cells: string[] = [];
+    for (const tc of Array.from(tr.getElementsByTagName("a:tc"))) {
+      const texts = Array.from(tc.getElementsByTagName("a:p"))
+        .map((p) => paragraphText(p))
+        .filter(Boolean);
+      cells.push(texts.join(" "));
+    }
+    rows.push(cells);
+  }
+  return { kind: "table", rows };
+}
+
 export function parseSlide(src: SlideSource): PptxSlide {
   const doc = parseXml(src.slideXml);
   const spTree = doc.getElementsByTagName("p:spTree")[0];
@@ -80,14 +96,22 @@ export function parseSlide(src: SlideSource): PptxSlide {
   const blocks: PptxBlock[] = [];
 
   if (spTree) {
-    for (const sp of Array.from(spTree.getElementsByTagName("p:sp"))) {
-      if (title === null && isTitleShape(sp)) {
-        const p = sp.getElementsByTagName("a:p")[0];
-        title = p ? paragraphText(p) : "";
-        continue;
+    for (const node of Array.from(spTree.childNodes)) {
+      if (node.nodeType !== 1) continue;
+      const el = node as Element;
+
+      if (el.localName === "sp") {
+        if (title === null && isTitleShape(el)) {
+          const p = el.getElementsByTagName("a:p")[0];
+          title = p ? paragraphText(p) : "";
+          continue;
+        }
+        const bullets = shapeBullets(el);
+        if (bullets) blocks.push(bullets);
+      } else if (el.localName === "graphicFrame") {
+        const tbl = el.getElementsByTagName("a:tbl")[0];
+        if (tbl) blocks.push(parseTable(tbl));
       }
-      const bullets = shapeBullets(sp);
-      if (bullets) blocks.push(bullets);
     }
   }
 

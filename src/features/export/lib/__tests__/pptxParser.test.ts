@@ -20,6 +20,33 @@ const bodySp = (paras: string) =>
 const para = (text: string, lvl?: number) =>
   `<a:p>${lvl ? `<a:pPr lvl="${lvl}"/>` : ""}<a:r><a:t>${text}</a:t></a:r></a:p>`;
 
+describe("pptxParser: tables", () => {
+  const tableFrame = `
+    <p:graphicFrame><a:graphic><a:graphicData>
+      <a:tbl>
+        <a:tr><a:tc><a:txBody><a:p><a:r><a:t>H1</a:t></a:r></a:p></a:txBody></a:tc>
+              <a:tc><a:txBody><a:p><a:r><a:t>H2</a:t></a:r></a:p></a:txBody></a:tc></a:tr>
+        <a:tr><a:tc><a:txBody><a:p><a:r><a:t>a|b</a:t></a:r></a:p></a:txBody></a:tc>
+              <a:tc><a:txBody><a:p><a:r><a:t>d</a:t></a:r></a:p></a:txBody></a:tc></a:tr>
+      </a:tbl>
+    </a:graphicData></a:graphic></p:graphicFrame>`;
+
+  function frameSlide(frame: string) {
+    return `<?xml version="1.0"?>
+      <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+             xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+        <p:cSld><p:spTree>${frame}</p:spTree></p:cSld></p:sld>`;
+  }
+
+  it("converts a:tbl to a Markdown table with header row and escaped pipes", () => {
+    const slide = parseSlide({ slideXml: frameSlide(tableFrame), relsXml: null, notesXml: null });
+    const { markdown } = renderSlides([slide], "deck", { slideFallback: (n) => `S${n}`, notes: "N:" });
+    expect(markdown).toContain("| H1 | H2 |");
+    expect(markdown).toContain("| --- | --- |");
+    expect(markdown).toContain("| a\\|b | d |");
+  });
+});
+
 describe("pptxParser: title + bullets", () => {
   it("uses title placeholder as heading and paragraphs as nested bullets", () => {
     const slide = parseSlide({
