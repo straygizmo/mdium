@@ -6,6 +6,15 @@ import { useUiStore, type LeftPanel } from "./ui-store";
 import type { editor } from "monaco-editor";
 import type { CsvDelimiter } from "@/features/preview/lib/delimiter";
 
+/** Revoke a tab's current and historical image object URLs (leak prevention). */
+function revokeTabImageUrls(
+  tab: { imageBlobUrl?: string; imageBlobUrlHistory?: string[] } | undefined
+): void {
+  if (!tab || typeof URL.revokeObjectURL !== "function") return;
+  if (tab.imageBlobUrl) URL.revokeObjectURL(tab.imageBlobUrl);
+  for (const u of tab.imageBlobUrlHistory ?? []) URL.revokeObjectURL(u);
+}
+
 export interface Tab {
   id: string;
   filePath: string;
@@ -36,6 +45,18 @@ export interface Tab {
   csvDelimiter?: CsvDelimiter;
   /** Image file blob URL (for preview) */
   imageBlobUrl?: string;
+  /**
+   * Object URLs that were superseded by crop/resize. They are kept alive (not
+   * revoked immediately) because undo snapshots still reference them by src;
+   * all of them are revoked together when the tab closes.
+   */
+  imageBlobUrlHistory?: string[];
+  /**
+   * True when a destructive image edit (crop/resize) is pending an explicit
+   * save. Such tabs are excluded from autosave so the original file is not
+   * silently overwritten; cleared on save via markClean.
+   */
+  imageDestructiveEditPending?: boolean;
   /** Fabric.js JSON for image canvas (for preserving state across tab switches) */
   imageCanvasJson?: string;
   /** Whether this tab should use the code editor (non-markdown text file) */
@@ -163,11 +184,9 @@ export const useTabStore = create<TabState>()(
   },
 
   closeTab: (id) => {
-    // Revoke blob URL for image tab
+    // Revoke blob URLs for image tab (current + superseded crop/resize urls)
     const closingTab = get().tabs.find((t) => t.id === id);
-    if (closingTab?.imageBlobUrl) {
-      URL.revokeObjectURL(closingTab.imageBlobUrl);
-    }
+    revokeTabImageUrls(closingTab);
     set((s) => {
       const closedTab = s.tabs.find((t) => t.id === id);
       const newTabs = s.tabs.filter((t) => t.id !== id);
@@ -260,7 +279,9 @@ export const useTabStore = create<TabState>()(
 
   markClean: (id) => {
     set((s) => ({
-      tabs: s.tabs.map((t) => (t.id === id ? { ...t, dirty: false } : t)),
+      tabs: s.tabs.map((t) =>
+        t.id === id ? { ...t, dirty: false, imageDestructiveEditPending: false } : t
+      ),
     }));
   },
 
@@ -276,11 +297,22 @@ export const useTabStore = create<TabState>()(
     set((s) => ({
       tabs: s.tabs.map((t) => {
         if (t.id !== id) return t;
-        // Revoke the previous object URL to avoid leaks (no-op for data URLs).
-        if (t.imageBlobUrl && t.imageBlobUrl !== url && typeof URL.revokeObjectURL === "function") {
-          URL.revokeObjectURL(t.imageBlobUrl);
-        }
-        return { ...t, imageBlobUrl: url, dirty: true };
+        // Keep the superseded url alive: undo snapshots still reference it by
+        // src, so revoking now would break undo. Track it for revocation on
+        // close instead.
+        const history =
+          t.imageBlobUrl && t.imageBlobUrl !== url
+            ? [...(t.imageBlobUrlHistory ?? []), t.imageBlobUrl]
+            : t.imageBlobUrlHistory ?? [];
+        return {
+          ...t,
+          imageBlobUrl: url,
+          imageBlobUrlHistory: history,
+          // Crop/resize change real pixels — require an explicit save so
+          // autosave does not silently overwrite the original file.
+          imageDestructiveEditPending: true,
+          dirty: true,
+        };
       }),
     }));
   },
@@ -453,8 +485,8 @@ export const useTabStore = create<TabState>()(
 
     // Revoke blob URLs for image tabs being removed (prevent memory leak)
     for (const tab of tabs) {
-      if (tab.folderPath === folderPath && tab.imageBlobUrl) {
-        URL.revokeObjectURL(tab.imageBlobUrl);
+      if (tab.folderPath === folderPath) {
+        revokeTabImageUrls(tab);
       }
     }
 

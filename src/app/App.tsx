@@ -963,8 +963,10 @@ export function App() {
         const tab = useTabStore.getState().tabs.find(
           (t) => t.id === useTabStore.getState().activeTabId
         );
-        // Skip untitled or unchanged tabs
-        if (tab && tab.filePath && tab.dirty) {
+        // Skip untitled or unchanged tabs. Also skip tabs with a pending
+        // destructive image edit (crop/resize): those require an explicit save
+        // so the original file is not silently overwritten.
+        if (tab && tab.filePath && tab.dirty && !tab.imageDestructiveEditPending) {
           handleSave();
         }
       }, 30000);
