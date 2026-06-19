@@ -159,9 +159,11 @@ export function RagPanel({ folderPath, aiSettings, onOpenFile }: RagPanelProps) 
                   : buildProgress
                     ? buildProgress.phase === "scanning"
                       ? `${t("ragPhaseScanning")} ${buildProgress.current}/${buildProgress.total}`
-                      : buildProgress.phase === "embedding"
-                        ? `${t("ragPhaseEmbedding")} ${buildProgress.current}/${buildProgress.total}`
-                        : t("ragPhaseSaving")
+                      : buildProgress.phase === "preparing"
+                        ? t("ragPhasePreparing")
+                        : buildProgress.phase === "embedding"
+                          ? `${t("ragPhaseEmbedding")} ${buildProgress.current}/${buildProgress.total}`
+                          : t("ragPhaseSaving")
                     : "Building..."
               : "No index"}
         </span>

@@ -40,6 +40,7 @@
   "ragDeleteChat": "チャットを削除",
   "ragDownloadingModel": "モデルをダウンロード中...",
   "ragPhaseScanning": "スキャン中",
+  "ragPhasePreparing": "準備中…",
   "ragPhaseEmbedding": "ベクトル化中",
   "ragPhaseSaving": "保存中",
   "ragBuildError": "インデックスの作成に失敗しました",

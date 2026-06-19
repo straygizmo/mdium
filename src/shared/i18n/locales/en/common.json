@@ -40,6 +40,7 @@
   "ragDeleteChat": "Delete chat",
   "ragDownloadingModel": "Downloading model...",
   "ragPhaseScanning": "Scanning",
+  "ragPhasePreparing": "Preparing…",
   "ragPhaseEmbedding": "Embedding",
   "ragPhaseSaving": "Saving",
   "ragBuildError": "Index build failed",

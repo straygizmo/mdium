@@ -67,7 +67,7 @@ async function callAI(
 }
 
 interface BuildProgress {
-  phase: "scanning" | "embedding" | "saving";
+  phase: "scanning" | "preparing" | "embedding" | "saving";
   current: number;
   total: number;
   currentFile: string;
@@ -133,13 +133,18 @@ export function useRagFeatures({ folderPath, aiSettings, onOpenFile }: UseRagFea
       unlisten = await listen<{ current: number; total: number; file: string }>(
         "rag-scan-progress",
         (e) => {
-          const fileName = e.payload.file.split(/[\\/]/).pop() ?? "";
-          setBuildProgress({
-            phase: "scanning",
-            current: e.payload.current,
-            total: e.payload.total,
-            currentFile: fileName,
-          });
+          const { current, total, file } = e.payload;
+          const fileName = file.split(/[\\/]/).pop() ?? "";
+          // Once the final file is reached, `rag_scan_folder` still has to
+          // finish the last file and serialize the entire chunk array back
+          // over IPC — a stretch with no progress events. Flip to a
+          // transitional "preparing" phase so the badge doesn't appear frozen
+          // on "Scanning N/N" during that gap.
+          setBuildProgress(
+            current >= total
+              ? { phase: "preparing", current, total, currentFile: "" }
+              : { phase: "scanning", current, total, currentFile: fileName },
+          );
         },
       );
 
