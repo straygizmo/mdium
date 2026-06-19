@@ -142,6 +142,7 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
     if (redoStack.current.length === 0) return;
     const current = makeSnapshot();
     if (current) undoStack.current.push(current);
+    if (undoStack.current.length > MAX_UNDO) undoStack.current.shift();
     const next = redoStack.current.pop()!;
     restoreSnapshot(next).then(() => {
       setCanUndo(true);
@@ -552,7 +553,8 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
     off.height = newH;
     const ctx = off.getContext("2d")!;
     ctx.imageSmoothingQuality = "high";
-    ctx.drawImage(el, 0, 0, el.naturalWidth || nat.w, el.naturalHeight || nat.h, 0, 0, newW, newH);
+    // Source rect is the current scene size (real pixels), authoritative over the element's intrinsic size.
+    ctx.drawImage(el, 0, 0, nat.w, nat.h, 0, 0, newW, newH);
     const resizedUrl = off.toDataURL("image/png");
 
     const newImg = await fabric.FabricImage.fromURL(resizedUrl);
@@ -598,10 +600,10 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
     cropRect.current = null;
     setCropActive(false);
 
-    pushUndo();
-
     const bg = c.backgroundImage as fabric.FabricImage | undefined;
     if (!bg) return null;
+
+    pushUndo();
     const el = bg.getElement() as HTMLImageElement;
     const off = document.createElement("canvas");
     off.width = width;
