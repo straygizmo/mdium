@@ -19,7 +19,7 @@ interface ImageCanvasProps {
 }
 
 export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(function ImageCanvas(
-  { imageSrc, canvasJson, onCanvasModified, imageFileType },
+  { imageSrc, canvasJson, onCanvasModified, imageFileType, onImageReplaced },
   ref
 ) {
   const canvasElRef = useRef<HTMLCanvasElement | null>(null);
@@ -44,6 +44,9 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(funct
     setOcrRegionCallback,
     clearOcrRect,
     deleteSelected,
+    cropActive,
+    applyCrop,
+    cancelCrop,
     strokeColor,
     setStrokeColor,
     fillColor,
@@ -131,6 +134,16 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(funct
     return () => window.removeEventListener("keydown", handleKey);
   }, [undo, redo, deleteSelected]);
 
+  // Persist a crop/resize result: convert the data URL to a blob URL,
+  // mark it as a self-edit so the reload effect skips it, then notify App.
+  const persistReplacedImage = useCallback(async (dataUrl: string) => {
+    const blob = await (await fetch(dataUrl)).blob();
+    const blobUrl = URL.createObjectURL(blob);
+    selfEditUrlRef.current = blobUrl;
+    onImageReplaced?.(blobUrl);
+    onCanvasModified?.();
+  }, [onImageReplaced, onCanvasModified]);
+
   const runOcr = useCallback(async (dataUrl: string) => {
     setOcrLoading(true);
     try {
@@ -157,6 +170,11 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(funct
   const handleOcr = useCallback(() => {
     setActiveTool("ocr");
   }, [setActiveTool]);
+
+  const handleApplyCrop = useCallback(async () => {
+    const url = await applyCrop();
+    if (url) await persistReplacedImage(url);
+  }, [applyCrop, persistReplacedImage]);
 
   const handleCopyOcr = useCallback(async () => {
     if (ocrResult) {
@@ -196,6 +214,13 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(funct
         strokeWidth={strokeWidth}
         onStrokeWidthChange={setStrokeWidth}
       />
+      {activeTool === "crop" && cropActive && (
+        <div className="image-crop-bar">
+          <span className="image-crop-hint">{t("crop.hint")}</span>
+          <button className="im-tb-btn im-tb-btn--active" onClick={handleApplyCrop}>{t("crop.apply")}</button>
+          <button className="im-tb-btn" onClick={cancelCrop}>{t("crop.cancel")}</button>
+        </div>
+      )}
       <div className="image-canvas-container" ref={containerElRef}>
         <div className="image-canvas-wrapper">
           <canvas ref={canvasElRef} />

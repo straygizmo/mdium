@@ -7,7 +7,13 @@
     "arrow": "→ Arrow",
     "line": "/ Line",
     "pen": "✎ Pen",
+    "crop": "✂ Crop",
     "ocr": "OCR Region"
+  },
+  "crop": {
+    "hint": "Drag to select, adjust with handles",
+    "apply": "Apply Crop",
+    "cancel": "Cancel"
   },
   "strokeColor": "Stroke Color",
   "color": "Color",

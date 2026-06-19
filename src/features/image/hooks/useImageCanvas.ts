@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import * as fabric from "fabric";
 import { computeFitZoom } from "../lib/image-transform";
 
-export type ImageTool = "select" | "text" | "rect" | "circle" | "arrow" | "line" | "pen" | "ocr";
+export type ImageTool = "select" | "text" | "rect" | "circle" | "arrow" | "line" | "pen" | "ocr" | "crop";
 
 export const FONT_FAMILIES = [
   "sans-serif",
@@ -49,6 +49,8 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
   const drawingObj = useRef<fabric.FabricObject | null>(null);
   const drawOrigin = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const ocrRect = useRef<fabric.Rect | null>(null);
+  const cropRect = useRef<fabric.Rect | null>(null);
+  const [cropActive, setCropActive] = useState(false);
   const onOcrRegionRef = useRef<((region: { left: number; top: number; width: number; height: number }) => void) | null>(null);
   // Scene coordinate space equals the original image's pixel size.
   const naturalSizeRef = useRef<{ w: number; h: number } | null>(null);
@@ -333,6 +335,13 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
       c.renderAll();
     }
 
+    if (cropRect.current && activeTool !== "crop") {
+      c.remove(cropRect.current);
+      cropRect.current = null;
+      setCropActive(false);
+      c.renderAll();
+    }
+
     const handleMouseDown = (opt: fabric.TPointerEventInfo) => {
       if (activeTool === "select" || activeTool === "pen") return;
       const pointer = c.getScenePoint(opt.e);
@@ -354,6 +363,25 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
         c.add(rect);
         ocrRect.current = rect;
         drawingObj.current = rect;
+        return;
+      }
+
+      if (activeTool === "crop") {
+        if (cropRect.current) {
+          c.remove(cropRect.current);
+          cropRect.current = null;
+        }
+        const rect = new fabric.Rect({
+          left: pointer.x, top: pointer.y, width: 0, height: 0,
+          originX: "left", originY: "top",
+          fill: "rgba(0, 120, 255, 0.12)", stroke: "#0078ff", strokeWidth: 2,
+          strokeDashArray: [6, 3],
+          selectable: true, evented: true,
+        });
+        c.add(rect);
+        cropRect.current = rect;
+        drawingObj.current = rect;
+        setCropActive(true);
         return;
       }
 
@@ -438,6 +466,14 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
         return;
       }
 
+      if (activeTool === "crop" && obj instanceof fabric.Rect) {
+        // Keep the rectangle interactive so the user can adjust it via handles.
+        c.setActiveObject(obj);
+        drawingObj.current = null;
+        c.renderAll();
+        return;
+      }
+
       if (activeTool === "arrow" && obj instanceof fabric.Line) {
         const x1 = obj.x1!, y1 = obj.y1!, x2 = obj.x2!, y2 = obj.y2!;
         const angle = Math.atan2(y2 - y1, x2 - x1);
@@ -488,6 +524,67 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
     notifyModified();
   }, [pushUndo, notifyModified]);
 
+  const cancelCrop = useCallback(() => {
+    const c = canvasRef.current;
+    if (c && cropRect.current) {
+      c.remove(cropRect.current);
+      cropRect.current = null;
+      c.renderAll();
+    }
+    setCropActive(false);
+    setActiveTool("select");
+  }, []);
+
+  const applyCrop = useCallback(async (): Promise<string | null> => {
+    const c = canvasRef.current;
+    const rect = cropRect.current;
+    const nat = naturalSizeRef.current;
+    if (!c || !rect || !nat) return null;
+
+    // Crop rectangle bounds in scene (real-pixel) coordinates, clamped to image.
+    const rw = (rect.width ?? 0) * (rect.scaleX ?? 1);
+    const rh = (rect.height ?? 0) * (rect.scaleY ?? 1);
+    let left = Math.max(0, Math.round(rect.left ?? 0));
+    let top = Math.max(0, Math.round(rect.top ?? 0));
+    let width = Math.round(rw);
+    let height = Math.round(rh);
+    width = Math.min(width, nat.w - left);
+    height = Math.min(height, nat.h - top);
+    if (width < 1 || height < 1) return null;
+
+    // Remove the selection rect before snapshot/crop.
+    c.remove(rect);
+    cropRect.current = null;
+    setCropActive(false);
+
+    pushUndo();
+
+    const bg = c.backgroundImage as fabric.FabricImage | undefined;
+    if (!bg) return null;
+    const el = bg.getElement() as HTMLImageElement;
+    const off = document.createElement("canvas");
+    off.width = width;
+    off.height = height;
+    off.getContext("2d")!.drawImage(el, left, top, width, height, 0, 0, width, height);
+    const croppedUrl = off.toDataURL("image/png");
+
+    const newImg = await fabric.FabricImage.fromURL(croppedUrl);
+    newImg.set({ scaleX: 1, scaleY: 1, left: 0, top: 0, originX: "left", originY: "top", selectable: false, evented: false });
+
+    // Translate annotations so the cropped region becomes the new origin.
+    c.getObjects().forEach((o) => {
+      o.set({ left: (o.left ?? 0) - left, top: (o.top ?? 0) - top });
+      o.setCoords();
+    });
+
+    naturalSizeRef.current = { w: width, h: height };
+    c.backgroundImage = newImg;
+    fitToContainer();
+    c.renderAll();
+    setActiveTool("select");
+    return croppedUrl;
+  }, [pushUndo, fitToContainer]);
+
 
   return {
     canvasRef,
@@ -513,6 +610,9 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
     setOcrRegionCallback,
     clearOcrRect,
     deleteSelected,
+    cropActive,
+    applyCrop,
+    cancelCrop,
     strokeColor,
     setStrokeColor,
     fillColor,

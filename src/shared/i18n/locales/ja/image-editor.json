@@ -7,7 +7,13 @@
     "arrow": "→ 矢印",
     "line": "/ 線",
     "pen": "✎ ペン",
+    "crop": "✂ トリミング",
     "ocr": "OCR 範囲選択"
+  },
+  "crop": {
+    "hint": "範囲をドラッグして調整",
+    "apply": "トリミング適用",
+    "cancel": "キャンセル"
   },
   "strokeColor": "線の色",
   "color": "色",

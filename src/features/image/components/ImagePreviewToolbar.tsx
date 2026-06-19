@@ -31,7 +31,7 @@ interface Props {
 }
 
 const TOOL_IDS: ImageTool[] = [
-  "select", "text", "rect", "circle", "arrow", "line", "pen", "ocr",
+  "select", "text", "rect", "circle", "arrow", "line", "pen", "crop", "ocr",
 ];
 
 const PRESET_COLORS = [
@@ -67,7 +67,9 @@ const ImagePreviewToolbar: FC<Props> = ({
   const { t } = useTranslation("imageEditor");
 
   const DRAWING_TOOLS: ImageTool[] = ["text", "rect", "circle", "arrow", "line", "pen"];
-  const visibleTools = isSvg ? TOOL_IDS.filter((id) => !DRAWING_TOOLS.includes(id)) : TOOL_IDS;
+  const RASTER_ONLY_TOOLS: ImageTool[] = ["crop"];
+  const hiddenForSvg = new Set<ImageTool>([...DRAWING_TOOLS, ...RASTER_ONLY_TOOLS]);
+  const visibleTools = isSvg ? TOOL_IDS.filter((id) => !hiddenForSvg.has(id)) : TOOL_IDS;
 
   const showTextOptions = !isSvg && activeTool === "text";
   const showShapeOptions = !isSvg && ["rect", "circle"].includes(activeTool);
