@@ -15,6 +15,7 @@ interface ImageCanvasProps {
   canvasJson?: string;
   onCanvasModified?: () => void;
   imageFileType?: string;
+  onImageReplaced?: (blobUrl: string) => void;
 }
 
 export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(function ImageCanvas(
@@ -67,6 +68,9 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(funct
   const [ocrResult, setOcrResult] = useState<string | null>(null);
   const prevUrlRef = useRef<string | null>(null);
   const initialLoadDone = useRef(false);
+  // When we replace the image via crop/resize, the new imageSrc flows back in.
+  // Skip the reload for that self-initiated change so annotations/undo survive.
+  const selfEditUrlRef = useRef<string | null>(null);
 
   // Init canvas on mount
   useEffect(() => {
@@ -79,6 +83,12 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(funct
 
   // Load background image when URL changes
   useEffect(() => {
+    if (imageSrc && imageSrc === selfEditUrlRef.current) {
+      // Self-initiated replacement: canvas already reflects it.
+      prevUrlRef.current = imageSrc;
+      selfEditUrlRef.current = null;
+      return;
+    }
     if (imageSrc && imageSrc !== prevUrlRef.current) {
       prevUrlRef.current = imageSrc;
       initialLoadDone.current = false;

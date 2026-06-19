@@ -1144,6 +1144,9 @@ export function App() {
                     canvasJson={activeTab.imageCanvasJson}
                     onCanvasModified={handleImageCanvasModified}
                     imageFileType={activeTab.imageFileType}
+                    onImageReplaced={(url) => {
+                      if (activeTab) useTabStore.getState().updateImageBlobUrl(activeTab.id, url);
+                    }}
                   />
                 </div>
               ) : activeTab.isCodeFile ? (

@@ -84,6 +84,7 @@ interface TabState {
   redoContent: (id: string) => void;
   markClean: (id: string) => void;
   updateImageCanvasState: (id: string, canvasJson: string) => void;
+  updateImageBlobUrl: (id: string, url: string) => void;
   updateTabEditorViewState: (id: string, state: editor.ICodeEditorViewState | null) => void;
   updateTabCsvPreview: (id: string, partial: { scrollTop?: number; headerMode?: boolean }) => void;
   updateTabFilePath: (id: string, filePath: string, fileName: string) => void;
@@ -268,6 +269,19 @@ export const useTabStore = create<TabState>()(
       tabs: s.tabs.map((t) =>
         t.id === id ? { ...t, imageCanvasJson: canvasJson, dirty: true } : t
       ),
+    }));
+  },
+
+  updateImageBlobUrl: (id, url) => {
+    set((s) => ({
+      tabs: s.tabs.map((t) => {
+        if (t.id !== id) return t;
+        // Revoke the previous object URL to avoid leaks (no-op for data URLs).
+        if (t.imageBlobUrl && t.imageBlobUrl !== url && typeof URL.revokeObjectURL === "function") {
+          URL.revokeObjectURL(t.imageBlobUrl);
+        }
+        return { ...t, imageBlobUrl: url, dirty: true };
+      }),
     }));
   },
 
