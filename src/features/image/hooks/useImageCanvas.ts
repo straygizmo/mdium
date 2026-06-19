@@ -22,6 +22,10 @@ export const FONT_SIZES = [10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 64];
 
 const MAX_UNDO = 50;
 
+// A snapshot captures objects+background (via toJSON) and the natural size,
+// so crop/resize (which change dimensions) can be fully undone.
+type CanvasSnapshot = { json: string; w: number; h: number };
+
 interface UseImageCanvasOptions {
   onCanvasModified?: () => void;
 }
@@ -39,8 +43,8 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
   const [fontFamily, setFontFamily] = useState("sans-serif");
   const [strokeWidth, setStrokeWidth] = useState(2);
 
-  const undoStack = useRef<string[]>([]);
-  const redoStack = useRef<string[]>([]);
+  const undoStack = useRef<CanvasSnapshot[]>([]);
+  const redoStack = useRef<CanvasSnapshot[]>([]);
   const isRestoring = useRef(false);
   const drawingObj = useRef<fabric.FabricObject | null>(null);
   const drawOrigin = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -52,52 +56,27 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
   const onCanvasModifiedRef = useRef(options?.onCanvasModified);
   onCanvasModifiedRef.current = options?.onCanvasModified;
 
-  const pushUndo = useCallback(() => {
+  const makeSnapshot = useCallback((): CanvasSnapshot | null => {
     const c = canvasRef.current;
-    if (!c || isRestoring.current) return;
-    const json = JSON.stringify(c.toJSON());
-    undoStack.current.push(json);
+    const nat = naturalSizeRef.current;
+    if (!c || !nat) return null;
+    return { json: JSON.stringify(c.toJSON()), w: nat.w, h: nat.h };
+  }, []);
+
+  const pushUndo = useCallback(() => {
+    if (isRestoring.current) return;
+    const snap = makeSnapshot();
+    if (!snap) return;
+    undoStack.current.push(snap);
     if (undoStack.current.length > MAX_UNDO) undoStack.current.shift();
     redoStack.current = [];
     setCanUndo(true);
     setCanRedo(false);
-  }, []);
+  }, [makeSnapshot]);
 
   const notifyModified = useCallback(() => {
     onCanvasModifiedRef.current?.();
   }, []);
-
-  const undo = useCallback(() => {
-    const c = canvasRef.current;
-    if (!c || undoStack.current.length === 0) return;
-    isRestoring.current = true;
-    const current = JSON.stringify(c.toJSON());
-    redoStack.current.push(current);
-    const prev = undoStack.current.pop()!;
-    c.loadFromJSON(prev).then(() => {
-      c.renderAll();
-      isRestoring.current = false;
-      setCanUndo(undoStack.current.length > 0);
-      setCanRedo(true);
-      notifyModified();
-    });
-  }, [notifyModified]);
-
-  const redo = useCallback(() => {
-    const c = canvasRef.current;
-    if (!c || redoStack.current.length === 0) return;
-    isRestoring.current = true;
-    const current = JSON.stringify(c.toJSON());
-    undoStack.current.push(current);
-    const next = redoStack.current.pop()!;
-    c.loadFromJSON(next).then(() => {
-      c.renderAll();
-      isRestoring.current = false;
-      setCanUndo(true);
-      setCanRedo(redoStack.current.length > 0);
-      notifyModified();
-    });
-  }, [notifyModified]);
 
   const zoomIn = useCallback(() => {
     const c = canvasRef.current;
@@ -130,6 +109,43 @@ export function useImageCanvas(options?: UseImageCanvasOptions) {
     c.setViewportTransform([zoom, 0, 0, zoom, 0, 0]);
     setZoomLevel(zoom);
   }, []);
+
+  const restoreSnapshot = useCallback(async (snap: CanvasSnapshot) => {
+    const c = canvasRef.current;
+    if (!c) return;
+    isRestoring.current = true;
+    await c.loadFromJSON(snap.json);
+    naturalSizeRef.current = { w: snap.w, h: snap.h };
+    // Ensure the restored background is non-interactive.
+    const bg = c.backgroundImage;
+    if (bg) bg.set({ selectable: false, evented: false });
+    fitToContainer();
+    c.renderAll();
+    isRestoring.current = false;
+    notifyModified();
+  }, [fitToContainer, notifyModified]);
+
+  const undo = useCallback(() => {
+    if (undoStack.current.length === 0) return;
+    const current = makeSnapshot();
+    if (current) redoStack.current.push(current);
+    const prev = undoStack.current.pop()!;
+    restoreSnapshot(prev).then(() => {
+      setCanUndo(undoStack.current.length > 0);
+      setCanRedo(true);
+    });
+  }, [makeSnapshot, restoreSnapshot]);
+
+  const redo = useCallback(() => {
+    if (redoStack.current.length === 0) return;
+    const current = makeSnapshot();
+    if (current) undoStack.current.push(current);
+    const next = redoStack.current.pop()!;
+    restoreSnapshot(next).then(() => {
+      setCanUndo(true);
+      setCanRedo(redoStack.current.length > 0);
+    });
+  }, [makeSnapshot, restoreSnapshot]);
 
   const refit = useCallback(() => { fitToContainer(); }, [fitToContainer]);
 
