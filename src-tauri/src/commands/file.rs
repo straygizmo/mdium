@@ -263,7 +263,7 @@ fn build_tree_all(dir: &Path, depth: u32) -> Vec<FileEntry> {
 }
 
 #[tauri::command]
-pub fn get_file_tree(
+pub async fn get_file_tree(
     path: String,
     show_all: Option<bool>,
     include_docx: Option<bool>,
@@ -273,24 +273,31 @@ pub fn get_file_tree(
     include_pdf: Option<bool>,
     include_empty_dirs: Option<bool>,
 ) -> Result<Vec<FileEntry>, String> {
-    let root = Path::new(&path);
-    if !root.is_dir() {
-        return Err("Not a directory".to_string());
-    }
-    if show_all.unwrap_or(false) {
-        Ok(build_tree_all(root, 0))
-    } else {
-        Ok(build_tree_filtered(
-            root,
-            0,
-            include_docx.unwrap_or(false),
-            include_xls.unwrap_or(false),
-            include_km.unwrap_or(false),
-            include_images.unwrap_or(false),
-            include_pdf.unwrap_or(false),
-            include_empty_dirs.unwrap_or(false),
-        ))
-    }
+    // Run the recursive filesystem scan off the main thread. A synchronous
+    // Tauri command executes on the main thread, so scanning a folder with
+    // many files would block the WebView event loop and freeze the UI.
+    tokio::task::spawn_blocking(move || {
+        let root = Path::new(&path);
+        if !root.is_dir() {
+            return Err("Not a directory".to_string());
+        }
+        if show_all.unwrap_or(false) {
+            Ok(build_tree_all(root, 0))
+        } else {
+            Ok(build_tree_filtered(
+                root,
+                0,
+                include_docx.unwrap_or(false),
+                include_xls.unwrap_or(false),
+                include_km.unwrap_or(false),
+                include_images.unwrap_or(false),
+                include_pdf.unwrap_or(false),
+                include_empty_dirs.unwrap_or(false),
+            ))
+        }
+    })
+    .await
+    .map_err(|e| format!("file tree scan task failed: {e}"))?
 }
 
 /// Zenn project detection result
