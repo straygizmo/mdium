@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from "vitest";
-import { getCsvExt, getMindmapExt, getKityMinderImportExt, isCodeFile } from "../constants";
+import { getCsvExt, getMindmapExt, getKityMinderImportExt, isCodeFile, getPptxExt } from "../constants";
 
 describe("getCsvExt", () => {
   it("returns .csv for .csv", () => expect(getCsvExt("data.csv")).toBe(".csv"));
@@ -34,5 +34,16 @@ describe("mindmap extension detection after .xmind migration", () => {
   it("does not treat .km or .xmind as code files", () => {
     expect(isCodeFile("a.xmind")).toBe(false);
     expect(isCodeFile("a.km")).toBe(false);
+  });
+});
+
+describe("getPptxExt", () => {
+  it("matches .pptx case-insensitively", () => {
+    expect(getPptxExt("/a/Deck.PPTX")).toBe(".pptx");
+    expect(getPptxExt("/a/deck.pptx")).toBe(".pptx");
+  });
+  it("returns null for non-pptx", () => {
+    expect(getPptxExt("/a/deck.docx")).toBeNull();
+    expect(getPptxExt("/a/deck.md")).toBeNull();
   });
 });

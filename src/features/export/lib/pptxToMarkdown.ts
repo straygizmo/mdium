@@ -1,6 +1,6 @@
 import JSZip from "jszip";
 import { writeTextFile, writeFile, mkdir } from "@tauri-apps/plugin-fs";
-import { parseSlide, renderSlides, type PptxLabels, type SlideSource } from "./pptxParser";
+import { parseSlide, renderSlides, type PptxLabels, type PptxSlide, type SlideSource, type RenderedImage } from "./pptxParser";
 
 export interface ConvertResult {
   mdPath: string;
@@ -46,6 +46,48 @@ function findNotesTarget(slideRels: string | null): string | null {
   return null;
 }
 
+export interface ExtractedPptx {
+  zip: JSZip;
+  markdown: string;
+  images: RenderedImage[];
+}
+
+// Load a pptx and render it to Markdown + image list, without any I/O.
+// Returns the loaded zip so callers can pull image bytes (write to disk vs. inline).
+export async function extractPptxMarkdown(
+  data: Uint8Array,
+  baseName: string,
+  labels: PptxLabels,
+): Promise<ExtractedPptx> {
+  const zip = await JSZip.loadAsync(data);
+  const readText = async (p: string): Promise<string | null> => {
+    const f = zip.file(p);
+    return f ? f.async("text") : null;
+  };
+
+  const presentationXml = await readText("ppt/presentation.xml");
+  const presRels = await readText("ppt/_rels/presentation.xml.rels");
+  if (!presentationXml || !presRels) {
+    throw new Error("Invalid PPTX: missing presentation.xml");
+  }
+
+  const slideOrder = resolveSlideOrder(presentationXml, presRels);
+  const slides: PptxSlide[] = [];
+  for (const slidePath of slideOrder) {
+    const slideXml = await readText(slidePath);
+    if (!slideXml) continue; // Skip slides whose XML is missing rather than crash
+    const relsPath = slidePath.replace(/slides\/([^/]+)$/, "slides/_rels/$1.rels");
+    const relsXml = await readText(relsPath);
+    const notesPath = findNotesTarget(relsXml);
+    const notesXml = notesPath ? await readText(notesPath) : null;
+    const src: SlideSource = { slideXml, relsXml, notesXml };
+    slides.push(parseSlide(src));
+  }
+
+  const { markdown, images } = renderSlides(slides, baseName, labels);
+  return { zip, markdown, images };
+}
+
 export async function pptxToMarkdown(
   data: Uint8Array,
   pptxPath: string,
@@ -62,32 +104,7 @@ export async function pptxToMarkdown(
   const imagesDir = `${outputDir}${sep}${baseName}_images`;
   const mdPath = `${outputDir}${sep}${baseName}.md`;
 
-  const zip = await JSZip.loadAsync(data);
-  const readText = async (p: string): Promise<string | null> => {
-    const f = zip.file(p);
-    return f ? f.async("text") : null;
-  };
-
-  const presentationXml = await readText("ppt/presentation.xml");
-  const presRels = await readText("ppt/_rels/presentation.xml.rels");
-  if (!presentationXml || !presRels) {
-    throw new Error("Invalid PPTX: missing presentation.xml");
-  }
-
-  const slideOrder = resolveSlideOrder(presentationXml, presRels);
-  const slides = [];
-  for (const slidePath of slideOrder) {
-    const slideXml = await readText(slidePath);
-    if (!slideXml) continue; // Skip slides whose XML is missing rather than crash
-    const relsPath = slidePath.replace(/slides\/([^/]+)$/, "slides/_rels/$1.rels");
-    const relsXml = await readText(relsPath);
-    const notesPath = findNotesTarget(relsXml);
-    const notesXml = notesPath ? await readText(notesPath) : null;
-    const src: SlideSource = { slideXml, relsXml, notesXml };
-    slides.push(parseSlide(src));
-  }
-
-  const { markdown, images } = renderSlides(slides, baseName, labels);
+  const { zip, markdown, images } = await extractPptxMarkdown(data, baseName, labels);
 
   if (images.length > 0) {
     await mkdir(imagesDir, { recursive: true });

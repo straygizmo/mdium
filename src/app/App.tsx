@@ -7,7 +7,7 @@ import { useSettingsStore } from "@/stores/settings-store";
 import { useTabStore } from "@/stores/tab-store";
 import { useGitStore } from "@/stores/git-store";
 import { useOpencodeServerStore } from "@/stores/opencode-server-store";
-import { getOfficeExt, getMindmapExt, getKityMinderImportExt, getImageExt, getPdfExt, getCsvExt, isCodeFile } from "@/shared/lib/constants";
+import { getOfficeExt, getMindmapExt, getKityMinderImportExt, getImageExt, getPdfExt, getCsvExt, getPptxExt, isCodeFile } from "@/shared/lib/constants";
 import { detectDelimiter } from "@/features/preview/lib/detect-delimiter";
 import { useFileStore } from "@/stores/file-store";
 import { useUiStore } from "@/stores/ui-store";
@@ -328,7 +328,7 @@ export function App() {
   // Force-hide editor for non-editable file types; normal files use per-tab state
   useEffect(() => {
     if (activeTab) {
-      const isSpecialFile = activeTab.mindmapFileType || activeTab.imageFileType || activeTab.officeFileType || activeTab.isDiffTab;
+      const isSpecialFile = activeTab.mindmapFileType || activeTab.imageFileType || activeTab.officeFileType || activeTab.pptxFileType || activeTab.isDiffTab;
       const isVideoJson = activeTab.filePath?.toLowerCase().endsWith(".video.json");
       const isCode = activeTab.isCodeFile;
       if (isSpecialFile || isVideoJson || isCode) {
@@ -423,6 +423,7 @@ export function App() {
 
         const imageExt = getImageExt(filePath);
         const pdfExt = getPdfExt(filePath);
+        const pptxExt = getPptxExt(filePath);
         const csvExt = getCsvExt(filePath);
 
         if (pdfExt) {
@@ -436,6 +437,18 @@ export function App() {
             content: "",
             binaryData,
             officeFileType: pdfExt,
+          });
+        } else if (pptxExt) {
+          // PPTX: open as a binary tab; PreviewPanel renders it as markdown.
+          const bytes = await invoke<number[]>("read_binary_file", { path: filePath });
+          const binaryData = new Uint8Array(bytes);
+          openTab({
+            filePath,
+            folderPath: activeFolderPath ?? "",
+            fileName,
+            content: "",
+            binaryData,
+            pptxFileType: ".pptx",
           });
         } else if (officeExt) {
           // Read Office file as binary
@@ -629,6 +642,10 @@ export function App() {
     // If untitled tab (empty filePath), redirect to "Save As"
     if (!activeTab.filePath) {
       handleSaveAs();
+      return;
+    }
+    // Binary preview tabs (pptx/pdf/office) are view-only — never overwrite the file with text.
+    if (activeTab.binaryData && !activeTab.imageFileType && !activeTab.mindmapFileType) {
       return;
     }
     try {
