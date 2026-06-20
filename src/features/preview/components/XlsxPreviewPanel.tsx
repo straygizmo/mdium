@@ -12,6 +12,16 @@ interface XlsxPreviewPanelProps {
   filePath: string | null;
 }
 
+/** Escape HTML special characters for safe interpolation into innerHTML. */
+export function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 /**
  * Render the generated .xlsx bytes into an HTML approximation using SheetJS.
  * The community edition does not render embedded images or styling — this is a
@@ -21,7 +31,7 @@ export function workbookToPreviewHtml(bytes: Uint8Array): string {
   const workbook = XLSX.read(bytes, { type: "array" });
   return workbook.SheetNames.map((name) => {
     const sheet = workbook.Sheets[name];
-    return `<h4>${name}</h4>` + XLSX.utils.sheet_to_html(sheet);
+    return `<h4>${escapeHtml(name)}</h4>` + XLSX.utils.sheet_to_html(sheet);
   }).join("\n");
 }
 

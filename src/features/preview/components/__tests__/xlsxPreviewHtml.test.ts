@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, it, expect } from "vitest";
 import { md2xlsx } from "@/vendor/md2xlsx";
-import { workbookToPreviewHtml } from "../XlsxPreviewPanel";
+import { workbookToPreviewHtml, escapeHtml } from "../XlsxPreviewPanel";
 
 describe("workbookToPreviewHtml", () => {
   it("renders sheet content as HTML tables", () => {
@@ -9,5 +9,13 @@ describe("workbookToPreviewHtml", () => {
     const html = workbookToPreviewHtml(bytes);
     expect(html).toContain("<table");
     expect(html).toContain("Title");
+  });
+});
+
+describe("escapeHtml", () => {
+  it("escapes HTML special characters", () => {
+    expect(escapeHtml('<img src=x onerror="alert(1)">')).toBe(
+      "&lt;img src=x onerror=&quot;alert(1)&quot;&gt;",
+    );
   });
 });
