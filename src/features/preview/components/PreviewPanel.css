@@ -174,7 +174,7 @@
 }
 
 .preview-panel__pptx-status {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--text-muted, #888);
   padding: 8px 0;
 }
