@@ -7,7 +7,6 @@ import { markdownToXlsx } from "@/features/export/lib/markdownToXlsx";
 import "./XlsxPreviewPanel.css";
 
 interface XlsxPreviewPanelProps {
-  previewRef: React.RefObject<HTMLDivElement | null>;
   content: string;
   filePath: string | null;
 }

@@ -1486,7 +1486,6 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
         {activeViewTab === "xlsx-preview" && (
           <div className="preview-panel__pdf-overlay">
             <XlsxPreviewPanel
-              previewRef={previewRef}
               content={content}
               filePath={filePath}
             />
