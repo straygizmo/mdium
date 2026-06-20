@@ -51,7 +51,8 @@ export async function markdownToXlsx(
   const { filePath } = options;
   if (filePath) {
     const sep = filePath.includes("\\") ? "\\" : "/";
-    const dir = filePath.replace(/[\\/][^\\/]*$/, "");
+    let dir = filePath.replace(/[\\/][^\\/]*$/, "");
+    if (dir === filePath) dir = "."; // bare filename: no directory component → current dir
     for (const relPath of collectRelativeImagePaths(markdown)) {
       const fsPath = `${dir}${sep}${relPath.replace(/\//g, sep)}`;
       try {

@@ -57,4 +57,10 @@ describe("markdownToXlsx", () => {
     await markdownToXlsx("![a](img/a.png)");
     expect(readFileMock).not.toHaveBeenCalled();
   });
+
+  it("resolves images against current dir when filePath has no directory", async () => {
+    readFileMock.mockResolvedValue(new Uint8Array([1, 2, 3]));
+    await markdownToXlsx("![a](img/a.png)", { filePath: "note.md" });
+    expect(readFileMock).toHaveBeenCalledWith("./img/a.png");
+  });
 });
