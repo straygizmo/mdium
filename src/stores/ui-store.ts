@@ -2,7 +2,7 @@ import { create } from "zustand";
 import type { OpencodeConfigTab, OpencodeTopTab } from "@/shared/types";
 
 export type LeftPanel = "folder" | "outline" | "rag" | "opencode-config" | "git";
-type ViewTab = "preview" | "table" | "pdf-preview" | "docx-preview" | "html-preview" | "slidev-preview" | "video";
+type ViewTab = "preview" | "table" | "pdf-preview" | "docx-preview" | "html-preview" | "xlsx-preview" | "slidev-preview" | "video";
 type FolderPanelTab = "terminal" | "rag";
 type BottomTerminalTab = "terminal" | "claude-code";
 export type SearchMode = "search" | "replace";
