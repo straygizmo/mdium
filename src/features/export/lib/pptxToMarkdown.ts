@@ -1,6 +1,6 @@
 import JSZip from "jszip";
 import { writeTextFile, writeFile, mkdir } from "@tauri-apps/plugin-fs";
-import { parseSlide, renderSlides, type PptxLabels, type SlideSource, type RenderedImage } from "./pptxParser";
+import { parseSlide, renderSlides, type PptxLabels, type PptxSlide, type SlideSource, type RenderedImage } from "./pptxParser";
 
 export interface ConvertResult {
   mdPath: string;
@@ -72,7 +72,7 @@ export async function extractPptxMarkdown(
   }
 
   const slideOrder = resolveSlideOrder(presentationXml, presRels);
-  const slides = [];
+  const slides: PptxSlide[] = [];
   for (const slidePath of slideOrder) {
     const slideXml = await readText(slidePath);
     if (!slideXml) continue; // Skip slides whose XML is missing rather than crash
