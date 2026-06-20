@@ -13,7 +13,7 @@ import { useBatchDeleteMd } from "../hooks/useBatchDeleteMd";
 import { BatchConvertTree } from "./BatchConvertTree";
 import "./BatchConvertModal.css";
 
-type FilterTab = "all" | "docx" | "pdf" | "xlsx";
+type FilterTab = "all" | "docx" | "pdf" | "xlsx" | "pptx";
 type BatchMode = "convert" | "delete";
 
 interface BatchConvertModalProps {
@@ -369,13 +369,21 @@ export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, o
           </button>
         </div>
         <div className="batch-convert__toolbar">
-          {(["all", "docx", "xlsx", "pdf"] as FilterTab[]).map((tab) => (
+          {(["all", "docx", "xlsx", "pptx", "pdf"] as FilterTab[]).map((tab) => (
             <button
               key={tab}
               className={`batch-convert__filter-btn ${filter === tab ? "batch-convert__filter-btn--active" : ""}`}
               onClick={() => setFilter(tab)}
             >
-              {tab === "all" ? t("batchConvertFilterAll") : tab === "docx" ? t("batchConvertFilterDocx") : tab === "xlsx" ? t("batchConvertFilterXlsx") : t("batchConvertFilterPdf")}
+              {tab === "all"
+                ? t("batchConvertFilterAll")
+                : tab === "docx"
+                  ? t("batchConvertFilterDocx")
+                  : tab === "xlsx"
+                    ? t("batchConvertFilterXlsx")
+                    : tab === "pptx"
+                      ? t("batchConvertFilterPptx")
+                      : t("batchConvertFilterPdf")}
             </button>
           ))}
           <span className="batch-convert__toolbar-sep" />

@@ -52,7 +52,7 @@ describe("pptxToMarkdown orchestrator", () => {
     const data = await buildPptx();
     const res = await pptxToMarkdown(data, "/decks/talk.pptx", false, labels);
     expect(res.mdPath).toBe("/decks/talk.md");
-    const md = writeTextFile.mock.calls[0][1] as string;
+    const md = (writeTextFile.mock.calls as unknown as [string, string][][])[0][1];
     expect(md.indexOf("## Second")).toBeLessThan(md.indexOf("## First"));
   });
 });
