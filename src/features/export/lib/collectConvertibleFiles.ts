@@ -3,7 +3,7 @@ import type { FileEntry } from "@/shared/types";
 export interface ConvertibleFile {
   name: string;
   path: string;
-  type: "docx" | "pdf" | "xlsx";
+  type: "docx" | "pdf" | "xlsx" | "pptx";
   hasExistingMdSibling: boolean;
   hasExistingMdInMdium: boolean;
 }
@@ -33,10 +33,11 @@ function walkTree(entries: FileEntry[], results: ConvertibleFile[]): void {
     }
 
     const lower = entry.name.toLowerCase();
-    let type: "docx" | "pdf" | "xlsx" | null = null;
+    let type: "docx" | "pdf" | "xlsx" | "pptx" | null = null;
     if (lower.endsWith(".docx")) type = "docx";
     else if (lower.endsWith(".pdf")) type = "pdf";
     else if (lower.endsWith(".xlsx") || lower.endsWith(".xlsm") || lower.endsWith(".xls")) type = "xlsx";
+    else if (lower.endsWith(".pptx")) type = "pptx";
 
     if (!type) continue;
 
@@ -58,7 +59,7 @@ export interface ConvertibleTreeNode {
   path: string;
   isDir: boolean;
   children: ConvertibleTreeNode[] | null;
-  fileType?: "docx" | "pdf" | "xlsx";
+  fileType?: "docx" | "pdf" | "xlsx" | "pptx";
   hasExistingMdSibling?: boolean;
   hasExistingMdInMdium?: boolean;
 }
@@ -90,7 +91,7 @@ export function buildConvertibleTree(tree: FileEntry[]): ConvertibleTreeNode[] {
     }
 
     const lower = entry.name.toLowerCase();
-    let fileType: "docx" | "pdf" | "xlsx" | null = null;
+    let fileType: "docx" | "pdf" | "xlsx" | "pptx" | null = null;
     if (lower.endsWith(".docx")) fileType = "docx";
     else if (lower.endsWith(".pdf")) fileType = "pdf";
     else if (
@@ -99,6 +100,7 @@ export function buildConvertibleTree(tree: FileEntry[]): ConvertibleTreeNode[] {
       lower.endsWith(".xls")
     )
       fileType = "xlsx";
+    else if (lower.endsWith(".pptx")) fileType = "pptx";
 
     if (!fileType) continue;
 
@@ -125,7 +127,7 @@ export function buildConvertibleTree(tree: FileEntry[]): ConvertibleTreeNode[] {
  */
 export function pruneTreeByFilter(
   tree: ConvertibleTreeNode[],
-  filter: "all" | "docx" | "pdf" | "xlsx"
+  filter: "all" | "docx" | "pdf" | "xlsx" | "pptx"
 ): ConvertibleTreeNode[] {
   if (filter === "all") return tree;
   const result: ConvertibleTreeNode[] = [];
