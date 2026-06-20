@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import type { ConvertibleFile } from "../lib/collectConvertibleFiles";
 
@@ -23,6 +24,7 @@ export interface BatchConvertSummary {
 }
 
 export function useBatchConvert() {
+  const { t } = useTranslation("common");
   const [isConverting, setIsConverting] = useState(false);
   const [progress, setProgress] = useState<BatchConvertProgress | null>(null);
   const [summary, setSummary] = useState<BatchConvertSummary | null>(null);
@@ -79,6 +81,13 @@ export function useBatchConvert() {
             const { xlsxToMarkdown } = await import("../lib/xlsxToMarkdown");
             const result = await xlsxToMarkdown(data, file.path, saveToMdium);
             results.push({ file, status: "success", mdPath: result.mdPath });
+          } else if (file.type === "pptx") {
+            const { pptxToMarkdown } = await import("../lib/pptxToMarkdown");
+            const result = await pptxToMarkdown(data, file.path, saveToMdium, {
+              slideFallback: (n: number) => t("pptxSlideLabel", { n }),
+              notes: t("pptxNotesLabel"),
+            });
+            results.push({ file, status: "success", mdPath: result.mdPath });
           } else {
             const { pdfToMarkdown } = await import("../lib/pdfToMarkdown");
             const result = await pdfToMarkdown(data, file.path, saveToMdium);
@@ -104,7 +113,7 @@ export function useBatchConvert() {
       setProgress(null);
       return s;
     },
-    []
+    [t]
   );
 
   const reset = useCallback(() => {
