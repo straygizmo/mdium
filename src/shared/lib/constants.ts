@@ -3,6 +3,7 @@ export const MINDMAP_EXTENSIONS = [".xmind"];
 /** KityMinder JSON files, supported only as a one-way import (auto-converted to .xmind). */
 export const KITYMINDER_IMPORT_EXTENSIONS = [".km"];
 export const PDF_EXTENSIONS = [".pdf"];
+export const PPTX_EXTENSIONS = [".pptx"];
 export const CSV_EXTENSIONS = [".csv", ".tsv"];
 export const IMAGE_EXTENSIONS = [
   ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".webp",
@@ -28,6 +29,11 @@ export function getPdfExt(filePath: string): string | null {
   return PDF_EXTENSIONS.find((ext) => lower.endsWith(ext)) ?? null;
 }
 
+export function getPptxExt(filePath: string): string | null {
+  const lower = filePath.toLowerCase();
+  return PPTX_EXTENSIONS.find((ext) => lower.endsWith(ext)) ?? null;
+}
+
 export function getCsvExt(filePath: string): string | null {
   const lower = filePath.toLowerCase();
   return CSV_EXTENSIONS.find((ext) => lower.endsWith(ext)) ?? null;
@@ -48,6 +54,7 @@ export function isCodeFile(filePath: string): boolean {
   if (lower.endsWith(".video.json")) return false;
   if (getOfficeExt(lower)) return false;
   if (getPdfExt(lower)) return false;
+  if (getPptxExt(lower)) return false;
   if (getMindmapExt(lower)) return false;
   if (getKityMinderImportExt(lower)) return false;
   if (getCsvExt(lower)) return false;

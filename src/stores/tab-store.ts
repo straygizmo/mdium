@@ -34,6 +34,8 @@ export interface Tab {
   imageFileType?: string;
   /** CSV/TSV file extension (e.g., ".csv") */
   csvFileType?: ".csv" | ".tsv";
+  /** PowerPoint file extension (preview-only, rendered as markdown) */
+  pptxFileType?: ".pptx";
   /**
    * Detected column delimiter for CSV-family files. Set once at open time.
    *

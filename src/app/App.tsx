@@ -7,7 +7,7 @@ import { useSettingsStore } from "@/stores/settings-store";
 import { useTabStore } from "@/stores/tab-store";
 import { useGitStore } from "@/stores/git-store";
 import { useOpencodeServerStore } from "@/stores/opencode-server-store";
-import { getOfficeExt, getMindmapExt, getKityMinderImportExt, getImageExt, getPdfExt, getCsvExt, isCodeFile } from "@/shared/lib/constants";
+import { getOfficeExt, getMindmapExt, getKityMinderImportExt, getImageExt, getPdfExt, getCsvExt, getPptxExt, isCodeFile } from "@/shared/lib/constants";
 import { detectDelimiter } from "@/features/preview/lib/detect-delimiter";
 import { useFileStore } from "@/stores/file-store";
 import { useUiStore } from "@/stores/ui-store";
@@ -423,6 +423,7 @@ export function App() {
 
         const imageExt = getImageExt(filePath);
         const pdfExt = getPdfExt(filePath);
+        const pptxExt = getPptxExt(filePath);
         const csvExt = getCsvExt(filePath);
 
         if (pdfExt) {
@@ -436,6 +437,18 @@ export function App() {
             content: "",
             binaryData,
             officeFileType: pdfExt,
+          });
+        } else if (pptxExt) {
+          // PPTX: open as a binary tab; PreviewPanel renders it as markdown.
+          const bytes = await invoke<number[]>("read_binary_file", { path: filePath });
+          const binaryData = new Uint8Array(bytes);
+          openTab({
+            filePath,
+            folderPath: activeFolderPath ?? "",
+            fileName,
+            content: "",
+            binaryData,
+            pptxFileType: ".pptx",
           });
         } else if (officeExt) {
           // Read Office file as binary
