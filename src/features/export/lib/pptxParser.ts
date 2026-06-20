@@ -73,6 +73,27 @@ function shapeBullets(sp: Element): PptxBlock | null {
   return items.length ? { kind: "bullets", items } : null;
 }
 
+// Map relationship Id -> Target (raw, relative to ppt/slides/).
+function parseRels(relsXml: string | null): Map<string, string> {
+  const map = new Map<string, string>();
+  if (!relsXml) return map;
+  const doc = parseXml(relsXml);
+  for (const rel of Array.from(doc.getElementsByTagName("Relationship"))) {
+    const id = rel.getAttribute("Id");
+    const target = rel.getAttribute("Target");
+    if (id && target) map.set(id, target);
+  }
+  return map;
+}
+
+// "../media/image1.png" (relative to ppt/slides/) -> "ppt/media/image1.png".
+function resolveMediaPath(target: string): string {
+  const cleaned = target.replace(/^\.\//, "");
+  if (cleaned.startsWith("../")) return `ppt/${cleaned.slice(3)}`;
+  if (cleaned.startsWith("/")) return cleaned.slice(1);
+  return `ppt/slides/${cleaned}`;
+}
+
 // Extract an <a:tbl> into a rows-of-cells matrix.
 function parseTable(tbl: Element): PptxBlock {
   const rows: string[][] = [];
@@ -91,6 +112,7 @@ function parseTable(tbl: Element): PptxBlock {
 
 export function parseSlide(src: SlideSource): PptxSlide {
   const doc = parseXml(src.slideXml);
+  const rels = parseRels(src.relsXml);
   const spTree = doc.getElementsByTagName("p:spTree")[0];
   let title: string | null = null;
   const blocks: PptxBlock[] = [];
@@ -111,6 +133,11 @@ export function parseSlide(src: SlideSource): PptxSlide {
       } else if (el.localName === "graphicFrame") {
         const tbl = el.getElementsByTagName("a:tbl")[0];
         if (tbl) blocks.push(parseTable(tbl));
+      } else if (el.localName === "pic") {
+        const blip = el.getElementsByTagName("a:blip")[0];
+        const rId = blip?.getAttribute("r:embed");
+        const target = rId ? rels.get(rId) : undefined;
+        if (target) blocks.push({ kind: "image", mediaPath: resolveMediaPath(target) });
       }
     }
   }

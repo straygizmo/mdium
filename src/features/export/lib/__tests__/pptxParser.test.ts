@@ -47,6 +47,28 @@ describe("pptxParser: tables", () => {
   });
 });
 
+describe("pptxParser: images", () => {
+  const picSlide = `<?xml version="1.0"?>
+    <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+           xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+           xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+      <p:cSld><p:spTree>
+        <p:pic><p:blipFill><a:blip r:embed="rId2"/></p:blipFill></p:pic>
+        <p:pic><p:blipFill><a:blip r:embed="rId2"/></p:blipFill></p:pic>
+      </p:spTree></p:cSld></p:sld>`;
+  const rels = `<?xml version="1.0"?>
+    <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+      <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/>
+    </Relationships>`;
+
+  it("resolves r:embed to media path, dedupes by media, and emits one image file", () => {
+    const slide = parseSlide({ slideXml: picSlide, relsXml: rels, notesXml: null });
+    const { markdown, images } = renderSlides([slide], "deck", { slideFallback: (n) => `S${n}`, notes: "N:" });
+    expect(markdown).toContain("![](deck_images/image1.png)");
+    expect(images).toEqual([{ mediaPath: "ppt/media/image1.png", fileName: "image1.png" }]);
+  });
+});
+
 describe("pptxParser: title + bullets", () => {
   it("uses title placeholder as heading and paragraphs as nested bullets", () => {
     const slide = parseSlide({
