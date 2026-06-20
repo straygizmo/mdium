@@ -31,6 +31,7 @@ import { useChatUIStore, consumePendingVideoOutput, doConnect, doCreateNewSessio
 import { BUILTIN_COMMANDS } from "@/features/opencode-config/lib/builtin-commands";
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 import { docxToMarkdown } from "@/features/export/lib/docxToMarkdown";
+import { pptxToMarkdownPreview } from "@/features/export/lib/pptxToMarkdownPreview";
 import { marked } from "marked";
 import { MediumPublishDialog } from "@/features/medium/components/MediumPublishDialog";
 import type { MediumPublishParams } from "@/features/medium/components/MediumPublishDialog";
@@ -257,6 +258,47 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
     && !activeTab.mindmapFileType
     && !activeTab.imageFileType
     && !activeTab.binaryData;
+
+  // PPTX preview: render the file as in-memory markdown (data-URL images).
+  const isPptx = !!(activeTab?.binaryData && activeTab?.pptxFileType);
+  const [pptxMarkdown, setPptxMarkdown] = useState<string | null>(null);
+  const [pptxLoading, setPptxLoading] = useState(false);
+  const [pptxError, setPptxError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isPptx || !activeTab?.binaryData) {
+      setPptxMarkdown(null);
+      setPptxLoading(false);
+      setPptxError(null);
+      return;
+    }
+    let cancelled = false;
+    setPptxLoading(true);
+    setPptxError(null);
+    setPptxMarkdown(null);
+    const data = activeTab.binaryData;
+    pptxToMarkdownPreview(data, {
+      slideFallback: (n: number) => t("common:pptxSlideLabel", { n }),
+      notes: t("common:pptxNotesLabel"),
+    })
+      .then((md) => {
+        if (!cancelled) setPptxMarkdown(md);
+      })
+      .catch(() => {
+        if (!cancelled) setPptxError(t("pptxPreviewError"));
+      })
+      .finally(() => {
+        if (!cancelled) setPptxLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isPptx, activeTab?.filePath, activeTab?.binaryData, t]);
+
+  // When pptx markdown is ready, render it through the same markdown pipeline.
+  const renderAsMarkdown = isRenderableMarkdown || (isPptx && pptxMarkdown != null);
+  const markdownSource = isPptx ? (pptxMarkdown ?? "") : content;
+
   const isSlidev = useMemo(
     () => (isRenderableMarkdown ? isSlidevMarkdown(content) : false),
     [content, isRenderableMarkdown],
@@ -651,13 +693,13 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
 
   // Markdown rendering with source-line annotation (front matter → preprocess chain → marked)
   useEffect(() => {
-    if (!isRenderableMarkdown) {
+    if (!renderAsMarkdown) {
       setFrontMatter(null);
       setHtml("");
       return;
     }
     try {
-      const { meta, body, bodyLineOffset } = splitFrontMatter(content);
+      const { meta, body, bodyLineOffset } = splitFrontMatter(markdownSource);
       setFrontMatter(meta);
       mermaidCounter = 0;
       const result = renderMarkdownWithSourceLines(body, bodyLineOffset);
@@ -666,7 +708,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
       console.error("Markdown rendering error:", error);
       setHtml(`<p>${t("renderError")}</p>`);
     }
-  }, [content, isRenderableMarkdown, t]);
+  }, [markdownSource, renderAsMarkdown, t]);
 
   // Manually write HTML to contentRef and convert relative image paths to blob URLs
   const blobUrlsRef = useRef<string[]>([]);
@@ -1324,6 +1366,12 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
                 ))}
               </div>
             )
+          )}
+          {isPptx && pptxLoading && (
+            <div className="preview-panel__pptx-status">{t("pptxPreviewLoading")}</div>
+          )}
+          {isPptx && pptxError && (
+            <div className="preview-panel__pptx-status preview-panel__pptx-status--error">{pptxError}</div>
           )}
           <div ref={contentRef} />
         </div>

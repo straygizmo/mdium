@@ -107,6 +107,8 @@
   "speechRecording": "Recording...",
   "speechTranscribing": "Transcribing...",
   "renderError": "Failed to render Markdown",
+  "pptxPreviewLoading": "Loading PowerPoint…",
+  "pptxPreviewError": "Failed to render PowerPoint",
   "selectTableSize": "Select table size",
   "mindmap.link": "Link",
   "mindmap.linkTitle": "Title (optional)",

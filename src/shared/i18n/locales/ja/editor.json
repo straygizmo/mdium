@@ -107,6 +107,8 @@
   "speechRecording": "録音中…",
   "speechTranscribing": "認識中…",
   "renderError": "Markdownのレンダリングに失敗しました",
+  "pptxPreviewLoading": "PowerPoint を読み込み中…",
+  "pptxPreviewError": "PowerPoint の表示に失敗しました",
   "selectTableSize": "表のサイズを選択",
   "mindmap.link": "リンク",
   "mindmap.linkTitle": "タイトル (任意)",
