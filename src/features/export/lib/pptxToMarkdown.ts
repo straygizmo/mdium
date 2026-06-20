@@ -1,6 +1,6 @@
 import JSZip from "jszip";
 import { writeTextFile, writeFile, mkdir } from "@tauri-apps/plugin-fs";
-import { parseSlide, renderSlides, type PptxLabels, type SlideSource } from "./pptxParser";
+import { parseSlide, renderSlides, type PptxLabels, type SlideSource, type RenderedImage } from "./pptxParser";
 
 export interface ConvertResult {
   mdPath: string;
@@ -46,22 +46,19 @@ function findNotesTarget(slideRels: string | null): string | null {
   return null;
 }
 
-export async function pptxToMarkdown(
-  data: Uint8Array,
-  pptxPath: string,
-  saveToMdium: boolean,
-  labels: PptxLabels,
-): Promise<ConvertResult> {
-  // Derive output paths (preserve input path separator so the result matches
-  // the OS-native paths delivered by the file tree — otherwise a mixed
-  // separator path creates duplicate tabs when the same file is reopened).
-  const sep = pptxPath.includes("\\") ? "\\" : "/";
-  const dir = pptxPath.replace(/[\\/][^\\/]*$/, "");
-  const baseName = pptxPath.replace(/^.*[\\/]/, "").replace(/\.pptx$/i, "");
-  const outputDir = saveToMdium ? `${dir}${sep}.mdium` : dir;
-  const imagesDir = `${outputDir}${sep}${baseName}_images`;
-  const mdPath = `${outputDir}${sep}${baseName}.md`;
+export interface ExtractedPptx {
+  zip: JSZip;
+  markdown: string;
+  images: RenderedImage[];
+}
 
+// Load a pptx and render it to Markdown + image list, without any I/O.
+// Returns the loaded zip so callers can pull image bytes (write to disk vs. inline).
+export async function extractPptxMarkdown(
+  data: Uint8Array,
+  baseName: string,
+  labels: PptxLabels,
+): Promise<ExtractedPptx> {
   const zip = await JSZip.loadAsync(data);
   const readText = async (p: string): Promise<string | null> => {
     const f = zip.file(p);
@@ -88,6 +85,26 @@ export async function pptxToMarkdown(
   }
 
   const { markdown, images } = renderSlides(slides, baseName, labels);
+  return { zip, markdown, images };
+}
+
+export async function pptxToMarkdown(
+  data: Uint8Array,
+  pptxPath: string,
+  saveToMdium: boolean,
+  labels: PptxLabels,
+): Promise<ConvertResult> {
+  // Derive output paths (preserve input path separator so the result matches
+  // the OS-native paths delivered by the file tree — otherwise a mixed
+  // separator path creates duplicate tabs when the same file is reopened).
+  const sep = pptxPath.includes("\\") ? "\\" : "/";
+  const dir = pptxPath.replace(/[\\/][^\\/]*$/, "");
+  const baseName = pptxPath.replace(/^.*[\\/]/, "").replace(/\.pptx$/i, "");
+  const outputDir = saveToMdium ? `${dir}${sep}.mdium` : dir;
+  const imagesDir = `${outputDir}${sep}${baseName}_images`;
+  const mdPath = `${outputDir}${sep}${baseName}.md`;
+
+  const { zip, markdown, images } = await extractPptxMarkdown(data, baseName, labels);
 
   if (images.length > 0) {
     await mkdir(imagesDir, { recursive: true });
