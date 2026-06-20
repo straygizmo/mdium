@@ -13,7 +13,7 @@
  */
 
 import { execSync } from "child_process";
-import { readFileSync, writeFileSync, mkdirSync, rmSync, copyFileSync } from "fs";
+import { writeFileSync, mkdirSync, rmSync, copyFileSync } from "fs";
 import { join, dirname } from "path";
 import { build } from "esbuild";
 
