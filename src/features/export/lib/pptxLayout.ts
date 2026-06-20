@@ -100,8 +100,11 @@ export async function extractPptxLayout(data: Uint8Array): Promise<SlideLayout[]
 
   const presentationXml = await readText("ppt/presentation.xml");
   const presRels = await readText("ppt/_rels/presentation.xml.rels");
-  if (!presentationXml || !presRels) {
+  if (!presentationXml) {
     throw new Error("Invalid PPTX: missing presentation.xml");
+  }
+  if (!presRels) {
+    throw new Error("Invalid PPTX: missing ppt/_rels/presentation.xml.rels");
   }
 
   const size = slideSize(presentationXml);

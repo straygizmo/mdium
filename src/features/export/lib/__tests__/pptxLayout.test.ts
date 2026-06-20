@@ -63,3 +63,82 @@ describe("extractPptxLayout", () => {
     expect(connectors).toEqual([{ from: "2", to: "3" }]);
   });
 });
+
+// Minimal single-slide PPTX whose slide spTree contains the given inner XML.
+// sldSz attributes are templated so absence can be exercised.
+async function buildPptxWith(spTreeInner: string, sldSzAttrs = `cx="9144000" cy="6858000"`): Promise<Uint8Array> {
+  const zip = new JSZip();
+  zip.file(
+    "ppt/presentation.xml",
+    `<?xml version="1.0"?>
+     <p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                     xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+       ${sldSzAttrs ? `<p:sldSz ${sldSzAttrs}/>` : ""}
+       <p:sldIdLst><p:sldId r:id="rA"/></p:sldIdLst>
+     </p:presentation>`,
+  );
+  zip.file(
+    "ppt/_rels/presentation.xml.rels",
+    `<?xml version="1.0"?>
+     <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+       <Relationship Id="rA" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/>
+     </Relationships>`,
+  );
+  zip.file(
+    "ppt/slides/slide1.xml",
+    `<?xml version="1.0"?>
+     <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+            xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+       <p:cSld><p:spTree>${spTreeInner}</p:spTree></p:cSld></p:sld>`,
+  );
+  return zip.generateAsync({ type: "uint8array" });
+}
+
+describe("extractPptxLayout edge cases", () => {
+  it("recurses into p:grpSp groups to collect nested shapes", async () => {
+    const data = await buildPptxWith(`
+      <p:grpSp>
+        <p:nvGrpSpPr><p:cNvPr id="10" name="g"/></p:nvGrpSpPr>
+        <p:sp>
+          <p:nvSpPr><p:cNvPr id="11" name="nested"/></p:nvSpPr>
+          <p:spPr><a:xfrm><a:off x="4572000" y="0"/><a:ext cx="4572000" cy="6858000"/></a:xfrm></p:spPr>
+          <p:txBody><a:p><a:r><a:t>Nested</a:t></a:r></a:p></p:txBody>
+        </p:sp>
+      </p:grpSp>`);
+    const { shapes } = (await extractPptxLayout(data))[0];
+    expect(shapes).toHaveLength(1);
+    expect(shapes[0]).toMatchObject({ id: "11", text: "Nested", x: 50, y: 0, w: 50, h: 100 });
+  });
+
+  it("yields a zero box for a shape without a:xfrm (no NaN)", async () => {
+    const data = await buildPptxWith(`
+      <p:sp>
+        <p:nvSpPr><p:cNvPr id="20" name="noxfrm"/></p:nvSpPr>
+        <p:spPr/>
+        <p:txBody><a:p><a:r><a:t>NoBox</a:t></a:r></a:p></p:txBody>
+      </p:sp>`);
+    const { shapes } = (await extractPptxLayout(data))[0];
+    expect(shapes[0]).toMatchObject({ id: "20", text: "NoBox", x: 0, y: 0, w: 0, h: 0 });
+  });
+
+  it("falls back to the default slide size when p:sldSz is absent", async () => {
+    // 4572000 / 9144000 default = 50; 3429000 / 6858000 default = 50.
+    const data = await buildPptxWith(
+      `<p:sp>
+         <p:nvSpPr><p:cNvPr id="30" name="d"/></p:nvSpPr>
+         <p:spPr><a:xfrm><a:off x="4572000" y="3429000"/><a:ext cx="4572000" cy="3429000"/></a:xfrm></p:spPr>
+         <p:txBody><a:p><a:r><a:t>Default</a:t></a:r></a:p></p:txBody>
+       </p:sp>`,
+      "",
+    );
+    const { shapes } = (await extractPptxLayout(data))[0];
+    expect(shapes[0]).toMatchObject({ id: "30", x: 50, y: 50, w: 50, h: 50 });
+  });
+
+  it("throws when presentation.xml is missing", async () => {
+    const zip = new JSZip();
+    zip.file("ppt/_rels/presentation.xml.rels", "<Relationships/>");
+    const data = await zip.generateAsync({ type: "uint8array" });
+    await expect(extractPptxLayout(data)).rejects.toThrow(/presentation\.xml/);
+  });
+});
