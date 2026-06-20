@@ -32,6 +32,7 @@ import { BUILTIN_COMMANDS } from "@/features/opencode-config/lib/builtin-command
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 import { docxToMarkdown } from "@/features/export/lib/docxToMarkdown";
 import { pptxToMarkdownPreview } from "@/features/export/lib/pptxToMarkdownPreview";
+import { pptxToMarkdownPreviewEnriched } from "@/features/export/lib/pptxAiEnrich";
 import { marked } from "marked";
 import { MediumPublishDialog } from "@/features/medium/components/MediumPublishDialog";
 import type { MediumPublishParams } from "@/features/medium/components/MediumPublishDialog";
@@ -221,7 +222,7 @@ interface PreviewPanelProps {
 }
 
 export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: PreviewPanelProps) {
-  const { t } = useTranslation("editor");
+  const { t, i18n } = useTranslation("editor");
   const activeTab = useTabStore((s) => s.getActiveTab());
   const themeId = useSettingsStore((s) => s.themeId);
   const themeType = getThemeById(themeId).type;
@@ -264,18 +265,30 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   const [pptxMarkdown, setPptxMarkdown] = useState<string | null>(null);
   const [pptxLoading, setPptxLoading] = useState(false);
   const [pptxError, setPptxError] = useState<string | null>(null);
+  const [aiEnrichedMarkdown, setAiEnrichedMarkdown] = useState<string | null>(null);
+  const [aiEnriching, setAiEnriching] = useState(false);
+  const [aiEnrichError, setAiEnrichError] = useState<string | null>(null);
+  const [showAiEnriched, setShowAiEnriched] = useState(false);
 
   useEffect(() => {
     if (!isPptx || !activeTab?.binaryData) {
       setPptxMarkdown(null);
       setPptxLoading(false);
       setPptxError(null);
+      setAiEnrichedMarkdown(null);
+      setAiEnriching(false);
+      setAiEnrichError(null);
+      setShowAiEnriched(false);
       return;
     }
     let cancelled = false;
     setPptxLoading(true);
     setPptxError(null);
     setPptxMarkdown(null);
+    setAiEnrichedMarkdown(null);
+    setAiEnriching(false);
+    setAiEnrichError(null);
+    setShowAiEnriched(false);
     const data = activeTab.binaryData;
     pptxToMarkdownPreview(data, {
       slideFallback: (n: number) => t("common:pptxSlideLabel", { n }),
@@ -297,7 +310,9 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
 
   // When pptx markdown is ready, render it through the same markdown pipeline.
   const renderAsMarkdown = isRenderableMarkdown || (isPptx && pptxMarkdown != null);
-  const markdownSource = isPptx ? (pptxMarkdown ?? "") : content;
+  const markdownSource = isPptx
+    ? (showAiEnriched && aiEnrichedMarkdown ? aiEnrichedMarkdown : (pptxMarkdown ?? ""))
+    : content;
 
   const isSlidev = useMemo(
     () => (isRenderableMarkdown ? isSlidevMarkdown(content) : false),
@@ -536,6 +551,33 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
   const handleScenarioCancel = useCallback(() => {
     setScenarioDialog(null);
   }, []);
+
+  const handleAiInterpret = useCallback(async () => {
+    if (!activeTab?.binaryData) return;
+    const aiSettings = useSettingsStore.getState().aiSettings;
+    if (!aiSettings.apiKey) {
+      setAiEnrichError(t("pptxAiNotConfigured"));
+      return;
+    }
+    setAiEnriching(true);
+    setAiEnrichError(null);
+    try {
+      const md = await pptxToMarkdownPreviewEnriched(
+        activeTab.binaryData,
+        {
+          slideFallback: (n: number) => t("common:pptxSlideLabel", { n }),
+          notes: t("common:pptxNotesLabel"),
+        },
+        { aiSection: t("pptxAiSection"), lang: i18n.language.startsWith("ja") ? "Japanese" : "English" },
+      );
+      setAiEnrichedMarkdown(md);
+      setShowAiEnriched(true);
+    } catch {
+      setAiEnrichError(t("pptxAiError"));
+    } finally {
+      setAiEnriching(false);
+    }
+  }, [activeTab?.binaryData, t, i18n.language]);
 
   // When a .video.json file is opened, load its content as a VideoProject
   const isVideoJson = useMemo(
@@ -1366,6 +1408,31 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
                 ))}
               </div>
             )
+          )}
+          {isPptx && pptxMarkdown != null && (
+            <div className="preview-panel__pptx-toolbar">
+              {!aiEnrichedMarkdown ? (
+                <button
+                  className="preview-panel__pptx-ai-btn"
+                  onClick={handleAiInterpret}
+                  disabled={aiEnriching}
+                >
+                  {aiEnriching ? t("pptxAiLoading") : t("pptxAiButton")}
+                </button>
+              ) : (
+                <button
+                  className="preview-panel__pptx-ai-btn"
+                  onClick={() => setShowAiEnriched((v) => !v)}
+                >
+                  {showAiEnriched ? t("pptxAiShowOriginal") : t("pptxAiShowEnriched")}
+                </button>
+              )}
+              {aiEnrichError && (
+                <span className="preview-panel__pptx-status preview-panel__pptx-status--error">
+                  {aiEnrichError}
+                </span>
+              )}
+            </div>
           )}
           {isPptx && pptxLoading && (
             <div className="preview-panel__pptx-status">{t("pptxPreviewLoading")}</div>
