@@ -38,7 +38,9 @@ function findNotesTarget(slideRels: string | null): string | null {
     if ((rel.getAttribute("Type") ?? "").endsWith("/notesSlide")) {
       const target = rel.getAttribute("Target") ?? "";
       const cleaned = target.replace(/^\.\//, "");
-      return cleaned.startsWith("../") ? `ppt/${cleaned.slice(3)}` : `ppt/slides/${cleaned}`;
+      if (cleaned.startsWith("../")) return `ppt/${cleaned.slice(3)}`;
+      if (cleaned.startsWith("/")) return cleaned.slice(1);
+      return `ppt/slides/${cleaned}`;
     }
   }
   return null;

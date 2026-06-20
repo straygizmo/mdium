@@ -127,3 +127,77 @@ describe("pptxParser: title + bullets", () => {
     expect(markdown).toContain("\n---\n");
   });
 });
+
+describe("pptxParser: grouped shapes (Fix 1)", () => {
+  // A <p:sp> with body text nested inside <p:grpSp> inside <p:spTree>.
+  // Without recursive group traversal, the text is lost.
+  function grpSpSlide(innerContent: string, relsDecl = ""): string {
+    return `<?xml version="1.0"?>
+    <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+           xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+           xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+           ${relsDecl}>
+      <p:cSld><p:spTree>
+        <p:grpSp>
+          <p:nvGrpSpPr/>
+          <p:grpSpPr/>
+          ${innerContent}
+        </p:grpSp>
+      </p:spTree></p:cSld>
+    </p:sld>`;
+  }
+
+  it("extracts bullet text from a shape nested inside a grpSp group", () => {
+    const innerSp = bodySp(para("Grouped bullet"));
+    const slide = parseSlide({ slideXml: grpSpSlide(innerSp), relsXml: null, notesXml: null });
+    const { markdown } = renderSlides([slide], "deck", labels);
+    expect(markdown).toContain("- Grouped bullet");
+  });
+
+  it("extracts image link from a pic nested inside a grpSp group", () => {
+    const innerPic = `<p:pic><p:blipFill><a:blip r:embed="rId3"/></p:blipFill></p:pic>`;
+    const rels = `<?xml version="1.0"?>
+      <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+        <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/grouped.png"/>
+      </Relationships>`;
+    const slide = parseSlide({ slideXml: grpSpSlide(innerPic), relsXml: rels, notesXml: null });
+    const { markdown } = renderSlides([slide], "deck", labels);
+    expect(markdown).toContain("![](deck_images/image1.png)");
+  });
+
+  it("still picks up a title from a title shape inside a grpSp group", () => {
+    const innerTitle = titleSp("Group Title");
+    const innerBody = bodySp(para("Under group title"));
+    const slide = parseSlide({ slideXml: grpSpSlide(innerTitle + innerBody), relsXml: null, notesXml: null });
+    const { markdown } = renderSlides([slide], "deck", labels);
+    expect(markdown).toContain("## Group Title");
+    expect(markdown).toContain("- Under group title");
+  });
+});
+
+describe("pptxParser: shapeBullets scoped to txBody (Fix 2)", () => {
+  // A shape with a txBody paragraph "Real" should only emit that paragraph.
+  // Normal text shapes must still produce their bullets correctly.
+  it("normal text shape produces its bullets from txBody", () => {
+    const slide = parseSlide({
+      slideXml: slideXml(bodySp(para("Real"))),
+      relsXml: null,
+      notesXml: null,
+    });
+    const { markdown } = renderSlides([slide], "deck", labels);
+    expect(markdown).toContain("- Real");
+  });
+
+  it("a shape with no txBody produces no bullets", () => {
+    // A shape element without any p:txBody — e.g. a connector or empty shape.
+    const emptyShapeXml = `<?xml version="1.0"?>
+      <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+             xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+        <p:cSld><p:spTree>
+          <p:sp><p:nvSpPr><p:nvPr/></p:nvSpPr></p:sp>
+        </p:spTree></p:cSld>
+      </p:sld>`;
+    const slide = parseSlide({ slideXml: emptyShapeXml, relsXml: null, notesXml: null });
+    expect(slide.blocks).toHaveLength(0);
+  });
+});

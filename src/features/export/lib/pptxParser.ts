@@ -65,8 +65,12 @@ function isTitleShape(sp: Element): boolean {
 }
 
 function shapeBullets(sp: Element): PptxBlock | null {
+  // Scope to txBody only so that a shape containing a table does not also
+  // pull the table cell paragraphs into the bullet list.
+  const txBody = sp.getElementsByTagName("p:txBody")[0];
+  if (!txBody) return null;
   const items: { text: string; level: number }[] = [];
-  for (const p of Array.from(sp.getElementsByTagName("a:p"))) {
+  for (const p of Array.from(txBody.getElementsByTagName("a:p"))) {
     const text = paragraphText(p);
     if (text) items.push({ text, level: paragraphLevel(p) });
   }
@@ -138,12 +142,19 @@ export function parseSlide(src: SlideSource): PptxSlide {
   let title: string | null = null;
   const blocks: PptxBlock[] = [];
 
-  if (spTree) {
-    for (const node of Array.from(spTree.childNodes)) {
+  // Recursively process a list of element children, handling sp/graphicFrame/pic
+  // directly and recursing into grpSp groups. This preserves document order and
+  // ensures shapes nested inside PowerPoint groups are not silently dropped.
+  function processChildren(children: NodeList): void {
+    for (const node of Array.from(children)) {
       if (node.nodeType !== 1) continue;
       const el = node as Element;
 
-      if (el.localName === "sp") {
+      if (el.localName === "grpSp") {
+        // Recurse into the group's children (its nvGrpSpPr/grpSpPr won't match
+        // any dispatch branch below and are simply skipped).
+        processChildren(el.childNodes);
+      } else if (el.localName === "sp") {
         if (title === null && isTitleShape(el)) {
           const p = el.getElementsByTagName("a:p")[0];
           title = p ? paragraphText(p) : "";
@@ -161,6 +172,10 @@ export function parseSlide(src: SlideSource): PptxSlide {
         if (target) blocks.push({ kind: "image", mediaPath: resolveMediaPath(target) });
       }
     }
+  }
+
+  if (spTree) {
+    processChildren(spTree.childNodes);
   }
 
   return { title: title || null, blocks, notes: parseNotes(src.notesXml) };

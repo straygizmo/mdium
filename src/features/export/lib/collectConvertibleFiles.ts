@@ -9,8 +9,9 @@ export interface ConvertibleFile {
 }
 
 /**
- * Recursively collect .docx and .pdf files from a FileEntry tree.
- * Also checks whether a corresponding .md file already exists in the same directory.
+ * Recursively collect convertible files (.docx, .pdf, .xlsx/.xls/.xlsm, .pptx)
+ * from a FileEntry tree. Also checks whether a corresponding .md file already
+ * exists in the same directory.
  */
 export function collectConvertibleFiles(tree: FileEntry[]): ConvertibleFile[] {
   const results: ConvertibleFile[] = [];
