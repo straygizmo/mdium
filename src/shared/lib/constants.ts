@@ -46,7 +46,7 @@ export function getImageExt(filePath: string): string | null {
 
 /**
  * Returns true if the file should be opened in the code editor
- * (i.e., it is not Markdown, Office, PDF, image, mindmap, CSV, or video JSON).
+ * (i.e., it is not Markdown, Office, PDF, PPTX, image, mindmap, CSV, or video JSON).
  */
 export function isCodeFile(filePath: string): boolean {
   const lower = filePath.toLowerCase();
