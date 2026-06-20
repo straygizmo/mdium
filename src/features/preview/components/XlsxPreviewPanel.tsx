@@ -4,11 +4,87 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
 import * as XLSX from "xlsx";
 import { markdownToXlsx } from "@/features/export/lib/markdownToXlsx";
+import { processSvgForStandaloneUse } from "./PreviewPanel";
 import "./XlsxPreviewPanel.css";
 
 interface XlsxPreviewPanelProps {
+  previewRef: React.RefObject<HTMLDivElement | null>;
   content: string;
   filePath: string | null;
+}
+
+/** Rasterize an SVG string to PNG bytes via an offscreen canvas. */
+function svgToPngBuffer(svgString: string): Promise<Uint8Array> {
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => reject(new Error("SVG to PNG timed out")), 10000);
+    const svgBlob = new Blob([svgString], { type: "image/svg+xml;charset=utf-8" });
+    const url = URL.createObjectURL(svgBlob);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      try {
+        const scale = 2;
+        const canvas = document.createElement("canvas");
+        canvas.width = img.width * scale;
+        canvas.height = img.height * scale;
+        const ctx = canvas.getContext("2d")!;
+        ctx.scale(scale, scale);
+        ctx.drawImage(img, 0, 0);
+        canvas.toBlob((blob) => {
+          clearTimeout(timeoutId);
+          if (!blob) {
+            reject(new Error("Canvas toBlob failed"));
+            return;
+          }
+          blob.arrayBuffer().then((ab) => resolve(new Uint8Array(ab))).catch(reject);
+        }, "image/png");
+      } catch (err) {
+        clearTimeout(timeoutId);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    };
+    img.onerror = () => {
+      clearTimeout(timeoutId);
+      URL.revokeObjectURL(url);
+      reject(new Error("Failed to load SVG for Mermaid rendering"));
+    };
+    img.src = url;
+  });
+}
+
+/**
+ * Wait for Mermaid diagrams in the preview DOM to finish rendering, then
+ * rasterize each to PNG bytes in document order. A diagram that is missing or
+ * fails to rasterize yields a null entry so index alignment with the markdown's
+ * ```mermaid blocks is preserved.
+ */
+async function collectMermaidPngs(
+  previewEl: HTMLDivElement | null,
+): Promise<(Uint8Array | null)[]> {
+  if (!previewEl) return [];
+  const waitStart = Date.now();
+  while (Date.now() - waitStart < 10000) {
+    const pending = previewEl.querySelectorAll(
+      '.mermaid-placeholder:not([data-rendered="done"])',
+    );
+    if (pending.length === 0) break;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  const placeholders = Array.from(previewEl.querySelectorAll(".mermaid-placeholder"));
+  const pngs: (Uint8Array | null)[] = [];
+  for (const ph of placeholders) {
+    const svg = ph.querySelector(".mermaid-rendered svg") as SVGSVGElement | null;
+    if (!svg) {
+      pngs.push(null);
+      continue;
+    }
+    try {
+      pngs.push(await svgToPngBuffer(processSvgForStandaloneUse(svg)));
+    } catch {
+      pngs.push(null);
+    }
+  }
+  return pngs;
 }
 
 /** Escape HTML special characters for safe interpolation into innerHTML. */
@@ -34,7 +110,7 @@ export function workbookToPreviewHtml(bytes: Uint8Array): string {
   }).join("\n");
 }
 
-export function XlsxPreviewPanel({ content, filePath }: XlsxPreviewPanelProps) {
+export function XlsxPreviewPanel({ previewRef, content, filePath }: XlsxPreviewPanelProps) {
   const { t } = useTranslation("editor");
   const [generating, setGenerating] = useState(false);
   const [splitByHeading, setSplitByHeading] = useState(false);
@@ -53,7 +129,8 @@ export function XlsxPreviewPanel({ content, filePath }: XlsxPreviewPanelProps) {
     if (!content) return;
     setGenerating(true);
     try {
-      const bytes = await markdownToXlsx(content, { filePath, splitByHeading });
+      const mermaidPngs = await collectMermaidPngs(previewRef.current);
+      const bytes = await markdownToXlsx(content, { filePath, splitByHeading, mermaidPngs });
       if (!mountedRef.current) return;
       xlsxDataRef.current = bytes;
       const container = containerRef.current;
@@ -65,7 +142,7 @@ export function XlsxPreviewPanel({ content, filePath }: XlsxPreviewPanelProps) {
     } finally {
       if (mountedRef.current) setGenerating(false);
     }
-  }, [content, filePath, splitByHeading]);
+  }, [content, filePath, splitByHeading, previewRef]);
 
   const saveXlsx = useCallback(async () => {
     const data = xlsxDataRef.current;

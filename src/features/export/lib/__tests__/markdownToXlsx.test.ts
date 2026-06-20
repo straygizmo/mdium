@@ -7,10 +7,21 @@ vi.mock("@tauri-apps/plugin-fs", () => ({
   readFile: (...args: unknown[]) => readFileMock(...args),
 }));
 
+import JSZip from "jszip";
 import {
   collectRelativeImagePaths,
+  resolveImagePath,
+  injectMermaidDiagrams,
   markdownToXlsx,
 } from "../markdownToXlsx";
+
+// 1x1 red PNG, used as a stand-in rasterized asset.
+const PNG = Uint8Array.from(
+  atob(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+  ),
+  (c) => c.charCodeAt(0),
+);
 
 describe("collectRelativeImagePaths", () => {
   it("returns only relative image paths, excluding remote and data URIs", () => {
@@ -61,6 +72,63 @@ describe("markdownToXlsx", () => {
   it("resolves images against current dir when filePath has no directory", async () => {
     readFileMock.mockResolvedValue(new Uint8Array([1, 2, 3]));
     await markdownToXlsx("![a](img/a.png)", { filePath: "note.md" });
-    expect(readFileMock).toHaveBeenCalledWith("./img/a.png");
+    expect(readFileMock).toHaveBeenCalledWith("img/a.png");
+  });
+
+  it("embeds rasterized mermaid diagrams into the workbook", async () => {
+    const md = "# T\n\n```mermaid\ngraph TD; A-->B;\n```\n";
+    const bytes = await markdownToXlsx(md, { mermaidPngs: [PNG] });
+    const zip = await JSZip.loadAsync(bytes);
+    const media = Object.keys(zip.files).filter((n) => n.includes("media"));
+    expect(media.length).toBe(1);
+  });
+});
+
+describe("resolveImagePath", () => {
+  it("joins a relative path against a forward-slash directory", () => {
+    expect(resolveImagePath("/docs", "img/a.png")).toBe("/docs/img/a.png");
+  });
+
+  it("normalizes Windows backslash directories to forward slashes", () => {
+    expect(resolveImagePath("C:\\Users\\me", "img/a.png")).toBe("C:/Users/me/img/a.png");
+  });
+
+  it("collapses .. and . segments", () => {
+    expect(resolveImagePath("/docs/sub", "../img/./a.png")).toBe("/docs/img/a.png");
+  });
+
+  it("decodes percent-encoded paths", () => {
+    expect(resolveImagePath("/docs", "img%20space.png")).toBe("/docs/img space.png");
+  });
+});
+
+describe("injectMermaidDiagrams", () => {
+  it("replaces a mermaid block with an image ref and builds a matching asset", () => {
+    const md = "# T\n\n```mermaid\ngraph TD; A-->B;\n```\n";
+    const { markdown, assets } = injectMermaidDiagrams(md, [PNG]);
+    expect(markdown).toContain("![](__mermaid_0__.png)");
+    expect(markdown).not.toContain("```mermaid");
+    expect(assets).toHaveLength(1);
+    expect(assets[0].path).toBe("__mermaid_0__.png");
+    expect(assets[0].data).toBe(PNG);
+  });
+
+  it("maps multiple blocks to PNGs in document order", () => {
+    const md = "```mermaid\nA\n```\n\ntext\n\n```mermaid\nB\n```\n";
+    const { markdown, assets } = injectMermaidDiagrams(md, [PNG, PNG]);
+    expect(markdown).toContain("![](__mermaid_0__.png)");
+    expect(markdown).toContain("![](__mermaid_1__.png)");
+    expect(assets.map((a) => a.path)).toEqual([
+      "__mermaid_0__.png",
+      "__mermaid_1__.png",
+    ]);
+  });
+
+  it("drops a block that has no corresponding PNG", () => {
+    const md = "```mermaid\nA\n```\n";
+    const { markdown, assets } = injectMermaidDiagrams(md, []);
+    expect(markdown).not.toContain("```mermaid");
+    expect(markdown).not.toContain("![]");
+    expect(assets).toHaveLength(0);
   });
 });
