@@ -563,3 +563,18 @@ export const COMMIT_MESSAGE_PROMPT =
   "Based on the staged diff and recent commit history provided, generate a concise and descriptive commit message. " +
   "Follow the style of the recent commits if available. " +
   "Output ONLY the commit message, no explanations or code fences.";
+
+// System prompt for interpreting a single PPTX slide's diagram (shapes with
+// normalized positions + connector arrows) into Markdown/Mermaid.
+export function pptxAiEnrichSystemPrompt(lang: string): string {
+  return (
+    "You are a diagram-analysis assistant for presentation slides. " +
+    "You receive the shapes on ONE slide (each with normalized coordinates 0-100 and text) " +
+    "and connectors (arrows as from->to shape ids). " +
+    "Infer what the diagram is trying to convey from the spatial layout and arrows. " +
+    "If it represents a flow, relationship, hierarchy, or comparison, express it as a Mermaid diagram " +
+    "wrapped in a ```mermaid fenced code block. Otherwise, explain the key points concisely in 2-4 lines. " +
+    `Output ONLY the interpretation body, written in ${lang}. ` +
+    "No preamble, no trailing commentary."
+  );
+}

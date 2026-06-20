@@ -14,7 +14,7 @@ function parseXml(xml: string): Document {
 // Ordered list of slide zip paths, following presentation.xml sldIdLst.
 // Uses getAttribute("r:id") (qualified-name form) because happy-dom 20.8.9's
 // getAttributeNS is broken and silently returns null.
-function resolveSlideOrder(presentationXml: string, presRels: string): string[] {
+export function resolveSlideOrder(presentationXml: string, presRels: string): string[] {
   const relMap = new Map<string, string>();
   for (const rel of Array.from(parseXml(presRels).getElementsByTagName("Relationship"))) {
     const id = rel.getAttribute("Id");
