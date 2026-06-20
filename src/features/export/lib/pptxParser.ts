@@ -110,6 +110,27 @@ function parseTable(tbl: Element): PptxBlock {
   return { kind: "table", rows };
 }
 
+// Extract body-placeholder text from a notesSlide, skipping non-body
+// placeholders (slide-number, date, etc.). Paragraphs are joined by newlines.
+// Uses prefixed getElementsByTagName because happy-dom's getElementsByTagNameNS
+// is broken (see file header comment).
+function parseNotes(notesXml: string | null): string | null {
+  if (!notesXml) return null;
+  const doc = parseXml(notesXml);
+  const lines: string[] = [];
+  for (const sp of Array.from(doc.getElementsByTagName("p:sp"))) {
+    const ph = sp.getElementsByTagName("p:ph")[0];
+    const type = ph?.getAttribute("type");
+    // Skip non-body placeholders (slide number, date, header, etc.)
+    if (type && type !== "body") continue;
+    for (const p of Array.from(sp.getElementsByTagName("a:p"))) {
+      const text = paragraphText(p);
+      if (text) lines.push(text);
+    }
+  }
+  return lines.length ? lines.join("\n") : null;
+}
+
 export function parseSlide(src: SlideSource): PptxSlide {
   const doc = parseXml(src.slideXml);
   const rels = parseRels(src.relsXml);
@@ -142,7 +163,7 @@ export function parseSlide(src: SlideSource): PptxSlide {
     }
   }
 
-  return { title: title || null, blocks, notes: null };
+  return { title: title || null, blocks, notes: parseNotes(src.notesXml) };
 }
 
 function escapeCell(s: string): string {

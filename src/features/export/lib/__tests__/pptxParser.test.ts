@@ -69,6 +69,35 @@ describe("pptxParser: images", () => {
   });
 });
 
+describe("pptxParser: speaker notes", () => {
+  const simpleSlide = `<?xml version="1.0"?>
+    <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+           xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+      <p:cSld><p:spTree>
+        <p:sp><p:nvSpPr><p:nvPr/></p:nvSpPr><p:txBody>
+          <a:p><a:r><a:t>Body</a:t></a:r></a:p></p:txBody></p:sp>
+      </p:spTree></p:cSld></p:sld>`;
+  const notesXml = `<?xml version="1.0"?>
+    <p:notes xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+             xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+      <p:cSld><p:spTree>
+        <p:sp><p:nvSpPr><p:nvPr><p:ph type="body"/></p:nvPr></p:nvSpPr><p:txBody>
+          <a:p><a:r><a:t>Remember the demo</a:t></a:r></a:p></p:txBody></p:sp>
+      </p:spTree></p:cSld></p:notes>`;
+
+  it("emits notes as a quote block when present", () => {
+    const slide = parseSlide({ slideXml: simpleSlide, relsXml: null, notesXml });
+    const { markdown } = renderSlides([slide], "deck", { slideFallback: (n) => `S${n}`, notes: "ノート:" });
+    expect(markdown).toContain("> **ノート:** Remember the demo");
+  });
+
+  it("emits no notes line when notesXml is null", () => {
+    const slide = parseSlide({ slideXml: simpleSlide, relsXml: null, notesXml: null });
+    const { markdown } = renderSlides([slide], "deck", { slideFallback: (n) => `S${n}`, notes: "ノート:" });
+    expect(markdown).not.toContain("ノート:");
+  });
+});
+
 describe("pptxParser: title + bullets", () => {
   it("uses title placeholder as heading and paragraphs as nested bullets", () => {
     const slide = parseSlide({
