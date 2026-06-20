@@ -41,7 +41,7 @@ describe("extractPptxMarkdown", () => {
     const result = await extractPptxMarkdown(data, "pptx", labels);
     expect(result.markdown).toContain("## Hello");
     expect(result.zip.file("ppt/slides/slide1.xml")).not.toBeNull();
-    expect(Array.isArray(result.images)).toBe(true);
+    expect(result.images).toEqual([]);
   });
 
   it("throws on a pptx missing presentation.xml", async () => {

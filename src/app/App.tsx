@@ -328,7 +328,7 @@ export function App() {
   // Force-hide editor for non-editable file types; normal files use per-tab state
   useEffect(() => {
     if (activeTab) {
-      const isSpecialFile = activeTab.mindmapFileType || activeTab.imageFileType || activeTab.officeFileType || activeTab.isDiffTab;
+      const isSpecialFile = activeTab.mindmapFileType || activeTab.imageFileType || activeTab.officeFileType || activeTab.pptxFileType || activeTab.isDiffTab;
       const isVideoJson = activeTab.filePath?.toLowerCase().endsWith(".video.json");
       const isCode = activeTab.isCodeFile;
       if (isSpecialFile || isVideoJson || isCode) {
@@ -642,6 +642,10 @@ export function App() {
     // If untitled tab (empty filePath), redirect to "Save As"
     if (!activeTab.filePath) {
       handleSaveAs();
+      return;
+    }
+    // Binary preview tabs (pptx/pdf/office) are view-only — never overwrite the file with text.
+    if (activeTab.binaryData && !activeTab.imageFileType && !activeTab.mindmapFileType) {
       return;
     }
     try {
