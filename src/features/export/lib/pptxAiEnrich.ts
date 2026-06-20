@@ -53,8 +53,11 @@ export async function pptxToMarkdownPreviewEnriched(
   labels: PptxLabels,
   enrich: EnrichLabels,
 ): Promise<string> {
-  const md = await pptxToMarkdownPreview(data, labels);
-  const layouts = await extractPptxLayout(data);
+  // Both parses are independent and read the same bytes; run them in parallel.
+  const [md, layouts] = await Promise.all([
+    pptxToMarkdownPreview(data, labels),
+    extractPptxLayout(data),
+  ]);
 
   const chunks = md.split(SLIDE_SEPARATOR);
   // Safety: if slide boundaries don't line up with layouts, skip AI insertion.
