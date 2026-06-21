@@ -291,49 +291,99 @@ function clearImageRowText(model: WorkbookModel): void {
   }
 }
 
+/** Points per pixel at 96 DPI. */
+const PT_PER_PX = 0.75;
+/** Excel's maximum row height, in points. */
+const MAX_ROW_HEIGHT_PT = 409.5;
+
 /**
- * Rewrite the engine's image anchors so each picture sits in column A at its
- * native size. The engine hardcodes column B and stretches images to fill a
- * fixed cell box; replace each twoCellAnchor with a oneCellAnchor anchored at
- * column 0 with an explicit EMU extent derived from the image's real
- * dimensions (preserving aspect ratio).
+ * Replicate the engine's reserved-blank-row count for an image (it inserts this
+ * many blank rows after each image row). Must match the engine so we collapse
+ * exactly those blanks and never a content row.
  */
-async function rewriteImageDrawings(
+function reservedRowsForDims(width: number, height: number): number {
+  const IMAGE_PREVIEW_ROWS = 6;
+  if (!width || !height) return IMAGE_PREVIEW_ROWS;
+  const previewWidthPx = 3 * 64; // IMAGE_PREVIEW_COLUMNS * PREVIEW_COLUMN_PIXELS
+  const previewHeightPx = previewWidthPx / (width / height);
+  const rows = Math.min(Math.max(Math.ceil(previewHeightPx / 20), 4), 24);
+  return Math.max(IMAGE_PREVIEW_ROWS, rows);
+}
+
+interface PlacedImage {
+  /** 0-based row index in the written sheet (after reserved rows are inserted). */
+  outputRow: number;
+  dims: { width: number; height: number }[];
+  reservedRows: number;
+}
+
+/** Per sheet, the placed images with their output row index and dimensions. */
+function imageLayout(model: WorkbookModel): PlacedImage[][] {
+  const byPath = new Map((model.imageAssets ?? []).map((a) => [a.path, a]));
+  return model.sheets.map((sheet) => {
+    const placed: PlacedImage[] = [];
+    let outputRow = 0;
+    for (const row of sheet.rows) {
+      const assets = (row.imageRefs ?? [])
+        .map((ref) => byPath.get(ref.path))
+        .filter((a): a is Md2XlsxImageAsset => Boolean(a));
+      if (assets.length) {
+        const dims = assets.map((a) => imageSize(a.data) ?? { width: 0, height: 0 });
+        const reservedRows = Math.max(
+          ...dims.map((d) => reservedRowsForDims(d.width, d.height)),
+        );
+        placed.push({ outputRow, dims, reservedRows });
+        outputRow += 1 + reservedRows;
+      } else {
+        outputRow += 1;
+      }
+    }
+    return placed;
+  });
+}
+
+/** Set (or collapse) a row's height in worksheet XML, preserving self-closing rows. */
+function setRowHeight(xml: string, rowNumber: number, heightPt: number): string {
+  const re = new RegExp(`<row r="${rowNumber}"([^>]*?)(/?)>`);
+  return xml.replace(re, (_m, attrs: string, selfClose: string) => {
+    const cleaned = attrs
+      .replace(/\s+ht="[^"]*"/g, "")
+      .replace(/\s+customHeight="[^"]*"/g, "");
+    return `<row r="${rowNumber}"${cleaned} ht="${heightPt}" customHeight="1"${selfClose}>`;
+  });
+}
+
+/**
+ * Post-process the generated workbook so each picture sits in column A at its
+ * native size, the image row grows to the image's height (capped at Excel's
+ * maximum), and the now-redundant reserved blank rows are collapsed when the
+ * image fits within one row.
+ *
+ * The engine hardcodes column B, stretches images to fill a fixed cell box
+ * (distorting them), and leaves the image row at default height so a native-
+ * sized picture overflows and hides the rows beneath it.
+ */
+async function applyImageLayout(
   bytes: Uint8Array,
   model: WorkbookModel,
 ): Promise<Uint8Array> {
-  const byPath = new Map((model.imageAssets ?? []).map((a) => [a.path, a]));
-
-  // Intrinsic dimensions of every drawn image, in the engine's anchor order
-  // (sheet order, then row order; refs without a matching asset are skipped).
-  const dims: { width: number; height: number }[] = [];
-  for (const sheet of model.sheets) {
-    for (const row of sheet.rows) {
-      for (const ref of row.imageRefs ?? []) {
-        const asset = byPath.get(ref.path);
-        if (!asset) continue;
-        dims.push(imageSize(asset.data) ?? { width: 0, height: 0 });
-      }
-    }
-  }
-  if (dims.length === 0) return bytes;
+  const layout = imageLayout(model);
+  const allDims = layout.flat().flatMap((p) => p.dims);
+  if (allDims.length === 0) return bytes;
 
   const zip = await JSZip.loadAsync(bytes);
+
+  // 1. Rewrite drawing anchors → column A, native EMU size.
   const drawingNames = Object.keys(zip.files)
     .filter((n) => /^xl\/drawings\/drawing\d+\.xml$/.test(n))
-    .sort((a, b) => {
-      const na = Number(a.match(/(\d+)\.xml$/)![1]);
-      const nb = Number(b.match(/(\d+)\.xml$/)![1]);
-      return na - nb;
-    });
-
-  let idx = 0;
+    .sort((a, b) => Number(a.match(/(\d+)\.xml$/)![1]) - Number(b.match(/(\d+)\.xml$/)![1]));
+  let dimIdx = 0;
   for (const name of drawingNames) {
     const xmlText = await zip.file(name)!.async("string");
     const rewritten = xmlText.replace(
       /<xdr:twoCellAnchor[^>]*>([\s\S]*?)<\/xdr:twoCellAnchor>/g,
       (_full, inner: string) => {
-        const d = dims[idx++] ?? { width: 0, height: 0 };
+        const d = allDims[dimIdx++] ?? { width: 0, height: 0 };
         const rowMatch = inner.match(/<xdr:from>[\s\S]*?<xdr:row>(\d+)<\/xdr:row>/);
         const row = rowMatch ? rowMatch[1] : "0";
         const picMatch = inner.match(/<xdr:pic>[\s\S]*?<\/xdr:pic>/);
@@ -351,6 +401,28 @@ async function rewriteImageDrawings(
       },
     );
     zip.file(name, rewritten);
+  }
+
+  // 2. Set image-row heights and collapse redundant reserved rows.
+  for (const [sheetOffset, placedList] of layout.entries()) {
+    if (!placedList.length) continue;
+    const sheetName = `xl/worksheets/sheet${sheetOffset + 1}.xml`;
+    const file = zip.file(sheetName);
+    if (!file) continue;
+    let xml = await file.async("string");
+    for (const placed of placedList) {
+      const imageHeightPt = Math.max(...placed.dims.map((d) => d.height)) * PT_PER_PX;
+      const rowHeightPt = Math.min(imageHeightPt, MAX_ROW_HEIGHT_PT);
+      const excelRow = placed.outputRow + 1; // worksheet rows are 1-based
+      xml = setRowHeight(xml, excelRow, Number(rowHeightPt.toFixed(2)));
+      // If the picture fits within one row, the reserved blanks are redundant.
+      if (imageHeightPt <= MAX_ROW_HEIGHT_PT) {
+        for (let i = 1; i <= placed.reservedRows; i += 1) {
+          xml = setRowHeight(xml, excelRow + i, 0);
+        }
+      }
+    }
+    zip.file(sheetName, xml);
   }
 
   return zip.generateAsync({ type: "uint8array" });
@@ -383,7 +455,7 @@ export async function markdownToXlsxArtifacts(
   // and other rows keep their text.
   const previewHtml = renderWorkbookModelToHtml(model);
   clearImageRowText(model);
-  const bytes = await rewriteImageDrawings(workbookModelToXlsx(model), model);
+  const bytes = await applyImageLayout(workbookModelToXlsx(model), model);
   return { bytes, previewHtml };
 }
 

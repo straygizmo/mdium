@@ -244,6 +244,18 @@ describe("markdownToXlsxArtifacts", () => {
       }
     }
   });
+
+  it("sizes the image row to the image height and collapses reserved rows", async () => {
+    readFileMock.mockResolvedValue(PNG); // 1x1 px → 0.75 pt
+    const md = "# T\n\n![a](pic.png)\n\nafter\n";
+    const { bytes } = await markdownToXlsxArtifacts(md, { filePath: "/docs/note.md" });
+    const zip = await JSZip.loadAsync(bytes);
+    const sheet = await zip.file("xl/worksheets/sheet1.xml")!.async("string");
+    // Image lands on row 2 (after the title); its height matches the image.
+    expect(sheet).toContain('<row r="2" ht="0.75" customHeight="1">');
+    // The first reserved blank row below it is collapsed.
+    expect(sheet).toContain('<row r="3" ht="0" customHeight="1">');
+  });
 });
 
 describe("imageSize", () => {
