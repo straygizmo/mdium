@@ -1,5 +1,19 @@
 import { readFile } from "@tauri-apps/plugin-fs";
-import type { Md2XlsxImageAsset } from "@/vendor/md2xlsx";
+import type {
+  CellModel,
+  Md2XlsxImageAsset,
+  WorkbookModel,
+} from "@/vendor/md2xlsx";
+
+/** Escape HTML special characters for safe interpolation into innerHTML. */
+export function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
 
 /**
  * Extract image paths referenced by `![alt](url)` that point at local
@@ -91,14 +105,13 @@ export interface MarkdownToXlsxOptions {
 }
 
 /**
- * Resolve relative images (best-effort), embed rasterized Mermaid diagrams,
- * and convert markdown to .xlsx bytes using the vendored miku-md2xlsx engine.
+ * Resolve relative images (best-effort) and rewrite Mermaid blocks to image
+ * refs, returning the processed markdown and the collected image assets.
  */
-export async function markdownToXlsx(
+async function resolveXlsxInputs(
   markdown: string,
-  options: MarkdownToXlsxOptions = {},
-): Promise<Uint8Array> {
-  const { md2xlsx } = await import("@/vendor/md2xlsx");
+  options: MarkdownToXlsxOptions,
+): Promise<{ processed: string; imageAssets: Md2XlsxImageAsset[] }> {
   const { filePath, mermaidPngs } = options;
 
   // Embed Mermaid diagrams by rewriting their fenced blocks to image refs.
@@ -123,6 +136,115 @@ export async function markdownToXlsx(
     }
   }
 
+  return { processed, imageAssets };
+}
+
+/** Encode bytes to a base64 string in fixed-size chunks (stack-safe). */
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+function renderCellContent(cell: CellModel): string {
+  let inner: string;
+  if (cell.richTextRuns && cell.richTextRuns.length) {
+    inner = cell.richTextRuns
+      .map((run) => {
+        let t = escapeHtml(run.text);
+        if (run.bold) t = `<b>${t}</b>`;
+        if (run.italic) t = `<i>${t}</i>`;
+        if (run.strike) t = `<s>${t}</s>`;
+        if (run.underline) t = `<u>${t}</u>`;
+        return t;
+      })
+      .join("");
+  } else {
+    inner = escapeHtml(cell.value ?? "");
+  }
+  if (cell.hyperlink?.target) {
+    inner = `<a href="${escapeHtml(cell.hyperlink.target)}">${inner}</a>`;
+  }
+  return inner;
+}
+
+/**
+ * Render an approximate HTML preview from the workbook model. Unlike a
+ * SheetJS round-trip, this renders embedded images (resolved files and
+ * rasterized Mermaid diagrams) inline as data URLs.
+ */
+export function renderWorkbookModelToHtml(model: WorkbookModel): string {
+  const assets = model.imageAssets ?? [];
+  return model.sheets
+    .map((sheet) => {
+      const rows = sheet.rows
+        .map((row) => {
+          if (row.imageRefs && row.imageRefs.length) {
+            const imgs = row.imageRefs
+              .map((ref) => {
+                const asset = assets.find((a) => a.path === ref.path);
+                if (!asset) return escapeHtml(ref.alt || ref.path);
+                const ct = asset.contentType || "image/png";
+                return `<img src="data:${ct};base64,${bytesToBase64(asset.data)}" alt="${escapeHtml(ref.alt || "")}" />`;
+              })
+              .join("");
+            return `<tr><td>${imgs}</td></tr>`;
+          }
+          const cells = row.cells
+            .map((c) => {
+              const tag = c.styleRole === "tableHeader" ? "th" : "td";
+              return `<${tag}>${renderCellContent(c)}</${tag}>`;
+            })
+            .join("");
+          return `<tr>${cells}</tr>`;
+        })
+        .join("");
+      return `<h4>${escapeHtml(sheet.name)}</h4><table>${rows}</table>`;
+    })
+    .join("\n");
+}
+
+export interface XlsxArtifacts {
+  /** The .xlsx file bytes, ready to save. */
+  bytes: Uint8Array;
+  /** An HTML approximation of the workbook, with images rendered inline. */
+  previewHtml: string;
+}
+
+/**
+ * Build both the .xlsx bytes and an image-aware HTML preview from markdown,
+ * resolving relative images and embedding rasterized Mermaid diagrams. The
+ * model is built once and reused for both outputs.
+ */
+export async function markdownToXlsxArtifacts(
+  markdown: string,
+  options: MarkdownToXlsxOptions = {},
+): Promise<XlsxArtifacts> {
+  const { markdownToXlsxModel, workbookModelToXlsx } = await import("@/vendor/md2xlsx");
+  const { processed, imageAssets } = await resolveXlsxInputs(markdown, options);
+  const model = markdownToXlsxModel(processed, {
+    sheetMode: options.splitByHeading ? "heading" : "single",
+    imageAssets,
+  });
+  return {
+    bytes: workbookModelToXlsx(model),
+    previewHtml: renderWorkbookModelToHtml(model),
+  };
+}
+
+/**
+ * Resolve relative images (best-effort), embed rasterized Mermaid diagrams,
+ * and convert markdown to .xlsx bytes using the vendored miku-md2xlsx engine.
+ */
+export async function markdownToXlsx(
+  markdown: string,
+  options: MarkdownToXlsxOptions = {},
+): Promise<Uint8Array> {
+  const { md2xlsx } = await import("@/vendor/md2xlsx");
+  const { processed, imageAssets } = await resolveXlsxInputs(markdown, options);
   return md2xlsx(processed, {
     sheetMode: options.splitByHeading ? "heading" : "single",
     imageAssets,

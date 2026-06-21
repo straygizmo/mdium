@@ -2,8 +2,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
-import * as XLSX from "xlsx";
-import { markdownToXlsx } from "@/features/export/lib/markdownToXlsx";
+import { markdownToXlsxArtifacts } from "@/features/export/lib/markdownToXlsx";
 import { processSvgForStandaloneUse } from "./PreviewPanel";
 import "./XlsxPreviewPanel.css";
 
@@ -87,29 +86,6 @@ async function collectMermaidPngs(
   return pngs;
 }
 
-/** Escape HTML special characters for safe interpolation into innerHTML. */
-export function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-/**
- * Render the generated .xlsx bytes into an HTML approximation using SheetJS.
- * The community edition does not render embedded images or styling — this is a
- * text/table preview only. Exported as a pure helper for testing.
- */
-export function workbookToPreviewHtml(bytes: Uint8Array): string {
-  const workbook = XLSX.read(bytes, { type: "array" });
-  return workbook.SheetNames.map((name) => {
-    const sheet = workbook.Sheets[name];
-    return `<h4>${escapeHtml(name)}</h4>` + XLSX.utils.sheet_to_html(sheet);
-  }).join("\n");
-}
-
 export function XlsxPreviewPanel({ previewRef, content, filePath }: XlsxPreviewPanelProps) {
   const { t } = useTranslation("editor");
   const [generating, setGenerating] = useState(false);
@@ -130,12 +106,16 @@ export function XlsxPreviewPanel({ previewRef, content, filePath }: XlsxPreviewP
     setGenerating(true);
     try {
       const mermaidPngs = await collectMermaidPngs(previewRef.current);
-      const bytes = await markdownToXlsx(content, { filePath, splitByHeading, mermaidPngs });
+      const { bytes, previewHtml } = await markdownToXlsxArtifacts(content, {
+        filePath,
+        splitByHeading,
+        mermaidPngs,
+      });
       if (!mountedRef.current) return;
       xlsxDataRef.current = bytes;
       const container = containerRef.current;
       if (container) {
-        container.innerHTML = workbookToPreviewHtml(bytes);
+        container.innerHTML = previewHtml;
       }
     } catch (error) {
       console.error("XLSX preview generation error:", error);

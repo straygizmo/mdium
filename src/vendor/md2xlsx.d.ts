@@ -23,12 +23,46 @@ export interface Md2XlsxOptions {
   imageAssets?: Md2XlsxImageAsset[];
 }
 
+export interface RichTextRun {
+  text: string;
+  bold?: boolean;
+  italic?: boolean;
+  strike?: boolean;
+  underline?: boolean;
+}
+
+export interface HyperlinkModel {
+  target: string;
+  kind: "external" | "internal";
+}
+
+export interface CellModel {
+  value: string;
+  styleRole?: string;
+  hyperlink?: HyperlinkModel;
+  richTextRuns?: RichTextRun[];
+}
+
+export interface ImageRefModel {
+  alt: string;
+  path: string;
+}
+
+export interface RowModel {
+  kind: string;
+  cells: CellModel[];
+  imageRefs?: ImageRefModel[];
+}
+
 export interface SheetModel {
   name: string;
+  rows: RowModel[];
+  columnHints?: number[];
 }
 
 export interface WorkbookModel {
   sheets: SheetModel[];
+  imageAssets?: Md2XlsxImageAsset[];
 }
 
 export function md2xlsx(markdown: string, options?: Md2XlsxOptions): Uint8Array;

@@ -53,7 +53,7 @@
   "generatingXlsx": "Generating XLSX...",
   "saveXlsxPreview": "Save XLSX",
   "splitByHeading": "Split sheets by heading",
-  "xlsxPreviewNote": "Preview shows text and tables only; images and styling appear in the saved file.",
+  "xlsxPreviewNote": "Preview is a simplified approximation; the saved file keeps full Excel styling.",
   "voiceInput": "Voice Input (Ctrl+Shift+M)",
   "contextMenu.selectAll": "Select All",
   "contextMenu.insert": "Insert",

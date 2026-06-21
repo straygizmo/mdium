@@ -105,6 +105,11 @@
   padding: 2px 6px;
 }
 
+.xlsx-preview-panel__content img {
+  max-width: 100%;
+  height: auto;
+}
+
 /* Loading overlay (content stays mounted underneath) */
 .xlsx-preview-panel__loading {
   position: absolute;

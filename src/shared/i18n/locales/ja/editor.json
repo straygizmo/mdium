@@ -53,7 +53,7 @@
   "generatingXlsx": "XLSXを生成中...",
   "saveXlsxPreview": "XLSXを保存",
   "splitByHeading": "見出しでシート分割",
-  "xlsxPreviewNote": "プレビューは文字と表のみ表示します。画像と装飾は保存ファイルに反映されます。",
+  "xlsxPreviewNote": "プレビューは簡易表示です。保存ファイルには完全なExcel書式が反映されます。",
   "voiceInput": "音声入力 (Ctrl+Shift+M)",
   "contextMenu.selectAll": "すべて選択",
   "contextMenu.insert": "挿入",

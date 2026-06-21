@@ -12,7 +12,10 @@ import {
   collectRelativeImagePaths,
   resolveImagePath,
   injectMermaidDiagrams,
+  renderWorkbookModelToHtml,
+  escapeHtml,
   markdownToXlsx,
+  markdownToXlsxArtifacts,
 } from "../markdownToXlsx";
 
 // 1x1 red PNG, used as a stand-in rasterized asset.
@@ -130,5 +133,68 @@ describe("injectMermaidDiagrams", () => {
     expect(markdown).not.toContain("```mermaid");
     expect(markdown).not.toContain("![]");
     expect(assets).toHaveLength(0);
+  });
+});
+
+describe("escapeHtml", () => {
+  it("escapes HTML special characters", () => {
+    expect(escapeHtml('<img src=x onerror="alert(1)">')).toBe(
+      "&lt;img src=x onerror=&quot;alert(1)&quot;&gt;",
+    );
+  });
+});
+
+describe("renderWorkbookModelToHtml", () => {
+  it("renders a table with the sheet name and cell values", () => {
+    const html = renderWorkbookModelToHtml({
+      sheets: [
+        {
+          name: "Sheet1",
+          rows: [
+            { kind: "table", cells: [{ value: "A", styleRole: "tableHeader" }] },
+            { kind: "table", cells: [{ value: "1" }] },
+          ],
+        },
+      ],
+    });
+    expect(html).toContain("<h4>Sheet1</h4>");
+    expect(html).toContain("<th>A</th>");
+    expect(html).toContain("<td>1</td>");
+  });
+
+  it("renders image rows inline as data URLs from the matching asset", () => {
+    const html = renderWorkbookModelToHtml({
+      sheets: [
+        {
+          name: "S",
+          rows: [
+            { kind: "image", cells: [{ value: "![a](pic.png)" }], imageRefs: [{ alt: "a", path: "pic.png" }] },
+          ],
+        },
+      ],
+      imageAssets: [{ path: "pic.png", data: PNG, contentType: "image/png" }],
+    });
+    expect(html).toContain('<img src="data:image/png;base64,');
+  });
+
+  it("escapes the sheet name", () => {
+    const html = renderWorkbookModelToHtml({
+      sheets: [{ name: "<x>", rows: [] }],
+    });
+    expect(html).toContain("<h4>&lt;x&gt;</h4>");
+  });
+});
+
+describe("markdownToXlsxArtifacts", () => {
+  beforeEach(() => {
+    readFileMock.mockReset();
+  });
+
+  it("returns xlsx bytes and an image-aware preview for a mermaid diagram", async () => {
+    const md = "# T\n\n```mermaid\ngraph TD; A-->B;\n```\n";
+    const { bytes, previewHtml } = await markdownToXlsxArtifacts(md, { mermaidPngs: [PNG] });
+    expect(bytes[0]).toBe(0x50);
+    expect(bytes[1]).toBe(0x4b);
+    expect(previewHtml).toContain('<img src="data:image/png;base64,');
   });
 });
