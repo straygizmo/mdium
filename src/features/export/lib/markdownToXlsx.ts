@@ -108,6 +108,15 @@ export interface MarkdownToXlsxOptions {
  * Resolve relative images (best-effort) and rewrite Mermaid blocks to image
  * refs, returning the processed markdown and the collected image assets.
  */
+// TODO(xlsx-debug): temporary diagnostics to locate why images don't resolve
+// in the real app. Remove once the root cause is found.
+const xlsxDebug: string[] = [];
+export function takeXlsxDebug(): string[] {
+  const out = [...xlsxDebug];
+  xlsxDebug.length = 0;
+  return out;
+}
+
 async function resolveXlsxInputs(
   markdown: string,
   options: MarkdownToXlsxOptions,
@@ -122,18 +131,30 @@ async function resolveXlsxInputs(
 
   const imageAssets: Md2XlsxImageAsset[] = [...mermaidAssets];
 
+  xlsxDebug.length = 0;
+  xlsxDebug.push(`filePath=${JSON.stringify(filePath)}`);
+  xlsxDebug.push(`mermaidPngs=${mermaidPngs?.length ?? 0}`);
+
   // Resolve relative image files from the original markdown (best-effort).
   if (filePath) {
     let dir = filePath.replace(/[\\/][^\\/]+$/, "");
     if (dir === filePath) dir = "."; // bare filename: no directory component → current dir
-    for (const relPath of collectRelativeImagePaths(markdown)) {
+    xlsxDebug.push(`dir=${JSON.stringify(dir)}`);
+    const collected = collectRelativeImagePaths(markdown);
+    xlsxDebug.push(`collected=${JSON.stringify(collected)}`);
+    for (const relPath of collected) {
+      const fsPath = resolveImagePath(dir, relPath);
       try {
-        const data = await readFile(resolveImagePath(dir, relPath));
+        const data = await readFile(fsPath);
         imageAssets.push({ path: relPath, data, contentType: contentTypeFor(relPath) });
-      } catch {
+        xlsxDebug.push(`OK  ${fsPath} (${data.length}b)`);
+      } catch (e) {
         // Best-effort: skip images that cannot be read.
+        xlsxDebug.push(`FAIL ${fsPath} :: ${(e as Error)?.message ?? e}`);
       }
     }
+  } else {
+    xlsxDebug.push("no filePath → image resolution skipped");
   }
 
   return { processed, imageAssets };
@@ -229,9 +250,15 @@ export async function markdownToXlsxArtifacts(
     sheetMode: options.splitByHeading ? "heading" : "single",
     imageAssets,
   });
+  // TODO(xlsx-debug): temporary visible diagnostics — remove once resolved.
+  const debug = takeXlsxDebug();
+  const debugHtml =
+    `<pre style="white-space:pre-wrap;font-size:11px;color:#b00;border:1px solid #b00;padding:6px;margin:0 0 8px">[xlsx image debug]\n` +
+    escapeHtml(debug.join("\n")) +
+    `\nassets=${imageAssets.length}</pre>`;
   return {
     bytes: workbookModelToXlsx(model),
-    previewHtml: renderWorkbookModelToHtml(model),
+    previewHtml: debugHtml + renderWorkbookModelToHtml(model),
   };
 }
 
