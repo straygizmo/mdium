@@ -105,18 +105,33 @@ export interface MarkdownToXlsxOptions {
 }
 
 /**
+ * Promote any line that contains only an image into a standalone, top-level
+ * image paragraph: dedent it to column 0 and surround it with blank lines.
+ *
+ * Without this, an image written on the line directly below a list item (no
+ * blank line) is absorbed into the list item as a lazy continuation, so the
+ * engine never emits it as an image row and the picture is dropped.
+ */
+export function promoteStandaloneImages(markdown: string): string {
+  const imageOnly = /^\s*(!\[[^\]]*\]\([^)]*\))\s*$/;
+  const out: string[] = [];
+  for (const line of markdown.split(/\r?\n/)) {
+    const match = line.match(imageOnly);
+    if (match) {
+      if (out.length && out[out.length - 1].trim() !== "") out.push("");
+      out.push(match[1]);
+      out.push("");
+    } else {
+      out.push(line);
+    }
+  }
+  return out.join("\n");
+}
+
+/**
  * Resolve relative images (best-effort) and rewrite Mermaid blocks to image
  * refs, returning the processed markdown and the collected image assets.
  */
-// TODO(xlsx-debug): temporary diagnostics to locate why images don't resolve
-// in the real app. Remove once the root cause is found.
-const xlsxDebug: string[] = [];
-export function takeXlsxDebug(): string[] {
-  const out = [...xlsxDebug];
-  xlsxDebug.length = 0;
-  return out;
-}
-
 async function resolveXlsxInputs(
   markdown: string,
   options: MarkdownToXlsxOptions,
@@ -124,37 +139,28 @@ async function resolveXlsxInputs(
   const { filePath, mermaidPngs } = options;
 
   // Embed Mermaid diagrams by rewriting their fenced blocks to image refs.
-  const { markdown: processed, assets: mermaidAssets } =
+  const { markdown: injected, assets: mermaidAssets } =
     mermaidPngs && mermaidPngs.length
       ? injectMermaidDiagrams(markdown, mermaidPngs)
       : { markdown, assets: [] as Md2XlsxImageAsset[] };
 
-  const imageAssets: Md2XlsxImageAsset[] = [...mermaidAssets];
+  // Lift image-only lines out of list items so the engine emits image rows.
+  const processed = promoteStandaloneImages(injected);
 
-  xlsxDebug.length = 0;
-  xlsxDebug.push(`filePath=${JSON.stringify(filePath)}`);
-  xlsxDebug.push(`mermaidPngs=${mermaidPngs?.length ?? 0}`);
+  const imageAssets: Md2XlsxImageAsset[] = [...mermaidAssets];
 
   // Resolve relative image files from the original markdown (best-effort).
   if (filePath) {
     let dir = filePath.replace(/[\\/][^\\/]+$/, "");
     if (dir === filePath) dir = "."; // bare filename: no directory component → current dir
-    xlsxDebug.push(`dir=${JSON.stringify(dir)}`);
-    const collected = collectRelativeImagePaths(markdown);
-    xlsxDebug.push(`collected=${JSON.stringify(collected)}`);
-    for (const relPath of collected) {
-      const fsPath = resolveImagePath(dir, relPath);
+    for (const relPath of collectRelativeImagePaths(markdown)) {
       try {
-        const data = await readFile(fsPath);
+        const data = await readFile(resolveImagePath(dir, relPath));
         imageAssets.push({ path: relPath, data, contentType: contentTypeFor(relPath) });
-        xlsxDebug.push(`OK  ${fsPath} (${data.length}b)`);
-      } catch (e) {
+      } catch {
         // Best-effort: skip images that cannot be read.
-        xlsxDebug.push(`FAIL ${fsPath} :: ${(e as Error)?.message ?? e}`);
       }
     }
-  } else {
-    xlsxDebug.push("no filePath → image resolution skipped");
   }
 
   return { processed, imageAssets };
@@ -250,28 +256,9 @@ export async function markdownToXlsxArtifacts(
     sheetMode: options.splitByHeading ? "heading" : "single",
     imageAssets,
   });
-  // TODO(xlsx-debug): temporary visible diagnostics — remove once resolved.
-  const debug = takeXlsxDebug();
-  const imageRowRefs: string[] = [];
-  let imageRowCount = 0;
-  for (const sheet of model.sheets) {
-    for (const row of sheet.rows) {
-      if (row.imageRefs && row.imageRefs.length) {
-        imageRowCount += 1;
-        for (const ref of row.imageRefs) imageRowRefs.push(ref.path);
-      }
-    }
-  }
-  debug.push(`assets=${imageAssets.length} paths=${JSON.stringify(imageAssets.map((a) => a.path))}`);
-  debug.push(`imageRows=${imageRowCount} refPaths=${JSON.stringify(imageRowRefs)}`);
-  debug.push(`modelAssets=${JSON.stringify((model.imageAssets ?? []).map((a) => a.path))}`);
-  const debugHtml =
-    `<pre style="white-space:pre-wrap;font-size:11px;color:#b00;border:1px solid #b00;padding:6px;margin:0 0 8px">[xlsx image debug]\n` +
-    escapeHtml(debug.join("\n")) +
-    `</pre>`;
   return {
     bytes: workbookModelToXlsx(model),
-    previewHtml: debugHtml + renderWorkbookModelToHtml(model),
+    previewHtml: renderWorkbookModelToHtml(model),
   };
 }
 

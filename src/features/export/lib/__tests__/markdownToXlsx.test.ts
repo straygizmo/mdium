@@ -12,6 +12,7 @@ import {
   collectRelativeImagePaths,
   resolveImagePath,
   injectMermaidDiagrams,
+  promoteStandaloneImages,
   renderWorkbookModelToHtml,
   escapeHtml,
   markdownToXlsx,
@@ -185,6 +186,19 @@ describe("renderWorkbookModelToHtml", () => {
   });
 });
 
+describe("promoteStandaloneImages", () => {
+  it("separates an image that lazily continues a list item", () => {
+    const md = "1. choose the agent\n![alt](images/a.png)\n";
+    const out = promoteStandaloneImages(md);
+    expect(out).toBe("1. choose the agent\n\n![alt](images/a.png)\n\n");
+  });
+
+  it("leaves inline images within text untouched", () => {
+    const md = "see ![a](x.png) here";
+    expect(promoteStandaloneImages(md)).toBe("see ![a](x.png) here");
+  });
+});
+
 describe("markdownToXlsxArtifacts", () => {
   beforeEach(() => {
     readFileMock.mockReset();
@@ -196,5 +210,18 @@ describe("markdownToXlsxArtifacts", () => {
     expect(bytes[0]).toBe(0x50);
     expect(bytes[1]).toBe(0x4b);
     expect(previewHtml).toContain('<img src="data:image/png;base64,');
+  });
+
+  it("embeds an image that lazily follows a list item (no blank line)", async () => {
+    readFileMock.mockResolvedValue(PNG);
+    const md = "1. choose the agent\n![alt](images/a.png)\n";
+    const { bytes, previewHtml } = await markdownToXlsxArtifacts(md, {
+      filePath: "/docs/note.md",
+    });
+    // Image renders inline in the preview...
+    expect(previewHtml).toContain('<img src="data:image/png;base64,');
+    // ...and is embedded as media in the workbook.
+    const zip = await JSZip.loadAsync(bytes);
+    expect(Object.keys(zip.files).some((n) => n.includes("media"))).toBe(true);
   });
 });
