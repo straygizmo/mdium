@@ -29,6 +29,7 @@ interface SettingsDialogProps {
   filterVisibility?: {
     showDocx: boolean;
     showXls: boolean;
+    showPptx: boolean;
     showKm: boolean;
     showImages: boolean;
     showPdf: boolean;
@@ -36,6 +37,7 @@ interface SettingsDialogProps {
   onSaveFilterVisibility?: (v: {
     showDocx: boolean;
     showXls: boolean;
+    showPptx: boolean;
     showKm: boolean;
     showImages: boolean;
     showPdf: boolean;
@@ -45,6 +47,7 @@ interface SettingsDialogProps {
 const DEFAULT_VISIBILITY = {
   showDocx: true,
   showXls: true,
+  showPptx: true,
   showKm: false,
   showImages: false,
   showPdf: false,
@@ -625,6 +628,16 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
                     type="checkbox"
                     checked={localVisibility.showXls}
                     onChange={(e) => handleVisibilityChange("showXls", e.target.checked)}
+                  />
+                </label>
+              </div>
+              <div className="settings-dialog__toggle-group">
+                <label className="settings-dialog__toggle">
+                  <span>{t("showPptxBtn")}</span>
+                  <input
+                    type="checkbox"
+                    checked={localVisibility.showPptx}
+                    onChange={(e) => handleVisibilityChange("showPptx", e.target.checked)}
                   />
                 </label>
               </div>

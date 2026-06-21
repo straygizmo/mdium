@@ -20,6 +20,9 @@ export function useFileFilters(folderPath: string | null, setFileTree: (folderPa
       ? localStorage.getItem("md-filter-xls") === "true"
       : migrateOld
   );
+  const [filterPptx, setFilterPptx] = useState(
+    () => localStorage.getItem("md-filter-pptx") === "true"
+  );
   const [filterKm, setFilterKm] = useState(
     () => localStorage.getItem("md-filter-km") === "true"
   );
@@ -36,6 +39,9 @@ export function useFileFilters(folderPath: string | null, setFileTree: (folderPa
   const [showXlsBtn, setShowXlsBtn] = useState(
     () => localStorage.getItem("md-show-xls-btn") !== "false"
   );
+  const [showPptxBtn, setShowPptxBtn] = useState(
+    () => localStorage.getItem("md-show-pptx-btn") !== "false"
+  );
   const [showKmBtn, setShowKmBtn] = useState(
     () => localStorage.getItem("md-show-km-btn") === "true"
   );
@@ -46,14 +52,16 @@ export function useFileFilters(folderPath: string | null, setFileTree: (folderPa
     () => localStorage.getItem("md-show-pdf-btn") === "true"
   );
 
-  const handleSaveFilterVisibility = useCallback((v: { showDocx: boolean; showXls: boolean; showKm: boolean; showImages: boolean; showPdf: boolean }) => {
+  const handleSaveFilterVisibility = useCallback((v: { showDocx: boolean; showXls: boolean; showPptx: boolean; showKm: boolean; showImages: boolean; showPdf: boolean }) => {
     setShowDocxBtn(v.showDocx);
     setShowXlsBtn(v.showXls);
+    setShowPptxBtn(v.showPptx);
     setShowKmBtn(v.showKm);
     setShowImagesBtn(v.showImages);
     setShowPdfBtn(v.showPdf);
     localStorage.setItem("md-show-docx-btn", String(v.showDocx));
     localStorage.setItem("md-show-xls-btn", String(v.showXls));
+    localStorage.setItem("md-show-pptx-btn", String(v.showPptx));
     localStorage.setItem("md-show-km-btn", String(v.showKm));
     localStorage.setItem("md-show-images-btn", String(v.showImages));
     localStorage.setItem("md-show-pdf-btn", String(v.showPdf));
@@ -64,6 +72,10 @@ export function useFileFilters(folderPath: string | null, setFileTree: (folderPa
     if (!v.showXls && filterXls) {
       setFilterXls(false);
       localStorage.setItem("md-filter-xls", "false");
+    }
+    if (!v.showPptx && filterPptx) {
+      setFilterPptx(false);
+      localStorage.setItem("md-filter-pptx", "false");
     }
     if (!v.showKm && filterKm) {
       setFilterKm(false);
@@ -77,18 +89,20 @@ export function useFileFilters(folderPath: string | null, setFileTree: (folderPa
       setFilterPdf(false);
       localStorage.setItem("md-filter-pdf", "false");
     }
-  }, [filterDocx, filterXls, filterKm, filterImages, filterPdf]);
+  }, [filterDocx, filterXls, filterPptx, filterKm, filterImages, filterPdf]);
 
   const activateShowAll = useCallback(() => {
     setShowAll(true);
     localStorage.setItem("md-filter-show-all", "true");
     setFilterDocx(false);
     setFilterXls(false);
+    setFilterPptx(false);
     setFilterKm(false);
     setFilterImages(false);
     setFilterPdf(false);
     localStorage.setItem("md-filter-docx", "false");
     localStorage.setItem("md-filter-xls", "false");
+    localStorage.setItem("md-filter-pptx", "false");
     localStorage.setItem("md-filter-km", "false");
     localStorage.setItem("md-filter-images", "false");
     localStorage.setItem("md-filter-pdf", "false");
@@ -114,24 +128,28 @@ export function useFileFilters(folderPath: string | null, setFileTree: (folderPa
   }, []);
 
   const toggleFilterDocx = useCallback(() => {
-    makeToggle(setFilterDocx, "md-filter-docx", [filterXls, filterKm, filterImages, filterPdf])();
-  }, [makeToggle, filterXls, filterKm, filterImages, filterPdf]);
+    makeToggle(setFilterDocx, "md-filter-docx", [filterXls, filterPptx, filterKm, filterImages, filterPdf])();
+  }, [makeToggle, filterXls, filterPptx, filterKm, filterImages, filterPdf]);
 
   const toggleFilterXls = useCallback(() => {
-    makeToggle(setFilterXls, "md-filter-xls", [filterDocx, filterKm, filterImages, filterPdf])();
-  }, [makeToggle, filterDocx, filterKm, filterImages, filterPdf]);
+    makeToggle(setFilterXls, "md-filter-xls", [filterDocx, filterPptx, filterKm, filterImages, filterPdf])();
+  }, [makeToggle, filterDocx, filterPptx, filterKm, filterImages, filterPdf]);
+
+  const toggleFilterPptx = useCallback(() => {
+    makeToggle(setFilterPptx, "md-filter-pptx", [filterDocx, filterXls, filterKm, filterImages, filterPdf])();
+  }, [makeToggle, filterDocx, filterXls, filterKm, filterImages, filterPdf]);
 
   const toggleFilterKm = useCallback(() => {
-    makeToggle(setFilterKm, "md-filter-km", [filterDocx, filterXls, filterImages, filterPdf])();
-  }, [makeToggle, filterDocx, filterXls, filterImages, filterPdf]);
+    makeToggle(setFilterKm, "md-filter-km", [filterDocx, filterXls, filterPptx, filterImages, filterPdf])();
+  }, [makeToggle, filterDocx, filterXls, filterPptx, filterImages, filterPdf]);
 
   const toggleFilterImages = useCallback(() => {
-    makeToggle(setFilterImages, "md-filter-images", [filterDocx, filterXls, filterKm, filterPdf])();
-  }, [makeToggle, filterDocx, filterXls, filterKm, filterPdf]);
+    makeToggle(setFilterImages, "md-filter-images", [filterDocx, filterXls, filterPptx, filterKm, filterPdf])();
+  }, [makeToggle, filterDocx, filterXls, filterPptx, filterKm, filterPdf]);
 
   const toggleFilterPdf = useCallback(() => {
-    makeToggle(setFilterPdf, "md-filter-pdf", [filterDocx, filterXls, filterKm, filterImages])();
-  }, [makeToggle, filterDocx, filterXls, filterKm, filterImages]);
+    makeToggle(setFilterPdf, "md-filter-pdf", [filterDocx, filterXls, filterPptx, filterKm, filterImages])();
+  }, [makeToggle, filterDocx, filterXls, filterPptx, filterKm, filterImages]);
 
   useEffect(() => {
     if (!folderPath) return;
@@ -144,6 +162,7 @@ export function useFileFilters(folderPath: string | null, setFileTree: (folderPa
           showAll: isZennMode ? false : showAll,
           includeDocx: isZennMode ? false : filterDocx,
           includeXls: isZennMode ? false : filterXls,
+          includePptx: isZennMode ? false : filterPptx,
           includeKm: isZennMode ? false : filterKm,
           includeImages: isZennMode ? true : filterImages,
           includePdf: isZennMode ? false : filterPdf,
@@ -153,7 +172,7 @@ export function useFileFilters(folderPath: string | null, setFileTree: (folderPa
       } catch { /* ignore */ }
     })();
     return () => { cancelled = true; };
-  }, [showAll, filterDocx, filterXls, filterKm, filterImages, filterPdf, folderPath, setFileTree, isZennMode]);
+  }, [showAll, filterDocx, filterXls, filterPptx, filterKm, filterImages, filterPdf, folderPath, setFileTree, isZennMode]);
 
   const refreshFileTree = useCallback(async () => {
     if (!folderPath) return;
@@ -163,6 +182,7 @@ export function useFileFilters(folderPath: string | null, setFileTree: (folderPa
         showAll: isZennMode ? false : showAll,
         includeDocx: isZennMode ? false : filterDocx,
         includeXls: isZennMode ? false : filterXls,
+        includePptx: isZennMode ? false : filterPptx,
         includeKm: isZennMode ? false : filterKm,
         includeImages: isZennMode ? true : filterImages,
         includePdf: isZennMode ? false : filterPdf,
@@ -170,16 +190,16 @@ export function useFileFilters(folderPath: string | null, setFileTree: (folderPa
       });
       setFileTree(folderPath, entries);
     } catch { /* ignore */ }
-  }, [folderPath, showAll, filterDocx, filterXls, filterKm, filterImages, filterPdf, setFileTree, isZennMode]);
+  }, [folderPath, showAll, filterDocx, filterXls, filterPptx, filterKm, filterImages, filterPdf, setFileTree, isZennMode]);
 
   // Auto-refresh file tree when folder contents change on disk
   useFolderWatcher(folderPath, refreshFileTree);
 
   return {
     showAll, activateShowAll,
-    filterDocx, filterXls, filterKm, filterImages, filterPdf,
-    toggleFilterDocx, toggleFilterXls, toggleFilterKm, toggleFilterImages, toggleFilterPdf,
-    showDocxBtn, showXlsBtn, showKmBtn, showImagesBtn, showPdfBtn,
+    filterDocx, filterXls, filterPptx, filterKm, filterImages, filterPdf,
+    toggleFilterDocx, toggleFilterXls, toggleFilterPptx, toggleFilterKm, toggleFilterImages, toggleFilterPdf,
+    showDocxBtn, showXlsBtn, showPptxBtn, showKmBtn, showImagesBtn, showPdfBtn,
     handleSaveFilterVisibility,
     refreshFileTree,
   } as const;

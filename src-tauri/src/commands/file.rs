@@ -93,6 +93,7 @@ fn is_target_file(
     name: &str,
     include_docx: bool,
     include_xls: bool,
+    include_pptx: bool,
     include_km: bool,
     include_images: bool,
     include_pdf: bool,
@@ -109,6 +110,9 @@ fn is_target_file(
         return true;
     }
     if include_xls && (lower.ends_with(".xlsx") || lower.ends_with(".xlsm")) {
+        return true;
+    }
+    if include_pptx && lower.ends_with(".pptx") {
         return true;
     }
     if include_km && (lower.ends_with(".km") || lower.ends_with(".xmind")) {
@@ -137,6 +141,7 @@ fn build_tree_filtered(
     depth: u32,
     include_docx: bool,
     include_xls: bool,
+    include_pptx: bool,
     include_km: bool,
     include_images: bool,
     include_pdf: bool,
@@ -175,6 +180,7 @@ fn build_tree_filtered(
                 depth + 1,
                 include_docx,
                 include_xls,
+                include_pptx,
                 include_km,
                 include_images,
                 include_pdf,
@@ -189,7 +195,7 @@ fn build_tree_filtered(
                     children: Some(children),
                 });
             }
-        } else if is_target_file(&name, include_docx, include_xls, include_km, include_images, include_pdf) {
+        } else if is_target_file(&name, include_docx, include_xls, include_pptx, include_km, include_images, include_pdf) {
             entries.push(FileEntry {
                 name,
                 path: path.to_string_lossy().to_string(),
@@ -268,6 +274,7 @@ pub async fn get_file_tree(
     show_all: Option<bool>,
     include_docx: Option<bool>,
     include_xls: Option<bool>,
+    include_pptx: Option<bool>,
     include_km: Option<bool>,
     include_images: Option<bool>,
     include_pdf: Option<bool>,
@@ -289,6 +296,7 @@ pub async fn get_file_tree(
                 0,
                 include_docx.unwrap_or(false),
                 include_xls.unwrap_or(false),
+                include_pptx.unwrap_or(false),
                 include_km.unwrap_or(false),
                 include_images.unwrap_or(false),
                 include_pdf.unwrap_or(false),

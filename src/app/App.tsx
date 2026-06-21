@@ -244,9 +244,9 @@ export function App() {
 
   const {
     showAll, activateShowAll,
-    filterDocx, filterXls, filterKm, filterImages, filterPdf,
-    toggleFilterDocx, toggleFilterXls, toggleFilterKm, toggleFilterImages, toggleFilterPdf,
-    showDocxBtn, showXlsBtn, showKmBtn, showImagesBtn, showPdfBtn,
+    filterDocx, filterXls, filterPptx, filterKm, filterImages, filterPdf,
+    toggleFilterDocx, toggleFilterXls, toggleFilterPptx, toggleFilterKm, toggleFilterImages, toggleFilterPdf,
+    showDocxBtn, showXlsBtn, showPptxBtn, showKmBtn, showImagesBtn, showPdfBtn,
     handleSaveFilterVisibility,
     refreshFileTree: loadFileTree,
   } = useFileFilters(activeFolderPath, setFileTree, isZennMode);
@@ -1114,16 +1114,19 @@ export function App() {
             activateShowAll={activateShowAll}
             filterDocx={filterDocx}
             filterXls={filterXls}
+            filterPptx={filterPptx}
             filterKm={filterKm}
             filterImages={filterImages}
             filterPdf={filterPdf}
             toggleFilterDocx={toggleFilterDocx}
             toggleFilterXls={toggleFilterXls}
+            toggleFilterPptx={toggleFilterPptx}
             toggleFilterKm={toggleFilterKm}
             toggleFilterImages={toggleFilterImages}
             toggleFilterPdf={toggleFilterPdf}
             showDocxBtn={showDocxBtn}
             showXlsBtn={showXlsBtn}
+            showPptxBtn={showPptxBtn}
             showKmBtn={showKmBtn}
             showPdfBtn={showPdfBtn}
           />
@@ -1372,6 +1375,7 @@ export function App() {
         filterVisibility={{
           showDocx: showDocxBtn,
           showXls: showXlsBtn,
+          showPptx: showPptxBtn,
           showKm: showKmBtn,
           showImages: showImagesBtn,
           showPdf: showPdfBtn,
