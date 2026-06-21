@@ -15,6 +15,7 @@ import {
   promoteStandaloneImages,
   renderWorkbookModelToHtml,
   escapeHtml,
+  imageSize,
   markdownToXlsx,
   markdownToXlsxArtifacts,
 } from "../markdownToXlsx";
@@ -223,5 +224,34 @@ describe("markdownToXlsxArtifacts", () => {
     // ...and is embedded as media in the workbook.
     const zip = await JSZip.loadAsync(bytes);
     expect(Object.keys(zip.files).some((n) => n.includes("media"))).toBe(true);
+  });
+
+  it("anchors images in column A at native size and drops the markdown text", async () => {
+    readFileMock.mockResolvedValue(PNG); // 1x1 px → 9525 EMU
+    const md = "# T\n\n![a](pic.png)\n";
+    const { bytes } = await markdownToXlsxArtifacts(md, { filePath: "/docs/note.md" });
+    const zip = await JSZip.loadAsync(bytes);
+    const drawing = await zip.file("xl/drawings/drawing1.xml")!.async("string");
+    expect(drawing).toContain("<xdr:oneCellAnchor>");
+    expect(drawing).toContain("<xdr:col>0</xdr:col>");
+    expect(drawing).toContain('cx="9525"');
+    expect(drawing).toContain('cy="9525"');
+    expect(drawing).not.toContain("twoCellAnchor");
+    // The raw markdown text must not appear anywhere in the workbook.
+    for (const name of Object.keys(zip.files)) {
+      if (name.endsWith(".xml")) {
+        expect(await zip.file(name)!.async("string")).not.toContain("pic.png");
+      }
+    }
+  });
+});
+
+describe("imageSize", () => {
+  it("reads PNG dimensions", () => {
+    expect(imageSize(PNG)).toEqual({ width: 1, height: 1 });
+  });
+
+  it("returns undefined for non-image bytes", () => {
+    expect(imageSize(new Uint8Array([1, 2, 3, 4]))).toBeUndefined();
   });
 });

@@ -1,9 +1,52 @@
 import { readFile } from "@tauri-apps/plugin-fs";
+import JSZip from "jszip";
 import type {
   CellModel,
   Md2XlsxImageAsset,
   WorkbookModel,
 } from "@/vendor/md2xlsx";
+
+/** EMU (English Metric Units) per pixel at 96 DPI. */
+const EMU_PER_PX = 9525;
+
+/** Read intrinsic pixel dimensions from PNG / GIF / JPEG bytes. */
+export function imageSize(
+  data: Uint8Array,
+): { width: number; height: number } | undefined {
+  // PNG
+  if (
+    data.length >= 24 &&
+    data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47
+  ) {
+    const u32 = (o: number) =>
+      (((data[o] << 24) | (data[o + 1] << 16) | (data[o + 2] << 8) | data[o + 3]) >>> 0);
+    return { width: u32(16), height: u32(20) };
+  }
+  // GIF
+  if (data.length >= 10 && data[0] === 0x47 && data[1] === 0x49 && data[2] === 0x46) {
+    return { width: data[6] | (data[7] << 8), height: data[8] | (data[9] << 8) };
+  }
+  // JPEG
+  if (data.length >= 4 && data[0] === 0xff && data[1] === 0xd8) {
+    let o = 2;
+    while (o + 9 < data.length) {
+      if (data[o] !== 0xff) { o += 1; continue; }
+      const marker = data[o + 1];
+      const len = (data[o + 2] << 8) | data[o + 3];
+      if (len < 2 || o + 2 + len > data.length) break;
+      if (
+        (marker >= 0xc0 && marker <= 0xc3) ||
+        (marker >= 0xc5 && marker <= 0xc7) ||
+        (marker >= 0xc9 && marker <= 0xcb) ||
+        (marker >= 0xcd && marker <= 0xcf)
+      ) {
+        return { width: (data[o + 7] << 8) | data[o + 8], height: (data[o + 5] << 8) | data[o + 6] };
+      }
+      o += 2 + len;
+    }
+  }
+  return undefined;
+}
 
 /** Escape HTML special characters for safe interpolation into innerHTML. */
 export function escapeHtml(text: string): string {
@@ -234,6 +277,85 @@ export function renderWorkbookModelToHtml(model: WorkbookModel): string {
     .join("\n");
 }
 
+/**
+ * Clear the cell text of image rows. The engine writes the raw `![](...)`
+ * markdown into the cell next to the picture; we only want the picture.
+ */
+function clearImageRowText(model: WorkbookModel): void {
+  for (const sheet of model.sheets) {
+    for (const row of sheet.rows) {
+      if (row.imageRefs && row.imageRefs.length) {
+        for (const cell of row.cells) cell.value = "";
+      }
+    }
+  }
+}
+
+/**
+ * Rewrite the engine's image anchors so each picture sits in column A at its
+ * native size. The engine hardcodes column B and stretches images to fill a
+ * fixed cell box; replace each twoCellAnchor with a oneCellAnchor anchored at
+ * column 0 with an explicit EMU extent derived from the image's real
+ * dimensions (preserving aspect ratio).
+ */
+async function rewriteImageDrawings(
+  bytes: Uint8Array,
+  model: WorkbookModel,
+): Promise<Uint8Array> {
+  const byPath = new Map((model.imageAssets ?? []).map((a) => [a.path, a]));
+
+  // Intrinsic dimensions of every drawn image, in the engine's anchor order
+  // (sheet order, then row order; refs without a matching asset are skipped).
+  const dims: { width: number; height: number }[] = [];
+  for (const sheet of model.sheets) {
+    for (const row of sheet.rows) {
+      for (const ref of row.imageRefs ?? []) {
+        const asset = byPath.get(ref.path);
+        if (!asset) continue;
+        dims.push(imageSize(asset.data) ?? { width: 0, height: 0 });
+      }
+    }
+  }
+  if (dims.length === 0) return bytes;
+
+  const zip = await JSZip.loadAsync(bytes);
+  const drawingNames = Object.keys(zip.files)
+    .filter((n) => /^xl\/drawings\/drawing\d+\.xml$/.test(n))
+    .sort((a, b) => {
+      const na = Number(a.match(/(\d+)\.xml$/)![1]);
+      const nb = Number(b.match(/(\d+)\.xml$/)![1]);
+      return na - nb;
+    });
+
+  let idx = 0;
+  for (const name of drawingNames) {
+    const xmlText = await zip.file(name)!.async("string");
+    const rewritten = xmlText.replace(
+      /<xdr:twoCellAnchor[^>]*>([\s\S]*?)<\/xdr:twoCellAnchor>/g,
+      (_full, inner: string) => {
+        const d = dims[idx++] ?? { width: 0, height: 0 };
+        const rowMatch = inner.match(/<xdr:from>[\s\S]*?<xdr:row>(\d+)<\/xdr:row>/);
+        const row = rowMatch ? rowMatch[1] : "0";
+        const picMatch = inner.match(/<xdr:pic>[\s\S]*?<\/xdr:pic>/);
+        const pic = picMatch ? picMatch[0] : "";
+        const cx = Math.max(1, Math.round(d.width * EMU_PER_PX));
+        const cy = Math.max(1, Math.round(d.height * EMU_PER_PX));
+        return (
+          `<xdr:oneCellAnchor>` +
+          `<xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${row}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>` +
+          `<xdr:ext cx="${cx}" cy="${cy}"/>` +
+          pic +
+          `<xdr:clientData/>` +
+          `</xdr:oneCellAnchor>`
+        );
+      },
+    );
+    zip.file(name, rewritten);
+  }
+
+  return zip.generateAsync({ type: "uint8array" });
+}
+
 export interface XlsxArtifacts {
   /** The .xlsx file bytes, ready to save. */
   bytes: Uint8Array;
@@ -244,7 +366,8 @@ export interface XlsxArtifacts {
 /**
  * Build both the .xlsx bytes and an image-aware HTML preview from markdown,
  * resolving relative images and embedding rasterized Mermaid diagrams. The
- * model is built once and reused for both outputs.
+ * model is built once and reused for both outputs. Image rows are stripped of
+ * their markdown text and the pictures are placed in column A at native size.
  */
 export async function markdownToXlsxArtifacts(
   markdown: string,
@@ -256,10 +379,12 @@ export async function markdownToXlsxArtifacts(
     sheetMode: options.splitByHeading ? "heading" : "single",
     imageAssets,
   });
-  return {
-    bytes: workbookModelToXlsx(model),
-    previewHtml: renderWorkbookModelToHtml(model),
-  };
+  // Render the preview before clearing text — image rows render the picture,
+  // and other rows keep their text.
+  const previewHtml = renderWorkbookModelToHtml(model);
+  clearImageRowText(model);
+  const bytes = await rewriteImageDrawings(workbookModelToXlsx(model), model);
+  return { bytes, previewHtml };
 }
 
 /**
@@ -270,10 +395,5 @@ export async function markdownToXlsx(
   markdown: string,
   options: MarkdownToXlsxOptions = {},
 ): Promise<Uint8Array> {
-  const { md2xlsx } = await import("@/vendor/md2xlsx");
-  const { processed, imageAssets } = await resolveXlsxInputs(markdown, options);
-  return md2xlsx(processed, {
-    sheetMode: options.splitByHeading ? "heading" : "single",
-    imageAssets,
-  });
+  return (await markdownToXlsxArtifacts(markdown, options)).bytes;
 }
