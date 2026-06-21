@@ -19,7 +19,8 @@
   "filterImages": "Filter: image files",
   "filterDocx": "Filter: .docx files",
   "filterXls": "Filter: .xls* files",
-  "filterKm": "Filter: .km / .xmind files",
+  "filterPptx": "Filter: .pptx files",
+  "filterKm": "Filter: .xmind files",
   "filterPdf": "Filter: .pdf files",
   "copyPath": "Copy Path"
 }

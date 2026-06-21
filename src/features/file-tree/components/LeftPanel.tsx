@@ -22,16 +22,19 @@ export interface FileFilterProps {
   activateShowAll: () => void;
   filterDocx: boolean;
   filterXls: boolean;
+  filterPptx: boolean;
   filterKm: boolean;
   filterImages: boolean;
   filterPdf: boolean;
   toggleFilterDocx: () => void;
   toggleFilterXls: () => void;
+  toggleFilterPptx: () => void;
   toggleFilterKm: () => void;
   toggleFilterImages: () => void;
   toggleFilterPdf: () => void;
   showDocxBtn: boolean;
   showXlsBtn: boolean;
+  showPptxBtn: boolean;
   showKmBtn: boolean;
   showPdfBtn: boolean;
 }
@@ -48,9 +51,9 @@ interface LeftPanelProps extends FileFilterProps {
 export function LeftPanel({
   onFileSelect, onRefresh, onNewFile, onNewFolder, previewRef, onImageDragStart,
   showAll, activateShowAll,
-  filterDocx, filterXls, filterKm, filterImages, filterPdf,
-  toggleFilterDocx, toggleFilterXls, toggleFilterKm, toggleFilterImages, toggleFilterPdf,
-  showDocxBtn, showXlsBtn, showKmBtn, showPdfBtn,
+  filterDocx, filterXls, filterPptx, filterKm, filterImages, filterPdf,
+  toggleFilterDocx, toggleFilterXls, toggleFilterPptx, toggleFilterKm, toggleFilterImages, toggleFilterPdf,
+  showDocxBtn, showXlsBtn, showPptxBtn, showKmBtn, showPdfBtn,
 }: LeftPanelProps) {
   const { t } = useTranslation("toolbar");
   const leftPanel = useUiStore((s) => s.leftPanel);
@@ -299,6 +302,15 @@ export function LeftPanel({
                   title={t("filterXls", { ns: "fileTree" })}
                 >
                   .xls*
+                </button>
+              )}
+              {showPptxBtn && (
+                <button
+                  className={`file-tree__filter-btn ${!showAll && filterPptx ? "file-tree__filter-btn--active" : ""}`}
+                  onClick={toggleFilterPptx}
+                  title={t("filterPptx", { ns: "fileTree" })}
+                >
+                  .pptx
                 </button>
               )}
               {showKmBtn && (

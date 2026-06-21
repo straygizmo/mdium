@@ -19,7 +19,8 @@
   "filterImages": "フィルタ: 画像ファイル",
   "filterDocx": "フィルタ: .docx ファイル",
   "filterXls": "フィルタ: .xls* ファイル",
-  "filterKm": "フィルタ: .km / .xmind ファイル",
+  "filterPptx": "フィルタ: .pptx ファイル",
+  "filterKm": "フィルタ: .xmind ファイル",
   "filterPdf": "フィルタ: .pdf ファイル",
   "copyPath": "パスをコピー"
 }
