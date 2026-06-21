@@ -16,6 +16,7 @@ import { OfficePreview } from "./OfficePreview";
 import { PdfPreviewPanel } from "./PdfPreviewPanel";
 import { DocxPreviewPanel } from "./DocxPreviewPanel";
 import { HtmlPreviewPanel } from "./HtmlPreviewPanel";
+import { XlsxPreviewPanel } from "./XlsxPreviewPanel";
 import { SlidevPreviewPanel } from "./SlidevPreviewPanel";
 import { CsvPreviewPanel } from "./CsvPreviewPanel";
 import { ZennFrontmatterForm } from "@/features/zenn/components/ZennFrontmatterForm";
@@ -1341,6 +1342,17 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
           </svg>
         </button>
         <button
+          className={`preview-panel__tab preview-panel__tab--icon ${activeViewTab === "xlsx-preview" ? "preview-panel__tab--active" : ""}`}
+          onClick={() => setActiveViewTab("xlsx-preview")}
+          title={t("xlsxPreview")}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+            <text x="12" y="16" textAnchor="middle" fill="currentColor" stroke="none" fontSize="6" fontWeight="bold" fontFamily="sans-serif">XLS</text>
+          </svg>
+        </button>
+        <button
           className={`preview-panel__tab preview-panel__tab--icon ${activeViewTab === "html-preview" ? "preview-panel__tab--active" : ""}`}
           onClick={() => setActiveViewTab("html-preview")}
           title={t("htmlPreview")}
@@ -1466,6 +1478,16 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
           <div className="preview-panel__pdf-overlay">
             <HtmlPreviewPanel
               previewRef={previewRef}
+              filePath={filePath}
+            />
+          </div>
+        )}
+
+        {activeViewTab === "xlsx-preview" && (
+          <div className="preview-panel__pdf-overlay">
+            <XlsxPreviewPanel
+              previewRef={previewRef}
+              content={content}
               filePath={filePath}
             />
           </div>
