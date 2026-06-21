@@ -252,10 +252,23 @@ export async function markdownToXlsxArtifacts(
   });
   // TODO(xlsx-debug): temporary visible diagnostics — remove once resolved.
   const debug = takeXlsxDebug();
+  const imageRowRefs: string[] = [];
+  let imageRowCount = 0;
+  for (const sheet of model.sheets) {
+    for (const row of sheet.rows) {
+      if (row.imageRefs && row.imageRefs.length) {
+        imageRowCount += 1;
+        for (const ref of row.imageRefs) imageRowRefs.push(ref.path);
+      }
+    }
+  }
+  debug.push(`assets=${imageAssets.length} paths=${JSON.stringify(imageAssets.map((a) => a.path))}`);
+  debug.push(`imageRows=${imageRowCount} refPaths=${JSON.stringify(imageRowRefs)}`);
+  debug.push(`modelAssets=${JSON.stringify((model.imageAssets ?? []).map((a) => a.path))}`);
   const debugHtml =
     `<pre style="white-space:pre-wrap;font-size:11px;color:#b00;border:1px solid #b00;padding:6px;margin:0 0 8px">[xlsx image debug]\n` +
     escapeHtml(debug.join("\n")) +
-    `\nassets=${imageAssets.length}</pre>`;
+    `</pre>`;
   return {
     bytes: workbookModelToXlsx(model),
     previewHtml: debugHtml + renderWorkbookModelToHtml(model),
