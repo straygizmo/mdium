@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { showConfirm } from "@/stores/dialog-store";
@@ -10,6 +10,22 @@ import "../../table/components/ContextMenu.css";
 
 /** Drag threshold in pixels before a mousedown becomes a drag */
 const DRAG_THRESHOLD = 5;
+
+/**
+ * Trees with more entries than this render with directories collapsed by
+ * default. Rendering tens of thousands of DOM nodes at once freezes the
+ * WebView, so large folders start collapsed and expand on demand.
+ */
+const AUTO_COLLAPSE_THRESHOLD = 1000;
+
+function countEntries(entries: FileEntry[]): number {
+  let count = 0;
+  for (const e of entries) {
+    count++;
+    if (e.children) count += countEntries(e.children);
+  }
+  return count;
+}
 
 interface FileTreeProps {
   tree: FileEntry[];
@@ -23,6 +39,7 @@ interface FileTreeProps {
 interface TreeNodeProps {
   entry: FileEntry;
   depth: number;
+  defaultExpanded: boolean;
   selectedPath: string | null;
   onFileSelect: (path: string) => void;
   onNodePointerDown: (entry: FileEntry) => void;
@@ -60,15 +77,13 @@ export function getFileIcon(name: string): string {
 }
 
 function TreeNode({
-  entry, depth, selectedPath, onFileSelect, onNodePointerDown, onContextMenu,
+  entry, depth, defaultExpanded, selectedPath, onFileSelect, onNodePointerDown, onContextMenu,
   renamingPath, renameValue, onRenameChange, onRenameSubmit, onRenameCancel,
   onImageDragStart, onRefresh, onTreeDragStart, dragSourcePath, dragOverPath,
 }: TreeNodeProps) {
-  const expanded = useFileStore((s) => s.isDirExpanded(entry.path, true));
+  const expanded = useFileStore((s) => s.isDirExpanded(entry.path, defaultExpanded));
   const toggleDir = useFileStore((s) => s.toggleDir);
   const inputRef = useRef<HTMLInputElement>(null);
-
-  const defaultExpanded = true;
 
   const handleClick = useCallback(() => {
     if (renamingPath === entry.path) return;
@@ -164,6 +179,7 @@ function TreeNode({
               key={child.path}
               entry={child}
               depth={depth + 1}
+              defaultExpanded={defaultExpanded}
               selectedPath={selectedPath}
               onFileSelect={onFileSelect}
               onNodePointerDown={onNodePointerDown}
@@ -197,6 +213,10 @@ export function FileTree({
   const menuRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(activeFile);
+  const defaultExpanded = useMemo(
+    () => countEntries(tree) <= AUTO_COLLAPSE_THRESHOLD,
+    [tree]
+  );
 
   useEffect(() => {
     setSelectedPath(activeFile);
@@ -628,6 +648,7 @@ export function FileTree({
             key={entry.path}
             entry={entry}
             depth={0}
+            defaultExpanded={defaultExpanded}
             selectedPath={selectedPath}
             onFileSelect={onFileSelect}
             onNodePointerDown={handleNodePointerDown}

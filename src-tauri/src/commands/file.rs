@@ -17,9 +17,17 @@ pub struct FileEntry {
     pub children: Option<Vec<FileEntry>>,
 }
 
+// File-read commands run via spawn_blocking: a synchronous Tauri command
+// executes on the main thread, and reading a file on a slow/unreachable UNC
+// path (e.g. during tab restore on startup) would freeze the UI.
+
 #[tauri::command]
-pub fn read_text_file(path: String) -> Result<String, String> {
-    fs::read_to_string(&path).map_err(|e| format!("Failed to read file: {}", e))
+pub async fn read_text_file(path: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        fs::read_to_string(&path).map_err(|e| format!("Failed to read file: {}", e))
+    })
+    .await
+    .map_err(|e| format!("file read task failed: {e}"))?
 }
 
 /// Read a text file, auto-detecting encoding.
@@ -31,8 +39,14 @@ pub fn read_text_file(path: String) -> Result<String, String> {
 /// Excel in Japan). The encoding is not round-tripped on save — edits will
 /// be written back as UTF-8.
 #[tauri::command]
-pub fn read_text_file_auto_encoding(path: String) -> Result<String, String> {
-    let bytes = fs::read(&path).map_err(|e| format!("Failed to read file: {}", e))?;
+pub async fn read_text_file_auto_encoding(path: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || read_text_file_auto_encoding_blocking(&path))
+        .await
+        .map_err(|e| format!("file read task failed: {e}"))?
+}
+
+fn read_text_file_auto_encoding_blocking(path: &str) -> Result<String, String> {
+    let bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
 
     // UTF-8 BOM
     if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
@@ -70,8 +84,12 @@ pub fn read_text_file_auto_encoding(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn read_binary_file(path: String) -> Result<Vec<u8>, String> {
-    fs::read(&path).map_err(|e| format!("Failed to read binary file: {}", e))
+pub async fn read_binary_file(path: String) -> Result<Vec<u8>, String> {
+    tokio::task::spawn_blocking(move || {
+        fs::read(&path).map_err(|e| format!("Failed to read binary file: {}", e))
+    })
+    .await
+    .map_err(|e| format!("file read task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -362,34 +380,40 @@ pub async fn detect_zenn_project(dir_path: String) -> Result<ZennProjectInfo, St
 
 /// Tauri command to batch-retrieve front matter metadata from .md files in articles/
 #[tauri::command]
-pub fn get_zenn_articles_meta(dir_path: String) -> Result<Vec<ZennArticleMeta>, String> {
-    let articles_dir = Path::new(&dir_path).join("articles");
-    if !articles_dir.exists() || !articles_dir.is_dir() {
-        return Ok(Vec::new());
-    }
-
-    let mut metas = Vec::new();
-    let Ok(read_dir) = fs::read_dir(&articles_dir) else {
-        return Ok(metas);
-    };
-
-    for entry in read_dir.filter_map(|e| e.ok()) {
-        let path = entry.path();
-        if !path.is_file() || !path.extension().map_or(false, |e| e == "md") {
-            continue;
+pub async fn get_zenn_articles_meta(dir_path: String) -> Result<Vec<ZennArticleMeta>, String> {
+    // Off the main thread: this reads every article file, which is slow on
+    // large folders and UNC paths.
+    tokio::task::spawn_blocking(move || {
+        let articles_dir = Path::new(&dir_path).join("articles");
+        if !articles_dir.exists() || !articles_dir.is_dir() {
+            return Ok(Vec::new());
         }
-        if let Ok(content) = fs::read_to_string(&path) {
-            if let Some(meta) = extract_zenn_frontmatter(&content) {
-                metas.push(ZennArticleMeta {
-                    path: path.to_string_lossy().to_string(),
-                    emoji: meta.0,
-                    title: meta.1,
-                    published: meta.2,
-                });
+
+        let mut metas = Vec::new();
+        let Ok(read_dir) = fs::read_dir(&articles_dir) else {
+            return Ok(metas);
+        };
+
+        for entry in read_dir.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if !path.is_file() || !path.extension().map_or(false, |e| e == "md") {
+                continue;
+            }
+            if let Ok(content) = fs::read_to_string(&path) {
+                if let Some(meta) = extract_zenn_frontmatter(&content) {
+                    metas.push(ZennArticleMeta {
+                        path: path.to_string_lossy().to_string(),
+                        emoji: meta.0,
+                        title: meta.1,
+                        published: meta.2,
+                    });
+                }
             }
         }
-    }
-    Ok(metas)
+        Ok(metas)
+    })
+    .await
+    .map_err(|e| format!("zenn meta task failed: {e}"))?
 }
 
 /// Extract emoji, title, published from front matter
@@ -425,9 +449,13 @@ fn extract_zenn_frontmatter(content: &str) -> Option<(String, String, bool)> {
 
 /// Tauri command to read and parse a Markdown file
 #[tauri::command]
-pub fn read_markdown_file(file_path: String) -> Result<ParsedDocument, String> {
-    let content = fs::read_to_string(&file_path).map_err(|e| e.to_string())?;
-    Ok(parse_markdown(&content))
+pub async fn read_markdown_file(file_path: String) -> Result<ParsedDocument, String> {
+    tokio::task::spawn_blocking(move || {
+        let content = fs::read_to_string(&file_path).map_err(|e| e.to_string())?;
+        Ok(parse_markdown(&content))
+    })
+    .await
+    .map_err(|e| format!("file read task failed: {e}"))?
 }
 
 /// Tauri command to update tables and write back to a Markdown file
@@ -637,16 +665,22 @@ pub fn open_in_vscode(path: String) -> Result<(), String> {
 /// Returns a map keyed by the input path strings. Paths whose parent
 /// directory cannot be determined are reported as `false`.
 #[tauri::command]
-pub fn check_mdium_md_exists(paths: Vec<String>) -> HashMap<String, bool> {
-    let mut result = HashMap::with_capacity(paths.len());
-    for raw in paths {
-        let src = Path::new(&raw);
-        let exists = resolve_generated_md_path(src, true)
-            .map(|p| p.is_file())
-            .unwrap_or(false);
-        result.insert(raw, exists);
-    }
-    result
+pub async fn check_mdium_md_exists(paths: Vec<String>) -> HashMap<String, bool> {
+    // Off the main thread: one `is_file()` per path is a network round trip
+    // each on UNC shares, which would freeze the UI for large selections.
+    tokio::task::spawn_blocking(move || {
+        let mut result = HashMap::with_capacity(paths.len());
+        for raw in paths {
+            let src = Path::new(&raw);
+            let exists = resolve_generated_md_path(src, true)
+                .map(|p| p.is_file())
+                .unwrap_or(false);
+            result.insert(raw, exists);
+        }
+        result
+    })
+    .await
+    .unwrap_or_default()
 }
 
 /// Resolve the generated `.md` path for a source file.
