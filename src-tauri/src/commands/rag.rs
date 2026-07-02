@@ -238,17 +238,8 @@ fn count_db_status(db_path: &Path) -> (usize, usize) {
 #[tauri::command]
 pub fn rag_get_status(folder_path: String, model_name: Option<String>) -> Result<RagStatus, String> {
     let name = model_name.as_deref().unwrap_or(DEFAULT_MODEL_NAME);
-    // rag_{model}.db for the current folder
-    let (mut total_chunks, mut total_files) = count_db_status(&PathBuf::from(db_path(&folder_path, name)));
-
-    // Also aggregate rag_{model}.db from subfolders
-    let mut sub_dbs = Vec::new();
-    find_sub_rag_dbs(Path::new(&folder_path), name, &mut sub_dbs);
-    for sub_db in &sub_dbs {
-        let (c, f) = count_db_status(sub_db);
-        total_chunks += c;
-        total_files += f;
-    }
+    // Single root DB: <root>/.mdium/rag_{model}.db
+    let (total_chunks, total_files) = count_db_status(&PathBuf::from(db_path(&folder_path, name)));
 
     Ok(RagStatus { total_chunks, total_files })
 }
@@ -281,15 +272,8 @@ pub fn rag_list_files(folder_path: String, model_name: Option<String>) -> Result
     let name = model_name.as_deref().unwrap_or(DEFAULT_MODEL_NAME);
     let mut files = Vec::new();
 
-    // rag_{model}.db for the current folder
+    // Single root DB: <root>/.mdium/rag_{model}.db
     collect_files_from_db(&PathBuf::from(db_path(&folder_path, name)), &mut files);
-
-    // Also collect rag_{model}.db from subfolders
-    let mut sub_dbs = Vec::new();
-    find_sub_rag_dbs(Path::new(&folder_path), name, &mut sub_dbs);
-    for sub_db in &sub_dbs {
-        collect_files_from_db(sub_db, &mut files);
-    }
 
     files.sort();
     Ok(files)
@@ -326,17 +310,116 @@ pub fn rag_scan_folder(
     let emit_step = (total / 200).max(1);
     let mut scanned = 0usize;
 
-    scan_folder_recursive(
-        Path::new(&folder_path),
-        &mut chunks,
-        &extensions,
-        min_len,
-        name,
-        &app,
-        total,
-        &mut scanned,
-        emit_step,
-    )?;
+    // Collect every matching file across the whole tree. All chunks are
+    // attributed to the root folder so they land in the single root DB
+    // (`<root>/.mdium/rag_{model}.db`) instead of per-subfolder databases.
+    let mut md_paths: Vec<PathBuf> = Vec::new();
+    collect_md_paths(Path::new(&folder_path), &extensions, &mut md_paths)?;
+
+    // Read existing hashes from the single root DB for incremental skipping.
+    let root_db = PathBuf::from(db_path(&folder_path, name));
+    let existing_hashes: HashMap<String, String> = if root_db.exists() {
+        Connection::open(&root_db)
+            .ok()
+            .filter(|conn| ensure_tables(conn).is_ok())
+            .and_then(|conn| {
+                conn.prepare("SELECT file, hash FROM file_hashes")
+                    .ok()
+                    .and_then(|mut stmt| {
+                        stmt.query_map([], |row| {
+                            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                        })
+                        .ok()
+                        .map(|rows| rows.flatten().collect())
+                    })
+            })
+            .unwrap_or_default()
+    } else {
+        HashMap::new()
+    };
+
+    let mut current_files: HashSet<String> = HashSet::new();
+
+    for path in md_paths {
+        scanned += 1;
+        if scanned % emit_step == 0 || scanned == total {
+            app.emit(
+                "rag-scan-progress",
+                RagScanProgress {
+                    current: scanned,
+                    total,
+                    file: path.to_string_lossy().to_string(),
+                },
+            )
+            .ok();
+        }
+        let content = fs::read_to_string(&path).unwrap_or_default();
+        let file_path = path.to_string_lossy().to_string();
+        let hash = format!("{:x}", Sha256::digest(content.as_bytes()));
+
+        current_files.insert(file_path.clone());
+
+        // Skip if hash hasn't changed
+        if let Some(existing_hash) = existing_hashes.get(&file_path) {
+            if *existing_hash == hash {
+                continue;
+            }
+        }
+
+        // Changed or new file → chunk it (attributed to the root folder)
+        let mut current_heading = String::new();
+        let mut current_text = String::new();
+        let mut chunk_start = 0;
+
+        for (i, line) in content.lines().enumerate() {
+            if line.starts_with('#') {
+                let trimmed = current_text.trim();
+                if !trimmed.is_empty() && trimmed.len() >= min_len {
+                    chunks.push(RagChunk {
+                        folder: folder_path.clone(),
+                        file: file_path.clone(),
+                        heading: current_heading.clone(),
+                        text: trimmed.to_string(),
+                        line: chunk_start,
+                        hash: hash.clone(),
+                    });
+                }
+                current_heading = line.trim_start_matches('#').trim().to_string();
+                current_text = String::new();
+                chunk_start = i;
+            } else {
+                current_text.push_str(line);
+                current_text.push('\n');
+            }
+        }
+
+        let trimmed = current_text.trim();
+        if !trimmed.is_empty() && trimmed.len() >= min_len {
+            chunks.push(RagChunk {
+                folder: folder_path.clone(),
+                file: file_path,
+                heading: current_heading,
+                text: trimmed.to_string(),
+                line: chunk_start,
+                hash,
+            });
+        }
+    }
+
+    // Prune rows for files that were removed or moved, from the root DB.
+    if root_db.exists() {
+        if let Ok(conn) = Connection::open(&root_db) {
+            if ensure_tables(&conn).is_ok() {
+                for file in existing_hashes.keys() {
+                    if !current_files.contains(file) {
+                        conn.execute("DELETE FROM chunks WHERE file = ?1", [file]).ok();
+                        conn.execute("DELETE FROM file_hashes WHERE file = ?1", [file]).ok();
+                    }
+                }
+            }
+        }
+    }
+
     Ok(chunks)
 }
 
@@ -399,20 +482,13 @@ fn count_files_recursive(dir: &Path, extensions: &[String]) -> usize {
     count
 }
 
-/// Scan files in each folder level and recurse into subfolders
-fn scan_folder_recursive(
-    dir: &Path,
-    chunks: &mut Vec<RagChunk>,
-    extensions: &[String],
-    min_chunk_length: usize,
-    model_name: &str,
-    app: &tauri::AppHandle,
-    total: usize,
-    scanned: &mut usize,
-    emit_step: usize,
-) -> Result<(), String> {
-    let folder_str = dir.to_string_lossy().to_string();
-
+/// Recursively collect every matching file across the tree, using the same
+/// traversal rules as `count_files_recursive`. `.md` files inside a `.mdium`
+/// folder are attributed to their parent (collected here) so they are indexed
+/// into the single root DB rather than a nested `.mdium/.mdium/` database.
+/// Surfaces the offending path on read_dir failure so per-folder ACL/antivirus
+/// issues are diagnosable from the UI.
+fn collect_md_paths(dir: &Path, extensions: &[String], result: &mut Vec<PathBuf>) -> Result<(), String> {
     // Surface the offending path on read_dir failure. A bare e.to_string()
     // produces "アクセスが拒否されました。 (os error 5)" with no location,
     // making per-subfolder ACL/antivirus issues impossible to diagnose from
@@ -431,8 +507,6 @@ fn scan_folder_recursive(
         .filter_map(|e| e.ok())
         .collect();
 
-    // Recurse into subfolders
-    let mut md_paths: Vec<PathBuf> = Vec::new();
     for entry in &entries {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
@@ -443,150 +517,18 @@ fn scan_folder_recursive(
 
         if path.is_dir() {
             if name == ".mdium" {
-                // Treat `.md` files inside `.mdium/` as belonging to this folder so
-                // their chunks are written to `<this folder>/.mdium/rag_{model}.db`
-                // instead of a nested `.mdium/.mdium/` DB.
-                collect_md_in_mdium(&path, extensions, &mut md_paths);
+                // Treat `.md` files inside `.mdium/` as belonging to their parent so
+                // they are indexed into the root DB instead of a nested
+                // `.mdium/.mdium/` database.
+                collect_md_in_mdium(&path, extensions, result);
                 continue;
             }
             if name.starts_with('.') {
                 continue;
             }
-            scan_folder_recursive(&path, chunks, extensions, min_chunk_length, model_name, app, total, scanned, emit_step)?;
+            collect_md_paths(&path, extensions, result)?;
         } else if extensions.iter().any(|ext| name.ends_with(ext.as_str())) {
-            md_paths.push(path);
-        }
-    }
-
-    // No .md files at this folder level: prune only rows for files that no
-    // longer exist on disk. Keep the DB file itself — a legacy layout may
-    // store chunks for subfolder files in this folder's DB, and dropping the
-    // file would silently destroy a still-valid index.
-    let mdium_dir = Path::new(&folder_str).join(".mdium");
-    let db_filename = model_db_name(model_name);
-    let db_file = mdium_dir.join(&db_filename);
-    if md_paths.is_empty() {
-        if db_file.exists() {
-            if let Ok(conn) = Connection::open(&db_file) {
-                if ensure_tables(&conn).is_ok() {
-                    let stored_files: Vec<String> = conn
-                        .prepare("SELECT DISTINCT file FROM chunks")
-                        .ok()
-                        .and_then(|mut stmt| {
-                            stmt.query_map([], |row| row.get::<_, String>(0))
-                                .ok()
-                                .map(|rows| rows.flatten().collect())
-                        })
-                        .unwrap_or_default();
-                    for file in stored_files {
-                        if !Path::new(&file).exists() {
-                            let _ = conn.execute("DELETE FROM chunks WHERE file = ?1", [&file]);
-                            let _ = conn.execute("DELETE FROM file_hashes WHERE file = ?1", [&file]);
-                        }
-                    }
-                }
-            }
-        }
-        return Ok(());
-    }
-
-    ensure_db_dir(&folder_str)?;
-    let db = db_path(&folder_str, model_name);
-    let conn = Connection::open(&db).map_err(|e| {
-        format!("Failed to open database '{}': {} (if another process is using this file, close it and retry)", db, e)
-    })?;
-    ensure_tables(&conn).map_err(|e| e.to_string())?;
-
-    // Get existing hashes from this folder's rag_{model}.db
-    let existing_hashes: HashMap<String, String> = {
-        let mut stmt = conn
-            .prepare("SELECT file, hash FROM file_hashes")
-            .map_err(|e| e.to_string())?;
-        let rows: Vec<(String, String)> = stmt
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })
-            .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
-        rows.into_iter().collect()
-    };
-
-    let mut current_files: HashSet<String> = HashSet::new();
-
-    for path in md_paths {
-        *scanned += 1;
-        if *scanned % emit_step == 0 || *scanned == total {
-            app.emit(
-                "rag-scan-progress",
-                RagScanProgress {
-                    current: *scanned,
-                    total,
-                    file: path.to_string_lossy().to_string(),
-                },
-            )
-            .ok();
-        }
-        let content = fs::read_to_string(&path).unwrap_or_default();
-        let file_path = path.to_string_lossy().to_string();
-        let hash = format!("{:x}", Sha256::digest(content.as_bytes()));
-
-        current_files.insert(file_path.clone());
-
-        // Skip if hash hasn't changed
-        if let Some(existing_hash) = existing_hashes.get(&file_path) {
-            if *existing_hash == hash {
-                continue;
-            }
-        }
-
-        // Changed or new file → chunk it
-        let mut current_heading = String::new();
-        let mut current_text = String::new();
-        let mut chunk_start = 0;
-
-        for (i, line) in content.lines().enumerate() {
-            if line.starts_with('#') {
-                let trimmed = current_text.trim();
-                if !trimmed.is_empty() && trimmed.len() >= min_chunk_length {
-                    chunks.push(RagChunk {
-                        folder: folder_str.clone(),
-                        file: file_path.clone(),
-                        heading: current_heading.clone(),
-                        text: trimmed.to_string(),
-                        line: chunk_start,
-                        hash: hash.clone(),
-                    });
-                }
-                current_heading = line.trim_start_matches('#').trim().to_string();
-                current_text = String::new();
-                chunk_start = i;
-            } else {
-                current_text.push_str(line);
-                current_text.push('\n');
-            }
-        }
-
-        let trimmed = current_text.trim();
-        if !trimmed.is_empty() && trimmed.len() >= min_chunk_length {
-            chunks.push(RagChunk {
-                folder: folder_str.clone(),
-                file: file_path,
-                heading: current_heading,
-                text: trimmed.to_string(),
-                line: chunk_start,
-                hash,
-            });
-        }
-    }
-
-    // Delete chunks and hashes of removed files from DB
-    for (file, _) in &existing_hashes {
-        if !current_files.contains(file) {
-            conn.execute("DELETE FROM chunks WHERE file = ?1", [file])
-                .ok();
-            conn.execute("DELETE FROM file_hashes WHERE file = ?1", [file])
-                .ok();
+            result.push(path);
         }
     }
 
@@ -724,29 +666,6 @@ fn search_single_db(
     search_collect_db(&conn, embedding, fts_query, out)
 }
 
-/// Recursively find rag_{model}.db in subfolders
-fn find_sub_rag_dbs(dir: &Path, model_name: &str, dbs: &mut Vec<PathBuf>) {
-    let db_filename = model_db_name(model_name);
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let name = entry.file_name().to_string_lossy().to_string();
-
-            if name.starts_with('.') || name == "node_modules" || name == "target" {
-                continue;
-            }
-
-            if path.is_dir() {
-                let sub_db = path.join(".mdium").join(&db_filename);
-                if sub_db.exists() {
-                    dbs.push(sub_db);
-                }
-                find_sub_rag_dbs(&path, model_name, dbs);
-            }
-        }
-    }
-}
-
 const RRF_K: f64 = 60.0;
 
 #[tauri::command]
@@ -773,15 +692,10 @@ pub fn rag_search(
         None
     };
 
-    // Collect candidates from the current folder DB and every subfolder DB.
+    // Collect candidates from the single root DB.
     let mut candidates: Vec<ScoredCandidate> = Vec::new();
     let current_db = PathBuf::from(db_path(&folder_path, name));
     search_single_db(&current_db, &embedding, fts_query.as_deref(), &mut candidates)?;
-    let mut sub_dbs = Vec::new();
-    find_sub_rag_dbs(Path::new(&folder_path), name, &mut sub_dbs);
-    for sub_db in &sub_dbs {
-        search_single_db(sub_db, &embedding, fts_query.as_deref(), &mut candidates)?;
-    }
 
     // Vector-only mode (or no qualifying FTS terms): rank by cosine alone.
     if mode != "hybrid" || fts_query.is_none() {
@@ -824,17 +738,10 @@ pub fn rag_search(
 pub fn rag_delete_index(folder_path: String, model_name: Option<String>) -> Result<(), String> {
     let name = model_name.as_deref().unwrap_or(DEFAULT_MODEL_NAME);
 
-    // Delete rag_{model}.db in the current folder
+    // Delete the single root DB: <root>/.mdium/rag_{model}.db
     let path = db_path(&folder_path, name);
     if Path::new(&path).exists() {
         fs::remove_file(&path).map_err(|e| e.to_string())?;
-    }
-
-    // Also delete all rag_{model}.db in subfolders
-    let mut sub_dbs = Vec::new();
-    find_sub_rag_dbs(Path::new(&folder_path), name, &mut sub_dbs);
-    for sub_db in &sub_dbs {
-        fs::remove_file(sub_db).map_err(|e| e.to_string())?;
     }
 
     Ok(())
@@ -1184,5 +1091,63 @@ mod tests {
 
         let _ = fs::remove_dir_all(&root);
         assert_eq!(count, 4, "should count a.md, b.md, sub/d.md, .mdium/e.md");
+    }
+
+    #[test]
+    fn collect_md_paths_matches_count_and_flattens_to_root() {
+        use std::fs;
+        // Unique, std-only temp fixture (no tempfile crate dependency).
+        let root = std::env::temp_dir().join(format!("mdium_rag_collect_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+
+        // Included: top-level .md files
+        fs::write(root.join("a.md"), "# A\nbody").unwrap();
+        fs::write(root.join("b.md"), "# B\nbody").unwrap();
+        // Excluded: wrong extension
+        fs::write(root.join("c.txt"), "nope").unwrap();
+
+        // Included: .md inside a normal subfolder (recursed)
+        fs::create_dir_all(root.join("sub")).unwrap();
+        fs::write(root.join("sub").join("d.md"), "# D\nbody").unwrap();
+
+        // Excluded: node_modules and target are skipped
+        fs::create_dir_all(root.join("node_modules")).unwrap();
+        fs::write(root.join("node_modules").join("x.md"), "# X").unwrap();
+        fs::create_dir_all(root.join("target")).unwrap();
+        fs::write(root.join("target").join("y.md"), "# Y").unwrap();
+
+        // Excluded: hidden dir (other than .mdium) is skipped
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::write(root.join(".git").join("z.md"), "# Z").unwrap();
+
+        // Included: files inside .mdium are attributed to the parent
+        fs::create_dir_all(root.join(".mdium")).unwrap();
+        fs::write(root.join(".mdium").join("e.md"), "# E\nbody").unwrap();
+
+        let extensions = vec![".md".to_string()];
+        let mut paths: Vec<PathBuf> = Vec::new();
+        collect_md_paths(&root, &extensions, &mut paths).unwrap();
+
+        // Same set of files that count_files_recursive would report.
+        assert_eq!(
+            paths.len(),
+            count_files_recursive(&root, &extensions),
+            "collect_md_paths must mirror count_files_recursive traversal"
+        );
+
+        let names: HashSet<String> = paths
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+
+        let _ = fs::remove_dir_all(&root);
+        assert_eq!(names.len(), 4);
+        for expected in ["a.md", "b.md", "d.md", "e.md"] {
+            assert!(names.contains(expected), "should collect {expected}");
+        }
+        assert!(!names.contains("c.txt"), "wrong extension excluded");
+        assert!(!names.contains("x.md"), "node_modules excluded");
+        assert!(!names.contains("z.md"), "hidden dir excluded");
     }
 }
