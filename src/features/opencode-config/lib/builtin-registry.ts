@@ -201,6 +201,7 @@ export function isBuiltinSkill(name: string): boolean {
 // sections import all built-in catalogs from one module, matching BUILTIN_MCP etc.
 export {
   BUILTIN_PLUGINS,
+  basePluginSpec,
   isBuiltinPlugin,
   getMissingBuiltinPlugins,
   getBuiltinPluginIdBySpec,

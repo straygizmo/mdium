@@ -11,7 +11,7 @@ export interface BuiltinPluginEntry {
 // (the package was renamed; `oh-my-opencode` is an alias of the same release).
 export const BUILTIN_PLUGINS: Record<string, BuiltinPluginEntry> = {
   superpowers: {
-    spec: "superpowers@git+https://github.com/obra/superpowers.git#v5.1.0",
+    spec: "superpowers@git+https://github.com/obra/superpowers.git#v6.1.1",
     descriptionKey: "pluginDesc_superpowers",
     docsUrl: "https://github.com/obra/superpowers/blob/main/docs/README.opencode.md",
   },
@@ -22,20 +22,31 @@ export const BUILTIN_PLUGINS: Record<string, BuiltinPluginEntry> = {
   },
 };
 
-/** True if the given spec string belongs to a built-in plugin. */
+/** Strip the trailing `#<ref>` (tag/branch pin) from a plugin spec. */
+export function basePluginSpec(spec: string): string {
+  const hash = spec.indexOf("#");
+  return hash === -1 ? spec : spec.slice(0, hash);
+}
+
+/** True if the given spec string belongs to a built-in plugin (any pinned version). */
 export function isBuiltinPlugin(spec: string): boolean {
-  return Object.values(BUILTIN_PLUGINS).some((e) => e.spec === spec);
+  return getBuiltinPluginIdBySpec(spec) !== undefined;
 }
 
-/** Built-in plugin ids whose spec is not present in the current plugin array. */
+/** Built-in plugin ids whose spec (any pinned version) is not present in the current plugin array. */
 export function getMissingBuiltinPlugins(currentPlugins: string[]): string[] {
-  const present = new Set(currentPlugins);
-  return Object.keys(BUILTIN_PLUGINS).filter((id) => !present.has(BUILTIN_PLUGINS[id].spec));
+  const present = new Set(currentPlugins.map(basePluginSpec));
+  return Object.keys(BUILTIN_PLUGINS).filter(
+    (id) => !present.has(basePluginSpec(BUILTIN_PLUGINS[id].spec)),
+  );
 }
 
-/** Find the built-in plugin id whose spec matches, or undefined if none. */
+/** Find the built-in plugin id whose spec matches (ignoring the version pin), or undefined if none. */
 export function getBuiltinPluginIdBySpec(spec: string): string | undefined {
-  return Object.keys(BUILTIN_PLUGINS).find((id) => BUILTIN_PLUGINS[id].spec === spec);
+  const base = basePluginSpec(spec);
+  return Object.keys(BUILTIN_PLUGINS).find(
+    (id) => basePluginSpec(BUILTIN_PLUGINS[id].spec) === base,
+  );
 }
 
 /** Return a new array with `spec` appended if not already present (dedup). */

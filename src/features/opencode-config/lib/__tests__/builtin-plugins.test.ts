@@ -1,12 +1,15 @@
 import { describe, it, expect } from "vitest";
 import {
   BUILTIN_PLUGINS,
+  basePluginSpec,
   isBuiltinPlugin,
   getMissingBuiltinPlugins,
   getBuiltinPluginIdBySpec,
   addPluginSpec,
   removePluginSpec,
 } from "../builtin-plugins";
+
+const OLD_SUPERPOWERS_SPEC = "superpowers@git+https://github.com/obra/superpowers.git#v5.1.0";
 
 describe("BUILTIN_PLUGINS catalog", () => {
   it("contains superpowers and oh-my-opencode entries with spec/descriptionKey/docsUrl", () => {
@@ -25,9 +28,25 @@ describe("BUILTIN_PLUGINS catalog", () => {
   });
 });
 
+describe("basePluginSpec", () => {
+  it("strips the #<ref> pin", () => {
+    expect(basePluginSpec(OLD_SUPERPOWERS_SPEC)).toBe(
+      "superpowers@git+https://github.com/obra/superpowers.git",
+    );
+  });
+
+  it("returns the spec unchanged when there is no pin", () => {
+    expect(basePluginSpec("oh-my-openagent")).toBe("oh-my-openagent");
+  });
+});
+
 describe("isBuiltinPlugin", () => {
   it("returns true for a built-in spec", () => {
     expect(isBuiltinPlugin(BUILTIN_PLUGINS.superpowers.spec)).toBe(true);
+  });
+
+  it("returns true for a built-in spec pinned to another version", () => {
+    expect(isBuiltinPlugin(OLD_SUPERPOWERS_SPEC)).toBe(true);
   });
 
   it("returns false for an unknown spec", () => {
@@ -48,6 +67,12 @@ describe("getMissingBuiltinPlugins", () => {
     expect(missing).toContain("oh-my-opencode");
   });
 
+  it("omits a built-in already present at a different pinned version", () => {
+    const missing = getMissingBuiltinPlugins([OLD_SUPERPOWERS_SPEC]);
+    expect(missing).not.toContain("superpowers");
+    expect(missing).toContain("oh-my-opencode");
+  });
+
   it("ignores unrelated custom specs", () => {
     const missing = getMissingBuiltinPlugins(["my-custom-plugin"]);
     expect(missing).toEqual(
@@ -59,6 +84,10 @@ describe("getMissingBuiltinPlugins", () => {
 describe("getBuiltinPluginIdBySpec", () => {
   it("returns the id for a built-in spec", () => {
     expect(getBuiltinPluginIdBySpec(BUILTIN_PLUGINS.superpowers.spec)).toBe("superpowers");
+  });
+
+  it("returns the id for a built-in spec pinned to another version", () => {
+    expect(getBuiltinPluginIdBySpec(OLD_SUPERPOWERS_SPEC)).toBe("superpowers");
   });
 
   it("returns undefined for an unknown spec", () => {
