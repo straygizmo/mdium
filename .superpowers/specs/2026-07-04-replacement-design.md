@@ -1,0 +1,130 @@
+# 置換（Replacement）機能 設計ドキュメント
+
+日付: 2026-07-04
+ステータス: レビュー待ち
+
+## 概要
+
+機密情報（社名・人名・ホスト名など）を外部LLMへ送信する前に仮名文字列へ置換（マスキング）し、LLMの応答では逆置換して元の文字列で表示する機能。opencodeチャットとRAGの両方のLLM境界に適用する。
+
+置換設定は画面左のアクティビティバー（Gitアイコンの直下）のボタンから開く独立パネルとして提供する。opencode設定のタブには含めない。
+
+## 背景と方針
+
+- **用途は機密情報のマスキング。** 置換漏れの防止が最優先。
+- .mdファイルの内容はmdiumクライアントではなく、opencodeサーバー側のツール（Read/grep）やRAG検索が読み取ってLLMに渡す。サーバー側ツールの常時フックは実装コストが高いため、**ディスク上の.mdファイルを一括置換で事前にマスクしておく方式**を採る。
+- 基本状態の不変条件:
+  - LLMへ出る文字列はすべて置換後（マスク済み）
+  - ユーザーに見える文字列はすべて置換前（原文）
+  - ディスク上の.mdファイルは一括置換によりマスク済み（＝RAG索引もマスク済み）
+
+## データモデルと保存
+
+`src/stores/settings-store.ts`（zustand persist、localStorageキー `mdium-settings`）に追加する。
+
+```ts
+interface ReplacementRule {
+  id: string;
+  from: string;      // 置換前（機密文字列）
+  to: string;        // 置換後（マスク文字列）
+  enabled: boolean;
+}
+
+// settings に追加するフィールド
+replacement: {
+  enabled: boolean;        // マスター有効/無効
+  rules: ReplacementRule[];
+}
+```
+
+保存先をlocalStorageにする理由: 置換ルール自体に機密文字列が含まれるため、開いているフォルダ内に保存するとLLMのツールに読まれる恐れがある。localStorageならフォルダ外にあり、gitにも入らない。ルールセットは全フォルダ共通の1セット。
+
+## 置換エンジン
+
+`src/shared/lib/replacement.ts` に純粋関数として実装する（RAGとopencodeの両featureから利用するためshared配置）。
+
+- `applyForward(text: string, rules: ReplacementRule[]): string` — 前→後。
+- `applyReverse(text: string, rules: ReplacementRule[]): string` — 後→前。
+- マッチングはリテラル一致・大文字小文字区別あり。正規表現は非対応（YAGNI）。
+- 適用順はマッチ対象文字列（forwardは`from`、reverseは`to`）の**長い順**。包含関係（例:「社名A支店」と「社名A」）での部分置換を防ぐ。
+- `enabled: false` のルール、`from`が空のルールはスキップ。マスタートグルが無効なら全体no-op。
+- バリデーション: 複数ルールが同じ`to`を持つ場合は逆置換が曖昧になるため、UIで警告を表示する（適用自体はブロックしない）。
+
+## UI
+
+### アクティビティバーのボタン
+
+`src/features/file-tree/components/LeftPanel.tsx` のアクティビティバーで、**Gitボタンの直後（RAGボタンの上）** に置換ボタンを追加する。アイコンは双方向の入れ替えを表すもの。
+
+- `useUiStore` の `leftPanel` 型に `"replacement"` を追加。
+- クリックで左パネル領域に置換パネルを表示（既存の folder/outline/git/rag/opencode-config と同じパターン）。セクションヘッダーは「置換 / REPLACEMENT」。
+
+### 置換パネル（インライン行編集）
+
+新featureとして `src/features/replacement/` を作成する。
+
+```
+┃ 置換                        ┃
+┃ [✓] 有効     [＋ ルール追加]  ┃
+┃ ──────────────────────── ┃
+┃ [✓][株式会社A社 ][会社X ][×] ┃
+┃ [✓][田中太郎   ][担当P ][×]  ┃
+┃ [ ][hostname01 ][srv-A ][×] ┃
+┃ ⚠ 「会社X」が重複しています    ┃
+┃ ──────────────────────── ┃
+┃ [一括置換] [一括逆置換]       ┃
+```
+
+- 各ルールは1行: 個別有効チェック、置換前入力、置換後入力、削除ボタン。入力欄を直接編集し、変更は即時保存（保存ボタンなし）。
+- 「ルール追加」で空行を追加。
+- バリデーション表示: `from`が空の行は赤枠、`to`重複は警告メッセージ。
+- パネル下部に一括置換/一括逆置換ボタンと、運用ガイダンス（一括置換後はRAGの再インデックスを推奨、復元はgit前提）を表示。
+- すべてのUI文字列はi18n（`en`/`ja`）。新namespace `replacement` を追加。
+
+## 適用ポイント（LLM境界）
+
+| 経路 | 前→後（送信） | 後→前（受信） |
+|---|---|---|
+| opencodeチャット | `doSendMessage`（`wrapWithMdiumContext`直後）、`doExecuteCommand`のargs | ストリーミング蓄積部、`session.idle`最終化（`marked`前）、履歴読込（`doLoadSession`） |
+| RAGパネルQA | `askQuestion`冒頭で質問文を置換し、埋め込み検索とLLM送信の両方にマスク済み文字列を使用（索引はマスク済みファイル由来なので一致する）。表示用の質問文は原文 | `callAI`の戻り値を`marked`前に逆置換 |
+| RAGブリッジ（opencode→`rag_search`） | 返却する検索結果テキスト（`useRagBridge.ts`の応答ペイロード）に前→後を適用。マスク済み索引なら実質no-op、未マスク索引時の漏れ防止の安全網 | なし（結果はLLM行きのため） |
+| ディスク上の.md | 一括置換ボタン（opencodeのRead/grepツール対策） | 一括逆置換ボタン |
+
+### opencodeチャットの詳細
+
+`src/features/opencode-config/hooks/useOpencodeChat.ts`:
+
+- 送信: `doSendMessage` で `wrapWithMdiumContext` の後に `applyForward` を適用してからSDKへ渡す。MDコンテキスト（選択範囲等）は`handleSubmit`で結合済みのテキストが渡ってくるためこの1箇所でカバーされる。表示用エコー（`displayText`）は原文のまま。
+- 受信: SSEの`text`パート蓄積時と、`session.idle`での最終化（`marked(rawText)`の前）に `applyReverse`。履歴読込時のアシスタントテキストにも適用。
+- ユーザーエコー除去ロジックは、サーバーからマスク済みテキストが返るため**逆置換後のテキスト同士で比較**するよう順序を揃える。
+
+### 一括置換/一括逆置換
+
+- 対象: 開いているフォルダ配下の `**/*.md`。隠しフォルダ（`.mdium`等の`.`始まり）と`node_modules`はスキップ。
+- 実行前に確認ダイアログ（対象フォルダと対象ファイル数を表示、バックアップなし・git前提の旨を明記）。
+- 実行後に置換件数（ファイル数・置換箇所数）を報告し、「RAGの再インデックスを推奨」の注記を表示。
+- 実装は既存のTauri fsコマンド（読み取り＋`write_text_file_with_dirs`）を利用。開いているタブと衝突する場合はダーティタブの扱いに注意（未保存変更があるファイルは対象外とし、結果に「スキップ: 未保存」と表示）。
+
+## エラー処理・エッジケース
+
+- ルールが空／マスタートグル無効 → 全経路でno-op（オーバーヘッドなし）。
+- `to`文字列が別ルールの`from`を含む場合、forward再適用で二重置換の恐れ → forwardは1パスで全ルールを適用し、置換済み区間には再マッチしない実装とする（単純な逐次`replaceAll`ではなく、走査位置を進めるスキャン方式）。
+- 逆置換の曖昧さ（`to`重複）はUI警告で予防。
+- 一括置換中のファイル読み書きエラーは該当ファイルをスキップして続行し、結果ダイアログに失敗一覧を表示。
+- 一括置換後、開いているタブの内容がディスクと食い違うため、対象ファイルを開いているクリーンなタブは再読込する。
+
+## テスト
+
+- `src/shared/lib/__tests__/replacement.test.ts`（vitest）:
+  - forward/reverseの基本動作、往復（forward→reverseで原文に戻る）
+  - 長い順適用（包含関係のルール）
+  - 二重置換の防止（`to`が別ルールの`from`を含むケース）
+  - enabled=false・空from・マスター無効のスキップ
+- 一括変換ロジックのユニットテスト（対象ファイル収集のフィルタリング）。
+
+## スコープ外
+
+- opencodeサーバー側ツール（Read/grep）出力の常時フック（プラグイン方式）。ディスク一括置換で代替。
+- 正規表現・大文字小文字非区別マッチ。
+- フォルダごとのルールセット。
+- .md以外のファイル（.txt等）の一括置換対象化。
