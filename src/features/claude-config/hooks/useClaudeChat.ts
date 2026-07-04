@@ -51,6 +51,11 @@ export const useClaudeChatStore = create<ClaudeChatUIState>()(() => ({
 let _sidecarId: number | null = null;
 let _folder: string | null = null;
 let _unsubscribe: (() => void) | null = null;
+// Prevents doClaudeConnect from running concurrently (guard-then-await race).
+let _connectInFlight = false;
+// Bumped whenever killClaudeSidecar runs so an in-flight connect attempt can
+// detect it was superseded and avoid publishing a now-orphaned sidecar.
+let _generation = 0;
 
 function setState(patch: Partial<ClaudeChatUIState>): void {
   useClaudeChatStore.setState(patch);
@@ -61,9 +66,10 @@ function handleSidecarMessage(msg: SidecarOutbound): void {
   switch (msg.type) {
     case "ready": {
       // Sidecar booted; start (or resume) the session.
-      const folder = _folder!;
+      if (_sidecarId === null || _folder === null) return;
+      const folder = _folder;
       const settings = useClaudeSessionStore.getState().getFolderSettings(folder);
-      void sendToSidecar(_sidecarId!, {
+      void sendToSidecar(_sidecarId, {
         type: "start_session",
         cwd: folder,
         model: settings.model || undefined,
@@ -101,37 +107,60 @@ function handleSidecarMessage(msg: SidecarOutbound): void {
 
 export async function doClaudeConnect(folder: string): Promise<void> {
   if (_sidecarId !== null && _folder === folder) return;
-  await killClaudeSidecar();
-
-  const nodeOk = await ensureCommand("node", {
-    messageKey: "nodeNotFound",
-    promptKey: "openInstallGuide",
-    installUrl: NODE_INSTALL_URL,
-  });
-  if (!nodeOk) {
-    setState({ error: i18n.t("nodeNotFound", { ns: "common" }) });
-    return;
-  }
-
-  setState({ connecting: true, error: null, chat: emptyChatModel() });
-  _folder = folder;
+  if (_connectInFlight) return;
+  _connectInFlight = true;
   try {
-    _sidecarId = await spawnSidecar(folder);
-  } catch (e) {
-    setState({ connecting: false, error: String(e) });
-    _folder = null;
-    return;
+    await killClaudeSidecar();
+    // Snapshot the generation after the kill above; if another kill happens
+    // while we're still awaiting spawn/subscribe below, this attempt is stale.
+    const gen = _generation;
+
+    const nodeOk = await ensureCommand("node", {
+      messageKey: "nodeNotFound",
+      promptKey: "openInstallGuide",
+      installUrl: NODE_INSTALL_URL,
+    });
+    if (!nodeOk) {
+      setState({ error: i18n.t("nodeNotFound", { ns: "common" }) });
+      return;
+    }
+
+    setState({ connecting: true, error: null, chat: emptyChatModel() });
+    _folder = folder;
+    let id: number;
+    try {
+      id = await spawnSidecar(folder);
+    } catch (e) {
+      setState({ connecting: false, error: String(e) });
+      _folder = null;
+      return;
+    }
+    if (gen !== _generation) {
+      // A kill happened while spawning; this sidecar is already orphaned.
+      await killSidecar(id).catch(() => {});
+      return;
+    }
+    _sidecarId = id;
+    const unsubscribe = await subscribeSidecar(id, {
+      onMessage: handleSidecarMessage,
+      onStderr: (line) => console.warn("[claude][diag]", line),
+      onExit: () => {
+        _sidecarId = null;
+        _unsubscribe?.();
+        _unsubscribe = null;
+        setState({ connected: false, connecting: false });
+      },
+    });
+    if (gen !== _generation) {
+      // A kill happened while subscribing; tear down this now-stale sidecar.
+      unsubscribe();
+      await killSidecar(id).catch(() => {});
+      return;
+    }
+    _unsubscribe = unsubscribe;
+  } finally {
+    _connectInFlight = false;
   }
-  _unsubscribe = await subscribeSidecar(_sidecarId, {
-    onMessage: handleSidecarMessage,
-    onStderr: (line) => console.warn("[claude][diag]", line),
-    onExit: () => {
-      _sidecarId = null;
-      _unsubscribe?.();
-      _unsubscribe = null;
-      setState({ connected: false, connecting: false });
-    },
-  });
 }
 
 /**
@@ -149,12 +178,20 @@ export async function doClaudeSend(text: string): Promise<void> {
   if (_sidecarId === null) return;
   const st = useClaudeChatStore.getState();
   setState({ chat: appendUserMessage(st.chat, text), lastEventAt: Date.now() });
-  await sendToSidecar(_sidecarId, { type: "user_message", text: wrapWithFileContext(text) });
+  try {
+    await sendToSidecar(_sidecarId, { type: "user_message", text: wrapWithFileContext(text) });
+  } catch (e) {
+    setState({ error: String(e) });
+  }
 }
 
 export async function doClaudeInterrupt(): Promise<void> {
   if (_sidecarId === null) return;
-  await sendToSidecar(_sidecarId, { type: "interrupt" });
+  try {
+    await sendToSidecar(_sidecarId, { type: "interrupt" });
+  } catch (e) {
+    setState({ error: String(e) });
+  }
   const st = useClaudeChatStore.getState();
   setState({ chat: { ...st.chat, running: false }, pendingPermission: null });
 }
@@ -165,7 +202,11 @@ export async function doClaudeRespondPermission(
 ): Promise<void> {
   if (_sidecarId === null) return;
   setState({ pendingPermission: null });
-  await sendToSidecar(_sidecarId, { type: "permission_response", id, behavior });
+  try {
+    await sendToSidecar(_sidecarId, { type: "permission_response", id, behavior });
+  } catch (e) {
+    setState({ error: String(e) });
+  }
 }
 
 export async function doClaudeNewSession(): Promise<void> {
@@ -177,6 +218,7 @@ export async function doClaudeNewSession(): Promise<void> {
 
 /** Kill the sidecar (app shutdown / folder close). Safe to call when idle. */
 export async function killClaudeSidecar(): Promise<void> {
+  _generation++;
   const id = _sidecarId;
   _sidecarId = null;
   _folder = null;
