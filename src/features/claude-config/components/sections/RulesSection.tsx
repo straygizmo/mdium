@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { useTabStore } from "@/stores/tab-store";
@@ -18,18 +18,20 @@ export function RulesSection() {
   const [text, setText] = useState("");
   const [savedAt, setSavedAt] = useState(0);
 
-  const load = useCallback(async (sc: Scope) => {
-    const path = await rulesPath(sc, folder);
-    try {
-      setText(await invoke<string>("read_text_file", { path }));
-    } catch {
-      setText(""); // file does not exist yet
-    }
-  }, [folder]);
-
   useEffect(() => {
-    void load(scope);
-  }, [scope, load]);
+    let cancelled = false;
+    void (async () => {
+      const path = await rulesPath(scope, folder);
+      let content = "";
+      try {
+        content = await invoke<string>("read_text_file", { path });
+      } catch {
+        // File does not exist yet.
+      }
+      if (!cancelled) setText(content);
+    })();
+    return () => { cancelled = true; };
+  }, [scope, folder]);
 
   const save = async () => {
     const path = await rulesPath(scope, folder);
