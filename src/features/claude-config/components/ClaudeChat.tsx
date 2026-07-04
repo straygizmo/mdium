@@ -73,6 +73,7 @@ export function ClaudeChat() {
       <div className="claude-chat__input-area">
         <textarea
           className="claude-chat__input"
+          aria-label={t("chatPlaceholder")}
           value={input}
           placeholder={t("chatPlaceholder")}
           onChange={(e) => setInput(e.target.value)}

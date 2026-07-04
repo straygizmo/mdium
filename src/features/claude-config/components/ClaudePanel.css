@@ -46,3 +46,4 @@
 .claude-settings__scope { display: flex; gap: 12px; font-size: 12px; }
 .claude-settings__rules-editor { min-height: 240px; font-family: monospace; font-size: 12px; resize: vertical; background: var(--bg-overlay, #2f2f2f); }
 .claude-settings__saved { margin-left: 8px; font-size: 11px; opacity: 0.7; }
+.claude-settings__saved--error { color: var(--error-color, #d64545); opacity: 1; }

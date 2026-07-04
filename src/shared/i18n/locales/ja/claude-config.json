@@ -31,5 +31,6 @@
   "rulesScopeGlobal": "グローバル (~/.claude/CLAUDE.md)",
   "rulesScopeProject": "プロジェクト (CLAUDE.md)",
   "save": "保存",
-  "saved": "保存しました"
+  "saved": "保存しました",
+  "saveFailed": "保存に失敗しました"
 }

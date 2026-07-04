@@ -17,6 +17,7 @@ export function RulesSection() {
   const [scope, setScope] = useState<Scope>("project");
   const [text, setText] = useState("");
   const [savedAt, setSavedAt] = useState(0);
+  const [saveError, setSaveError] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -34,10 +35,16 @@ export function RulesSection() {
   }, [scope, folder]);
 
   const save = async () => {
-    const path = await rulesPath(scope, folder);
-    await invoke("write_text_file_with_dirs", { path, content: text });
-    setSavedAt(Date.now());
-    setTimeout(() => setSavedAt(0), 2000);
+    try {
+      const path = await rulesPath(scope, folder);
+      await invoke("write_text_file_with_dirs", { path, content: text });
+      setSaveError(false);
+      setSavedAt(Date.now());
+      setTimeout(() => setSavedAt(0), 2000);
+    } catch {
+      setSaveError(true);
+      setTimeout(() => setSaveError(false), 2000);
+    }
   };
 
   return (
@@ -61,6 +68,11 @@ export function RulesSection() {
       <div>
         <button onClick={() => void save()}>{t("save")}</button>
         {savedAt > 0 && <span className="claude-settings__saved">{t("saved")}</span>}
+        {saveError && (
+          <span className="claude-settings__saved claude-settings__saved--error">
+            {t("saveFailed")}
+          </span>
+        )}
       </div>
     </div>
   );
