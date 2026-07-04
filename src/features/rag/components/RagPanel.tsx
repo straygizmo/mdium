@@ -6,6 +6,7 @@ import { useRagFeatures } from "../hooks/useRagFeatures";
 import type { ChatSession } from "../hooks/useRagFeatures";
 import { classifyRagError } from "../lib/model-error";
 import { useSettingsStore } from "@/stores/settings-store";
+import { applyReverse } from "@/shared/lib/replacement";
 import { useUiStore } from "@/stores/ui-store";
 import { useSpeechToText } from "@/features/speech/hooks/useSpeechToText";
 import type { AiSettings, RagSettings } from "@/shared/types";
@@ -41,6 +42,7 @@ export function RagPanel({ folderPath, aiSettings, onOpenFile }: RagPanelProps) 
   } = useRagFeatures({ folderPath, aiSettings, onOpenFile });
 
   const setShowSettings = useSettingsStore((s) => s.setShowSettings);
+  const replacementSettings = useSettingsStore((s) => s.replacement);
   const language = useSettingsStore((s) => s.language);
   const ragSettings = useSettingsStore((s) => s.ragSettings);
   const setRagSettings = useSettingsStore((s) => s.setRagSettings);
@@ -352,7 +354,7 @@ export function RagPanel({ folderPath, aiSettings, onOpenFile }: RagPanelProps) 
                     onClick={() => onOpenFile?.(src.file)}
                     title={`${src.file} (${Math.round(src.score * 100)}%)`}
                   >
-                    {src.file.split(/[\\/]/).pop()} {src.heading && `#${src.heading}`}
+                    {src.file.split(/[\\/]/).pop()} {src.heading && `#${applyReverse(src.heading, replacementSettings)}`}
                   </button>
                 ))}
               </div>

@@ -142,7 +142,13 @@ export function ReplacementPanel() {
         }),
       ];
       if (skippedDirty > 0) lines.push(t("bulkSkippedDirty", { count: skippedDirty }));
-      if (summary.failed.length > 0) lines.push(t("bulkFailed", { count: summary.failed.length }));
+      if (summary.failed.length > 0) {
+        lines.push(t("bulkFailed", { count: summary.failed.length }));
+        // File paths/errors are not translatable prose — append raw.
+        for (const f of summary.failed.slice(0, 5)) {
+          lines.push(`${f.path}: ${f.error}`);
+        }
+      }
       lines.push(t("ragReindexNote"));
       await showMessage(lines.join("\n"));
     } finally {

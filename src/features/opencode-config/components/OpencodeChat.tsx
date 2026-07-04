@@ -5,6 +5,8 @@ import { useOpencodeChat, useChatUIStore } from "../hooks/useOpencodeChat";
 import type { OpencodeSessionInfo, ImageAttachment } from "../hooks/useOpencodeChat";
 import type { Part } from "@opencode-ai/sdk/client";
 import { useTabStore } from "@/stores/tab-store";
+import { useSettingsStore } from "@/stores/settings-store";
+import { applyReverse } from "@/shared/lib/replacement";
 import { useEditorContextStore } from "@/stores/editor-context-store";
 import { OpencodeConfigBadges } from "./OpencodeConfigBadges";
 import { CompletionPopup } from "./CompletionPopup";
@@ -27,6 +29,7 @@ export function OpencodeChat() {
   const activeTabName = useTabStore((s) => s.getActiveTab()?.fileName);
   const activeTabFilePath = useTabStore((s) => s.getActiveTab()?.filePath);
   const activeTabFolderPath = useTabStore((s) => s.getActiveTab()?.folderPath);
+  const replacementSettings = useSettingsStore((s) => s.replacement);
 
   const {
     connected,
@@ -514,12 +517,20 @@ export function OpencodeChat() {
               if (prevUser?.role === "user" && prevUser.content) {
                 const userText = prevUser.content.trim();
                 const textParts = msg.parts.filter((p) => p.type === "text");
-                const firstText = textParts.length > 0 ? ((textParts[0] as any).text ?? "") : "";
+                // Part texts are the raw masked payload — unmask before
+                // comparing against the (original) user echo text.
+                const firstText =
+                  textParts.length > 0
+                    ? applyReverse((textParts[0] as any).text ?? "", replacementSettings)
+                    : "";
                 if (firstText.trim().startsWith(userText)) {
                   if (isStreaming) {
                     // Raw text: strip directly
                     const stripped = firstText.trim().slice(userText.length).trimStart();
-                    const restParts = textParts.slice(1).map((p) => (p as any).text ?? "").join("");
+                    const restParts = textParts
+                      .slice(1)
+                      .map((p) => applyReverse((p as any).text ?? "", replacementSettings))
+                      .join("");
                     displayContent = stripped + restParts;
                   } else {
                     // HTML from marked(): strip the leading <p>question</p> or plain text prefix
@@ -547,7 +558,9 @@ export function OpencodeChat() {
                       </summary>
                       <div className="oc-chat__reasoning-body">
                         {reasoningParts.map((p) => (
-                          <p key={(p as any).id}>{(p as any).text ?? ""}</p>
+                          <p key={(p as any).id}>
+                            {applyReverse((p as any).text ?? "", replacementSettings)}
+                          </p>
                         ))}
                       </div>
                     </details>

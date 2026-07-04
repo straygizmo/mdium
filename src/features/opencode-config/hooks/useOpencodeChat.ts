@@ -396,7 +396,11 @@ function formatSessionError(err: unknown): string {
 function applySessionError(err: unknown) {
   const name = (err as { name?: string } | null | undefined)?.name;
   const isAbort = name === "MessageAbortedError";
-  const errorText = isAbort ? null : formatSessionError(err);
+  // Provider error messages may echo back masked text (e.g. from the prompt);
+  // unmask before it is stored/displayed.
+  const errorText = isAbort
+    ? null
+    : applyReverse(formatSessionError(err), replacementSettings());
 
   useChatUIStore.setState((s) => {
     // Drop the trailing empty assistant placeholder if no content was rendered
@@ -1180,8 +1184,10 @@ async function ensureSessionId(title: string): Promise<string | null> {
   if (!_client) return null;
 
   try {
+    // Mask before it leaves the app: the title is persisted server-side by opencode.
+    const maskedTitle = applyForward(title.slice(0, 50), replacementSettings());
     const res = await _client.session.create({
-      body: { title: title.slice(0, 50) },
+      body: { title: maskedTitle },
     });
     console.log("[opencode] session.create res:", res.data, res.error);
     const data = res.data as any;
@@ -1595,11 +1601,16 @@ async function doGetSessionHistory() {
     } else {
       sessionArray = [];
     }
+    const rs = replacementSettings();
     const list: OpencodeSessionInfo[] = sessionArray
       .filter((s) => s && typeof s === "object")
       .map((s) => ({
         id: s.id ?? "",
-        title: s.title || (s.id ? String(s.id).slice(0, 8) : "untitled"),
+        title: s.title
+          ? applyReverse(s.title, rs)
+          : s.id
+            ? String(s.id).slice(0, 8)
+            : "untitled",
         createdAt: s.time?.created ?? 0,
         updatedAt: s.time?.updated ?? 0,
       }))
