@@ -13,6 +13,8 @@ import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { marked } from "marked";
 import i18n from "@/shared/i18n";
 import { useOpencodeServerStore } from "@/stores/opencode-server-store";
+import { useOpencodeUsageStore } from "@/stores/opencode-usage-store";
+import { sessionTotalsFromMessageInfos } from "@/stores/opencode-usage-core";
 import { ensureCommand, OPENCODE_INSTALL_URL } from "@/shared/lib/ensureCommand";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
@@ -846,6 +848,25 @@ function processSSEStream(stream: AsyncIterable<unknown>) {
           // case message.part.updated events were not fired (e.g. LLM refusal
           // or very short responses).
           const msgInfo = (ev.properties as any).info;
+          // Usage accounting: record cost/tokens for ANY assistant message on
+          // this stream (not only the displayed session) so background
+          // sessions are counted too. Guarded so a usage bug can never break
+          // chat handling. Repeated events for the same message are deduped
+          // by upsert inside recordUsage.
+          try {
+            if (msgInfo && msgInfo.role === "assistant" && msgInfo.id && msgInfo.tokens) {
+              useOpencodeUsageStore.getState().recordUsage({
+                messageID: msgInfo.id,
+                sessionID: msgInfo.sessionID ?? "",
+                providerID: msgInfo.providerID ?? "unknown",
+                modelID: msgInfo.modelID ?? "unknown",
+                cost: msgInfo.cost ?? 0,
+                tokens: msgInfo.tokens,
+              });
+            }
+          } catch (e) {
+            console.warn("[opencode][usage] recordUsage failed:", e);
+          }
           if (
             msgInfo &&
             msgInfo.role === "assistant" &&
@@ -1510,6 +1531,19 @@ async function doLoadSession(sessionId: string) {
     if (res.data) {
       const raw = res.data as any;
       const msgArray = Array.isArray(raw) ? raw : [];
+      // Rebuild this session's usage totals for the toolbar readout.
+      // Daily aggregates are NOT touched here — they accumulate from live
+      // events only, so reloading history never double counts.
+      try {
+        useOpencodeUsageStore
+          .getState()
+          .setSessionTotals(
+            sessionId,
+            sessionTotalsFromMessageInfos(msgArray.map((m: any) => m.info ?? m)),
+          );
+      } catch (e) {
+        console.warn("[opencode][usage] session totals rebuild failed:", e);
+      }
       const loaded: OpencodeMessage[] = [];
       for (const msg of msgArray) {
         const info = (msg.info ?? msg) as Message;
