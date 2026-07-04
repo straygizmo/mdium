@@ -7,6 +7,7 @@ import { useSettingsStore } from "@/stores/settings-store";
 import { useTabStore } from "@/stores/tab-store";
 import { useGitStore } from "@/stores/git-store";
 import { useOpencodeServerStore } from "@/stores/opencode-server-store";
+import { killClaudeSidecar } from "@/features/claude-config/hooks/useClaudeChat";
 import { getOfficeExt, getMindmapExt, getKityMinderImportExt, getImageExt, getPdfExt, getCsvExt, getPptxExt, isCodeFile } from "@/shared/lib/constants";
 import { detectDelimiter } from "@/features/preview/lib/detect-delimiter";
 import { useFileStore } from "@/stores/file-store";
@@ -310,6 +311,7 @@ export function App() {
   useEffect(() => {
     const handleBeforeUnload = () => {
       useOpencodeServerStore.getState().removeAllServers();
+      void killClaudeSidecar();
     };
     window.addEventListener("beforeunload", handleBeforeUnload);
 
@@ -324,6 +326,7 @@ export function App() {
         }
       }
       await useOpencodeServerStore.getState().removeAllServers();
+      await killClaudeSidecar();
     }).then((fn) => { unlisten = fn; });
 
     return () => {
@@ -1054,6 +1057,10 @@ export function App() {
       } else if (e.ctrlKey && e.key === "d") {
         e.preventDefault();
         handleOpenFolder();
+      } else if (e.ctrlKey && e.shiftKey && (e.key === "O" || e.key === "o")) {
+        e.preventDefault();
+        useUiStore.getState().setLeftPanel("claude");
+        useTabStore.getState().setFolderLeftPanel("claude");
       } else if (e.ctrlKey && e.key === "o") {
         e.preventDefault();
         useUiStore.getState().setLeftPanel("opencode-config");
