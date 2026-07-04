@@ -35,6 +35,7 @@
       "../resources/mcp-servers/**/*",
       "../resources/video-env/**/*",
       "../resources/lottie-presets/**/*",
+      "../resources/claude-sidecar/**/*",
       "../packages/open-motion/core/**/*",
       "../packages/open-motion/components/**/*",
       "../packages/open-motion/renderer/**/*",

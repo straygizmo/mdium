@@ -41,4 +41,7 @@ resources/slidev-env/node_modules/
 resources/mcp-servers/*/node_modules/
 resources/mcp-servers/*/dist/
 
+# esbuild-bundled Claude Agent SDK sidecar (built by scripts/build-claude-sidecar.mjs)
+resources/claude-sidecar/
+
 slides/
