@@ -2,6 +2,10 @@ import { useTranslation } from "react-i18next";
 import { useSettingsStore } from "@/stores/settings-store";
 import { findDuplicateTos } from "@/shared/lib/replacement";
 import type { ReplacementRule } from "@/shared/types";
+import { invoke } from "@tauri-apps/api/core";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { showMessage } from "@/stores/dialog-store";
+import { parseRulesCsv, mergeRules, exportRulesCsv } from "../lib/rules-csv";
 import "./ReplacementPanel.css";
 
 export function ReplacementPanel() {
@@ -33,6 +37,48 @@ export function ReplacementPanel() {
       ...replacement,
       rules: replacement.rules.filter((r) => r.id !== id),
     });
+  };
+
+  const handleImportCsv = async () => {
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: "CSV", extensions: ["csv"] }],
+    });
+    if (typeof selected !== "string") return;
+    try {
+      const raw = await invoke<string>("read_text_file_auto_encoding", { path: selected });
+      const { rows, errors } = parseRulesCsv(raw);
+      const { rules, added, updated } = mergeRules(replacement.rules, rows);
+      setReplacement({ ...replacement, rules });
+      let msg = t("importResult", { added, updated, errors: errors.length });
+      if (errors.length > 0) {
+        const lines = errors.slice(0, 10).map((err) =>
+          t("importErrorLine", {
+            line: err.line,
+            reason: t(err.reason === "columnCount" ? "reasonColumnCount" : "reasonBoolValue"),
+          }),
+        );
+        msg += "\n" + lines.join("\n");
+      }
+      await showMessage(msg, { kind: errors.length > 0 ? "warning" : "info" });
+    } catch (e) {
+      await showMessage(String(e), { kind: "error" });
+    }
+  };
+
+  const handleExportCsv = async () => {
+    const path = await save({
+      defaultPath: "replacement-rules.csv",
+      filters: [{ name: "CSV", extensions: ["csv"] }],
+    });
+    if (!path) return;
+    try {
+      // BOM so Excel opens the UTF-8 file with correct Japanese text.
+      await invoke("write_text_file", { path, content: "\uFEFF" + exportRulesCsv(replacement.rules) });
+      await showMessage(t("exportDone"));
+    } catch (e) {
+      await showMessage(String(e), { kind: "error" });
+    }
   };
 
   return (
@@ -92,6 +138,18 @@ export function ReplacementPanel() {
           ⚠ {t("duplicateToWarning", { value: to })}
         </p>
       ))}
+
+      <div className="replacement-panel__section">
+        <span className="replacement-panel__section-title">{t("sectionCsv")}</span>
+        <div className="replacement-panel__row">
+          <button className="replacement-panel__btn" onClick={handleImportCsv}>
+            {t("importCsv")}
+          </button>
+          <button className="replacement-panel__btn" onClick={handleExportCsv}>
+            {t("exportCsv")}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
