@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next";
 import { useUiStore } from "@/stores/ui-store";
 import { useTabStore } from "@/stores/tab-store";
 import { ClaudeChat } from "./ClaudeChat";
+import { ClaudeSettings } from "./ClaudeSettings";
 import "./ClaudePanel.css";
 
 export function ClaudePanel() {
@@ -34,7 +35,7 @@ export function ClaudePanel() {
           {t("tabSettings")}
         </button>
       </div>
-      {topTab === "chat" ? <ClaudeChat /> : <div className="claude-panel__settings" />}
+      {topTab === "chat" ? <ClaudeChat /> : <ClaudeSettings />}
     </div>
   );
 }
