@@ -250,6 +250,11 @@ pub fn run() {
             commands::pty::install_claude_code,
             commands::pty::spawn_background_process,
             commands::pty::kill_background_process,
+            // Claude sidecar (stdio bridge)
+            commands::claude_sidecar::resolve_claude_sidecar_path,
+            commands::claude_sidecar::spawn_claude_sidecar,
+            commands::claude_sidecar::write_claude_sidecar,
+            commands::claude_sidecar::kill_claude_sidecar,
             // Claude config operations
             commands::claude_config::get_home_dir,
             commands::claude_config::read_json_file,

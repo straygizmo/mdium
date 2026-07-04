@@ -1,6 +1,7 @@
 pub mod active_xlsm;
 pub mod ai;
 pub mod claude_config;
+pub mod claude_sidecar;
 pub mod env;
 pub mod file;
 pub mod fs_search;
