@@ -29,8 +29,8 @@ Tauri Rust: claude_sidecar.rs(汎用stdioブリッジ)
         │  stdio (JSON Lines)
 Nodeサイドカー: claude-sidecar.cjs(esbuildバンドル、リソース同梱)
   @anthropic-ai/claude-agent-sdk の query() をラップ
-        │  SDK内部(SDKがcli.jsを同梱)
-  Claude API(認証は ~/.claude の既存ログイン資格情報)
+        │  SDK内部(ユーザーのインストール済み claude CLI を起動)
+  Claude API(認証はユーザーの claude CLI のログイン資格情報に従う)
 ```
 
 ### 検討した代替案
@@ -43,11 +43,13 @@ Nodeサイドカー: claude-sidecar.cjs(esbuildバンドル、リソース同梱
 ### プロセス構成の要点
 
 - サイドカーは**開いているフォルダごとに1プロセス**。パネル初回表示時に遅延起動、フォルダを閉じたらkill。
-- ビルド時にesbuildで単一 `.cjs` にバンドルし、`src-tauri` のリソースとして同梱。実行時は `node <resolveResourceしたパス>` で起動。
+- ビルド時にesbuildでサイドカーコード+SDKのJS部分を単一 `.cjs` にバンドルし、リソースとして同梱。SDKのプラットフォーム別バイナリ(optionalDependencies)は同梱しない(external指定)。実行時は `node <リソースパス>` で起動。
+- **エージェント実行ファイルはユーザーのインストール済み claude CLI を利用**: サイドカーが起動時に検出(`where claude` → ネイティブ `.exe` はそのまま、npm版 `.cmd` シムは `node_modules/@anthropic-ai/claude-code/cli.js` を導出)し、`pathToClaudeCodeExecutable` に指定(cli.jsの場合は `executable: "node"` を併用)。検出失敗時は `error {fatal}` でi18n案内を表示。
 - 通信はstdioのJSON Linesのみ。**ポート不使用**のため、ポート割当・死活監視・プロキシ迂回(WinINET問題)は構造的に発生しない。
 - Rust側 `claude_sidecar.rs` は汎用stdioブリッジ(spawn / stdin 1行書込 / stdout行→Tauriイベントemit / kill)のみ。プロトコル内容には関知しない。既存 `spawn_background_process` はdetached起動でstdioを扱えないため流用しない。
-- 認証はSDK任せ(mdium側でAPIキーを扱わない)。
+- 認証はユーザーの claude CLI のログイン資格情報(サブスクリプション/APIキー)に従う。mdium側でAPIキーは扱わない。
 - 接続時に `node --version` で前提チェック。無ければi18n化した案内を表示。
+- リスク: CLI自動更新とSDKバージョンの互換性ズレ。SDKはpackage.jsonでピン留めし、プロトコルエラーは `error` イベントで表面化させる。
 
 ## サイドカー通信プロトコル(stdio JSON Lines)
 
