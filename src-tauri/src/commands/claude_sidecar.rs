@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{ChildStdin, Command, Stdio};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter};
 
 #[cfg(target_os = "windows")]
@@ -22,8 +22,12 @@ pub struct SidecarExit {
     pub code: Option<i32>,
 }
 
-fn stdin_map() -> &'static Mutex<HashMap<u32, ChildStdin>> {
-    static MAP: OnceLock<Mutex<HashMap<u32, ChildStdin>>> = OnceLock::new();
+// The map holds an Arc<Mutex<ChildStdin>> per sidecar so that a blocking
+// write on one sidecar's stdin only holds that sidecar's per-entry lock,
+// not the global map lock. This keeps spawn/kill/write for other sidecars
+// from stalling behind a single backed-up process.
+fn stdin_map() -> &'static Mutex<HashMap<u32, Arc<Mutex<ChildStdin>>>> {
+    static MAP: OnceLock<Mutex<HashMap<u32, Arc<Mutex<ChildStdin>>>>> = OnceLock::new();
     MAP.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -103,7 +107,7 @@ pub fn spawn_claude_sidecar(app: AppHandle, script_path: String, cwd: String) ->
     let id = child.id();
 
     let stdin = child.stdin.take().ok_or("sidecar stdin unavailable")?;
-    stdin_map().lock().unwrap().insert(id, stdin);
+    stdin_map().lock().unwrap().insert(id, Arc::new(Mutex::new(stdin)));
 
     let stdout = child.stdout.take().ok_or("sidecar stdout unavailable")?;
     let app_out = app.clone();
@@ -133,8 +137,14 @@ pub fn spawn_claude_sidecar(app: AppHandle, script_path: String, cwd: String) ->
 
 #[tauri::command]
 pub fn write_claude_sidecar(id: u32, line: String) -> Result<(), String> {
-    let mut map = stdin_map().lock().unwrap();
-    let stdin = map.get_mut(&id).ok_or("sidecar not running")?;
+    // Clone the per-sidecar Arc while holding the global lock only briefly,
+    // then drop the global lock before doing the blocking write so other
+    // sidecars' spawn/kill/write calls aren't blocked on this one's I/O.
+    let stdin_arc = {
+        let map = stdin_map().lock().unwrap();
+        map.get(&id).ok_or("sidecar not running")?.clone()
+    };
+    let mut stdin = stdin_arc.lock().unwrap();
     stdin
         .write_all(line.as_bytes())
         .and_then(|_| stdin.write_all(b"\n"))
@@ -148,14 +158,31 @@ pub fn kill_claude_sidecar(id: u32) -> Result<(), String> {
     stdin_map().lock().unwrap().remove(&id);
     #[cfg(target_os = "windows")]
     {
-        let _ = Command::new("taskkill")
+        let output = Command::new("taskkill")
             .args(["/PID", &id.to_string(), "/F", "/T"])
             .creation_flags(0x08000000)
-            .output();
+            .output()
+            .map_err(|e| format!("Failed to run taskkill: {}", e))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            // Ignore "not found" errors (process already exited)
+            if !stderr.contains("not found") {
+                return Err(format!("taskkill failed: {}", stderr));
+            }
+        }
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = Command::new("kill").args(["-9", &id.to_string()]).output();
+        let output = Command::new("kill")
+            .args(["-9", &id.to_string()])
+            .output()
+            .map_err(|e| format!("Failed to run kill: {}", e))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            if !stderr.contains("No such process") {
+                return Err(format!("kill failed: {}", stderr));
+            }
+        }
     }
     Ok(())
 }
