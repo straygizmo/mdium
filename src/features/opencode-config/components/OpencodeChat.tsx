@@ -15,6 +15,7 @@ import { useCompletion } from "../hooks/useCompletion";
 import { useInputHistoryStore, useInputHistoryNav } from "../hooks/useInputHistory";
 import { useInputUndoRedo } from "../hooks/useInputUndoRedo";
 import { useDividerDragVertical } from "@/shared/hooks/useDividerDragVertical";
+import { OpencodeUsagePopover } from "./OpencodeUsagePopover";
 import "./OpencodeChat.css";
 
 function computeLineColFromContext(text: string, pos: number) {
@@ -443,6 +444,7 @@ export function OpencodeChat() {
               ? t("ocChatConnected")
               : t("ocChatDisconnected")}
         </span>
+        <OpencodeUsagePopover />
         <button
           className="oc-chat__toolbar-btn oc-chat__toolbar-btn--right"
           onClick={createNewSession}
