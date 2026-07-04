@@ -27,4 +27,8 @@ describe("formatTokenCount", () => {
   it("abbreviates millions", () => {
     expect(formatTokenCount(2_500_000)).toBe("2.5M");
   });
+  it("rolls over to M at the rounding boundary", () => {
+    expect(formatTokenCount(999_949)).toBe("999.9k");
+    expect(formatTokenCount(999_950)).toBe("1.0M");
+  });
 });

@@ -12,7 +12,9 @@ export function formatUsageCost(cost: number): string {
 }
 
 export function formatTokenCount(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return String(n);
+  if (n < 1_000) return String(n);
+  const k = n / 1_000;
+  // Values that would round-display as "1000.0k" belong in the M branch.
+  if (k < 999.95) return `${k.toFixed(1)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
 }
