@@ -20,6 +20,7 @@
   "deny": "拒否",
   "toolRunning": "実行中...",
   "toolFailed": "失敗",
+  "toolDone": "✓",
   "model": "モデル",
   "modelDefault": "CLIの既定",
   "permissionMode": "許可モード",

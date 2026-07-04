@@ -20,6 +20,7 @@
   "deny": "Deny",
   "toolRunning": "Running...",
   "toolFailed": "Failed",
+  "toolDone": "✓",
   "model": "Model",
   "modelDefault": "CLI default",
   "permissionMode": "Permission mode",

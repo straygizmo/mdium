@@ -7,7 +7,7 @@ export function ToolUseCard({ part }: { part: ClaudeToolPart }) {
     ? t("toolRunning")
     : part.isError
       ? t("toolFailed")
-      : "✓";
+      : t("toolDone");
   return (
     <details className="claude-tool">
       <summary className="claude-tool__summary">
