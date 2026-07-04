@@ -32,7 +32,7 @@ interface ClaudeChatUIState {
   connecting: boolean;
   error: string | null;
   chat: ChatModelState;
-  pendingPermission: SidecarPermissionRequest | null;
+  pendingPermissions: SidecarPermissionRequest[];
   stallNotice: boolean;
   lastEventAt: number;
 }
@@ -42,7 +42,7 @@ export const useClaudeChatStore = create<ClaudeChatUIState>()(() => ({
   connecting: false,
   error: null,
   chat: emptyChatModel(),
-  pendingPermission: null,
+  pendingPermissions: [],
   stallNotice: false,
   lastEventAt: 0,
 }));
@@ -91,7 +91,10 @@ function handleSidecarMessage(msg: SidecarOutbound): void {
       break;
     }
     case "permission_request":
-      setState({ pendingPermission: msg, lastEventAt: Date.now() });
+      setState({
+        pendingPermissions: [...st.pendingPermissions, msg],
+        lastEventAt: Date.now(),
+      });
       break;
     case "error": {
       const message =
@@ -154,7 +157,16 @@ export async function doClaudeConnect(folder: string): Promise<void> {
         _sidecarId = null;
         _unsubscribe?.();
         _unsubscribe = null;
-        setState({ connected: false, connecting: false });
+        // A crash mid-turn must not leave Stop/permission cards stuck as
+        // dead controls: reset running state and drop any queued permission
+        // requests along with the connection state.
+        const current = useClaudeChatStore.getState();
+        setState({
+          connected: false,
+          connecting: false,
+          chat: { ...current.chat, running: false },
+          pendingPermissions: [],
+        });
       },
     });
     if (gen !== _generation) {
@@ -202,7 +214,7 @@ export async function doClaudeInterrupt(): Promise<void> {
     setState({ error: String(e) });
   }
   const st = useClaudeChatStore.getState();
-  setState({ chat: { ...st.chat, running: false }, pendingPermission: null });
+  setState({ chat: { ...st.chat, running: false }, pendingPermissions: [] });
 }
 
 export async function doClaudeRespondPermission(
@@ -210,7 +222,11 @@ export async function doClaudeRespondPermission(
   behavior: "allow" | "deny",
 ): Promise<void> {
   if (_sidecarId === null) return;
-  setState({ pendingPermission: null });
+  setState({
+    pendingPermissions: useClaudeChatStore
+      .getState()
+      .pendingPermissions.filter((p) => p.id !== id),
+  });
   try {
     await sendToSidecar(_sidecarId, { type: "permission_response", id, behavior });
   } catch (e) {
@@ -237,7 +253,7 @@ export async function killClaudeSidecar(): Promise<void> {
   useClaudeChatStore.setState({
     connected: false,
     connecting: false,
-    pendingPermission: null,
+    pendingPermissions: [],
     chat: emptyChatModel(),
   });
   if (id !== null) {
@@ -274,7 +290,10 @@ export function useClaudeChat() {
     connecting: state.connecting,
     error: state.error,
     chat: state.chat,
-    pendingPermission: state.pendingPermission,
+    // Consumer-facing API keeps the singular name/shape (only the oldest
+    // queued request is shown at a time); the store holds the full queue so
+    // requests don't overwrite each other (see pendingPermissions).
+    pendingPermission: state.pendingPermissions[0] ?? null,
     stallNotice: state.stallNotice,
     connect: doClaudeConnect,
     sendMessage: doClaudeSend,

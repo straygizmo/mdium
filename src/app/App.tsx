@@ -335,6 +335,14 @@ export function App() {
     };
   }, []);
 
+  // Closing the last open folder leaves no cwd for the Claude sidecar to
+  // operate on; kill it rather than let it linger against a stale folder.
+  useEffect(() => {
+    if (!activeFolderPath) {
+      void killClaudeSidecar();
+    }
+  }, [activeFolderPath]);
+
   // Force-hide editor for non-editable file types; normal files use per-tab state
   useEffect(() => {
     if (activeTab) {
