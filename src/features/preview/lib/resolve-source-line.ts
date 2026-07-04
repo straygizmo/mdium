@@ -6,6 +6,9 @@
 export function resolveSourceLine(target: HTMLElement): number | null {
   // Openable images have their own dblclick action (open as tab); let it win.
   if (target.closest("img[data-filepath]")) return null;
+  // Table cells (and their active inline-edit inputs) have their own dblclick
+  // action (inline cell edit); let it win instead of jumping the editor.
+  if (target.closest("th, td, input")) return null;
   const el = target.closest<HTMLElement>("[data-source-line]");
   if (!el) return null;
   const line = Number(el.dataset.sourceLine);

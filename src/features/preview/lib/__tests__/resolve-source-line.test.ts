@@ -43,6 +43,30 @@ describe("resolveSourceLine", () => {
     expect(resolveSourceLine(img)).toBe(3);
   });
 
+  it("returns null for a td inside an annotated table (has its own inline-edit dblclick action)", () => {
+    const root = render(
+      '<table data-source-line="5"><tbody><tr><td>cell</td></tr></tbody></table>',
+    );
+    const td = root.querySelector<HTMLElement>("td")!;
+    expect(resolveSourceLine(td)).toBeNull();
+  });
+
+  it("returns null for a th inside an annotated table (has its own inline-edit dblclick action)", () => {
+    const root = render(
+      '<table data-source-line="5"><thead><tr><th>head</th></tr></thead></table>',
+    );
+    const th = root.querySelector<HTMLElement>("th")!;
+    expect(resolveSourceLine(th)).toBeNull();
+  });
+
+  it("returns null for an input (active inline table-cell editor)", () => {
+    const root = render(
+      '<table data-source-line="5"><tbody><tr><td><input value="cell"></td></tr></tbody></table>',
+    );
+    const input = root.querySelector<HTMLElement>("input")!;
+    expect(resolveSourceLine(input)).toBeNull();
+  });
+
   it("returns null for non-positive or non-integer line values", () => {
     const zero = render('<p data-source-line="0">x</p>');
     expect(resolveSourceLine(zero.querySelector<HTMLElement>("p")!)).toBeNull();

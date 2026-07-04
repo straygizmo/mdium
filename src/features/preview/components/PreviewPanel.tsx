@@ -885,17 +885,31 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree, onJump
     return () => div.removeEventListener("dblclick", handler);
   }, [onOpenFile]);
 
-  // Double-click a rendered block to jump the editor to its source line
+  // Double-click a rendered block to jump the editor to its source line.
+  // No dependency array — the effect re-runs on every render, but the
+  // listenedElRef guard makes it a no-op unless contentRef.current has
+  // actually changed. This is needed because early-return render paths
+  // (video JSON / CSV / office) unmount and recreate the contentRef div
+  // while this component instance stays mounted, which would otherwise
+  // strand the listener on the old, detached div.
+  const jumpListenedElRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const div = contentRef.current;
     if (!div || !onJumpToLine) return;
+    // Already listening on this exact element — skip
+    if (div === jumpListenedElRef.current) return;
+    jumpListenedElRef.current = div;
+
     const handler = (e: MouseEvent) => {
       const line = resolveSourceLine(e.target as HTMLElement);
       if (line !== null) onJumpToLine(line);
     };
     div.addEventListener("dblclick", handler);
-    return () => div.removeEventListener("dblclick", handler);
-  }, [onJumpToLine]);
+    return () => {
+      div.removeEventListener("dblclick", handler);
+      jumpListenedElRef.current = null;
+    };
+  });
 
   // Search highlight
   const showSearch = useUiStore((s) => s.showSearch);
