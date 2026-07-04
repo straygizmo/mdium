@@ -5,7 +5,7 @@ import { applyTheme } from "@/shared/themes/apply-theme";
 import { getThemeById, DEFAULT_THEME_ID } from "@/shared/themes";
 import { syncProviderToOpencode } from "@/shared/lib/opencode-auth-sync";
 import { getDefaultRagSettings, normalizeRagSettings } from "@/features/rag/lib/rag-settings";
-import type { AiSettings, MediumSettings, RagSettings } from "@/shared/types";
+import type { AiSettings, MediumSettings, RagSettings, ReplacementSettings } from "@/shared/types";
 
 export type Language = "ja" | "en";
 
@@ -20,6 +20,11 @@ const DEFAULT_AI_SETTINGS: AiSettings = {
 
 const DEFAULT_MEDIUM_SETTINGS: MediumSettings = {
   apiToken: "",
+};
+
+const DEFAULT_REPLACEMENT_SETTINGS: ReplacementSettings = {
+  enabled: false,
+  rules: [],
 };
 
 export type SpeechModel = "Xenova/whisper-small" | "onnx-community/whisper-large-v3-turbo" | "onnx-community/moonshine-base-ONNX";
@@ -40,6 +45,7 @@ interface SettingsState {
   speechModel: SpeechModel;
   mediumSettings: MediumSettings;
   allowLlmVbaImport: boolean;
+  replacement: ReplacementSettings;
 
   setThemeId: (id: string) => void;
   setLanguage: (lang: Language) => void;
@@ -57,6 +63,7 @@ interface SettingsState {
   setSpeechModel: (model: SpeechModel) => void;
   setMediumSettings: (settings: MediumSettings) => void;
   setAllowLlmVbaImport: (enabled: boolean) => void;
+  setReplacement: (settings: ReplacementSettings) => void;
   initializeTheme: () => void;
 }
 
@@ -79,6 +86,7 @@ export const useSettingsStore = create<SettingsState>()(
       speechModel: "Xenova/whisper-small" as SpeechModel,
       mediumSettings: DEFAULT_MEDIUM_SETTINGS,
       allowLlmVbaImport: false,
+      replacement: DEFAULT_REPLACEMENT_SETTINGS,
 
       setThemeId: (id) => {
         const theme = getThemeById(id);
@@ -119,6 +127,7 @@ export const useSettingsStore = create<SettingsState>()(
       setSpeechModel: (model) => set({ speechModel: model }),
       setMediumSettings: (settings) => set({ mediumSettings: settings }),
       setAllowLlmVbaImport: (enabled) => set({ allowLlmVbaImport: enabled }),
+      setReplacement: (settings) => set({ replacement: settings }),
 
       initializeTheme: () => {
         const theme = getThemeById(get().themeId);
@@ -143,6 +152,7 @@ export const useSettingsStore = create<SettingsState>()(
         speechModel: state.speechModel,
         mediumSettings: state.mediumSettings,
         allowLlmVbaImport: state.allowLlmVbaImport,
+        replacement: state.replacement,
       }),
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<SettingsState>;
