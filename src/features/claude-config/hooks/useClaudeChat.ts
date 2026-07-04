@@ -228,6 +228,7 @@ export async function doClaudeNewSession(): Promise<void> {
 /** Kill the sidecar (app shutdown / folder close). Safe to call when idle. */
 export async function killClaudeSidecar(): Promise<void> {
   _generation++;
+  _pendingFolder = null;
   const id = _sidecarId;
   _sidecarId = null;
   _folder = null;
