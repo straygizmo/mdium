@@ -192,7 +192,17 @@
 .preview-panel__pptx-ai-btn {
   font-size: 0.85em;
   padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--text);
   cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.preview-panel__pptx-ai-btn:hover:not(:disabled) {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: white;
 }
 .preview-panel__pptx-ai-btn:disabled {
   opacity: 0.6;
