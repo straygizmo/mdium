@@ -10,6 +10,7 @@ import { OutlinePanel } from "./OutlinePanel";
 import { RagPanel } from "@/features/rag/components/RagPanel";
 import { OpencodeConfigPanel } from "@/features/opencode-config/components/OpencodeConfigPanel";
 import { GitPanel } from "@/features/git/components/GitPanel";
+import { ReplacementPanel } from "@/features/replacement/components/ReplacementPanel";
 import { useGitStore } from "@/stores/git-store";
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 import { useChatUIStore } from "@/features/opencode-config/hooks/useOpencodeChat";
@@ -125,6 +126,18 @@ export function LeftPanel({
             )}
           </button>
           <button
+            className={`left-panel__activity-btn ${leftPanel === "replacement" ? "left-panel__activity-btn--active" : ""}`}
+            onClick={() => { setLeftPanel("replacement"); setFolderLeftPanel("replacement"); }}
+            title={t("title", { ns: "replacement" })}
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="17 1 21 5 17 9" />
+              <path d="M3 11V9a4 4 0 0 1 4-4h14" />
+              <polyline points="7 23 3 19 7 15" />
+              <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+            </svg>
+          </button>
+          <button
             className={`left-panel__activity-btn ${leftPanel === "rag" ? "left-panel__activity-btn--active" : ""}`}
             onClick={() => { setLeftPanel("rag"); setFolderLeftPanel("rag"); }}
             title="RAG"
@@ -206,6 +219,7 @@ export function LeftPanel({
               </>
             )}
             {leftPanel === "git" && t("sourceControl", { ns: "git" }).toUpperCase()}
+            {leftPanel === "replacement" && t("title", { ns: "replacement" }).toUpperCase()}
           </span>
           {leftPanel === "folder" && !!activeFolderPath && (
             <div className="left-panel__section-header-actions">
@@ -361,6 +375,7 @@ export function LeftPanel({
           <OpencodeConfigPanel />
         )}
         {leftPanel === "git" && <GitPanel />}
+        {leftPanel === "replacement" && <ReplacementPanel />}
       </div>
       {showBatchConvert && (
         <BatchConvertModal
