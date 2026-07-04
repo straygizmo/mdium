@@ -224,3 +224,17 @@ export interface BuiltinCommand {
   agent?: string;
   model?: string;
 }
+
+/** A single masking rule: `from` (sensitive string) -> `to` (alias). */
+export interface ReplacementRule {
+  id: string;
+  from: string;
+  to: string;
+  enabled: boolean;
+}
+
+/** Replacement (masking) settings stored in the app settings store. */
+export interface ReplacementSettings {
+  enabled: boolean;
+  rules: ReplacementRule[];
+}
