@@ -53,6 +53,9 @@ let _folder: string | null = null;
 let _unsubscribe: (() => void) | null = null;
 // Prevents doClaudeConnect from running concurrently (guard-then-await race).
 let _connectInFlight = false;
+// Folder requested by a connect call that raced an in-flight connect; consumed
+// once the in-flight connect finishes so the request isn't silently dropped.
+let _pendingFolder: string | null = null;
 // Bumped whenever killClaudeSidecar runs so an in-flight connect attempt can
 // detect it was superseded and avoid publishing a now-orphaned sidecar.
 let _generation = 0;
@@ -75,7 +78,7 @@ function handleSidecarMessage(msg: SidecarOutbound): void {
         model: settings.model || undefined,
         permissionMode: settings.permissionMode,
         resumeSessionId: settings.lastSessionId ?? undefined,
-      });
+      }).catch((e) => setState({ error: String(e) }));
       setState({ connected: true, connecting: false, error: null });
       break;
     }
@@ -107,7 +110,10 @@ function handleSidecarMessage(msg: SidecarOutbound): void {
 
 export async function doClaudeConnect(folder: string): Promise<void> {
   if (_sidecarId !== null && _folder === folder) return;
-  if (_connectInFlight) return;
+  if (_connectInFlight) {
+    _pendingFolder = folder;
+    return;
+  }
   _connectInFlight = true;
   try {
     await killClaudeSidecar();
@@ -160,6 +166,9 @@ export async function doClaudeConnect(folder: string): Promise<void> {
     _unsubscribe = unsubscribe;
   } finally {
     _connectInFlight = false;
+    const pending = _pendingFolder;
+    _pendingFolder = null;
+    if (pending !== null) void doClaudeConnect(pending);
   }
 }
 
