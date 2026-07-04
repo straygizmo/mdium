@@ -29,6 +29,9 @@ import enCsv from "./locales/en/csv.json";
 import jaReplacement from "./locales/ja/replacement.json";
 import enReplacement from "./locales/en/replacement.json";
 
+import jaClaudeConfig from "./locales/ja/claude-config.json";
+import enClaudeConfig from "./locales/en/claude-config.json";
+
 const savedLanguage = localStorage.getItem("mdium-lang") ?? "ja";
 
 i18n.use(initReactI18next).init({
@@ -45,6 +48,7 @@ i18n.use(initReactI18next).init({
       video: jaVideo,
       csv: jaCsv,
       replacement: jaReplacement,
+      "claude-config": jaClaudeConfig,
     },
     en: {
       common: enCommon,
@@ -58,6 +62,7 @@ i18n.use(initReactI18next).init({
       video: enVideo,
       csv: enCsv,
       replacement: enReplacement,
+      "claude-config": enClaudeConfig,
     },
   },
   lng: savedLanguage,

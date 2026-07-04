@@ -188,6 +188,9 @@ export type OpencodeConfigTab = "rules" | "tools" | "agents" | "commands" | "mcp
 /** Opencode top-level tab */
 export type OpencodeTopTab = "chat" | "settings";
 
+/** Claude panel top-level tab */
+export type ClaudeTopTab = "chat" | "settings";
+
 /** Slidev dev server state for a given markdown file */
 export interface SlidevSession {
   /** Temp directory path */
