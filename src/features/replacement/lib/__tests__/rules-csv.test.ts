@@ -16,7 +16,7 @@ describe("parseRulesCsv", () => {
   });
 
   it("accepts LF line endings and a leading BOM", () => {
-    const csv = "﻿" + `${HEADER}\na,b,1\nc,d,0\n`;
+    const csv = "\uFEFF" + `${HEADER}\na,b,1\nc,d,0\n`;
     const result = parseRulesCsv(csv);
     expect(result.rows).toEqual([
       { from: "a", to: "b", enabled: true },

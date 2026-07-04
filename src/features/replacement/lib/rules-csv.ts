@@ -178,7 +178,7 @@ function escapeCsvField(value: string): string {
 /**
  * Serialize rules to the same 3-column CSV format accepted by
  * parseRulesCsv (round-trip safe). CRLF line endings for Excel. The caller
- * prepends a BOM ("﻿") when writing to disk.
+ * prepends a BOM ("\uFEFF") when writing to disk.
  */
 export function exportRulesCsv(rules: ReplacementRule[]): string {
   const lines = [
