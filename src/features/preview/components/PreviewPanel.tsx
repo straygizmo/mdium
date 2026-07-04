@@ -873,17 +873,31 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree, onJump
     };
   }, [html]);
 
-  // Double-click images in preview to open as tab
+  // Double-click images in preview to open as tab.
+  // No dependency array — the effect re-runs on every render, but the
+  // listenedElRef guard makes it a no-op unless contentRef.current has
+  // actually changed. This is needed because early-return render paths
+  // (video JSON / CSV / office) unmount and recreate the contentRef div
+  // while this component instance stays mounted, which would otherwise
+  // strand the listener on the old, detached div.
+  const openFileListenedElRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const div = contentRef.current;
     if (!div || !onOpenFile) return;
+    // Already listening on this exact element — skip
+    if (div === openFileListenedElRef.current) return;
+    openFileListenedElRef.current = div;
+
     const handler = (e: MouseEvent) => {
       const img = (e.target as HTMLElement).closest<HTMLImageElement>("img[data-filepath]");
       if (img) onOpenFile(img.dataset.filepath!);
     };
     div.addEventListener("dblclick", handler);
-    return () => div.removeEventListener("dblclick", handler);
-  }, [onOpenFile]);
+    return () => {
+      div.removeEventListener("dblclick", handler);
+      openFileListenedElRef.current = null;
+    };
+  });
 
   // Double-click a rendered block to jump the editor to its source line.
   // No dependency array — the effect re-runs on every render, but the
