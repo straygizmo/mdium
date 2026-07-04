@@ -1,10 +1,14 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSettingsStore } from "@/stores/settings-store";
 import { findDuplicateTos } from "@/shared/lib/replacement";
 import type { ReplacementRule } from "@/shared/types";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { showMessage } from "@/stores/dialog-store";
+import { showMessage, showConfirm } from "@/stores/dialog-store";
+import { useTabStore } from "@/stores/tab-store";
+import { useFileStore } from "@/stores/file-store";
+import { collectMdPaths, runBulkReplace } from "../lib/bulk-replace";
 import { parseRulesCsv, mergeRules, exportRulesCsv } from "../lib/rules-csv";
 import "./ReplacementPanel.css";
 
@@ -12,8 +16,13 @@ export function ReplacementPanel() {
   const { t } = useTranslation("replacement");
   const replacement = useSettingsStore((s) => s.replacement);
   const setReplacement = useSettingsStore((s) => s.setReplacement);
+  const activeFolderPath = useTabStore((s) => s.activeFolderPath);
+  const [bulkRunning, setBulkRunning] = useState(false);
 
   const duplicateTos = findDuplicateTos(replacement.rules);
+
+  const hasActiveRules = replacement.enabled &&
+    replacement.rules.some((r) => r.enabled && r.from && r.to);
 
   const updateRule = (id: string, patch: Partial<ReplacementRule>) => {
     setReplacement({
@@ -78,6 +87,66 @@ export function ReplacementPanel() {
       await showMessage(t("exportDone"));
     } catch (e) {
       await showMessage(String(e), { kind: "error" });
+    }
+  };
+
+  const handleBulk = async (direction: "forward" | "reverse") => {
+    if (!activeFolderPath) {
+      await showMessage(t("noFolder"), { kind: "warning" });
+      return;
+    }
+    const tree = useFileStore.getState().fileTrees[activeFolderPath] ?? [];
+    const allPaths = collectMdPaths(tree);
+    // Files with unsaved editor changes are excluded: rewriting them on disk
+    // would silently lose the user's in-memory edits on the next save.
+    const dirtyPaths = new Set(
+      useTabStore.getState().tabs
+        .filter((tab) => tab.dirty && tab.filePath)
+        .map((tab) => tab.filePath as string),
+    );
+    const paths = allPaths.filter((p) => !dirtyPaths.has(p));
+    const skippedDirty = allPaths.length - paths.length;
+    if (paths.length === 0) {
+      await showMessage(t("bulkNoTargets"), { kind: "warning" });
+      return;
+    }
+    const ok = await showConfirm(
+      t("bulkConfirm", { folder: activeFolderPath, count: paths.length }),
+      { kind: "warning" },
+    );
+    if (!ok) return;
+
+    setBulkRunning(true);
+    try {
+      const summary = await runBulkReplace(paths, replacement, direction);
+
+      // Reload clean tabs whose file was rewritten so the editor shows the
+      // new on-disk content.
+      const changed = new Set(summary.changedPaths);
+      for (const tab of useTabStore.getState().tabs) {
+        if (tab.filePath && changed.has(tab.filePath) && !tab.dirty) {
+          try {
+            const content = await invoke<string>("read_text_file", { path: tab.filePath });
+            useTabStore.getState().updateTabContent(tab.id, content);
+            useTabStore.getState().markClean(tab.id);
+          } catch {
+            // Tab reload is best-effort; the file itself was already rewritten.
+          }
+        }
+      }
+
+      const lines = [
+        t("bulkDone", {
+          files: summary.changedPaths.length,
+          replacements: summary.totalReplacements,
+        }),
+      ];
+      if (skippedDirty > 0) lines.push(t("bulkSkippedDirty", { count: skippedDirty }));
+      if (summary.failed.length > 0) lines.push(t("bulkFailed", { count: summary.failed.length }));
+      lines.push(t("ragReindexNote"));
+      await showMessage(lines.join("\n"));
+    } finally {
+      setBulkRunning(false);
     }
   };
 
@@ -149,6 +218,27 @@ export function ReplacementPanel() {
             {t("exportCsv")}
           </button>
         </div>
+      </div>
+
+      <div className="replacement-panel__section">
+        <span className="replacement-panel__section-title">{t("sectionBulk")}</span>
+        <div className="replacement-panel__row">
+          <button
+            className="replacement-panel__btn"
+            disabled={bulkRunning || !hasActiveRules}
+            onClick={() => handleBulk("forward")}
+          >
+            {t("bulkForward")}
+          </button>
+          <button
+            className="replacement-panel__btn"
+            disabled={bulkRunning || !hasActiveRules}
+            onClick={() => handleBulk("reverse")}
+          >
+            {t("bulkReverse")}
+          </button>
+        </div>
+        <p className="replacement-panel__note">{t("ragReindexNote")}</p>
       </div>
     </div>
   );
