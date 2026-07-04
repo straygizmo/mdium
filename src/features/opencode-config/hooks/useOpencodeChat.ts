@@ -864,10 +864,25 @@ function processSSEStream(stream: AsyncIterable<unknown>) {
                   .map((p: any) => p.text ?? "")
                   .join("");
                 if (textContent) {
+                  // Unmask for display; parts keep the raw (masked) SDK payload.
+                  const displayContent = applyReverse(textContent, replacementSettings());
+
+                  // Detect questions JSON and unlock loading
+                  const questions = tryParseQuestions(displayContent);
+                  if (questions) {
+                    const updated = [...s.messages];
+                    updated[updated.length - 1] = {
+                      ...last,
+                      content: "",
+                      parts: msgParts,
+                    };
+                    return { messages: updated, pendingQuestions: questions, loading: false };
+                  }
+
                   const updated = [...s.messages];
                   updated[updated.length - 1] = {
                     ...last,
-                    content: textContent,
+                    content: displayContent,
                     parts: msgParts,
                   };
                   return { messages: updated };
