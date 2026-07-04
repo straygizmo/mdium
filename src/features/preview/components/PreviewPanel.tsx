@@ -10,6 +10,7 @@ import {
   renderMarkdownWithSourceLines,
   splitFrontMatter,
 } from "@/shared/lib/markdown/render-with-source-lines";
+import { resolveSourceLine } from "@/features/preview/lib/resolve-source-line";
 
 import { usePreviewTableEdit } from "../hooks/usePreviewTableEdit";
 import { OfficePreview } from "./OfficePreview";
@@ -220,9 +221,10 @@ interface PreviewPanelProps {
   previewRef: React.RefObject<HTMLDivElement | null>;
   onOpenFile?: (path: string) => void;
   onRefreshFileTree?: () => void;
+  onJumpToLine?: (line: number) => void;
 }
 
-export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: PreviewPanelProps) {
+export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree, onJumpToLine }: PreviewPanelProps) {
   const { t, i18n } = useTranslation("editor");
   const activeTab = useTabStore((s) => s.getActiveTab());
   const themeId = useSettingsStore((s) => s.themeId);
@@ -882,6 +884,18 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree }: Prev
     div.addEventListener("dblclick", handler);
     return () => div.removeEventListener("dblclick", handler);
   }, [onOpenFile]);
+
+  // Double-click a rendered block to jump the editor to its source line
+  useEffect(() => {
+    const div = contentRef.current;
+    if (!div || !onJumpToLine) return;
+    const handler = (e: MouseEvent) => {
+      const line = resolveSourceLine(e.target as HTMLElement);
+      if (line !== null) onJumpToLine(line);
+    };
+    div.addEventListener("dblclick", handler);
+    return () => div.removeEventListener("dblclick", handler);
+  }, [onJumpToLine]);
 
   // Search highlight
   const showSearch = useUiStore((s) => s.showSearch);

@@ -17,6 +17,7 @@ import { useScrollSync } from "@/shared/hooks/useScrollSync";
 import { useDividerDrag } from "@/shared/hooks/useDividerDrag";
 import { useFileWatcher } from "@/shared/hooks/useFileWatcher";
 import { useRagBridge } from "@/features/rag/hooks/useRagBridge";
+import { jumpEditorToLine } from "@/features/editor/lib/jumpToLine";
 import { getThemeById } from "@/shared/themes";
 import { Toolbar } from "./components/Toolbar";
 import { FolderTabBar, TabBar } from "./components/TabBar";
@@ -94,6 +95,12 @@ export function App() {
 
   useScrollSync(editorRef, previewRef, editorVisible, activeTab?.id ?? "");
   const handleEditorDividerMouseDown = useDividerDrag(editorAreaRef, editorRatio, setEditorRatio);
+
+  const handleJumpToEditorLine = useCallback((line: number) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    jumpEditorToLine(editor, line);
+  }, []);
 
   // Per-tab editor/preview scroll position memory. React unmounts and remounts
   // the editor/preview DOM when switching between file types (e.g., .md ↔ .xlsm)
@@ -1201,6 +1208,7 @@ export function App() {
                       previewRef={previewRef}
                       onOpenFile={handleFileSelect}
                       onRefreshFileTree={loadFileTree}
+                      onJumpToLine={handleJumpToEditorLine}
                     />
                   </div>
                 </>
