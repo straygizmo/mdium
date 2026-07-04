@@ -22,6 +22,7 @@ import type { OpencodeMcpServer } from "@/shared/types";
 import { BUILTIN_AGENTS, BUILTIN_CUSTOM_TOOLS } from "../lib/builtin-registry";
 import { isAzureRefusal, isAzureProviderActive } from "../lib/provider-detection";
 import { evaluateStall, STALL_TICK_MS } from "./stall-watchdog";
+import { applyForward, applyReverse } from "@/shared/lib/replacement";
 
 export interface OpencodeMessage {
   role: "user" | "assistant";
@@ -104,6 +105,11 @@ async function wrapWithMdiumContext(userMessage: string): Promise<string> {
   } catch {
     return userMessage;
   }
+}
+
+/** Current replacement (masking) settings, read at call time. */
+function replacementSettings() {
+  return useSettingsStore.getState().replacement;
 }
 
 /**
@@ -528,14 +534,16 @@ function processSSEStream(stream: AsyncIterable<unknown>) {
                   .filter((p) => p.type === "text")
                   .map((p) => (p as any).text ?? "")
                   .join("");
+                // Unmask for display; parts keep the raw (masked) SDK payload.
+                const displayContent = applyReverse(textContent, replacementSettings());
                 updated[updated.length - 1] = {
                   ...last,
-                  content: textContent,
+                  content: displayContent,
                   parts: newParts,
                 };
 
                 // Detect questions JSON and unlock loading
-                const questions = tryParseQuestions(textContent);
+                const questions = tryParseQuestions(displayContent);
                 if (questions) {
                   updated[updated.length - 1] = { ...updated[updated.length - 1], content: "" };
                   return { messages: updated, pendingQuestions: questions, loading: false };
@@ -675,12 +683,21 @@ function processSSEStream(stream: AsyncIterable<unknown>) {
               if (prevIdx >= 0) {
                 const prevUser = state.messages[prevIdx];
                 if (prevUser?.role === "user" && prevUser.content && last.parts) {
+                  const rs = replacementSettings();
                   const userText = prevUser.content.trim();
                   const textParts = last.parts.filter((p) => p.type === "text");
-                  const firstText = textParts.length > 0 ? ((textParts[0] as any).text ?? "") : "";
+                  // Part texts are the raw masked payload — unmask before
+                  // comparing against the (original) user echo text.
+                  const firstText =
+                    textParts.length > 0
+                      ? applyReverse(((textParts[0] as any).text ?? ""), rs)
+                      : "";
                   if (firstText.trim().startsWith(userText)) {
                     const stripped = firstText.trim().slice(userText.length).trimStart();
-                    const restParts = textParts.slice(1).map((p) => (p as any).text ?? "").join("");
+                    const restParts = textParts
+                      .slice(1)
+                      .map((p) => applyReverse((p as any).text ?? "", rs))
+                      .join("");
                     rawText = stripped + restParts;
                   }
                 }
@@ -766,19 +783,22 @@ function processSSEStream(stream: AsyncIterable<unknown>) {
           // "Thinking..." forever (no part/idle event ever clears `loading`).
           const props = (ev as any).properties ?? {};
           if (props.sessionID && props.sessionID !== _currentSessionId) continue;
+          const rs = replacementSettings();
           const questions: PendingQuestion[] = Array.isArray(props.questions)
             ? props.questions
                 .map((q: any): PendingQuestion => ({
-                  question: String(q?.question ?? ""),
-                  header: typeof q?.header === "string" ? q.header : undefined,
+                  question: applyReverse(String(q?.question ?? ""), rs),
+                  header: typeof q?.header === "string" ? applyReverse(q.header, rs) : undefined,
                   options: Array.isArray(q?.options)
                     ? q.options
                         .map((o: any): QuestionOption => {
-                          if (typeof o === "string") return { label: o };
+                          if (typeof o === "string") return { label: applyReverse(o, rs) };
                           return {
-                            label: String(o?.label ?? o?.value ?? ""),
+                            label: applyReverse(String(o?.label ?? o?.value ?? ""), rs),
                             description:
-                              typeof o?.description === "string" ? o.description : undefined,
+                              typeof o?.description === "string"
+                                ? applyReverse(o.description, rs)
+                                : undefined,
                           };
                         })
                         .filter((o: QuestionOption) => o.label)
@@ -1216,7 +1236,7 @@ export async function doSendMessage(
   _pendingQuestionRequestId = null;
 
   // L1: inject active tab context into every user message payload (SDK call only)
-  const wrappedText = await wrapWithMdiumContext(text);
+  const wrappedText = applyForward(await wrapWithMdiumContext(text), replacementSettings());
 
   useChatUIStore.setState({ error: null });
   const sessionId = await ensureSessionId(text || "image");
@@ -1339,7 +1359,11 @@ export async function doAnswerQuestions(answers: string[][]) {
       new Request(`${_baseUrl}/question/${encodeURIComponent(reqId)}/reply`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ answers }),
+        body: JSON.stringify({
+          answers: answers.map((group) =>
+            group.map((a) => applyForward(a, replacementSettings())),
+          ),
+        }),
       }),
     );
     if (!res.ok) {
@@ -1422,7 +1446,10 @@ export async function doExecuteCommand(commandName: string, args?: string) {
   try {
     const res = await _client.session.command({
       path: { id: sessionId },
-      body: { command: commandName, arguments: args ?? "" },
+      body: {
+        command: commandName,
+        arguments: args ? applyForward(args, replacementSettings()) : "",
+      },
     });
     console.log("[opencode] session.command res:", res.data, res.error);
     if (res.error) {
@@ -1467,7 +1494,11 @@ async function doLoadSession(sessionId: string) {
         const info = (msg.info ?? msg) as Message;
         const parts = msg.parts ?? [];
         const textParts = parts.filter((p: any) => p.type === "text");
-        const textContent = textParts.map((p: any) => p.text ?? "").join("");
+        const rs = replacementSettings();
+        const textContent = applyReverse(
+          textParts.map((p: any) => p.text ?? "").join(""),
+          rs,
+        );
         const html =
           info.role === "assistant"
             ? await marked(textContent)
@@ -1480,7 +1511,10 @@ async function doLoadSession(sessionId: string) {
           // Append text content
           if (textContent) {
             const prevTextParts = (prev.parts ?? []).filter((p: any) => p.type === "text");
-            const prevTextContent = prevTextParts.map((p: any) => p.text ?? "").join("");
+            const prevTextContent = applyReverse(
+              prevTextParts.map((p: any) => p.text ?? "").join(""),
+              rs,
+            );
             prev.content = await marked(prevTextContent);
           }
         } else {
