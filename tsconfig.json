@@ -19,5 +19,5 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src", "packages/open-motion/core", "packages/open-motion/components"]
+  "include": ["src", "packages/open-motion/core", "packages/open-motion/components", "sidecar"]
 }

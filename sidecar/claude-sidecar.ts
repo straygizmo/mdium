@@ -59,8 +59,11 @@ const deps: SidecarCoreDeps = {
 async function main(): Promise<void> {
   resolved = await resolveClaudeExecutable();
   if (!resolved) {
-    // Fatal: mdium shows the "install claude CLI" guidance and stops.
+    // Fatal: mdium shows the "install claude CLI" guidance and stops. Return
+    // immediately so `ready` is never sent and, with no readline interface
+    // registered, the event loop is empty and the process exits on its own.
     send({ type: "error", message: "CLAUDE_CLI_NOT_FOUND", fatal: true });
+    return;
   }
   const core = new SidecarCore(deps);
   const rl = createInterface({ input: process.stdin });
