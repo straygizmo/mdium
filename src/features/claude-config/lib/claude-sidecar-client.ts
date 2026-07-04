@@ -11,9 +11,16 @@ interface SidecarExitPayload {
   code: number | null;
 }
 
+// `cwd` is kept as a parameter (rather than dropped) because callers still
+// need to route the user's project folder to the sidecar -- it just no
+// longer travels via the OS process's working directory (a security risk
+// when the folder is untrusted; see spawn_claude_sidecar in
+// src-tauri/src/commands/claude_sidecar.rs). Instead the caller sends it as
+// part of the `start_session` message once the sidecar is up.
 export async function spawnSidecar(cwd: string): Promise<number> {
+  void cwd;
   const scriptPath = await invoke<string>("resolve_claude_sidecar_path");
-  return invoke<number>("spawn_claude_sidecar", { scriptPath, cwd });
+  return invoke<number>("spawn_claude_sidecar", { scriptPath });
 }
 
 export function sendToSidecar(id: number, msg: SidecarInbound): Promise<void> {

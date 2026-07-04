@@ -79,7 +79,7 @@ pub fn resolve_claude_sidecar_path(app: AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn spawn_claude_sidecar(app: AppHandle, script_path: String, cwd: String) -> Result<u32, String> {
+pub fn spawn_claude_sidecar(app: AppHandle, script_path: String) -> Result<u32, String> {
     // Mirror pty.rs: go through cmd on Windows so PATH lookup of node matches
     // the rest of the app; stdio pipes pass through cmd to node unchanged.
     #[cfg(target_os = "windows")]
@@ -96,8 +96,19 @@ pub fn spawn_claude_sidecar(app: AppHandle, script_path: String, cwd: String) ->
         c
     };
 
-    cmd.current_dir(&cwd)
-        .stdin(Stdio::piped())
+    // SECURITY: never run the sidecar process with the user-opened project
+    // folder as its working directory. cmd.exe (and node's own module/PATH
+    // resolution) search the current directory before PATH, so a malicious
+    // node.exe/claude.cmd/etc. planted inside an untrusted opened folder
+    // would otherwise get executed in place of the real tool. Instead, use
+    // the sidecar script's own (trusted, app-controlled) parent directory as
+    // cwd -- or leave cwd unset if it has none. The user's folder is still
+    // passed to the sidecar via the `start_session` message, not the OS
+    // process cwd.
+    if let Some(parent) = PathBuf::from(&script_path).parent() {
+        cmd.current_dir(parent);
+    }
+    cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
