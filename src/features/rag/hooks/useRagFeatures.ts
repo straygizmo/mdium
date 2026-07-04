@@ -4,6 +4,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { marked } from "marked";
 import { useLocalEmbedding } from "./useLocalEmbedding";
 import { useSettingsStore } from "@/stores/settings-store";
+import { applyForward, applyReverse } from "@/shared/lib/replacement";
 import type { AiSettings } from "@/shared/types";
 
 interface RagStatus {
@@ -229,12 +230,18 @@ export function useRagFeatures({ folderPath, aiSettings, onOpenFile }: UseRagFea
       setLoading(true);
 
       try {
+        const rs = useSettingsStore.getState().replacement;
+        // The on-disk files (and thus the index) are masked by the bulk
+        // replace, so search with the masked query and send only masked
+        // strings to the LLM. The user-visible question stays original.
+        const maskedQuestion = applyForward(question, rs);
+
         await loadEmbed(ragSettings.embeddingModel);
-        const queryEmbed = await embed(question, "query");
+        const queryEmbed = await embed(maskedQuestion, "query");
         const allResults = await invoke<any[]>("rag_search", {
           folderPath,
           embedding: queryEmbed,
-          queryText: question,
+          queryText: maskedQuestion,
           limit: ragSettings.retrieveTopK,
           modelName: ragSettings.embeddingModel,
           searchMode: ragSettings.searchMode,
@@ -247,16 +254,21 @@ export function useRagFeatures({ folderPath, aiSettings, onOpenFile }: UseRagFea
             ? allResults
             : allResults.filter((r: any) => (r.score ?? 0) >= ragSettings.retrieveMinScore);
 
-        const context = results
-          .map((r: any) => `[${r.file}#${r.heading}]\n${r.text}`)
-          .join("\n\n---\n\n");
+        // Forward-mask the retrieved context as a safety net for indexes
+        // built from unmasked files (no-op when the index is already masked).
+        const context = applyForward(
+          results
+            .map((r: any) => `[${r.file}#${r.heading}]\n${r.text}`)
+            .join("\n\n---\n\n"),
+          rs,
+        );
 
         const systemPrompt =
           "You are a helpful assistant. Answer the user's question based on the following context from their documents. " +
           "Respond in the same language as the question. Include relevant source references.\n\n" +
           context;
 
-        const answer = await callAI(aiSettings, systemPrompt, question);
+        const answer = applyReverse(await callAI(aiSettings, systemPrompt, maskedQuestion), rs);
 
         const sources = results.map((r: any) => ({
           file: r.file,

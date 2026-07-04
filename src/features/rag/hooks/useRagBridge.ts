@@ -5,6 +5,7 @@ import { useLocalEmbedding } from "./useLocalEmbedding";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useTabStore } from "@/stores/tab-store";
 import { useChatUIStore } from "@/features/opencode-config/hooks/useOpencodeChat";
+import { applyForward } from "@/shared/lib/replacement";
 
 interface RagBridgeRequest {
   id: string;
@@ -134,10 +135,13 @@ export function useRagBridge() {
             ? allResults
             : allResults.filter((r: any) => (r.score ?? 0) >= rag.retrieveMinScore);
 
+        // Mask result text before it reaches the LLM via opencode. File
+        // paths are NOT masked — opencode tools resolve files by this path.
+        const repl = useSettingsStore.getState().replacement;
         return filtered.map((r: any) => ({
           file: r.file,
-          heading: r.heading ?? "",
-          content: r.text ?? "",
+          heading: applyForward(r.heading ?? "", repl),
+          content: applyForward(r.text ?? "", repl),
           line_number: r.line ?? 0,
           score: r.score ?? 0,
         }));
