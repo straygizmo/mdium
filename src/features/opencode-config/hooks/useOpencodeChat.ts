@@ -854,10 +854,10 @@ function processSSEStream(stream: AsyncIterable<unknown>) {
           // chat handling. Repeated events for the same message are deduped
           // by upsert inside recordUsage.
           try {
-            if (msgInfo && msgInfo.role === "assistant" && msgInfo.id && msgInfo.tokens) {
+            if (msgInfo && msgInfo.role === "assistant" && msgInfo.id && msgInfo.sessionID && msgInfo.tokens) {
               useOpencodeUsageStore.getState().recordUsage({
                 messageID: msgInfo.id,
-                sessionID: msgInfo.sessionID ?? "",
+                sessionID: msgInfo.sessionID,
                 providerID: msgInfo.providerID ?? "unknown",
                 modelID: msgInfo.modelID ?? "unknown",
                 cost: msgInfo.cost ?? 0,

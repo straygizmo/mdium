@@ -5,6 +5,7 @@ import { useOpencodeUsageStore } from "@/stores/opencode-usage-store";
 import {
   emptyTotals,
   localDayKey,
+  retentionCutoffDayKey,
   tokenSum,
   type UsageTotals,
 } from "@/stores/opencode-usage-core";
@@ -90,7 +91,11 @@ export function OpencodeUsagePopover() {
 
   const todayKey = localDayKey(new Date());
   const today = days[todayKey];
-  const dayKeys = Object.keys(days).sort().reverse();
+  const cutoff = retentionCutoffDayKey(todayKey);
+  const dayKeys = Object.keys(days)
+    .filter((k) => k >= cutoff)
+    .sort()
+    .reverse();
   const sessionHasUsage = sessionTotals.cost > 0 || tokenSum(sessionTotals) > 0;
 
   return (

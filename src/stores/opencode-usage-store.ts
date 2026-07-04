@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 import {
   applyUsageRecord,
   localDayKey,
+  sanitizePersistedDays,
   type DailyUsage,
   type MessageContrib,
   type UsageRecord,
@@ -50,6 +51,14 @@ export const useOpencodeUsageStore = create<OpencodeUsageState>()(
       // Only daily aggregates persist; session totals and per-message
       // contributions are rebuilt at runtime.
       partialize: (s) => ({ days: s.days }),
+      // Guard against corrupt/tampered persisted state: a wrong-shape `days`
+      // must never crash the toolbar on rehydration.
+      merge: (persistedState, currentState) => ({
+        ...currentState,
+        days: sanitizePersistedDays(
+          (persistedState as { days?: unknown } | undefined)?.days,
+        ),
+      }),
     },
   ),
 );

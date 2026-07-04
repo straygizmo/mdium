@@ -91,6 +91,33 @@ function shiftDayKey(day: string, deltaDays: number): string {
   return localDayKey(new Date(y, m - 1, d + deltaDays));
 }
 
+// Oldest day key still inside the retention window for the given day.
+export function retentionCutoffDayKey(today: string): string {
+  return shiftDayKey(today, -(RETENTION_DAYS - 1));
+}
+
+// Sanitize a persisted `days` value of unknown shape (localStorage can be
+// tampered with or partially written). Keeps only entries that look like
+// DailyUsage; anything else is dropped so rehydration can never crash the UI.
+export function sanitizePersistedDays(value: unknown): Record<string, DailyUsage> {
+  const days: Record<string, DailyUsage> = {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) return days;
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    const d = v as DailyUsage | null | undefined;
+    if (
+      d &&
+      typeof d === "object" &&
+      d.total &&
+      typeof d.total === "object" &&
+      d.byModel &&
+      typeof d.byModel === "object"
+    ) {
+      days[k] = d;
+    }
+  }
+  return days;
+}
+
 function totalsFromRecord(rec: Pick<UsageRecord, "cost" | "tokens">): UsageTotals {
   const t = rec.tokens ?? {};
   return {

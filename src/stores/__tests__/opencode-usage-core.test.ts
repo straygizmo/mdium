@@ -4,6 +4,8 @@ import {
   applyUsageRecord,
   emptyTotals,
   localDayKey,
+  retentionCutoffDayKey,
+  sanitizePersistedDays,
   sessionTotalsFromMessageInfos,
   tokenSum,
   type UsageAggregateState,
@@ -113,6 +115,49 @@ describe("applyUsageRecord", () => {
     expect(next.days[TODAY].total.cost).toBe(0);
     expect(next.days[TODAY].total.output).toBe(0);
     expect(next.days[TODAY].total.input).toBe(100);
+  });
+
+  it("moves a message's contribution to the new day when re-applied after rollover", () => {
+    let s = applyUsageRecord(emptyState(), rec(), "2026-07-03");
+    s = applyUsageRecord(
+      s,
+      rec({ cost: 0.02, tokens: { input: 200 } }),
+      "2026-07-04",
+    );
+    expect(s.days["2026-07-03"].total.input).toBe(0);
+    expect(s.days["2026-07-03"].total.cost).toBe(0);
+    expect(s.days["2026-07-04"].total.input).toBe(200);
+    expect(s.sessions["ses1"].input).toBe(200);
+    expect(s.messageContrib["msg1"].date).toBe("2026-07-04");
+  });
+});
+
+describe("sanitizePersistedDays", () => {
+  it("returns {} for null/array/non-object input", () => {
+    expect(sanitizePersistedDays(null)).toEqual({});
+    expect(sanitizePersistedDays([1, 2])).toEqual({});
+    expect(sanitizePersistedDays("junk")).toEqual({});
+  });
+
+  it("drops malformed entries and keeps valid ones", () => {
+    const valid = { total: emptyTotals(), byModel: {} };
+    const result = sanitizePersistedDays({
+      "2026-07-01": valid,
+      "2026-07-02": null,
+      "2026-07-03": { total: null, byModel: {} },
+      "2026-07-04": { total: emptyTotals() },
+    });
+    expect(Object.keys(result)).toEqual(["2026-07-01"]);
+  });
+});
+
+describe("retentionCutoffDayKey", () => {
+  it("returns the oldest kept day (today minus 29 days)", () => {
+    expect(retentionCutoffDayKey("2026-07-04")).toBe("2026-06-05");
+    // 2026 is not a leap year (Feb has 28 days), so 2026-03-01 minus 29 days
+    // is 2026-01-31 (verified against the same shiftDayKey logic already
+    // exercised by the "prunes day buckets older than RETENTION_DAYS" test).
+    expect(retentionCutoffDayKey("2026-03-01")).toBe("2026-01-31");
   });
 });
 
