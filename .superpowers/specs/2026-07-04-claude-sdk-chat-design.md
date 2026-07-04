@@ -89,7 +89,7 @@ src/features/claude-config/
 │  ├─ ToolUseCard.tsx          # 新規: ツール実行の折りたたみ表示
 │  ├─ PermissionCard.tsx       # 新規: 許可プロンプト(QuestionsCard相当のUX)
 │  ├─ sections/
-│  │  ├─ GeneralSection.tsx    # モデル選択 + permission mode
+│  │  ├─ GeneralSection.tsx    # モデル選択 + permission mode(開いているフォルダ別に保存)
 │  │  └─ RulesSection.tsx      # CLAUDE.md編集(グローバル/プロジェクト)
 │  ├─ McpServersTab.tsx        # 既存を接続(設定タブ「MCP」)
 │  └─ SkillsTab.tsx            # 既存を接続(設定タブ「Skills」)
