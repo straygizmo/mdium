@@ -9,6 +9,8 @@
   "pluginsDescription": "Enable or disable installed Claude Code plugins. This edits enabledPlugins in ~/.claude/settings.json.",
   "pluginsEmpty": "No plugins installed.",
   "pluginApplyNotice": "Changes apply to new chat sessions.",
+  "pluginsDocsUrl": "https://docs.claude.com/en/docs/claude-code/plugins",
+  "pluginsSavePath": "Save to",
   "noFolderOpen": "Open a folder to use Claude.",
   "connect": "Connect",
   "reconnect": "Reconnect",

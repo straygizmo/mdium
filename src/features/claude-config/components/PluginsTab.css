@@ -1,59 +1,132 @@
+/* Claude Plugins tab — styled to match the opencode Plugins section. */
+
 .plugins-tab {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   padding: 12px;
 }
 
-.plugins-tab__desc {
-  margin: 0;
+/* Hint / description text */
+.plugins-tab__hint {
   font-size: 12px;
-  opacity: 0.75;
+  color: var(--text-muted);
+  line-height: 1.6;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.plugins-tab__doc-link {
+  text-decoration: none;
+  cursor: pointer;
 }
 
 .plugins-tab__empty {
-  opacity: 0.6;
   font-size: 13px;
-  padding: 16px 0;
+  color: var(--text-muted);
   text-align: center;
-}
-
-.plugins-tab__list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  padding: 16px 0;
 }
 
 .plugins-tab__item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.3));
-  border-radius: 6px;
-  cursor: pointer;
+  justify-content: space-between;
+  padding: 6px 8px;
+  margin-bottom: 4px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.plugins-tab__item--disabled {
+  opacity: 0.45;
+}
+
+.plugins-tab__item--disabled .plugins-tab__toggle {
+  opacity: 1;
+}
+
+.plugins-tab__item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
 }
 
 .plugins-tab__item-name {
+  font-size: 13px;
   font-weight: 600;
+  color: var(--text);
 }
 
-.plugins-tab__item-market {
+.plugins-tab__item-detail {
   font-size: 11px;
-  opacity: 0.6;
-  border: 1px solid rgba(128, 128, 128, 0.4);
-  border-radius: 4px;
-  padding: 1px 6px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.plugins-tab__item-version {
-  margin-left: auto;
-  font-size: 11px;
-  opacity: 0.6;
+.plugins-tab__item-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
-.plugins-tab__notice {
-  margin: 0;
+/* Toggle switch (mirrors .oc-section__toggle) */
+.plugins-tab__toggle {
+  display: flex;
+  align-items: center;
+  padding: 0;
+  cursor: pointer;
+}
+
+.plugins-tab__toggle input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 36px;
+  height: 20px;
+  background: var(--text-muted);
+  border-radius: 10px;
+  position: relative;
+  cursor: pointer;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+
+.plugins-tab__toggle input[type="checkbox"]::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  background: white;
+  border-radius: 50%;
+  transition: transform 0.2s;
+}
+
+.plugins-tab__toggle input[type="checkbox"]:checked {
+  background: var(--accent, #4f8ff7);
+}
+
+.plugins-tab__toggle input[type="checkbox"]:checked::after {
+  transform: translateX(16px);
+}
+
+/* File path hint */
+.plugins-tab__path-hint {
   font-size: 11px;
-  opacity: 0.6;
+  font-family: "Consolas", "Monaco", "Courier New", monospace;
+  color: var(--text-muted);
+  margin-top: 8px;
+  flex-shrink: 0;
 }

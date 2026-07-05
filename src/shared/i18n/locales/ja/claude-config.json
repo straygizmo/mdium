@@ -9,6 +9,8 @@
   "pluginsDescription": "インストール済みの Claude Code プラグインの有効/無効を切り替えます。~/.claude/settings.json の enabledPlugins を編集します。",
   "pluginsEmpty": "インストール済みのプラグインはありません。",
   "pluginApplyNotice": "変更は新しいチャットセッションから反映されます。",
+  "pluginsDocsUrl": "https://docs.claude.com/en/docs/claude-code/plugins",
+  "pluginsSavePath": "保存先",
   "noFolderOpen": "Claudeを使うにはフォルダを開いてください。",
   "connect": "接続",
   "reconnect": "再接続",
