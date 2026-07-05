@@ -2,8 +2,10 @@
 import { describe, expect, it } from "vitest";
 import {
   centeredScrollTop,
+  centeredScrollTopFromPixel,
   jumpEditorToLine,
   lineStartOffset,
+  measureVisualLineTop,
 } from "../jumpToLine";
 
 describe("lineStartOffset", () => {
@@ -53,7 +55,59 @@ describe("centeredScrollTop", () => {
   });
 });
 
+describe("centeredScrollTopFromPixel", () => {
+  it("centers the measured pixel top in the viewport", () => {
+    // line top at 980px, lineHeight 20, clientHeight 400: 980 - 200 + 10 = 790
+    expect(centeredScrollTopFromPixel(980, 20, 400)).toBe(790);
+  });
+
+  it("never returns a negative scrollTop", () => {
+    expect(centeredScrollTopFromPixel(0, 20, 400)).toBe(0);
+    expect(centeredScrollTopFromPixel(50, 20, 400)).toBe(0);
+  });
+});
+
+describe("measureVisualLineTop", () => {
+  it("returns null when the environment cannot lay out text (no layout engine)", () => {
+    const editor = document.createElement("textarea");
+    editor.value = "one\ntwo\nthree";
+    document.body.appendChild(editor);
+
+    // happy-dom has no layout engine, so measurement must report "unavailable"
+    // instead of a bogus 0 so callers fall back to the line-based estimate.
+    expect(measureVisualLineTop(editor, 8)).toBeNull();
+    editor.remove();
+  });
+
+  it("does not leave the measurement mirror in the DOM", () => {
+    const editor = document.createElement("textarea");
+    editor.value = "one\ntwo\nthree";
+    document.body.appendChild(editor);
+    const before = document.body.childElementCount;
+
+    measureVisualLineTop(editor, 8);
+
+    expect(document.body.childElementCount).toBe(before);
+    editor.remove();
+  });
+});
+
 describe("jumpEditorToLine", () => {
+  it("flags the jump scroll so scroll sync skips it, then clears the flag", async () => {
+    const editor = document.createElement("textarea");
+    editor.value = "one\ntwo\nthree";
+    document.body.appendChild(editor);
+
+    jumpEditorToLine(editor, 3);
+    expect(editor.dataset.jumpScroll).toBe("1");
+
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    );
+    expect(editor.dataset.jumpScroll).toBeUndefined();
+    editor.remove();
+  });
+
   it("focuses the editor and places the caret at the line start", () => {
     const editor = document.createElement("textarea");
     editor.value = "one\ntwo\nthree";

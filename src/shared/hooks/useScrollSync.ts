@@ -146,6 +146,9 @@ export function useScrollSync(
 
     const syncFromEditor = () => {
       if (isSyncingRef.current) return;
+      // Programmatic jump from a preview double-click: the preview is already
+      // at the spot the user clicked, so don't drag it away.
+      if (editor.dataset.jumpScroll) return;
       if (markers.length === 0) return;
       if (lineHeight <= 0) measureLineHeight();
       isSyncingRef.current = true;
