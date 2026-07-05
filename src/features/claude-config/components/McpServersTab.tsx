@@ -26,14 +26,22 @@ export function McpServersTab() {
   const serverEntries = Object.entries(globalMcpServers);
 
   const handleSave = async (name: string, server: McpServer) => {
-    await saveGlobalMcpServer(name, server);
+    try {
+      await saveGlobalMcpServer(name, server);
+    } catch {
+      return; // store already reported the error
+    }
     setEditing(null);
     setAdding(false);
   };
 
   const handleDelete = async (name: string) => {
     if (!(await showConfirm(t("mcpDeleteConfirm"), { kind: "warning" }))) return;
-    await deleteGlobalMcpServer(name);
+    try {
+      await deleteGlobalMcpServer(name);
+    } catch {
+      // store already reported the error
+    }
   };
 
   if (adding || editing !== null) {
@@ -67,7 +75,13 @@ export function McpServersTab() {
               <div className="mcp-servers-tab__item-actions">
                 <button
                   className={`mcp-servers-tab__toggle-btn ${server.disabled ? "mcp-servers-tab__toggle-btn--off" : ""}`}
-                  onClick={() => toggleGlobalMcpServer(name)}
+                  onClick={async () => {
+                    try {
+                      await toggleGlobalMcpServer(name);
+                    } catch {
+                      // store already reported the error
+                    }
+                  }}
                   title={server.disabled ? t("mcpDisabled") : t("mcpEnabled")}
                 >
                   {server.disabled ? t("mcpDisabled") : t("mcpEnabled")}

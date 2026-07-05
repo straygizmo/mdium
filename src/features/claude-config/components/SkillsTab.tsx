@@ -23,14 +23,22 @@ export function SkillsTab() {
   }, [loadGlobalSkills]);
 
   const handleSave = async (skill: SkillInfo) => {
-    await saveGlobalSkill(skill);
+    try {
+      await saveGlobalSkill(skill);
+    } catch {
+      return; // store already reported the error
+    }
     setEditing(null);
     setAdding(false);
   };
 
   const handleDelete = async (dirName: string) => {
     if (!(await showConfirm(t("skillDeleteConfirm"), { kind: "warning" }))) return;
-    await deleteGlobalSkill(dirName);
+    try {
+      await deleteGlobalSkill(dirName);
+    } catch {
+      // store already reported the error
+    }
   };
 
   if (adding || editing !== null) {

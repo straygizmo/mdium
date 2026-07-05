@@ -66,7 +66,13 @@ export function PluginsTab() {
                 <input
                   type="checkbox"
                   checked={p.enabled}
-                  onChange={(e) => setClaudePluginEnabled(p.key, e.target.checked)}
+                  onChange={async (e) => {
+                    try {
+                      await setClaudePluginEnabled(p.key, e.target.checked);
+                    } catch {
+                      // store already reported the error
+                    }
+                  }}
                 />
               </label>
             </div>
