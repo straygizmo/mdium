@@ -1,6 +1,13 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import type { McpServer, SkillInfo } from "@/shared/types";
+import {
+  mergePluginList,
+  toggleEnabledPlugins,
+  extractInstalledPlugins,
+  extractEnabledPlugins,
+  type PluginListItem,
+} from "@/features/claude-config/lib/plugins";
 
 interface ClaudeConfigState {
   // Global MCP
@@ -11,6 +18,10 @@ interface ClaudeConfigState {
   globalSkills: SkillInfo[];
   // Project Skills
   projectSkills: SkillInfo[];
+  // Claude plugins (user-global ~/.claude/settings.json)
+  claudePlugins: PluginListItem[];
+  loadClaudePlugins: () => Promise<void>;
+  setClaudePluginEnabled: (key: string, enabled: boolean) => Promise<void>;
 
   // Load
   loadGlobalMcp: () => Promise<void>;
@@ -93,6 +104,7 @@ export const useClaudeConfigStore = create<ClaudeConfigState>()((set, get) => ({
   projectMcpServers: {},
   globalSkills: [],
   projectSkills: [],
+  claudePlugins: [],
 
   loadGlobalMcp: async () => {
     const home = await getHomePath();
@@ -118,6 +130,35 @@ export const useClaudeConfigStore = create<ClaudeConfigState>()((set, get) => ({
     const baseDir = `${folderPath}/.claude`;
     const skills = await invoke<SkillInfo[]>("list_skills", { baseDir });
     set({ projectSkills: skills.map(mapSkillEntry) });
+  },
+
+  loadClaudePlugins: async () => {
+    const home = await getHomePath();
+    const installedRaw = await invoke<string>("read_json_file", {
+      path: `${home}/.claude/plugins/installed_plugins.json`,
+    });
+    const settingsRaw = await invoke<string>("read_json_file", {
+      path: `${home}/.claude/settings.json`,
+    });
+    const installed = extractInstalledPlugins(installedRaw);
+    const enabled = extractEnabledPlugins(settingsRaw);
+    set({ claudePlugins: mergePluginList(installed, enabled) });
+  },
+
+  setClaudePluginEnabled: async (key, enabled) => {
+    const home = await getHomePath();
+    const path = `${home}/.claude/settings.json`;
+    const raw = await invoke<string>("read_json_file", { path });
+    let json: Record<string, unknown>;
+    try {
+      json = JSON.parse(raw);
+    } catch {
+      json = {};
+    }
+    const enabledPlugins = extractEnabledPlugins(raw);
+    json.enabledPlugins = toggleEnabledPlugins(enabledPlugins, key, enabled);
+    await invoke("write_json_file", { path, content: JSON.stringify(json, null, 2) });
+    await get().loadClaudePlugins();
   },
 
   // Global MCP
