@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import type { McpServer, SkillInfo } from "@/shared/types";
+import { guardWrite } from "./claude-config-write-guard";
 import {
   mergePluginList,
   toggleEnabledPlugins,
@@ -146,104 +147,126 @@ export const useClaudeConfigStore = create<ClaudeConfigState>()((set, get) => ({
   },
 
   setClaudePluginEnabled: async (key, enabled) => {
-    const home = await getHomePath();
-    const path = `${home}/.claude/settings.json`;
-    const raw = await invoke<string>("read_json_file", { path });
-    let json: Record<string, unknown>;
-    try {
-      json = JSON.parse(raw);
-    } catch {
-      json = {};
-    }
-    const enabledPlugins = extractEnabledPlugins(raw);
-    json.enabledPlugins = toggleEnabledPlugins(enabledPlugins, key, enabled);
-    await invoke("write_json_file", { path, content: JSON.stringify(json, null, 2) });
-    await get().loadClaudePlugins();
+    return guardWrite(async () => {
+      const home = await getHomePath();
+      const path = `${home}/.claude/settings.json`;
+      const raw = await invoke<string>("read_json_file", { path });
+      let json: Record<string, unknown>;
+      try {
+        json = JSON.parse(raw);
+      } catch {
+        json = {};
+      }
+      const enabledPlugins = extractEnabledPlugins(raw);
+      json.enabledPlugins = toggleEnabledPlugins(enabledPlugins, key, enabled);
+      await invoke("write_json_file", { path, content: JSON.stringify(json, null, 2) });
+      await get().loadClaudePlugins();
+    });
   },
 
   // Global MCP
   saveGlobalMcpServer: async (name, server) => {
-    const home = await getHomePath();
-    const path = `${home}/.claude.json`;
-    const servers = { ...get().globalMcpServers, [name]: server };
-    await writeMcpToFile(path, servers);
-    set({ globalMcpServers: servers });
+    return guardWrite(async () => {
+      const home = await getHomePath();
+      const path = `${home}/.claude.json`;
+      const servers = { ...get().globalMcpServers, [name]: server };
+      await writeMcpToFile(path, servers);
+      set({ globalMcpServers: servers });
+    });
   },
 
   deleteGlobalMcpServer: async (name) => {
-    const home = await getHomePath();
-    const path = `${home}/.claude.json`;
-    const servers = { ...get().globalMcpServers };
-    delete servers[name];
-    await writeMcpToFile(path, servers);
-    set({ globalMcpServers: servers });
+    return guardWrite(async () => {
+      const home = await getHomePath();
+      const path = `${home}/.claude.json`;
+      const servers = { ...get().globalMcpServers };
+      delete servers[name];
+      await writeMcpToFile(path, servers);
+      set({ globalMcpServers: servers });
+    });
   },
 
   toggleGlobalMcpServer: async (name) => {
-    const home = await getHomePath();
-    const path = `${home}/.claude.json`;
-    const servers = { ...get().globalMcpServers };
-    if (servers[name]) {
-      servers[name] = { ...servers[name], disabled: !servers[name].disabled };
-    }
-    await writeMcpToFile(path, servers);
-    set({ globalMcpServers: servers });
+    return guardWrite(async () => {
+      const home = await getHomePath();
+      const path = `${home}/.claude.json`;
+      const servers = { ...get().globalMcpServers };
+      if (servers[name]) {
+        servers[name] = { ...servers[name], disabled: !servers[name].disabled };
+      }
+      await writeMcpToFile(path, servers);
+      set({ globalMcpServers: servers });
+    });
   },
 
   // Project MCP
   saveProjectMcpServer: async (folderPath, name, server) => {
-    const path = `${folderPath}/.mcp.json`;
-    const servers = { ...get().projectMcpServers, [name]: server };
-    await writeMcpToFile(path, servers);
-    set({ projectMcpServers: servers });
+    return guardWrite(async () => {
+      const path = `${folderPath}/.mcp.json`;
+      const servers = { ...get().projectMcpServers, [name]: server };
+      await writeMcpToFile(path, servers);
+      set({ projectMcpServers: servers });
+    });
   },
 
   deleteProjectMcpServer: async (folderPath, name) => {
-    const path = `${folderPath}/.mcp.json`;
-    const servers = { ...get().projectMcpServers };
-    delete servers[name];
-    await writeMcpToFile(path, servers);
-    set({ projectMcpServers: servers });
+    return guardWrite(async () => {
+      const path = `${folderPath}/.mcp.json`;
+      const servers = { ...get().projectMcpServers };
+      delete servers[name];
+      await writeMcpToFile(path, servers);
+      set({ projectMcpServers: servers });
+    });
   },
 
   toggleProjectMcpServer: async (folderPath, name) => {
-    const path = `${folderPath}/.mcp.json`;
-    const servers = { ...get().projectMcpServers };
-    if (servers[name]) {
-      servers[name] = { ...servers[name], disabled: !servers[name].disabled };
-    }
-    await writeMcpToFile(path, servers);
-    set({ projectMcpServers: servers });
+    return guardWrite(async () => {
+      const path = `${folderPath}/.mcp.json`;
+      const servers = { ...get().projectMcpServers };
+      if (servers[name]) {
+        servers[name] = { ...servers[name], disabled: !servers[name].disabled };
+      }
+      await writeMcpToFile(path, servers);
+      set({ projectMcpServers: servers });
+    });
   },
 
   // Global Skills
   saveGlobalSkill: async (skill) => {
-    const home = await getHomePath();
-    const baseDir = `${home}/.claude`;
-    const content = buildSkillContent(skill);
-    await invoke("write_skill", { baseDir, dirName: skill.dirName, content });
-    await get().loadGlobalSkills();
+    return guardWrite(async () => {
+      const home = await getHomePath();
+      const baseDir = `${home}/.claude`;
+      const content = buildSkillContent(skill);
+      await invoke("write_skill", { baseDir, dirName: skill.dirName, content });
+      await get().loadGlobalSkills();
+    });
   },
 
   deleteGlobalSkill: async (dirName) => {
-    const home = await getHomePath();
-    const baseDir = `${home}/.claude`;
-    await invoke("delete_skill", { baseDir, dirName });
-    await get().loadGlobalSkills();
+    return guardWrite(async () => {
+      const home = await getHomePath();
+      const baseDir = `${home}/.claude`;
+      await invoke("delete_skill", { baseDir, dirName });
+      await get().loadGlobalSkills();
+    });
   },
 
   // Project Skills
   saveProjectSkill: async (folderPath, skill) => {
-    const baseDir = `${folderPath}/.claude`;
-    const content = buildSkillContent(skill);
-    await invoke("write_skill", { baseDir, dirName: skill.dirName, content });
-    await get().loadProjectSkills(folderPath);
+    return guardWrite(async () => {
+      const baseDir = `${folderPath}/.claude`;
+      const content = buildSkillContent(skill);
+      await invoke("write_skill", { baseDir, dirName: skill.dirName, content });
+      await get().loadProjectSkills(folderPath);
+    });
   },
 
   deleteProjectSkill: async (folderPath, dirName) => {
-    const baseDir = `${folderPath}/.claude`;
-    await invoke("delete_skill", { baseDir, dirName });
-    await get().loadProjectSkills(folderPath);
+    return guardWrite(async () => {
+      const baseDir = `${folderPath}/.claude`;
+      await invoke("delete_skill", { baseDir, dirName });
+      await get().loadProjectSkills(folderPath);
+    });
   },
 }));
 
