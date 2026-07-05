@@ -1,8 +1,10 @@
 import { useEffect } from "react";
 import { create } from "zustand";
+import { invoke } from "@tauri-apps/api/core";
 import i18n from "@/shared/i18n";
 import { useTabStore } from "@/stores/tab-store";
 import { useClaudeSessionStore } from "@/stores/claude-session-store";
+import { parseTranscript } from "../lib/claude-transcript";
 import { ensureCommand, NODE_INSTALL_URL } from "@/shared/lib/ensureCommand";
 import {
   evaluateStall,
@@ -27,6 +29,13 @@ import type {
 
 export const CLAUDE_INSTALL_URL = "https://code.claude.com/docs/";
 
+export interface ClaudeSessionInfo {
+  id: string;
+  title: string;
+  /** Milliseconds since the Unix epoch (transcript last-modified time). */
+  updatedAt: number;
+}
+
 interface ClaudeChatUIState {
   connected: boolean;
   connecting: boolean;
@@ -35,6 +44,10 @@ interface ClaudeChatUIState {
   pendingPermissions: SidecarPermissionRequest[];
   stallNotice: boolean;
   lastEventAt: number;
+  sessions: ClaudeSessionInfo[];
+  // The `claude` CLI could not be found on the machine; surfaced as a distinct
+  // status so the badge can say "CLI not installed" instead of "disconnected".
+  cliMissing: boolean;
 }
 
 export const useClaudeChatStore = create<ClaudeChatUIState>()(() => ({
@@ -45,6 +58,8 @@ export const useClaudeChatStore = create<ClaudeChatUIState>()(() => ({
   pendingPermissions: [],
   stallNotice: false,
   lastEventAt: 0,
+  cliMissing: false,
+  sessions: [],
 }));
 
 // Module-level singleton connection (mirrors the useOpencodeChat pattern).
@@ -97,11 +112,14 @@ function handleSidecarMessage(msg: SidecarOutbound): void {
       });
       break;
     case "error": {
-      const message =
-        msg.message === "CLAUDE_CLI_NOT_FOUND"
-          ? i18n.t("claudeCliNotFound", { ns: "claude-config" })
-          : msg.message;
-      setState({ error: message });
+      // The message may be the bare sentinel (from the entry point) or wrapped
+      // as "Error: CLAUDE_CLI_NOT_FOUND" (from the SDK start path), so match on
+      // substring.
+      const cliMissing = msg.message.includes("CLAUDE_CLI_NOT_FOUND");
+      const message = cliMissing
+        ? i18n.t("claudeCliNotFound", { ns: "claude-config" })
+        : msg.message;
+      setState({ error: message, ...(cliMissing ? { cliMissing: true } : {}) });
       if (msg.fatal) setState({ connected: false, connecting: false });
       break;
     }
@@ -134,7 +152,7 @@ export async function doClaudeConnect(folder: string): Promise<void> {
       return;
     }
 
-    setState({ connecting: true, error: null, chat: emptyChatModel() });
+    setState({ connecting: true, error: null, chat: emptyChatModel(), cliMissing: false });
     _folder = folder;
     let id: number;
     try {
@@ -241,6 +259,70 @@ export async function doClaudeNewSession(): Promise<void> {
   if (folder) await doClaudeConnect(folder);
 }
 
+/** The folder whose sessions we operate on: the live one, or the active tab's. */
+function currentFolder(): string | null {
+  return _folder ?? useTabStore.getState().activeFolderPath;
+}
+
+interface RawClaudeSession {
+  id: string;
+  title: string;
+  updated_at: number;
+}
+
+/** Load the list of past Claude sessions for the current folder into the store. */
+export async function doClaudeGetSessions(): Promise<void> {
+  const folder = currentFolder();
+  if (!folder) return;
+  try {
+    const raw = await invoke<RawClaudeSession[]>("list_claude_sessions", { folder });
+    setState({
+      sessions: raw.map((s) => ({ id: s.id, title: s.title, updatedAt: s.updated_at })),
+    });
+  } catch (e) {
+    setState({ error: String(e) });
+  }
+}
+
+/**
+ * Restore a past session: reconnect the sidecar resuming that session id (so new
+ * turns continue it) and reconstruct its transcript for display. The transcript
+ * is applied after connect so the connecting-time reset doesn't wipe it.
+ */
+export async function doClaudeLoadSession(id: string): Promise<void> {
+  const folder = currentFolder();
+  if (!folder) return;
+  useClaudeSessionStore.getState().setLastSessionId(folder, id);
+  await killClaudeSidecar();
+  await doClaudeConnect(folder);
+  try {
+    const raw = await invoke<string>("read_claude_session", { folder, sessionId: id });
+    const messages = parseTranscript(raw);
+    const st = useClaudeChatStore.getState();
+    setState({ chat: { ...st.chat, messages, sessionId: id } });
+  } catch (e) {
+    setState({ error: String(e) });
+  }
+}
+
+/** Delete a past session's transcript and drop it from the list. */
+export async function doClaudeDeleteSession(id: string): Promise<void> {
+  const folder = currentFolder();
+  if (!folder) return;
+  try {
+    await invoke("delete_claude_session", { folder, sessionId: id });
+    // If the deleted session was queued for resume, forget it.
+    if (useClaudeSessionStore.getState().getFolderSettings(folder).lastSessionId === id) {
+      useClaudeSessionStore.getState().setLastSessionId(folder, null);
+    }
+    setState({
+      sessions: useClaudeChatStore.getState().sessions.filter((s) => s.id !== id),
+    });
+  } catch (e) {
+    setState({ error: String(e) });
+  }
+}
+
 /** Kill the sidecar (app shutdown / folder close). Safe to call when idle. */
 export async function killClaudeSidecar(): Promise<void> {
   _generation++;
@@ -295,10 +377,15 @@ export function useClaudeChat() {
     // requests don't overwrite each other (see pendingPermissions).
     pendingPermission: state.pendingPermissions[0] ?? null,
     stallNotice: state.stallNotice,
+    cliMissing: state.cliMissing,
+    sessions: state.sessions,
     connect: doClaudeConnect,
     sendMessage: doClaudeSend,
     interrupt: doClaudeInterrupt,
     respondPermission: doClaudeRespondPermission,
     newSession: doClaudeNewSession,
+    getSessions: doClaudeGetSessions,
+    loadSession: doClaudeLoadSession,
+    deleteSession: doClaudeDeleteSession,
   };
 }

@@ -1,13 +1,12 @@
-import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useUiStore } from "@/stores/ui-store";
+import type { ClaudeSettingsTab } from "@/shared/types";
 import { GeneralSection } from "./sections/GeneralSection";
 import { RulesSection } from "./sections/RulesSection";
 import { McpServersTab } from "./McpServersTab";
 import { SkillsTab } from "./SkillsTab";
 
-type SettingsTab = "general" | "rules" | "mcp" | "skills";
-
-const TABS: { key: SettingsTab; labelKey: string }[] = [
+const TABS: { key: ClaudeSettingsTab; labelKey: string }[] = [
   { key: "general", labelKey: "tabGeneral" },
   { key: "rules", labelKey: "tabRules" },
   { key: "mcp", labelKey: "tabMcp" },
@@ -16,7 +15,8 @@ const TABS: { key: SettingsTab; labelKey: string }[] = [
 
 export function ClaudeSettings() {
   const { t } = useTranslation("claude-config");
-  const [tab, setTab] = useState<SettingsTab>("general");
+  const tab = useUiStore((s) => s.claudeSettingsTab);
+  const setTab = useUiStore((s) => s.setClaudeSettingsTab);
 
   return (
     <div className="claude-settings">

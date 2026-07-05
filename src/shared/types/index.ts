@@ -191,6 +191,9 @@ export type OpencodeTopTab = "chat" | "settings";
 /** Claude panel top-level tab */
 export type ClaudeTopTab = "chat" | "settings";
 
+/** Claude settings sub-tab */
+export type ClaudeSettingsTab = "general" | "rules" | "mcp" | "skills";
+
 /** Slidev dev server state for a given markdown file */
 export interface SlidevSession {
   /** Temp directory path */

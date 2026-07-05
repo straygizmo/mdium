@@ -135,6 +135,207 @@ pub fn delete_skill(base_dir: String, dir_name: String) -> Result<(), String> {
     Ok(())
 }
 
+// --- Claude session history ---
+
+#[derive(Serialize, Clone)]
+pub struct ClaudeSessionEntry {
+    pub id: String,
+    pub title: String,
+    /// Last-modified time of the session transcript, in milliseconds since the
+    /// Unix epoch. Used by the UI to sort newest-first and render a timestamp.
+    pub updated_at: i64,
+}
+
+/// Claude Code stores per-project transcripts under
+/// `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`, where the directory
+/// name is the working directory with every non-alphanumeric character replaced
+/// by a dash (e.g. `C:\Users\me\repo` -> `C--Users-me-repo`).
+fn encode_project_dir(folder: &str) -> String {
+    folder
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
+fn claude_projects_dir(folder: &str) -> Option<std::path::PathBuf> {
+    let home = dirs::home_dir()?;
+    Some(
+        home.join(".claude")
+            .join("projects")
+            .join(encode_project_dir(folder)),
+    )
+}
+
+/// Guards `read`/`delete` against path traversal: session ids are UUID-shaped,
+/// so only alphanumerics and dashes are ever legitimate.
+fn is_safe_session_id(id: &str) -> bool {
+    !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+/// Strip the mdium context wrapper and skip harness/command noise so the derived
+/// title reflects what the user actually typed. Returns an empty string when the
+/// message is not a meaningful user prompt.
+fn clean_user_text(text: &str) -> String {
+    let mut s = text.trim();
+    if let Some(rest) = s.strip_prefix("<mdium_context>") {
+        if let Some(idx) = rest.find("</mdium_context>") {
+            s = rest[idx + "</mdium_context>".len()..].trim_start();
+        }
+    }
+    let s = s.trim();
+    if s.is_empty()
+        || s.starts_with("<local-command")
+        || s.starts_with("<command-")
+        || s.starts_with("<system-reminder")
+        || s.starts_with('[')
+    {
+        return String::new();
+    }
+    s.chars().take(80).collect::<String>().trim().to_string()
+}
+
+/// Extract a plain-text prompt from a `user` jsonl entry, whether the message
+/// content is a bare string or an array of content blocks.
+fn user_entry_text(v: &serde_json::Value) -> Option<String> {
+    let content = v.get("message")?.get("content")?;
+    if let Some(s) = content.as_str() {
+        return Some(s.to_string());
+    }
+    if let Some(arr) = content.as_array() {
+        for block in arr {
+            if block.get("type").and_then(|x| x.as_str()) == Some("text") {
+                if let Some(s) = block.get("text").and_then(|x| x.as_str()) {
+                    return Some(s.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Read a transcript once to derive a display title and whether it holds any
+/// real conversation. Prefers Claude's own `aiTitle`, falling back to the first
+/// meaningful user prompt.
+fn extract_session_meta(path: &Path) -> (String, bool) {
+    let content = match fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return (String::new(), false),
+    };
+    let mut ai_title = String::new();
+    let mut first_user = String::new();
+    let mut has_message = false;
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let v: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        match v.get("type").and_then(|x| x.as_str()).unwrap_or("") {
+            "ai-title" => {
+                if let Some(s) = v.get("aiTitle").and_then(|x| x.as_str()) {
+                    if !s.is_empty() {
+                        ai_title = s.to_string();
+                    }
+                }
+            }
+            "user" => {
+                has_message = true;
+                let is_meta = v.get("isMeta").and_then(|x| x.as_bool()).unwrap_or(false);
+                if first_user.is_empty() && !is_meta {
+                    if let Some(txt) = user_entry_text(&v) {
+                        let cleaned = clean_user_text(&txt);
+                        if !cleaned.is_empty() {
+                            first_user = cleaned;
+                        }
+                    }
+                }
+            }
+            "assistant" => has_message = true,
+            _ => {}
+        }
+    }
+    let title = if !ai_title.is_empty() {
+        ai_title
+    } else {
+        first_user
+    };
+    (title, has_message)
+}
+
+#[tauri::command]
+pub fn list_claude_sessions(folder: String) -> Result<Vec<ClaudeSessionEntry>, String> {
+    let dir = match claude_projects_dir(&folder) {
+        Some(d) => d,
+        None => return Ok(vec![]),
+    };
+    if !dir.exists() {
+        return Ok(vec![]);
+    }
+    let mut sessions = vec![];
+    for entry in fs::read_dir(&dir).map_err(|e| e.to_string())? {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let id = path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let updated_at = fs::metadata(&path)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let (title, has_message) = extract_session_meta(&path);
+        // Skip transcripts with no actual conversation (e.g. aborted boots).
+        if !has_message {
+            continue;
+        }
+        sessions.push(ClaudeSessionEntry {
+            id,
+            title,
+            updated_at,
+        });
+    }
+    sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    Ok(sessions)
+}
+
+#[tauri::command]
+pub fn read_claude_session(folder: String, session_id: String) -> Result<String, String> {
+    if !is_safe_session_id(&session_id) {
+        return Err("invalid session id".to_string());
+    }
+    let dir = claude_projects_dir(&folder).ok_or("Could not determine home directory")?;
+    let path = dir.join(format!("{session_id}.jsonl"));
+    if !path.exists() {
+        return Ok(String::new());
+    }
+    fs::read_to_string(path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn delete_claude_session(folder: String, session_id: String) -> Result<(), String> {
+    if !is_safe_session_id(&session_id) {
+        return Err("invalid session id".to_string());
+    }
+    let dir = claude_projects_dir(&folder).ok_or("Could not determine home directory")?;
+    let path = dir.join(format!("{session_id}.jsonl"));
+    if path.exists() {
+        fs::remove_file(&path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 // --- Custom tool file operations ---
 
 #[derive(Serialize, Deserialize, Clone)]

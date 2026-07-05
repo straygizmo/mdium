@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { OpencodeConfigTab, OpencodeTopTab, ClaudeTopTab } from "@/shared/types";
+import type { OpencodeConfigTab, OpencodeTopTab, ClaudeTopTab, ClaudeSettingsTab } from "@/shared/types";
 
 export type LeftPanel = "folder" | "outline" | "rag" | "opencode-config" | "git" | "replacement" | "claude";
 type ViewTab = "preview" | "table" | "pdf-preview" | "docx-preview" | "html-preview" | "xlsx-preview" | "slidev-preview" | "video";
@@ -25,6 +25,7 @@ interface UiState {
   opencodeConfigTab: OpencodeConfigTab;
   opencodeTopTab: OpencodeTopTab;
   claudeTopTab: ClaudeTopTab;
+  claudeSettingsTab: ClaudeSettingsTab;
   isZennMode: boolean;
   gitGraphRatio: number;
   setGitGraphRatio: (ratio: number) => void;
@@ -50,6 +51,7 @@ interface UiState {
   setOpencodeConfigTab: (tab: OpencodeConfigTab) => void;
   setOpencodeTopTab: (tab: OpencodeTopTab) => void;
   setClaudeTopTab: (tab: ClaudeTopTab) => void;
+  setClaudeSettingsTab: (tab: ClaudeSettingsTab) => void;
   setZennMode: (mode: boolean) => void;
 }
 
@@ -71,6 +73,7 @@ export const useUiStore = create<UiState>()((set) => ({
   opencodeConfigTab: "rules" as OpencodeConfigTab,
   opencodeTopTab: "chat" as OpencodeTopTab,
   claudeTopTab: "chat" as ClaudeTopTab,
+  claudeSettingsTab: "general" as ClaudeSettingsTab,
   isZennMode: false,
   gitGraphRatio: 0.5,
 
@@ -115,6 +118,7 @@ export const useUiStore = create<UiState>()((set) => ({
   setOpencodeConfigTab: (tab) => set({ opencodeConfigTab: tab }),
   setOpencodeTopTab: (tab) => set({ opencodeTopTab: tab }),
   setClaudeTopTab: (tab) => set({ claudeTopTab: tab }),
+  setClaudeSettingsTab: (tab) => set({ claudeSettingsTab: tab }),
   setZennMode: (mode) => set({ isZennMode: mode }),
   setGitGraphRatio: (ratio) => set({ gitGraphRatio: ratio }),
 }));
