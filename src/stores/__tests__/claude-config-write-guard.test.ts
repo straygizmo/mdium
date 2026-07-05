@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Mock the app-wide error modal and the i18n instance the guard depends on.
-const showMessage = vi.fn(() => Promise.resolve());
+const showMessage = vi.fn((_text: string, _opts?: { kind?: string }) => Promise.resolve());
 vi.mock("@/stores/dialog-store", () => ({
-  showMessage: (...args: unknown[]) => showMessage(...args),
+  showMessage: (text: string, opts?: { kind?: string }) => showMessage(text, opts),
 }));
 vi.mock("@/shared/i18n", () => ({
   default: { t: (key: string) => key },
