@@ -79,13 +79,14 @@ graph LR
 ### マルチフォーマット対応
 
 - **Markdown**（.md）— メイン編集フォーマット
-- **Office ドキュメント**（.docx, .xlsx, .xlsm）— 閲覧・変換
+- **Office ドキュメント**（.docx, .xlsx, .xlsm, .pptx）— 閲覧・変換
 - **マインドマップ**（.km, .xmind）— インタラクティブなビジュアル編集
 - **PDF**（.pdf）— 閲覧・Markdown への変換
 - **画像**（.png, .jpg, .gif, .bmp, .svg, .webp 等）— プレビュー・キャンバス編集
 - DOCX/Markdown の双方向変換
 - Excel から Markdown への変換 — [xlsx2md](https://github.com/igapyon/xlsx2md) によるテーブル検出・ナラティブ抽出・画像/チャート/シェイプ・リッチテキスト対応
 - Excel VBA マクロの抽出・注入（.xlsm）
+- PowerPoint から Markdown への変換（.pptx）— スライドプレビューと任意の AI 補強に対応
 - PDF エクスポート
 
 ### コードエディタ

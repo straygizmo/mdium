@@ -79,13 +79,14 @@ graph LR
 ### Multi-Format Document Support
 
 - **Markdown** (.md) — primary editing format
-- **Office documents** (.docx, .xlsx, .xlsm) — viewing and conversion
+- **Office documents** (.docx, .xlsx, .xlsm, .pptx) — viewing and conversion
 - **Mindmaps** (.km, .xmind) — interactive visual editing
 - **PDF** (.pdf) — viewing and conversion to Markdown
 - **Images** (.png, .jpg, .gif, .bmp, .svg, .webp, etc.) — preview and canvas editing
 - Bidirectional DOCX/Markdown conversion
 - Excel to Markdown conversion powered by [xlsx2md](https://github.com/igapyon/xlsx2md) (table detection, narrative extraction, images/charts/shapes, rich text)
 - Excel VBA macro extraction and injection (.xlsm)
+- PowerPoint to Markdown conversion (.pptx) with slide preview and optional AI enrichment
 - Export to PDF
 
 ### Code Editor
