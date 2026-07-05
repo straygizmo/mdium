@@ -5,12 +5,14 @@ import { GeneralSection } from "./sections/GeneralSection";
 import { RulesSection } from "./sections/RulesSection";
 import { McpServersTab } from "./McpServersTab";
 import { SkillsTab } from "./SkillsTab";
+import { PluginsTab } from "./PluginsTab";
 
 const TABS: { key: ClaudeSettingsTab; labelKey: string }[] = [
   { key: "general", labelKey: "tabGeneral" },
   { key: "rules", labelKey: "tabRules" },
   { key: "mcp", labelKey: "tabMcp" },
   { key: "skills", labelKey: "tabSkills" },
+  { key: "plugins", labelKey: "tabPlugins" },
 ];
 
 export function ClaudeSettings() {
@@ -36,6 +38,7 @@ export function ClaudeSettings() {
         {tab === "rules" && <RulesSection />}
         {tab === "mcp" && <McpServersTab />}
         {tab === "skills" && <SkillsTab />}
+        {tab === "plugins" && <PluginsTab />}
       </div>
     </div>
   );

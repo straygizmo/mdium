@@ -192,7 +192,7 @@ export type OpencodeTopTab = "chat" | "settings";
 export type ClaudeTopTab = "chat" | "settings";
 
 /** Claude settings sub-tab */
-export type ClaudeSettingsTab = "general" | "rules" | "mcp" | "skills";
+export type ClaudeSettingsTab = "general" | "rules" | "mcp" | "skills" | "plugins";
 
 /** Slidev dev server state for a given markdown file */
 export interface SlidevSession {

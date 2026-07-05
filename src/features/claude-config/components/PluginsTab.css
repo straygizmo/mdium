@@ -1,0 +1,59 @@
+.plugins-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+}
+
+.plugins-tab__desc {
+  margin: 0;
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.plugins-tab__empty {
+  opacity: 0.6;
+  font-size: 13px;
+  padding: 16px 0;
+  text-align: center;
+}
+
+.plugins-tab__list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.plugins-tab__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.3));
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.plugins-tab__item-name {
+  font-weight: 600;
+}
+
+.plugins-tab__item-market {
+  font-size: 11px;
+  opacity: 0.6;
+  border: 1px solid rgba(128, 128, 128, 0.4);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.plugins-tab__item-version {
+  margin-left: auto;
+  font-size: 11px;
+  opacity: 0.6;
+}
+
+.plugins-tab__notice {
+  margin: 0;
+  font-size: 11px;
+  opacity: 0.6;
+}
