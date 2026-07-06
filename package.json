@@ -4,6 +4,7 @@
   "version": "0.2.6",
   "type": "module",
   "scripts": {
+    "predev": "npm run build:sidecar",
     "dev": "vite",
     "build": "tsc && vite build && npm run build:sidecar",
     "build:sidecar": "node scripts/build-claude-sidecar.mjs",
