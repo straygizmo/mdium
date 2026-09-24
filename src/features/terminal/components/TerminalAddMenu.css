@@ -4,10 +4,12 @@
 
 .terminal-add-menu__menu {
   position: absolute;
-  bottom: 100%;
+  top: 100%;
   right: 0;
-  margin-bottom: 4px;
+  margin-top: 4px;
   min-width: 142px;
+  max-height: 240px;
+  overflow-y: auto;
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: 4px;

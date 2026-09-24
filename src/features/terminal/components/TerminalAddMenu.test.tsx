@@ -1,4 +1,6 @@
 // @vitest-environment happy-dom
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -79,5 +81,14 @@ describe("TerminalAddMenu", () => {
 
     expect(onAdd).not.toHaveBeenCalled();
     expect(container.querySelector('[role="menu"]')).toBeNull();
+  });
+});
+
+describe("TerminalAddMenu CSS", () => {
+  it("opens the menu downward so it is not clipped by the toolbar's overflow:hidden ancestor", () => {
+    const css = readFileSync(resolve(process.cwd(), "src/features/terminal/components/TerminalAddMenu.css"), "utf8");
+    const rule = css.match(/\.terminal-add-menu__menu\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(rule).toContain("top: 100%");
+    expect(rule).not.toContain("bottom: 100%");
   });
 });
