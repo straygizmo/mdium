@@ -444,7 +444,6 @@ export function OpencodeChat() {
               ? t("ocChatConnected")
               : t("ocChatDisconnected")}
         </span>
-        <OpencodeUsagePopover />
         <button
           className="oc-chat__toolbar-btn oc-chat__toolbar-btn--right"
           onClick={createNewSession}
@@ -633,23 +632,26 @@ export function OpencodeChat() {
 
         {/* Bottom section */}
         <div className="oc-chat__bottom" style={{ flex: `0 0 ${100 - chatSplitRatio}%` }}>
-          {/* MD context toggle */}
-          <label
-            className={`oc-chat__md-toggle-bar${canUseMdContext ? "" : " oc-chat__md-toggle-bar--disabled"}`}
-            title={t("ocChatMdContext")}
-          >
-            <input
-              type="checkbox"
-              data-switch
-              role="switch"
-              checked={mdContextActive}
-              disabled={!canUseMdContext}
-              onChange={(e) => setUseMdContext(e.target.checked)}
-            />
-            <span className="oc-chat__md-toggle-label">
-              {t("ocChatMdToggleLabel", { name: canUseMdContext ? (activeTabName ?? "MD") : "MD" })}
-            </span>
-          </label>
+          {/* MD context toggle and session usage */}
+          <div className="oc-chat__md-toggle-row">
+            <label
+              className={`oc-chat__md-toggle-bar${canUseMdContext ? "" : " oc-chat__md-toggle-bar--disabled"}`}
+              title={t("ocChatMdContext")}
+            >
+              <input
+                type="checkbox"
+                data-switch
+                role="switch"
+                checked={mdContextActive}
+                disabled={!canUseMdContext}
+                onChange={(e) => setUseMdContext(e.target.checked)}
+              />
+              <span className="oc-chat__md-toggle-label">
+                {t("ocChatMdToggleLabel", { name: canUseMdContext ? (activeTabName ?? "MD") : "MD" })}
+              </span>
+            </label>
+            <OpencodeUsagePopover />
+          </div>
 
           {/* Input area */}
           <div className="oc-chat__input-area">
