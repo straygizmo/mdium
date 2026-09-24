@@ -140,7 +140,7 @@ describe("CopilotAdapter", () => {
     await expect(s.runTurn("hi", new AbortController().signal)).rejects.toThrow("COPILOT_DISCONNECTED");
   });
 
-  it("rejects the turn with COPILOT_DISCONNECTED when the liveness check fails", async () => {
+  it("rejects the turn with COPILOT_DISCONNECTED after two consecutive failed liveness checks", async () => {
     vi.useFakeTimers();
     try {
       const session = fakeSession([]);
@@ -148,14 +148,118 @@ describe("CopilotAdapter", () => {
       const { client } = fakeClient(session, { getStatus });
       const s = await make(client).startSession(opts, cbs());
       const turn = s.runTurn("hi", new AbortController().signal);
-      // Attach a handler immediately: the rejection happens asynchronously
-      // (once the fake-timer interval fires), before the assertion below runs.
       turn.catch(() => {});
+      // First failed check (interval fires at 30s; getStatus rejects immediately).
+      await vi.advanceTimersByTimeAsync(30_000);
+      // Second interval tick, second failed check: only now must it reject.
+      await vi.advanceTimersByTimeAsync(30_000);
+      await expect(turn).rejects.toThrow("COPILOT_DISCONNECTED");
+      expect(session.abort).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects the turn with COPILOT_DISCONNECTED after two consecutive liveness timeouts", async () => {
+    vi.useFakeTimers();
+    try {
+      const session = fakeSession([]);
+      // getStatus never resolves; every check must time out at 10s.
+      const getStatus = vi.fn(() => new Promise<{ version: string }>(() => {}));
+      const { client } = fakeClient(session, { getStatus });
+      const s = await make(client).startSession(opts, cbs());
+      const turn = s.runTurn("hi", new AbortController().signal);
+      turn.catch(() => {});
+      // First interval tick (30s) + its 10s race timeout = first failed check.
+      await vi.advanceTimersByTimeAsync(40_000);
+      // Second interval tick (60s) + its 10s race timeout = second failed check.
       await vi.advanceTimersByTimeAsync(30_000);
       await expect(turn).rejects.toThrow("COPILOT_DISCONNECTED");
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("does not reject when a single failed liveness check is followed by a success", async () => {
+    vi.useFakeTimers();
+    try {
+      const session = fakeSession([]);
+      let call = 0;
+      const getStatus = vi.fn(async () => {
+        call += 1;
+        if (call === 1) throw new Error("down");
+        return { version: "1.0.88" };
+      });
+      const { client } = fakeClient(session, { getStatus });
+      const s = await make(client).startSession(opts, cbs());
+      const turn = s.runTurn("hi", new AbortController().signal);
+      let settled = false;
+      turn.catch(() => { settled = true; });
+      turn.then(() => { settled = true; });
+      // First check fails, second (a fresh interval tick) succeeds and must
+      // reset the consecutive-failure count instead of rejecting.
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(settled).toBe(false);
+      session.emit({ type: "assistant.message", data: { content: "Hello", messageId: "m" } });
+      session.emit({ type: "session.idle", data: {} });
+      await expect(turn).resolves.toBe("Hello");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops the liveness interval once the turn resolves normally", async () => {
+    vi.useFakeTimers();
+    try {
+      const session = fakeSession([]);
+      const { client } = fakeClient(session);
+      const s = await make(client).startSession(opts, cbs());
+      const turn = s.runTurn("hi", new AbortController().signal);
+      session.emit({ type: "assistant.message", data: { content: "Hello", messageId: "m" } });
+      session.emit({ type: "session.idle", data: {} });
+      await expect(turn).resolves.toBe("Hello");
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(client.getStatus).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores a session.error from a sub-agent", async () => {
+    const session = fakeSession([]);
+    const { client } = fakeClient(session);
+    const s = await make(client).startSession(opts, cbs());
+    const turn = s.runTurn("hi", new AbortController().signal);
+    session.emit({ type: "session.error", data: { message: "sub-agent failure" }, agentId: "agent-2" });
+    session.emit({ type: "assistant.message", data: { content: "Hello", messageId: "m" } });
+    session.emit({ type: "session.idle", data: {} });
+    await expect(turn).resolves.toBe("Hello");
+    expect(session.abort).not.toHaveBeenCalled();
+  });
+
+  it("does not settle or abort on an auto-switch-eligible session.error", async () => {
+    const session = fakeSession([]);
+    const { client } = fakeClient(session);
+    const s = await make(client).startSession(opts, cbs());
+    const turn = s.runTurn("hi", new AbortController().signal);
+    session.emit({ type: "session.error", data: { message: "rate limited", errorType: "rate_limit", eligibleForAutoSwitch: true } });
+    session.emit({ type: "assistant.message", data: { content: "Hello", messageId: "m" } });
+    session.emit({ type: "session.idle", data: {} });
+    await expect(turn).resolves.toBe("Hello");
+    expect(session.abort).not.toHaveBeenCalled();
+  });
+
+  it("rejects with AbortError, not the session.error, when an error arrives during the abort wait", async () => {
+    const session = fakeSession([]);
+    const { client } = fakeClient(session);
+    const s = await make(client).startSession(opts, cbs());
+    const controller = new AbortController();
+    const turn = s.runTurn("hi", controller.signal);
+    controller.abort();
+    session.emit({ type: "session.error", data: { message: "boom" } });
+    await expect(turn).rejects.toMatchObject({ name: "AbortError" });
+    expect(session.abort).toHaveBeenCalledTimes(1);
   });
 
   it("ignores sub-agent assistant events (top-level agentId and legacy parentToolCallId)", async () => {
@@ -178,21 +282,23 @@ describe("CopilotAdapter", () => {
     ]);
   });
 
-  it("defaults missing delta text and tool result fields", async () => {
+  it("defaults missing delta text, message content, and tool result fields", async () => {
     const session = fakeSession([
       { type: "assistant.message_delta", data: { messageId: "m" } },
       { type: "tool.execution_start", data: { toolCallId: "t1", toolName: "bash" } },
       { type: "tool.execution_complete", data: { toolCallId: "t1" } },
+      { type: "assistant.message", data: { messageId: "m" } },
       { type: "session.idle", data: {} },
     ]);
     const { client } = fakeClient(session);
     const events: AgentEvent[] = [];
     const s = await make(client).startSession(opts, cbs((e) => events.push(e)));
-    await s.runTurn("hi", new AbortController().signal);
+    await expect(s.runTurn("hi", new AbortController().signal)).resolves.toBe("");
     expect(events).toEqual([
       { type: "assistant_delta", text: "" },
       { type: "tool_started", toolId: "t1", title: "bash" },
       { type: "tool_finished", toolId: "t1", ok: false },
+      { type: "assistant_message", text: "" },
     ]);
   });
 

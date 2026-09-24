@@ -83,6 +83,10 @@ class CopilotAgentSession implements AdapterSession {
       let aborted = false;
       let idleWaitTimer: ReturnType<typeof setTimeout> | undefined;
       let livenessTimer: ReturnType<typeof setInterval> | undefined;
+      // Require two consecutive failed/timed-out liveness checks before
+      // declaring the CLI disconnected, so one slow response doesn't fail
+      // the turn; a successful check resets the count.
+      let consecutiveLivenessFailures = 0;
       const finish = (fn: () => void) => {
         unsubscribe();
         signal.removeEventListener("abort", onAbort);
@@ -101,13 +105,20 @@ class CopilotAgentSession implements AdapterSession {
       // raced against a timeout, since the SDK has no public connection-state
       // or process-exit API to observe directly (see report for details).
       const checkLiveness = async () => {
+        let raceTimeout: ReturnType<typeof setTimeout> | undefined;
         const timeout = new Promise<never>((_, rejectTimeout) => {
-          setTimeout(() => rejectTimeout(new Error("Liveness check timed out")), LIVENESS_TIMEOUT_MS);
+          raceTimeout = setTimeout(() => rejectTimeout(new Error("Liveness check timed out")), LIVENESS_TIMEOUT_MS);
         });
         try {
           await Promise.race([this.client.getStatus(), timeout]);
+          consecutiveLivenessFailures = 0;
         } catch {
+          consecutiveLivenessFailures += 1;
+          if (consecutiveLivenessFailures < 2) return;
+          void this.session.abort().catch(() => undefined);
           finish(() => reject(new Error("COPILOT_DISCONNECTED")));
+        } finally {
+          if (raceTimeout) clearTimeout(raceTimeout);
         }
       };
       const unsubscribe = this.session.on((event) => {
@@ -120,7 +131,7 @@ class CopilotAgentSession implements AdapterSession {
           }
           case "assistant.message": {
             if (isSubAgentEvent(event)) break;
-            const content = eventData<{ content: string }>(event).content;
+            const content = eventData<{ content?: string }>(event).content ?? "";
             messages.push(content);
             this.callbacks.onEvent({ type: "assistant_message", text: content });
             break;
@@ -136,7 +147,19 @@ class CopilotAgentSession implements AdapterSession {
             break;
           }
           case "session.error": {
-            const d = eventData<{ message?: string; errorType?: string }>(event);
+            // Sub-agent errors don't end the main turn.
+            if (isSubAgentEvent(event)) break;
+            const d = eventData<{ message?: string; errorType?: string; eligibleForAutoSwitch?: boolean }>(event);
+            // If this turn is already aborting, an error racing in before the
+            // cancellation-confirming idle must not override the AbortError,
+            // and session.abort() was already called by onAbort.
+            if (aborted) {
+              finish(() => reject(abortError()));
+              break;
+            }
+            // The runtime follows this with an auto_mode_switch and recovers
+            // on its own; do not abort or settle the turn for it.
+            if (d.eligibleForAutoSwitch === true) break;
             void this.session.abort().catch(() => undefined);
             const message = d.message ?? "Copilot session error";
             finish(() => reject(new Error(d.errorType ? `${d.errorType}: ${message}` : message)));
