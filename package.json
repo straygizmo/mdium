@@ -17,10 +17,12 @@
     "vendor:md2xlsx": "node scripts/vendor-md2xlsx.mjs"
   },
   "dependencies": {
+    "@github/copilot-sdk": "^1.0.14",
     "@huggingface/transformers": "^3.8.1",
     "@monaco-editor/react": "^4.7.0",
     "@open-motion/components": "file:packages/open-motion/components",
     "@open-motion/core": "file:packages/open-motion/core",
+    "@openai/codex-sdk": "^0.152.1",
     "@opencode-ai/sdk": "^1.17.13",
     "@tanstack/react-virtual": "^3.13.24",
     "@tauri-apps/api": "^2.10.1",
