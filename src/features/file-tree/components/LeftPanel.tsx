@@ -13,6 +13,9 @@ import { ClaudePanel } from "@/features/claude-config/components/ClaudePanel";
 import { GitPanel } from "@/features/git/components/GitPanel";
 import { ReplacementPanel } from "@/features/replacement/components/ReplacementPanel";
 import { useGitStore } from "@/stores/git-store";
+import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
+import { useChatUIStore } from "@/features/opencode-config/hooks/useOpencodeChat";
+import { useAgentChatStore } from "@/features/agent-chat/agent-chat-store";
 import { collectConvertibleFiles, buildConvertibleTree } from "@/features/export/lib/collectConvertibleFiles";
 import { BatchConvertModal } from "@/features/export/components/BatchConvertModal";
 import "./LeftPanel.css";
@@ -68,6 +71,14 @@ export function LeftPanel({
   const { aiSettings } = useSettingsStore();
   const setShowSettings = useSettingsStore((s) => s.setShowSettings);
   const collapseAllDirs = useFileStore((s) => s.collapseAllDirs);
+  const ocConfigAgents = useOpencodeConfigStore((s) => s.config.agents);
+  const ocSelectedAgent = useChatUIStore((s) => s.selectedAgent);
+  const agentChatSelectedTab = useAgentChatStore((s) => s.selectedTab);
+  const ocModel = useMemo(() => {
+    const agentModel = ocSelectedAgent && ocConfigAgents?.[ocSelectedAgent]?.model;
+    if (agentModel) return agentModel;
+    return `${aiSettings.provider}/${aiSettings.model}`;
+  }, [ocSelectedAgent, ocConfigAgents, aiSettings.provider, aiSettings.model]);
   const gitFileCount = useGitStore((s) => s.files.length);
   const [showBatchConvert, setShowBatchConvert] = useState(false);
   const convertibleFiles = useMemo(() => collectConvertibleFiles(fileTree), [fileTree]);
@@ -214,7 +225,18 @@ export function LeftPanel({
                 </span>
               </>
             )}
-            {leftPanel === "opencode-config" && t("title", { ns: "agent-chat" })}
+            {leftPanel === "opencode-config" && (
+              <>
+                {t("title", { ns: "agent-chat" })}
+                {agentChatSelectedTab === "opencode" && ocModel && (
+                  <span className="left-panel__section-header-model">
+                    ({ocModel.includes("/")
+                      ? `${ocModel.split("/")[0]} / ${ocModel.split("/").slice(1).join("/")}`
+                      : ocModel})
+                  </span>
+                )}
+              </>
+            )}
             {leftPanel === "git" && t("sourceControl", { ns: "git" }).toUpperCase()}
             {leftPanel === "replacement" && t("title", { ns: "replacement" }).toUpperCase()}
             {leftPanel === "claude" && "CLAUDE"}
