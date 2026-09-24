@@ -9,6 +9,7 @@ import { useGitStore } from "@/stores/git-store";
 import { useOpencodeServerStore } from "@/stores/opencode-server-store";
 import { killClaudeSidecar } from "@/features/claude-config/hooks/useClaudeChat";
 import { shutdownRunner } from "@/features/agent-chat/lib/agent-runner-client";
+import { useAgentChatStore } from "@/features/agent-chat/agent-chat-store";
 import { getOfficeExt, getMindmapExt, getKityMinderImportExt, getImageExt, getPdfExt, getCsvExt, getPptxExt, isCodeFile } from "@/shared/lib/constants";
 import { detectDelimiter } from "@/features/preview/lib/detect-delimiter";
 import { useFileStore } from "@/stores/file-store";
@@ -1103,6 +1104,7 @@ export function App() {
         e.preventDefault();
         useUiStore.getState().setLeftPanel("opencode-config");
         useTabStore.getState().setFolderLeftPanel("opencode-config");
+        useAgentChatStore.getState().setSelectedTab("opencode");
       } else if (e.ctrlKey && e.key === "`") {
         e.preventDefault();
         const ui = useUiStore.getState();

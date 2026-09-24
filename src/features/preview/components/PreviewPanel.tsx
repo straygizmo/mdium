@@ -32,6 +32,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { useChatUIStore, consumePendingVideoOutput, doConnect, doCreateNewSession, doSendMessage, setPendingVideoOutput, syncMdiumVbaMcpConfig } from "@/features/opencode-config/hooks/useOpencodeChat";
 import { BUILTIN_COMMANDS } from "@/features/opencode-config/lib/builtin-commands";
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
+import { useAgentChatStore } from "@/features/agent-chat/agent-chat-store";
 import { docxToMarkdown } from "@/features/export/lib/docxToMarkdown";
 import { pptxToMarkdownPreview } from "@/features/export/lib/pptxToMarkdownPreview";
 import { pptxToMarkdownPreviewEnriched } from "@/features/export/lib/pptxAiEnrich";
@@ -474,6 +475,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree, onJump
     useUiStore.getState().setLeftPanel("opencode-config");
     useTabStore.getState().setFolderLeftPanel("opencode-config");
     useUiStore.getState().setOpencodeTopTab("chat");
+    useAgentChatStore.getState().setSelectedTab("opencode");
 
     // Ensure connection, create a new chat, and send expanded prompt
     await doConnect(activeFolderPath ?? undefined);
@@ -530,6 +532,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree, onJump
     useUiStore.getState().setLeftPanel("opencode-config");
     useTabStore.getState().setFolderLeftPanel("opencode-config");
     useUiStore.getState().setOpencodeTopTab("chat");
+    useAgentChatStore.getState().setSelectedTab("opencode");
 
     // Expand the template with actual parameter values (prefer user-edited version)
     const videoCmd = globalCommands[commandName] ?? BUILTIN_COMMANDS[commandName];
