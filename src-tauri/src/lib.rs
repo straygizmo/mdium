@@ -255,6 +255,10 @@ pub fn run() {
             commands::claude_sidecar::spawn_claude_sidecar,
             commands::claude_sidecar::write_claude_sidecar,
             commands::claude_sidecar::kill_claude_sidecar,
+            commands::agent_runner::resolve_agent_runner_path,
+            commands::agent_runner::spawn_agent_runner,
+            commands::agent_runner::write_agent_runner,
+            commands::agent_runner::kill_agent_runner,
             // Claude config operations
             commands::claude_config::get_home_dir,
             commands::claude_config::read_json_file,
