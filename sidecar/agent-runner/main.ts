@@ -15,17 +15,29 @@ const core = new RunnerCore({
   send,
 });
 
+// Upper bound on how long shutdown may wait for in-flight requests and
+// session closes before exiting anyway, so a hung adapter/CLI cannot leave
+// the process running forever once mdium has asked it to stop.
+const SHUTDOWN_TIMEOUT_MS = 5_000;
+
 const inFlight = new Set<Promise<void>>();
 const rl = createInterface({ input: process.stdin });
 rl.on("line", (line) => {
   if (!line.trim()) return;
-  const handled = core.handleLine(line).finally(() => inFlight.delete(handled));
+  const handled = core
+    .handleLine(line)
+    .catch((error: unknown) => {
+      // Last-resort guard: a bug reaching here must not crash the process or
+      // silently drop the request — always answer with an error line.
+      send({ type: "error", message: error instanceof Error ? error.message : String(error) });
+    })
+    .finally(() => inFlight.delete(handled));
   inFlight.add(handled);
 });
 // When mdium closes stdin, let in-flight requests answer, then cancel every session and exit.
 rl.on("close", () => {
-  void Promise.allSettled([...inFlight])
-    .then(() => core.shutdown())
-    .finally(() => process.exit(0));
+  const settled = Promise.allSettled([...inFlight]).then(() => core.shutdown());
+  const timeout = new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_TIMEOUT_MS));
+  void Promise.race([settled, timeout]).finally(() => process.exit(0));
 });
 send({ type: "ready" });

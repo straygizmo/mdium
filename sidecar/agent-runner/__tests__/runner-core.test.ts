@@ -39,7 +39,6 @@ function setup() {
     signal: () => lastSignal,
     finishTurn: (v: string) => turn.resolve(v),
     failTurn: (e: unknown) => turn.reject(e),
-    resetTurn: () => { turn = deferred<string>(); },
   };
 }
 
@@ -50,6 +49,18 @@ describe("RunnerCore", () => {
     const t = setup();
     await t.line({ type: "probe", requestId: "r0", provider: "copilot" });
     expect(t.sent).toContainEqual({ type: "availability", requestId: "r0", provider: "copilot", availability: { kind: "available", version: "1.0.0" } });
+  });
+
+  it("answers probe with an error availability when the adapter's probe rejects", async () => {
+    const t = setup();
+    (t.adapter.probe as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("boom"));
+    await t.line({ type: "probe", requestId: "r9", provider: "codex" });
+    expect(t.sent).toContainEqual({
+      type: "availability",
+      requestId: "r9",
+      provider: "codex",
+      availability: { kind: "error", detail: "boom" },
+    });
   });
 
   it("starts a session and completes a turn with forwarded events", async () => {
@@ -135,5 +146,73 @@ describe("RunnerCore", () => {
     await t.start();
     await t.start();
     expect(t.sent.at(-1)).toMatchObject({ type: "error", requestId: "r1", sessionId: "s1" });
+  });
+
+  it("denies pending permissions immediately on cancel, before the turn settles", async () => {
+    const t = setup();
+    await t.start();
+    await t.line({ type: "send", sessionId: "s1", text: "a" });
+    const pending = t.callbacks().requestPermission({ kind: "shell", summary: "ls" });
+    await t.line({ type: "cancel", sessionId: "s1" });
+    // Must resolve without needing the turn's own rejection to propagate first.
+    await expect(pending).resolves.toBe(false);
+  });
+
+  it("suppresses turn_cancelled for a turn aborted by close_session", async () => {
+    const t = setup();
+    await t.start();
+    await t.line({ type: "send", sessionId: "s1", text: "a" });
+    await t.line({ type: "close_session", sessionId: "s1" });
+    await flush();
+    expect(t.session.close).toHaveBeenCalled();
+    expect(t.sent.some((m) => m.type === "turn_cancelled")).toBe(false);
+  });
+
+  it("closes a session whose start_session is still pending, without sending session_started", async () => {
+    const sent: RunnerOutbound[] = [];
+    const startDeferred = deferred<AdapterSession>();
+    const session: AdapterSession = {
+      nativeSessionId: () => "native-1",
+      runTurn: vi.fn(),
+      close: vi.fn(async () => {}),
+    };
+    const adapter: ProviderAdapter = {
+      probe: vi.fn(async () => ({ kind: "available" as const, version: "1.0.0" })),
+      startSession: vi.fn(() => startDeferred.promise),
+    };
+    const core = new RunnerCore({ adapters: { codex: adapter, copilot: adapter }, send: (m) => sent.push(m) });
+    const starting = core.handleLine(
+      JSON.stringify({ type: "start_session", requestId: "r1", sessionId: "s1", provider: "codex", workingDirectory: "C:/w", permission: "cli-default" }),
+    );
+    await core.handleLine(JSON.stringify({ type: "close_session", sessionId: "s1" }));
+    startDeferred.resolve(session);
+    await starting;
+    await flush();
+    expect(session.close).toHaveBeenCalled();
+    expect(sent).toContainEqual({ type: "error", requestId: "r1", sessionId: "s1", message: "SESSION_CLOSED" });
+    expect(sent.some((m) => m.type === "session_started")).toBe(false);
+  });
+
+  it("rejects a concurrent duplicate start_session while the first is still starting", async () => {
+    const sent: RunnerOutbound[] = [];
+    const startDeferred = deferred<AdapterSession>();
+    const session: AdapterSession = {
+      nativeSessionId: () => "native-1",
+      runTurn: vi.fn(),
+      close: vi.fn(async () => {}),
+    };
+    const startSession = vi.fn(() => startDeferred.promise);
+    const adapter: ProviderAdapter = { probe: vi.fn(async () => ({ kind: "available" as const, version: "1.0.0" })), startSession };
+    const core = new RunnerCore({ adapters: { codex: adapter, copilot: adapter }, send: (m) => sent.push(m) });
+    const first = core.handleLine(
+      JSON.stringify({ type: "start_session", requestId: "r1", sessionId: "s1", provider: "codex", workingDirectory: "C:/w", permission: "cli-default" }),
+    );
+    await core.handleLine(
+      JSON.stringify({ type: "start_session", requestId: "r2", sessionId: "s1", provider: "codex", workingDirectory: "C:/w", permission: "cli-default" }),
+    );
+    expect(sent).toContainEqual({ type: "error", requestId: "r2", sessionId: "s1", message: "SESSION_EXISTS" });
+    expect(startSession).toHaveBeenCalledTimes(1);
+    startDeferred.resolve(session);
+    await first;
   });
 });
