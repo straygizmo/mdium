@@ -285,6 +285,59 @@ describe("RunnerCore", () => {
     }
   });
 
+  it("does not emit turn_completed when the session is closed before an in-flight turn resolves", async () => {
+    const sent: RunnerOutbound[] = [];
+    const turn = deferred<string>();
+    const session: AdapterSession = {
+      nativeSessionId: () => "native-1",
+      // Deliberately ignores the abort signal, to simulate a race where the
+      // underlying turn keeps running (and later settles) after close_session.
+      runTurn: vi.fn(() => turn.promise),
+      close: vi.fn(async () => {}),
+    };
+    const adapter: ProviderAdapter = {
+      probe: vi.fn(async () => ({ kind: "available" as const, version: "1.0.0" })),
+      startSession: vi.fn(async () => session),
+    };
+    const core = new RunnerCore({ adapters: { codex: adapter, copilot: adapter }, send: (m) => sent.push(m) });
+    await core.handleLine(
+      JSON.stringify({ type: "start_session", requestId: "r1", sessionId: "s1", provider: "codex", workingDirectory: "C:/w", permission: "cli-default" }),
+    );
+    await core.handleLine(JSON.stringify({ type: "send", sessionId: "s1", text: "a" }));
+    await core.handleLine(JSON.stringify({ type: "close_session", sessionId: "s1" }));
+
+    turn.resolve("late success");
+    await flush();
+
+    expect(sent.some((m) => m.type === "turn_completed")).toBe(false);
+  });
+
+  it("does not emit turn_failed for a non-abort error when the session is closed before an in-flight turn rejects", async () => {
+    const sent: RunnerOutbound[] = [];
+    const turn = deferred<string>();
+    const session: AdapterSession = {
+      nativeSessionId: () => "native-1",
+      // Deliberately ignores the abort signal.
+      runTurn: vi.fn(() => turn.promise),
+      close: vi.fn(async () => {}),
+    };
+    const adapter: ProviderAdapter = {
+      probe: vi.fn(async () => ({ kind: "available" as const, version: "1.0.0" })),
+      startSession: vi.fn(async () => session),
+    };
+    const core = new RunnerCore({ adapters: { codex: adapter, copilot: adapter }, send: (m) => sent.push(m) });
+    await core.handleLine(
+      JSON.stringify({ type: "start_session", requestId: "r1", sessionId: "s1", provider: "codex", workingDirectory: "C:/w", permission: "cli-default" }),
+    );
+    await core.handleLine(JSON.stringify({ type: "send", sessionId: "s1", text: "a" }));
+    await core.handleLine(JSON.stringify({ type: "close_session", sessionId: "s1" }));
+
+    turn.reject(new Error("late failure, unrelated to the abort"));
+    await flush();
+
+    expect(sent.some((m) => m.type === "turn_failed")).toBe(false);
+  });
+
   it("denies pending permissions immediately when the turn timeout fires", async () => {
     vi.useFakeTimers();
     try {

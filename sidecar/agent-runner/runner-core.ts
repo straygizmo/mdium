@@ -215,6 +215,11 @@ export class RunnerCore {
     void entry.session
       .runTurn(text, turn.controller.signal)
       .then((finalResponse) => {
+        // The session may have been closed (close_session) while this turn
+        // was still resolving, e.g. if the adapter's runTurn does not itself
+        // observe the abort signal. Its outcome no longer matters to a gone
+        // session.
+        if (entry.closed) return;
         const nativeSessionId = entry.session.nativeSessionId();
         this.deps.send({ type: "turn_completed", sessionId, finalResponse, ...(nativeSessionId ? { nativeSessionId } : {}) });
       })
@@ -224,7 +229,7 @@ export class RunnerCore {
           // A close_session-triggered abort already reported its own outcome;
           // do not also emit turn_cancelled for a session that is now gone.
           if (!turn.suppressCancelEvent) this.deps.send({ type: "turn_cancelled", sessionId });
-        } else this.deps.send({ type: "turn_failed", sessionId, message: message(error) });
+        } else if (!entry.closed) this.deps.send({ type: "turn_failed", sessionId, message: message(error) });
       })
       .finally(() => {
         if (turn.timer) clearTimeout(turn.timer);
