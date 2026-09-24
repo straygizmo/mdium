@@ -11,6 +11,7 @@ use tauri::{AppHandle, Emitter};
 struct PtyState {
     writer: Box<dyn Write + Send>,
     pair: portable_pty::PtyPair,
+    child: Box<dyn portable_pty::Child + Send + Sync>,
 }
 
 type PtyMap = Arc<Mutex<HashMap<String, PtyState>>>;
@@ -32,10 +33,19 @@ pub fn spawn_pty(
 ) -> Result<(), String> {
     // A remounted xterm reconnects with the same session id. Keep its process
     // alive instead of replacing it so closing and reopening the panel is safe.
+    // If the process has already exited (e.g. the user typed `exit`), drop
+    // the stale entry and fall through to spawn a fresh one for the same id.
     {
-        let guard = pty_store().lock().unwrap();
-        if guard.contains_key(&id) {
-            return Ok(());
+        let mut guard = pty_store().lock().unwrap();
+        if let Some(state) = guard.get_mut(&id) {
+            match state.child.try_wait() {
+                Ok(Some(_)) => {
+                    guard.remove(&id);
+                }
+                _ => {
+                    return Ok(());
+                }
+            }
         }
     }
 
@@ -66,7 +76,8 @@ pub fn spawn_pty(
         cmd.cwd(&cwd);
     }
 
-    pair.slave
+    let child = pair
+        .slave
         .spawn_command(cmd)
         .map_err(|e| format!("Failed to spawn: {}", e))?;
 
@@ -96,7 +107,7 @@ pub fn spawn_pty(
     });
 
     let mut guard = pty_store().lock().unwrap();
-    guard.insert(id, PtyState { writer, pair });
+    guard.insert(id, PtyState { writer, pair, child });
 
     Ok(())
 }
@@ -134,6 +145,9 @@ pub fn resize_pty(id: String, cols: u16, rows: u16) -> Result<(), String> {
 #[tauri::command]
 pub fn kill_pty(id: String) -> Result<(), String> {
     let mut guard = pty_store().lock().unwrap();
+    if let Some(state) = guard.get_mut(&id) {
+        let _ = state.child.kill();
+    }
     guard.remove(&id);
     Ok(())
 }

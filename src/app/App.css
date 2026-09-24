@@ -258,25 +258,6 @@ body {
   flex-shrink: 0;
 }
 
-.app__bottom-terminal-action-btn {
-  padding: 2px 10px;
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: all 0.15s;
-  white-space: nowrap;
-}
-
-.app__bottom-terminal-action-btn:hover {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: #fff;
-}
-
 .app__bottom-terminal-add-select {
   height: 24px;
   min-width: 142px;

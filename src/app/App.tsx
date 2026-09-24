@@ -1288,15 +1288,19 @@ export function App() {
               </div>
             )}
           </div>
-          {bottomTerminalVisible && (
+          {terminalSessions.length > 0 && (
             <>
               <div
                 className="app__bottom-terminal-divider"
                 onMouseDown={handleTerminalMouseDown}
+                style={{ display: bottomTerminalVisible ? "block" : "none" }}
               />
               <div
                 className="app__bottom-terminal"
-                style={{ height: terminalHeight }}
+                style={{
+                  height: terminalHeight,
+                  display: bottomTerminalVisible ? "flex" : "none",
+                }}
               >
                 <div className="app__bottom-terminal-toolbar">
                   <div className="app__bottom-terminal-tabs">
@@ -1364,8 +1368,9 @@ export function App() {
                           id={session.id}
                           folderPath={session.folderPath}
                           themeType={getTerminalThemeType(session.kind, themeType)}
-                          active={isActive}
+                          active={isActive && bottomTerminalVisible}
                           command={getTerminalCommand(session.kind)}
+                          killOnUnmount={false}
                         />
                       </div>
                     );

@@ -14,6 +14,10 @@ interface TerminalProps {
   themeType: "light" | "dark";
   command?: string;
   active?: boolean;
+  /** Kill the backend PTY when this view unmounts. Set to false for views
+   * whose PTY lifecycle is managed elsewhere (e.g. bottom-panel sessions,
+   * which are killed explicitly via the close button or folder pruning). */
+  killOnUnmount?: boolean;
 }
 
 const DARK_THEME = {
@@ -31,6 +35,13 @@ const DARK_THEME = {
   white: "#bac2de",
 };
 
+// A hidden container (display: none, or not yet laid out) reports zero
+// dimensions; fitting xterm or resizing the PTY against that would collapse
+// it to an invalid 0x0 size, so callers must skip the fit/resize in that case.
+function hasLayout(el: HTMLElement | null): boolean {
+  return !!el && el.clientWidth > 0 && el.clientHeight > 0;
+}
+
 const LIGHT_THEME = {
   background: "#ffffff",
   foreground: "#1f2937",
@@ -46,7 +57,7 @@ const LIGHT_THEME = {
   white: "#f3f4f6",
 };
 
-export function Terminal({ id, folderPath, themeType, command, active = true }: TerminalProps) {
+export function Terminal({ id, folderPath, themeType, command, active = true, killOnUnmount = true }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -75,7 +86,9 @@ export function Terminal({ id, folderPath, themeType, command, active = true }: 
     xterm.unicode.activeVersion = "11";
 
     xterm.open(containerRef.current);
-    fitAddon.fit();
+    if (hasLayout(containerRef.current)) {
+      fitAddon.fit();
+    }
 
     xtermRef.current = xterm;
     fitAddonRef.current = fitAddon;
@@ -125,7 +138,7 @@ export function Terminal({ id, folderPath, themeType, command, active = true }: 
     setup();
 
     const resizeObserver = new ResizeObserver(() => {
-      if (!disposed) {
+      if (!disposed && hasLayout(containerRef.current)) {
         fitAddon.fit();
         invoke("resize_pty", { id, cols: xterm.cols, rows: xterm.rows }).catch(() => {});
       }
@@ -137,9 +150,18 @@ export function Terminal({ id, folderPath, themeType, command, active = true }: 
       resizeObserver.disconnect();
       unlistenFn?.();
       xterm.dispose();
+      // Most session views keep their PTY alive across unmounts (a remounted
+      // xterm reconnects to the same session id); only views that own the
+      // PTY's whole lifecycle (killOnUnmount) kill it here.
+      if (killOnUnmount) {
+        invoke("kill_pty", { id }).catch(() => {});
+      }
     };
   // folderPath is intentionally excluded: a session captures its working
   // directory at creation and its PTY survives when this view is unmounted.
+  // killOnUnmount is intentionally excluded: it must not retrigger this
+  // effect (which would kill and respawn the PTY); only its value at
+  // unmount time (captured by closure) matters.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, themeType, command]);
 
@@ -148,6 +170,7 @@ export function Terminal({ id, folderPath, themeType, command, active = true }: 
     if (active && fitAddonRef.current && xtermRef.current) {
       // Delay slightly so the container has layout dimensions
       const timer = setTimeout(() => {
+        if (!hasLayout(containerRef.current)) return;
         fitAddonRef.current?.fit();
         const xterm = xtermRef.current;
         if (xterm) {
