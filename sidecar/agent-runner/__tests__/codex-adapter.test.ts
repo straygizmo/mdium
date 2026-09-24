@@ -89,4 +89,37 @@ describe("CodexAdapter", () => {
     await expect(a.startSession({ workingDirectory: "C:/w", permission: "cli-default" }, callbacks([]))).rejects.toThrow("CODEX_NOT_FOUND");
     await expect(a.probe()).resolves.toMatchObject({ kind: "missing" });
   });
+
+  it("rejects when the signal is aborted mid-stream", async () => {
+    const controller = new AbortController();
+    const fake = fakeCodex([
+      { type: "item.started", item: { id: "c1", type: "command_execution", command: "npm test", aggregated_output: "", status: "in_progress" } },
+      { type: "item.completed", item: { id: "c1", type: "command_execution", command: "npm test", aggregated_output: "", status: "completed" } },
+    ]);
+    const session = await adapter(fake.createCodex).startSession(
+      { workingDirectory: "C:/w", permission: "cli-default" },
+      { onEvent: () => controller.abort(), requestPermission: async () => false },
+    );
+    await expect(session.runTurn("x", controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("synthesizes tool_started for a single-shot completed tool item", async () => {
+    const fake = fakeCodex([
+      {
+        type: "item.completed",
+        item: { id: "f1", type: "file_change", status: "completed", changes: [{ path: "a.ts", kind: "update" }] },
+      },
+    ]);
+    const events: AgentEvent[] = [];
+    const session = await adapter(fake.createCodex).startSession(
+      { workingDirectory: "C:/w", permission: "cli-default" },
+      callbacks(events),
+    );
+    await session.runTurn("x", new AbortController().signal);
+
+    expect(events).toEqual([
+      { type: "tool_started", toolId: "f1", title: "file_change" },
+      { type: "tool_finished", toolId: "f1", ok: true },
+    ]);
+  });
 });

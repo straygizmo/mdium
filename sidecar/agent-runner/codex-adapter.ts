@@ -52,16 +52,28 @@ class CodexSession implements AdapterSession {
   async runTurn(text: string, signal: AbortSignal): Promise<string> {
     const { events } = await this.thread.runStreamed(text, { signal });
     let finalResponse = "";
+    // Some tool items (e.g. file_change) are single-shot: the SDK emits only
+    // "item.completed" for them, with no preceding "item.started". Track which
+    // tool ids we already announced so we can synthesize the missing start.
+    const startedToolIds = new Set<string>();
+    const emit = (e: AgentEvent) => this.callbacks.onEvent(e);
     for await (const raw of events) {
       const event = raw as CodexEvent;
       if (event.type === "turn.failed") throw new Error((event as { error: { message: string } }).error.message);
       if (event.type === "error") throw new Error((event as { message: string }).message);
       if (!("item" in event)) continue;
       const { item } = event as { item: CodexItem };
-      const emit = (e: AgentEvent) => this.callbacks.onEvent(e);
       if (TOOL_ITEMS.has(item.type)) {
-        if (event.type === "item.started") emit({ type: "tool_started", toolId: item.id, title: toolTitle(item) });
-        if (event.type === "item.completed") emit({ type: "tool_finished", toolId: item.id, ok: item.status !== "failed" });
+        if (event.type === "item.started") {
+          startedToolIds.add(item.id);
+          emit({ type: "tool_started", toolId: item.id, title: toolTitle(item) });
+        }
+        if (event.type === "item.completed") {
+          if (!startedToolIds.has(item.id)) {
+            emit({ type: "tool_started", toolId: item.id, title: toolTitle(item) });
+          }
+          emit({ type: "tool_finished", toolId: item.id, ok: item.status !== "failed" });
+        }
       } else if (item.type === "agent_message" && event.type === "item.completed" && item.text) {
         finalResponse = item.text;
         emit({ type: "assistant_message", text: item.text });
