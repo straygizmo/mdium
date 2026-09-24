@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isAtLeast, probeCodex, type CommandRunner } from "../availability";
+import { isAtLeast, probeCodex, runCommand, type CommandRunner } from "../availability";
 
 function runner(map: Record<string, { status: number | null; stdout?: string; stderr?: string; error?: NodeJS.ErrnoException }>): CommandRunner {
   return async (_cmd, args) => {
@@ -7,6 +7,19 @@ function runner(map: Record<string, { status: number | null; stdout?: string; st
     return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "", error: r.error };
   };
 }
+
+describe("runCommand", () => {
+  it("resolves with status for non-zero exit", async () => {
+    const result = await runCommand(process.execPath, ["-e", "process.exit(3)"]);
+    expect(result).toEqual({ status: 3, stdout: "", stderr: "", error: undefined });
+  });
+
+  it("resolves with error for missing binary", async () => {
+    const result = await runCommand("definitely-not-a-real-binary-xyz", []);
+    expect(result.status).toBe(null);
+    expect(result.error?.code).toBe("ENOENT");
+  });
+});
 
 describe("isAtLeast", () => {
   it.each([
