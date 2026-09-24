@@ -45,11 +45,12 @@ function EntryView({ entry }: { entry: ChatEntry }) {
 }
 
 export function NativeChat({ folder, provider }: Props) {
-  const { t } = useTranslation("agent-chat");
+  const { t, i18n } = useTranslation("agent-chat");
   const chat = useAgentChatStore((s) => s.chats[chatKey(folder, provider)] ?? emptyChat);
   const { send, cancel, newSession, respondPermission, listSessions } = useAgentChatStore.getState();
   const [input, setInput] = useState("");
   const [history, setHistory] = useState<AgentSessionSummary[] | null>(null);
+  const [historyError, setHistoryError] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -81,7 +82,15 @@ export function NativeChat({ folder, provider }: Props) {
             disabled={busy}
             title={t("history")}
             aria-label={t("history")}
-            onClick={() => void listSessions(folder, provider).then(setHistory).catch(() => setHistory([]))}
+            onClick={() => {
+              setHistoryError(false);
+              void listSessions(folder, provider)
+                .then(setHistory)
+                .catch(() => {
+                  setHistoryError(true);
+                  setHistory([]);
+                });
+            }}
           >
             ⟲
           </button>
@@ -147,7 +156,9 @@ export function NativeChat({ folder, provider }: Props) {
               <span>{t("history")}</span>
               <button type="button" className="claude-chat__dialog-close" onClick={() => setHistory(null)} aria-label={t("close")}>×</button>
             </div>
-            {history.length === 0 ? (
+            {historyError ? (
+              <div className="claude-chat__history-empty">{t("historyError")}</div>
+            ) : history.length === 0 ? (
               <div className="claude-chat__history-empty">{t("noHistory")}</div>
             ) : (
               <ul className="claude-chat__history-list">
@@ -159,7 +170,7 @@ export function NativeChat({ folder, provider }: Props) {
                       onClick={() => { setHistory(null); void newSession(folder, provider, s.nativeSessionId); }}
                     >
                       <div className="claude-chat__history-title">{s.title ?? s.nativeSessionId}</div>
-                      {s.updatedAt && <div className="claude-chat__history-meta">{new Date(s.updatedAt).toLocaleString()}</div>}
+                      {s.updatedAt && <div className="claude-chat__history-meta">{new Date(s.updatedAt).toLocaleString(i18n.language)}</div>}
                     </button>
                   </li>
                 ))}

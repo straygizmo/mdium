@@ -7,6 +7,7 @@
   "newSession": "新しいセッション",
   "history": "セッション履歴",
   "noHistory": "セッションがありません",
+  "historyError": "セッション履歴を読み込めませんでした。",
   "close": "閉じる",
   "send": "送信",
   "stop": "停止",
