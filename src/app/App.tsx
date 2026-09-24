@@ -357,7 +357,7 @@ export function App() {
       }
       await useOpencodeServerStore.getState().removeAllServers();
       await killClaudeSidecar();
-      void shutdownRunner();
+      await shutdownRunner();
     }).then((fn) => { unlisten = fn; });
 
     return () => {
