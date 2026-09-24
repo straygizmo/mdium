@@ -1288,7 +1288,7 @@ export function App() {
               </div>
             )}
           </div>
-          {terminalSessions.length > 0 && (
+          {(bottomTerminalVisible || terminalSessions.length > 0) && (
             <>
               <div
                 className="app__bottom-terminal-divider"

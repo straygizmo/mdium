@@ -165,9 +165,15 @@ export function Terminal({ id, folderPath, themeType, command, active = true, ki
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, themeType, command]);
 
-  // Re-fit and focus when the tab becomes active (display: none → flex)
+  // Re-fit and focus when the tab becomes active (display: none → flex);
+  // blur when it becomes inactive so a hidden-but-mounted terminal doesn't
+  // keep keyboard focus.
   useEffect(() => {
-    if (active && fitAddonRef.current && xtermRef.current) {
+    if (!active) {
+      xtermRef.current?.blur();
+      return;
+    }
+    if (fitAddonRef.current && xtermRef.current) {
       // Delay slightly so the container has layout dimensions
       const timer = setTimeout(() => {
         if (!hasLayout(containerRef.current)) return;
