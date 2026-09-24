@@ -10,6 +10,8 @@ export interface ChatEntry {
   text: string;
   /** Tool entries: undefined while running, then the outcome. */
   ok?: boolean;
+  /** Tool entries only: the SDK's tool call id, used to match a later tool_finished. */
+  toolId?: string;
 }
 
 export interface PendingPermission { permissionId: string; request: ToolRequest }
@@ -28,7 +30,7 @@ interface AgentChatState {
   setSelectedTab(tab: ChatProviderTab): void;
   probe(provider: AgentProvider): Promise<void>;
   newSession(folder: string, provider: AgentProvider, resumeNativeId?: string): Promise<void>;
-  send(folder: string, provider: AgentProvider, text: string): Promise<void>;
+  send(folder: string, provider: AgentProvider, text: string): Promise<boolean>;
   cancel(folder: string, provider: AgentProvider): Promise<void>;
   respondPermission(folder: string, provider: AgentProvider, allow: boolean): Promise<void>;
   listSessions(folder: string, provider: AgentProvider): Promise<AgentSessionSummary[]>;
@@ -72,10 +74,19 @@ export const useAgentChatStore = create<AgentChatState>()((set, get) => {
           break;
         case "tool_started":
           if (streamingLast) streaming.delete(last.id);
-          entries.push({ id: event.toolId, role: "tool", text: event.title });
+          entries.push({ id: newRunnerId(), role: "tool", text: event.title, toolId: event.toolId });
           break;
         case "tool_finished": {
-          const index = entries.findIndex((e) => e.role === "tool" && e.id === event.toolId);
+          // A toolId can repeat across turns (the same tool run more than
+          // once), so match the most recent still-unresolved entry for it.
+          let index = -1;
+          for (let i = entries.length - 1; i >= 0; i--) {
+            const candidate = entries[i];
+            if (candidate.role === "tool" && candidate.toolId === event.toolId && candidate.ok === undefined) {
+              index = i;
+              break;
+            }
+          }
           if (index >= 0) entries[index] = { ...entries[index], ok: event.ok };
           break;
         }
@@ -95,7 +106,11 @@ export const useAgentChatStore = create<AgentChatState>()((set, get) => {
   onRunnerMessage((msg: RunnerOutbound) => {
     if (msg.type === "error" && msg.message === "RUNNER_EXITED" && !msg.sessionId) {
       for (const key of Object.keys(get().chats)) {
-        update(key, (c) => ({ ...c, sessionId: null, status: "idle", pendingPermission: null }));
+        const c = get().chats[key];
+        // Skip chats with nothing in flight (no session, already idle): the
+        // runner dying doesn't affect them, so don't spam an error entry.
+        if (!c || (c.sessionId === null && c.status === "idle")) continue;
+        update(key, (cur) => ({ ...cur, sessionId: null, status: "idle", pendingPermission: null }));
         append(key, { id: newRunnerId(), role: "error", text: "RUNNER_EXITED" });
       }
       streaming.clear();
@@ -145,14 +160,20 @@ export const useAgentChatStore = create<AgentChatState>()((set, get) => {
       const key = chatKey(folder, provider);
       const previous = get().chats[key]?.sessionId;
       if (previous) {
-        // Idle the old chat and drop any pending permission before waiting on
-        // the close so the UI never shows a stale busy/pending state while
-        // the runner is still tearing the session down.
-        update(key, (c) => ({ ...c, status: "idle", pendingPermission: null }));
+        // Mark the old chat as starting (not idle) and drop any pending
+        // permission before waiting on the close: this blocks `send` for
+        // the whole window and keeps the UI from showing a stale
+        // busy/pending state while the runner is tearing the session down.
+        update(key, (c) => ({ ...c, status: "starting", pendingPermission: null }));
         await sendToRunner({ type: "close_session", sessionId: previous }).catch(() => undefined);
       }
       const sessionId = newRunnerId();
-      update(key, () => ({ ...emptyChat, sessionId, status: "starting" }));
+      update(key, (c) => {
+        // Drop the discarded entries' ids from the streaming set so it
+        // doesn't grow with ids that no longer belong to any entry.
+        c.entries.forEach((e) => streaming.delete(e.id));
+        return { ...emptyChat, sessionId, status: "starting" };
+      });
       try {
         await requestRunner(
           {
@@ -166,8 +187,12 @@ export const useAgentChatStore = create<AgentChatState>()((set, get) => {
           },
           "session_started",
         );
+        // A newer newSession (or a RUNNER_EXITED reset) may have superseded
+        // this attempt while it was in flight; don't clobber its state.
+        if (get().chats[key]?.sessionId !== sessionId) return;
         update(key, (c) => ({ ...c, status: "idle" }));
       } catch (error) {
+        if (get().chats[key]?.sessionId !== sessionId) return;
         update(key, (c) => ({ ...c, sessionId: null, status: "idle" }));
         append(key, { id: newRunnerId(), role: "error", text: message(error) });
       }
@@ -176,13 +201,19 @@ export const useAgentChatStore = create<AgentChatState>()((set, get) => {
     send: async (folder, provider, text) => {
       const key = chatKey(folder, provider);
       const current = get().chats[key] ?? emptyChat;
-      if (current.status !== "idle") return;
+      if (current.status !== "idle") return false;
       if (!current.sessionId) await get().newSession(folder, provider);
       const sessionId = get().chats[key]?.sessionId;
-      if (!sessionId) return;
+      if (!sessionId) return false;
       append(key, { id: newRunnerId(), role: "user", text });
       update(key, (c) => ({ ...c, status: "running" }));
-      await sendToRunner({ type: "send", sessionId, text }).catch((error: unknown) => endTurn(key, message(error)));
+      try {
+        await sendToRunner({ type: "send", sessionId, text });
+        return true;
+      } catch (error) {
+        endTurn(key, message(error));
+        return false;
+      }
     },
 
     cancel: async (folder, provider) => {
@@ -196,7 +227,9 @@ export const useAgentChatStore = create<AgentChatState>()((set, get) => {
       if (!chat?.sessionId || !chat.pendingPermission) return;
       const { permissionId } = chat.pendingPermission;
       update(key, (c) => ({ ...c, pendingPermission: null }));
-      await sendToRunner({ type: "respond_permission", sessionId: chat.sessionId, permissionId, allow });
+      await sendToRunner({ type: "respond_permission", sessionId: chat.sessionId, permissionId, allow }).catch(
+        (error: unknown) => endTurn(key, message(error)),
+      );
     },
 
     listSessions: async (folder, provider) => {
