@@ -11,10 +11,16 @@ const targetStylesheets: string[] = [
   "src/features/opencode-config/components/OpencodeConfigDialog.css",
   "src/features/opencode-config/components/OpencodeChat.css",
   "src/features/claude-config/components/PluginsTab.css",
+  "src/features/video/components/VideoPanel.css",
+  "src/features/preview/components/PreviewPanel.css",
 ];
 
 // Components that render span-based switches. Extended as features adopt data-switch.
-const keyboardSwitchComponents: string[] = [];
+const keyboardSwitchComponents: string[] = [
+  "src/features/video/components/SceneEditForm.tsx",
+  "src/features/video/components/VideoSettingsBar.tsx",
+  "src/features/preview/components/PreviewPanel.tsx",
+];
 
 // Components whose every checkbox is a switch.
 const checkboxSwitchComponents: string[] = [

@@ -744,36 +744,23 @@
   display: inline-block;
   width: 28px;
   height: 16px;
-  background: var(--bg-base);
-  border: 1px solid var(--border);
   border-radius: 8px;
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s;
   flex-shrink: 0;
 }
 
-.preview-panel__switch:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: 1px;
-}
-
-.preview-panel__switch--on {
-  background: var(--accent-green, #22c55e);
-  border-color: var(--accent-green, #22c55e);
-}
-
 .preview-panel__switch-thumb {
   position: absolute;
-  top: 2px;
+  top: 50%;
+  margin-top: -5px;
   left: 2px;
   width: 10px;
   height: 10px;
-  background: var(--text-muted);
   border-radius: 50%;
   transition: transform 0.15s, background 0.15s;
 }
 
 .preview-panel__switch--on .preview-panel__switch-thumb {
   transform: translateX(12px);
-  background: #fff;
 }

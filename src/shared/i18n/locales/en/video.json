@@ -16,6 +16,7 @@
   "regenerateTtsAudio": "Regenerate TTS audio",
   "narrationDirty": "Out of sync",
   "captions": "Captions",
+  "showImage": "Show {{name}}",
   "captionsOn": "ON",
   "captionsOff": "OFF",
   "transition": "Transition",

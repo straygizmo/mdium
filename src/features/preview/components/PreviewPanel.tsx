@@ -1310,7 +1310,9 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree, onJump
                 </span>
                 <span
                   className={`preview-panel__switch${allowLlmVbaImport ? " preview-panel__switch--on" : ""}`}
+                  data-switch
                   role="switch"
+                  aria-label={t("allowLlmVbaImport")}
                   aria-checked={allowLlmVbaImport}
                   tabIndex={0}
                   onClick={() => {
@@ -1325,7 +1327,7 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree, onJump
                     }
                   }}
                 >
-                  <span className="preview-panel__switch-thumb" />
+                  <span className="preview-panel__switch-thumb" data-switch-thumb />
                 </span>
               </label>
             )}

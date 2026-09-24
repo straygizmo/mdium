@@ -16,6 +16,7 @@
   "regenerateTtsAudio": "TTS音声を再生成",
   "narrationDirty": "未同期",
   "captions": "字幕",
+  "showImage": "{{name}} を表示",
   "captionsOn": "ON",
   "captionsOff": "OFF",
   "transition": "トランジション",

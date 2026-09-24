@@ -213,7 +213,9 @@ export function SceneEditForm({ scene, onRegenerateAudio, audioGenerating }: Sce
                   <div className="scene-edit-form__image-top-row">
                     <span
                       className={`scene-edit-form__switch${enabled ? " scene-edit-form__switch--on" : ""}`}
+                      data-switch
                       role="switch"
+                      aria-label={t("showImage", { name: fileName })}
                       aria-checked={enabled}
                       tabIndex={0}
                       onClick={() => handleImageToggle(i, enabled)}
@@ -224,7 +226,7 @@ export function SceneEditForm({ scene, onRegenerateAudio, audioGenerating }: Sce
                         }
                       }}
                     >
-                      <span className="scene-edit-form__switch-thumb" />
+                      <span className="scene-edit-form__switch-thumb" data-switch-thumb />
                     </span>
                     <span className={`scene-edit-form__image-name${enabled ? "" : " scene-edit-form__image-name--disabled"}`}>
                       {fileName}
@@ -286,13 +288,15 @@ export function SceneEditForm({ scene, onRegenerateAudio, audioGenerating }: Sce
             <span className="scene-edit-form__caption-switch-label">{t("captions")}</span>
             <span
               className={`scene-edit-form__switch${captionsEnabled ? " scene-edit-form__switch--on" : ""}`}
+              data-switch
               role="switch"
+              aria-label={t("captions")}
               aria-checked={captionsEnabled}
               tabIndex={0}
               onClick={handleToggleCaptions}
               onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleToggleCaptions(); } }}
             >
-              <span className="scene-edit-form__switch-thumb" />
+              <span className="scene-edit-form__switch-thumb" data-switch-thumb />
             </span>
           </label>
         </div>

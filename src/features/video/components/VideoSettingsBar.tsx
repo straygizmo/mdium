@@ -220,7 +220,9 @@ export function VideoSettingsBar({ onGenerateAudio, generating, generatingStatus
         <label style={{ fontSize: 12, color: "var(--text)", whiteSpace: "nowrap" }}>{t("captions")}</label>
         <span
           className={`scene-edit-form__switch${allCaptionsEnabled ? " scene-edit-form__switch--on" : ""}`}
+          data-switch
           role="switch"
+          aria-label={t("captions")}
           aria-checked={allCaptionsEnabled}
           tabIndex={0}
           onClick={handleToggleAllCaptions}
@@ -231,7 +233,7 @@ export function VideoSettingsBar({ onGenerateAudio, generating, generatingStatus
             }
           }}
         >
-          <span className="scene-edit-form__switch-thumb" />
+          <span className="scene-edit-form__switch-thumb" data-switch-thumb />
         </span>
       </div>
     </div>
