@@ -7,7 +7,7 @@
     "predev": "npm run build:sidecar",
     "dev": "vite",
     "build": "tsc && vite build && npm run build:sidecar",
-    "build:sidecar": "node scripts/build-claude-sidecar.mjs",
+    "build:sidecar": "node scripts/build-claude-sidecar.mjs && node scripts/build-agent-runner.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
     "test": "vitest run",

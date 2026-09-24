@@ -44,4 +44,7 @@ resources/mcp-servers/*/dist/
 # esbuild-bundled Claude Agent SDK sidecar (built by scripts/build-claude-sidecar.mjs)
 resources/claude-sidecar/
 
+# esbuild-bundled agent runner (built by scripts/build-agent-runner.mjs)
+resources/agent-runner/
+
 slides/
