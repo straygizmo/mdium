@@ -105,13 +105,20 @@ interface ProviderAdapter {
 interface SessionOptions {
   workingDirectory: string;
   model?: string;
-  permission: "read-only" | "workspace-write";   // full access は提供しない
-  network: boolean;
+  // cli-default: MDium は権限を指定せず各 CLI の利用者設定に従う（AGENT CHAT）
+  // read-only: 読み取りのみを強制（設計・計画・レビュー・要件整理・定期 JOB）
+  // full-access: 制限なし。安全ガード（3.7）と組み合わせてのみ使用（実装本実行）
+  permission: "cli-default" | "read-only" | "full-access";
+  env?: Record<string, string>;   // 子プロセス環境の上書き（3.7 の封じ込めに使用）
   timeoutMs?: number;
 }
 ```
 
-- 権限の対応付け: Codex は sandbox mode（`read-only` / `workspace-write`、ネットワーク設定）、Copilot は権限ハンドラでツール要求を許可・拒否、opencode はエージェントの permission 設定（edit / bash）。プロバイダーが要求された権限を表現できない場合、アダプタは `unsupported` を返し、呼び出し側はそのプロバイダーを選択不可として扱う。
+- 権限の対応付け:
+  - `read-only`: Codex は sandbox `read-only`、Copilot は権限ハンドラで `read` 以外の要求をすべて拒否、opencode は `plan` エージェントで実行し `read` 以外の権限要求を拒否。
+  - `full-access`: Codex は sandbox `danger-full-access`、Copilot と opencode はすべて許可（ただしランナーのガードフックを通す。3.7）。
+  - `cli-default`: Codex は sandbox を指定しない（`~/.codex/config.toml` に従う）。Copilot の権限要求は CLI と同じく利用者に都度確認する（チャット UI で承認・拒否）。
+- ガードフック: アダプタはツール実行要求を正規化した `ToolRequest`（種別 `shell` / `write` / `read` / `network` / `other`、コマンドまたはパス）として呼び出し側のポリシーに渡す。事前フックを持つ Copilot / opencode は実行前に判定し、拒否できる。事前フックを持たない Codex は実行開始イベントで判定し、違反時は直ちにターンを中止する。
 - タイムアウトは呼び出し側が指定する。SDK 既定の短いタイムアウトに依存しない。
 - `cancel` は子プロセスツリーまで終了させる。stdin が閉じたらランナーは全セッションをキャンセルしてから終了する。
 - Codex 実行ファイルの解決は `MDIUM_CODEX_PATH` → PATH 上の `codex` → npm グローバルの順。見つからなければ `probe` が理由付きで unavailable を返す。
@@ -125,6 +132,7 @@ interface SessionOptions {
 - Codex / Copilot タブはランナーを使うネイティブチャット（新規セッション、送信、履歴一覧と再開は対応プロバイダーのみ）。
 - 利用できないプロバイダーのタブは無効表示とし、理由をツールチップで示す。
 - パネルを切り替えてもチャット状態を保持する。
+- チャットの権限は `cli-default`（各 CLI の利用者設定に従う）。Copilot の権限要求はチャット内に承認・拒否ボタンとして表示する。
 - 表示文言（パネル名「AGENT CHAT」を含む）はすべて i18n。
 
 ---
@@ -176,7 +184,6 @@ interface Workflow {
   reviewReturnTo: "design" | "implement";   // 既定 "design"
   maxReentryCount: number;                  // 既定 5
   maxConcurrentRuns: number;                // 既定 1
-  implementNetwork: boolean;                // 実装本実行のネットワーク許可。既定 false
   designDocPath?: string;                   // 設計書の保存先（空なら保存しない）。有効化時の初期値 "docs/designs/{date}-{slug}-design.md"
   issueTracking: "auto" | "off";            // auto: origin が GitHub/GitLab なら連携
 }
@@ -189,7 +196,7 @@ interface Stage<R extends "design" | "implement" | "review"> {
   completionCriteria: string;  // 完了要件
   provider: "codex" | "copilot" | "opencode";
   model?: string;
-  requiresApproval: boolean;   // implement のみ有効。既定 true
+  requiresApproval: boolean;   // implement のみ有効。既定 false
   timeoutMinutes: number;      // 既定 60
 }
 ```
@@ -235,16 +242,27 @@ interface Stage<R extends "design" | "implement" | "review"> {
 - 全工程のエージェントはこの worktree を作業ディレクトリとして実行する。レビューは `base..branch` の差分を対象にする。
 - プロジェクトが git リポジトリでない場合、ワークフローは実行不可とし理由を表示する。
 
-### 3.7 工程の権限
+### 3.7 工程の権限と安全ガード
 
-| 役割 / モード | 権限 | ネットワーク |
-|---|---|---|
-| 設計 | read-only | なし |
-| 実装（計画） | read-only | なし |
-| 実装（本実行） | workspace-write（worktree 内） | `implementNetwork` に従う |
-| レビュー | read-only | なし |
+| 役割 / モード | 権限（2.1） |
+|---|---|
+| 設計 | read-only |
+| 実装（計画、`requiresApproval` が true の場合のみ） | read-only |
+| 実装（本実行） | full-access（作業ディレクトリは worktree） |
+| レビュー | read-only |
 
-全権限（サンドボックスなし）での実行は提供しない。選択したプロバイダーが権限を表現できない場合、その工程の保存時に検証エラーとする。
+実装の本実行は利用者の承認なしで全権限を与えてよい。その代わり、次の多層の安全ガードを必ず適用する。ガードは危険操作の検出を完全には保証しない（難読化されたコマンドやネットワーク送信は網羅できない）ため、ワークフローを初めて有効にするときにこの限界を説明し、利用者の確認を得る。
+
+1. 入力検査: 工程の開始前に、エージェントへ渡す外部由来テキスト（タスク本文、Issue 本文・コメント、テキスト系の添付）を検査する。既知のインジェクション表現（以前の指示の無視、システムプロンプトの上書き、資格情報や環境変数の送信依頼など）、不可視文字・双方向制御文字、長大なエンコード済みペイロードを検出した場合は実行せず `attention`（理由: 入力に危険な指示の疑い、該当箇所を表示）とする。利用者は内容を確認して「このまま続行」できる。
+2. 実行時ガード: 2.1 のガードフックで、次の操作を拒否リストとして判定する。
+   - `git push`、リモートの追加・変更、`gh` / `glab` による外部変更
+   - worktree 外への書き込み・削除
+   - 資格情報の読み取り（`~/.ssh`、`~/.aws`、`~/.config/gh`、`.git-credentials`、`.env` 系、ブラウザのプロファイル等）
+   - 外部への送信系コマンド（`curl` / `wget` / `Invoke-WebRequest` / `Invoke-RestMethod` 等でのアップロード・POST）
+   - システム設定の変更（レジストリ、サービス、スケジュールタスク、環境変数の永続変更）
+   Copilot / opencode は実行前に拒否する。Codex は実行開始イベントで検出した時点でターンを中止する。いずれも `attention`（理由: 危険操作を検出、内容を表示）とする。
+3. 環境による封じ込め: エージェントの子プロセス環境（2.1 の `env`）で、`GIT_CONFIG_COUNT` 等により全リモートの push 先を無効な URL に上書きし、`GH_TOKEN` / `GITLAB_TOKEN` を無効値にする。MDium 自身の Issue 連携は Rust から通常の環境で行うため影響を受けない。
+4. 事後検査: 工程の終了後、利用者の作業ツリー（`git status` とブランチ位置）と base ブランチが工程開始前から変化していないことを確認し、変化していれば `attention`（理由: 作業ツリー外への変更を検出）とする。
 
 ### 3.8 工程の入出力
 
@@ -260,7 +278,7 @@ interface Stage<R extends "design" | "implement" | "review"> {
 
 - `requiresApproval` が true の場合、まず計画モード（read-only）で実行し、計画を本文に表示して `awaiting_user` にする。
 - タスク詳細に「承認」と「修正を依頼」を別ボタンで置く。
-  - 承認: 本実行（workspace-write）へ進む。
+  - 承認: 本実行（full-access、3.7 のガード適用）へ進む。
   - 修正を依頼: 入力した指示を加えて計画をやり直す（承認フラグは立てない）。
 - 承認はその試行に対してのみ有効で、次の計画には引き継がない。
 
@@ -380,6 +398,6 @@ ready → issue_created（Issue 連携時のみ）→ attachments_committed → 
 - push、PR / MR 作成、リモートでのマージ
 - 工程の追加・削除・並べ替え、任意の遷移グラフ
 - 外部スキルパックの取得・同期
-- 全権限（サンドボックスなし）でのエージェント実行
+- ガードなしの全権限でのエージェント実行
 - 書き込み権限を持つ定期 JOB
 - アプリ停止中の定期 JOB の補完実行
