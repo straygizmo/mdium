@@ -125,13 +125,31 @@ function startRunner(): Promise<number> {
         throw subscribeError;
       }
 
+      if (generation !== myGeneration) {
+        // Superseded (e.g. `shutdownRunner` ran) while we were still
+        // subscribing. Bail out before writing any shared state.
+        throw new Error("RUNNER_EXITED");
+      }
+
       startBuffer = [];
       const ready = new Promise<void>((resolve, reject) => {
         readyWaiter = { resolve, reject };
       });
-      const scriptPath = await invoke<string>("resolve_agent_runner_path");
-      spawnedId = await invoke<number>("spawn_agent_runner", { scriptPath });
+      // Attach a no-op handler immediately: a shutdown-triggered rejection
+      // can arrive before `await ready` is reached below (e.g. while still
+      // resolving the script path or spawning), and without an early
+      // handler that would surface as an unhandled rejection even though
+      // `await ready` goes on to observe the same rejection normally.
+      ready.catch(() => undefined);
 
+      const scriptPath = await invoke<string>("resolve_agent_runner_path");
+      if (generation !== myGeneration) {
+        // Superseded while resolving the script path. Bail out before
+        // spawning a process nobody wants anymore.
+        throw new Error("RUNNER_EXITED");
+      }
+
+      spawnedId = await invoke<number>("spawn_agent_runner", { scriptPath });
       if (generation !== myGeneration) {
         // Superseded (e.g. `shutdownRunner` ran) while we were spawning.
         // Don't claim ownership of shared state; the catch below still
@@ -146,8 +164,13 @@ function startRunner(): Promise<number> {
       startBuffer = [];
       for (const event of buffered) {
         if (event.payload.id !== spawnedId) continue;
-        if (event.kind === "line") processLine(event.payload.line);
-        else handleExit();
+        if (event.kind === "line") {
+          processLine(event.payload.line);
+        } else {
+          // The process is already gone; ignore anything buffered after it.
+          handleExit();
+          break;
+        }
       }
 
       timer = setTimeout(() => {
@@ -160,6 +183,12 @@ function startRunner(): Promise<number> {
       if (generation === myGeneration) {
         readyWaiter = null;
         runnerId = null;
+        // Clear `starting` here (before the kill below, which can take a
+        // moment) so a caller that calls `ensureRunner()` while we're
+        // still killing the process starts a fresh attempt instead of
+        // joining this one, which is only going to reject anyway.
+        starting = null;
+        startBuffer = null;
       }
       if (spawnedId !== null) {
         await invoke("kill_agent_runner", { id: spawnedId }).catch(() => undefined);

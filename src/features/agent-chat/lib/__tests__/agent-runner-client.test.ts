@@ -196,14 +196,17 @@ describe("agent runner client", () => {
 
   it("logs stderr lines during an in-flight start regardless of process id", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const client = await loadClient(() => undefined); // ready withheld -> stays in flight
+    const send = client.sendToRunner({ type: "cancel", sessionId: "s1" });
     try {
-      const client = await loadClient(() => undefined); // ready withheld -> stays in flight
-      const send = client.sendToRunner({ type: "cancel", sessionId: "s1" });
-      send.catch(() => undefined); // never settles in this test; keep it observed
       await flush();
       emitStderr(999, "boot diagnostic");
       expect(warnSpy).toHaveBeenCalledWith("[agent-runner]", "boot diagnostic");
     } finally {
+      // `send` never settles on its own in this test (ready is withheld);
+      // abort the in-flight start so it settles instead of dangling.
+      await client.shutdownRunner();
+      await send.catch(() => undefined);
       warnSpy.mockRestore();
     }
   });
@@ -234,5 +237,59 @@ describe("agent runner client", () => {
     await expect(client.sendToRunner({ type: "cancel", sessionId: "s1" })).rejects.toThrow("SPAWN_FAILED");
     await client.sendToRunner({ type: "cancel", sessionId: "s2" });
     expect(spawnCalls).toBe(2);
+  });
+
+  // --- Fix round 2 ---------------------------------------------------
+
+  it("aborts a start whose spawn_agent_runner is still pending: caller rejects, the belated id is killed, and the next start works", async () => {
+    const spawnControl: { resolve: ((id: number) => void) | null } = { resolve: null };
+    const client = await loadClient();
+    invoke.mockReset();
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "resolve_agent_runner_path") return "C:/runner.mjs";
+      if (cmd === "spawn_agent_runner") {
+        return new Promise<number>((resolve) => { spawnControl.resolve = resolve; });
+      }
+      return undefined;
+    });
+
+    const send = client.sendToRunner({ type: "cancel", sessionId: "s1" });
+    await flush(); // let the chain reach the still-pending spawn invoke
+
+    await client.shutdownRunner();
+    // The id becomes known only now, well after the abort.
+    spawnControl.resolve?.(42);
+    await expect(send).rejects.toThrow("RUNNER_EXITED");
+    expect(invoke).toHaveBeenCalledWith("kill_agent_runner", { id: 42 });
+
+    // The next start must work normally (fresh spawn).
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "resolve_agent_runner_path") return "C:/runner.mjs";
+      if (cmd === "spawn_agent_runner") {
+        emitLine(7, { type: "ready" });
+        return 7;
+      }
+      return undefined;
+    });
+    await client.sendToRunner({ type: "cancel", sessionId: "s2" });
+  });
+
+  it("aborts a start whose subscribe() is still pending and never spawns", async () => {
+    const client = await loadClient();
+    const deferredListens: Array<() => void> = [];
+    listen.mockReset();
+    listen.mockImplementation(() => new Promise<() => void>((resolve) => {
+      deferredListens.push(() => resolve(() => undefined));
+    }));
+
+    const send = client.sendToRunner({ type: "cancel", sessionId: "s1" });
+    await flush(); // let the chain reach the still-pending listen() calls
+
+    await client.shutdownRunner();
+    // Let subscribe() finally resolve, belatedly.
+    deferredListens.forEach((finish) => finish());
+    await expect(send).rejects.toThrow("RUNNER_EXITED");
+    expect(invoke.mock.calls.filter(([c]) => c === "resolve_agent_runner_path")).toHaveLength(0);
+    expect(invoke.mock.calls.filter(([c]) => c === "spawn_agent_runner")).toHaveLength(0);
   });
 });
