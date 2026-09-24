@@ -68,7 +68,7 @@ describe("AgentChatPanel", () => {
           sessionId: "s1",
           status: "running",
           entries: [{ id: "u", role: "user", text: "hi" }],
-          pendingPermission: { permissionId: "p1", request: { kind: "shell", summary: "npm test" } },
+          pendingPermissions: [{ permissionId: "p1", request: { kind: "shell", summary: "npm test" } }],
         },
       },
     });

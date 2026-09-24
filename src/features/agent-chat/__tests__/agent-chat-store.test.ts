@@ -85,10 +85,29 @@ describe("agent chat store", () => {
     await useAgentChatStore.getState().send("C:/w", "codex", "hi");
     const sessionId = chat().sessionId!;
     client.emit({ type: "permission_request", sessionId, permissionId: "p1", request: { kind: "shell", summary: "ls" } });
-    expect(chat().pendingPermission).toEqual({ permissionId: "p1", request: { kind: "shell", summary: "ls" } });
+    expect(chat().pendingPermissions).toEqual([{ permissionId: "p1", request: { kind: "shell", summary: "ls" } }]);
     await useAgentChatStore.getState().respondPermission("C:/w", "codex", true);
     expect(client.sendToRunner).toHaveBeenCalledWith({ type: "respond_permission", sessionId, permissionId: "p1", allow: true });
-    expect(chat().pendingPermission).toBeNull();
+    expect(chat().pendingPermissions).toEqual([]);
+  });
+
+  it("queues concurrent permission requests and answers them in order", async () => {
+    await useAgentChatStore.getState().send("C:/w", "codex", "hi");
+    const sessionId = chat().sessionId!;
+    client.emit({ type: "permission_request", sessionId, permissionId: "p1", request: { kind: "shell", summary: "ls" } });
+    client.emit({ type: "permission_request", sessionId, permissionId: "p2", request: { kind: "write", summary: "a.ts" } });
+    expect(chat().pendingPermissions).toEqual([
+      { permissionId: "p1", request: { kind: "shell", summary: "ls" } },
+      { permissionId: "p2", request: { kind: "write", summary: "a.ts" } },
+    ]);
+
+    await useAgentChatStore.getState().respondPermission("C:/w", "codex", true);
+    expect(client.sendToRunner).toHaveBeenLastCalledWith({ type: "respond_permission", sessionId, permissionId: "p1", allow: true });
+    expect(chat().pendingPermissions).toEqual([{ permissionId: "p2", request: { kind: "write", summary: "a.ts" } }]);
+
+    await useAgentChatStore.getState().respondPermission("C:/w", "codex", false);
+    expect(client.sendToRunner).toHaveBeenLastCalledWith({ type: "respond_permission", sessionId, permissionId: "p2", allow: false });
+    expect(chat().pendingPermissions).toEqual([]);
   });
 
   it("does not throw when responding to a permission fails to send, and records the error", async () => {
@@ -99,7 +118,7 @@ describe("agent chat store", () => {
     client.sendToRunner.mockRejectedValueOnce(new Error("PIPE_CLOSED"));
     await expect(useAgentChatStore.getState().respondPermission("C:/w", "codex", true)).resolves.toBeUndefined();
 
-    expect(chat().pendingPermission).toBeNull();
+    expect(chat().pendingPermissions).toEqual([]);
     expect(chat().status).toBe("idle");
     expect(chat().entries.at(-1)).toMatchObject({ role: "error", text: "PIPE_CLOSED" });
   });
@@ -147,21 +166,21 @@ describe("agent chat store", () => {
     await useAgentChatStore.getState().send("C:/w", "codex", "hi");
     const sessionId = chat().sessionId!;
     client.emit({ type: "permission_request", sessionId, permissionId: "p1", request: { kind: "shell", summary: "ls" } });
-    expect(chat().pendingPermission).not.toBeNull();
+    expect(chat().pendingPermissions).not.toEqual([]);
 
     let statusAtClose: string | undefined;
     let pendingAtClose: unknown;
     client.sendToRunner.mockImplementationOnce(async (msg: { type: string }) => {
       if (msg.type === "close_session") {
         statusAtClose = chat().status;
-        pendingAtClose = chat().pendingPermission;
+        pendingAtClose = chat().pendingPermissions;
       }
     });
 
     await useAgentChatStore.getState().newSession("C:/w", "codex");
 
     expect(statusAtClose).toBe("starting");
-    expect(pendingAtClose).toBeNull();
+    expect(pendingAtClose).toEqual([]);
   });
 
   it("blocks send while the previous session is still being closed", async () => {

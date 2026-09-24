@@ -20,7 +20,12 @@ export interface ProviderChat {
   sessionId: string | null;
   status: "idle" | "starting" | "running";
   entries: ChatEntry[];
-  pendingPermission: PendingPermission | null;
+  /**
+   * FIFO queue of outstanding permission requests. The Copilot SDK dispatches
+   * permission requests fire-and-forget, so more than one can be pending at
+   * once; the UI answers them one at a time, oldest first.
+   */
+  pendingPermissions: PendingPermission[];
 }
 
 interface AgentChatState {
@@ -38,7 +43,7 @@ interface AgentChatState {
 
 export const chatKey = (folder: string, provider: AgentProvider) => `${provider}::${folder}`;
 
-export const emptyChat: ProviderChat = { sessionId: null, status: "idle", entries: [], pendingPermission: null };
+export const emptyChat: ProviderChat = { sessionId: null, status: "idle", entries: [], pendingPermissions: [] };
 
 /** Assistant entries still receiving deltas. */
 const streaming = new Set<string>();
@@ -99,7 +104,7 @@ export const useAgentChatStore = create<AgentChatState>()((set, get) => {
     update(key, (c) => {
       c.entries.forEach((e) => streaming.delete(e.id));
       const entries = error ? [...c.entries, { id: newRunnerId(), role: "error" as const, text: error }] : c.entries;
-      return { ...c, status: "idle", pendingPermission: null, entries };
+      return { ...c, status: "idle", pendingPermissions: [], entries };
     });
   };
 
@@ -110,7 +115,7 @@ export const useAgentChatStore = create<AgentChatState>()((set, get) => {
         // Skip chats with nothing in flight (no session, already idle): the
         // runner dying doesn't affect them, so don't spam an error entry.
         if (!c || (c.sessionId === null && c.status === "idle")) continue;
-        update(key, (cur) => ({ ...cur, sessionId: null, status: "idle", pendingPermission: null }));
+        update(key, (cur) => ({ ...cur, sessionId: null, status: "idle", pendingPermissions: [] }));
         append(key, { id: newRunnerId(), role: "error", text: "RUNNER_EXITED" });
       }
       streaming.clear();
@@ -124,7 +129,10 @@ export const useAgentChatStore = create<AgentChatState>()((set, get) => {
         applyEvent(key, msg.event);
         break;
       case "permission_request":
-        update(key, (c) => ({ ...c, pendingPermission: { permissionId: msg.permissionId, request: msg.request } }));
+        update(key, (c) => ({
+          ...c,
+          pendingPermissions: [...c.pendingPermissions, { permissionId: msg.permissionId, request: msg.request }],
+        }));
         break;
       case "turn_completed":
       case "turn_cancelled":
@@ -164,7 +172,7 @@ export const useAgentChatStore = create<AgentChatState>()((set, get) => {
         // permission before waiting on the close: this blocks `send` for
         // the whole window and keeps the UI from showing a stale
         // busy/pending state while the runner is tearing the session down.
-        update(key, (c) => ({ ...c, status: "starting", pendingPermission: null }));
+        update(key, (c) => ({ ...c, status: "starting", pendingPermissions: [] }));
         await sendToRunner({ type: "close_session", sessionId: previous }).catch(() => undefined);
       }
       const sessionId = newRunnerId();
@@ -224,10 +232,12 @@ export const useAgentChatStore = create<AgentChatState>()((set, get) => {
     respondPermission: async (folder, provider, allow) => {
       const key = chatKey(folder, provider);
       const chat = get().chats[key];
-      if (!chat?.sessionId || !chat.pendingPermission) return;
-      const { permissionId } = chat.pendingPermission;
-      update(key, (c) => ({ ...c, pendingPermission: null }));
-      await sendToRunner({ type: "respond_permission", sessionId: chat.sessionId, permissionId, allow }).catch(
+      const head = chat?.pendingPermissions[0];
+      if (!chat?.sessionId || !head) return;
+      // Dequeue only the head: later requests in the queue remain pending
+      // and are answered by subsequent calls.
+      update(key, (c) => ({ ...c, pendingPermissions: c.pendingPermissions.slice(1) }));
+      await sendToRunner({ type: "respond_permission", sessionId: chat.sessionId, permissionId: head.permissionId, allow }).catch(
         (error: unknown) => endTurn(key, message(error)),
       );
     },

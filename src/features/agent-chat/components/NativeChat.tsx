@@ -53,9 +53,11 @@ export function NativeChat({ folder, provider }: Props) {
   const [historyError, setHistoryError] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
+  const pendingPermission = chat.pendingPermissions[0];
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView?.({ block: "end" });
-  }, [chat.entries, chat.pendingPermission]);
+  }, [chat.entries, pendingPermission]);
 
   const busy = chat.status !== "idle";
   const submit = () => {
@@ -101,11 +103,11 @@ export function NativeChat({ folder, provider }: Props) {
 
       <div className="claude-chat__messages">
         {chat.entries.map((entry) => <EntryView key={entry.id} entry={entry} />)}
-        {chat.pendingPermission && (
+        {pendingPermission && (
           <div className="claude-permission">
             <div className="claude-permission__title">{t("permissionTitle")}</div>
-            <div className="claude-permission__tool">{t(`permissionKind_${chat.pendingPermission.request.kind}`)}</div>
-            <pre className="claude-permission__input">{chat.pendingPermission.request.summary}</pre>
+            <div className="claude-permission__tool">{t(`permissionKind_${pendingPermission.request.kind}`)}</div>
+            <pre className="claude-permission__input">{pendingPermission.request.summary}</pre>
             <div className="claude-permission__actions">
               <button type="button" className="claude-permission__btn claude-permission__btn--allow" onClick={() => void respondPermission(folder, provider, true)}>
                 {t("allow")}

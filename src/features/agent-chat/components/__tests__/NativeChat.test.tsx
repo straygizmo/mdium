@@ -66,7 +66,7 @@ describe("NativeChat", () => {
             { id: "e1", role: "error", text: "COPILOT_DISCONNECTED" },
             { id: "e2", role: "error", text: "SESSION_CLOSED" },
           ],
-          pendingPermission: null,
+          pendingPermissions: [],
         },
       },
     });
