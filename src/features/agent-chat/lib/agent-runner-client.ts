@@ -9,6 +9,10 @@ interface PendingRequest {
   resolve: (msg: RunnerOutbound) => void;
   reject: (error: Error) => void;
 }
+interface ReadyWaiter {
+  resolve: () => void;
+  reject: (error: Error) => void;
+}
 type BufferedEvent =
   | { kind: "line"; payload: LinePayload }
   | { kind: "exit"; payload: ExitPayload };
@@ -21,13 +25,24 @@ const pending = new Map<string, PendingRequest>();
 let runnerId: number | null = null;
 let starting: Promise<number> | null = null;
 let subscribed: Promise<void> | null = null;
-let readyWaiter: (() => void) | null = null;
-// Non-null only while a start is in progress and `runnerId` is not yet
-// known. `spawn_agent_runner` can emit its first line (typically "ready")
-// before the invoke promise that carries its id resolves; without this
-// buffer that line would be dropped (its id doesn't match anything yet)
-// and `ensureRunner` would hang forever waiting for `ready`.
+let readyWaiter: ReadyWaiter | null = null;
+// Non-null for the whole duration of a start attempt (from just before it
+// subscribes/spawns until it settles, success or failure). Two jobs:
+//  1. While `runnerId` is still null, the line/exit listeners buffer into
+//     it instead of dropping events -- `spawn_agent_runner` can emit its
+//     first line (typically "ready") before the invoke promise carrying
+//     its id resolves, and a naive id check would drop that line forever.
+//  2. It doubles as the "a start is in flight" flag, which the stderr
+//     listener uses to log without filtering by id while the process is
+//     still proving itself (before/while we know its real id).
 let startBuffer: BufferedEvent[] | null = null;
+// Incremented every time a new start attempt begins. Each attempt captures
+// its own value at the top and checks it before mutating shared state
+// (`runnerId`/`starting`/`readyWaiter`/`startBuffer`) in its catch/finally,
+// so a stale/superseded start (e.g. one aborted by `shutdownRunner`, or one
+// that lost a race to a newer start) can never clobber state that no longer
+// belongs to it.
+let generation = 0;
 
 function processLine(line: string): void {
   try {
@@ -40,7 +55,7 @@ function processLine(line: string): void {
 
 function dispatch(msg: RunnerOutbound): void {
   if (msg.type === "ready") {
-    readyWaiter?.();
+    readyWaiter?.resolve();
     readyWaiter = null;
     return;
   }
@@ -56,7 +71,10 @@ function dispatch(msg: RunnerOutbound): void {
   listeners.forEach((listener) => listener(msg));
 }
 
+/** The runner process is gone: reject anything waiting on it and tell everyone. */
 function handleExit(): void {
+  readyWaiter?.reject(new Error("RUNNER_EXITED"));
+  readyWaiter = null;
   runnerId = null;
   starting = null;
   for (const req of pending.values()) req.reject(new Error("RUNNER_EXITED"));
@@ -67,19 +85,23 @@ function handleExit(): void {
 function subscribe(): Promise<void> {
   subscribed ??= Promise.all([
     listen<LinePayload>("agent-runner://line", (e) => {
-      if (startBuffer !== null && runnerId === null) {
-        startBuffer.push({ kind: "line", payload: e.payload });
+      if (runnerId === null) {
+        startBuffer?.push({ kind: "line", payload: e.payload });
         return;
       }
       if (e.payload.id !== runnerId) return;
       processLine(e.payload.line);
     }),
     listen<LinePayload>("agent-runner://stderr", (e) => {
-      if (e.payload.id === runnerId) console.warn("[agent-runner]", e.payload.line);
+      // While a start is in flight, log regardless of id -- the process
+      // isn't confirmed "ours" by id yet, but its stderr is still useful.
+      if (startBuffer !== null || e.payload.id === runnerId) {
+        console.warn("[agent-runner]", e.payload.line);
+      }
     }),
     listen<ExitPayload>("agent-runner://exit", (e) => {
-      if (startBuffer !== null && runnerId === null) {
-        startBuffer.push({ kind: "exit", payload: e.payload });
+      if (runnerId === null) {
+        startBuffer?.push({ kind: "exit", payload: e.payload });
         return;
       }
       if (e.payload.id === runnerId) handleExit();
@@ -88,45 +110,74 @@ function subscribe(): Promise<void> {
   return subscribed;
 }
 
-async function ensureRunner(): Promise<number> {
-  if (runnerId !== null) return runnerId;
-  starting ??= (async () => {
-    await subscribe();
-    startBuffer = [];
+function startRunner(): Promise<number> {
+  const myGeneration = ++generation;
+  return (async () => {
     let spawnedId: number | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
     try {
-      const ready = new Promise<void>((resolve) => { readyWaiter = resolve; });
+      try {
+        await subscribe();
+      } catch (subscribeError) {
+        // The Tauri event bindings never got established. Let a later call
+        // retry `listen(...)` instead of reusing this broken promise forever.
+        subscribed = null;
+        throw subscribeError;
+      }
+
+      startBuffer = [];
+      const ready = new Promise<void>((resolve, reject) => {
+        readyWaiter = { resolve, reject };
+      });
       const scriptPath = await invoke<string>("resolve_agent_runner_path");
       spawnedId = await invoke<number>("spawn_agent_runner", { scriptPath });
+
+      if (generation !== myGeneration) {
+        // Superseded (e.g. `shutdownRunner` ran) while we were spawning.
+        // Don't claim ownership of shared state; the catch below still
+        // kills the process we just spawned.
+        throw new Error("RUNNER_EXITED");
+      }
       runnerId = spawnedId;
 
       // Replay whatever arrived for this id while we were still waiting on
       // the spawn promise; discard anything from a stale/other process.
       const buffered = startBuffer;
-      startBuffer = null;
+      startBuffer = [];
       for (const event of buffered) {
         if (event.payload.id !== spawnedId) continue;
         if (event.kind === "line") processLine(event.payload.line);
         else handleExit();
       }
 
-      const timeout = new Promise<never>((_resolve, reject) => {
-        setTimeout(() => reject(new Error("RUNNER_START_TIMEOUT")), START_TIMEOUT_MS);
-      });
-      await Promise.race([ready, timeout]);
+      timer = setTimeout(() => {
+        readyWaiter?.reject(new Error("RUNNER_START_TIMEOUT"));
+        readyWaiter = null;
+      }, START_TIMEOUT_MS);
+      await ready;
       return spawnedId;
     } catch (error) {
-      readyWaiter = null;
-      startBuffer = null;
-      runnerId = null;
+      if (generation === myGeneration) {
+        readyWaiter = null;
+        runnerId = null;
+      }
       if (spawnedId !== null) {
         await invoke("kill_agent_runner", { id: spawnedId }).catch(() => undefined);
       }
       throw error;
     } finally {
-      starting = null;
+      if (timer !== null) clearTimeout(timer);
+      if (generation === myGeneration) {
+        starting = null;
+        startBuffer = null;
+      }
     }
   })();
+}
+
+async function ensureRunner(): Promise<number> {
+  if (runnerId !== null) return runnerId;
+  starting ??= startRunner();
   return starting;
 }
 
@@ -158,9 +209,24 @@ export function newRunnerId(): string {
 }
 
 export async function shutdownRunner(): Promise<void> {
-  if (runnerId === null) return;
   const id = runnerId;
-  runnerId = null;
+  if (id === null && starting === null) return;
+
+  // Invalidate any in-flight start (its ownership check will fail from
+  // here on) and unblock its ready-wait immediately rather than leaving it
+  // to time out.
+  generation++;
+  readyWaiter?.reject(new Error("RUNNER_EXITED"));
+  readyWaiter = null;
   starting = null;
-  await invoke("kill_agent_runner", { id }).catch(() => undefined);
+  runnerId = null;
+  startBuffer = null;
+
+  for (const req of pending.values()) req.reject(new Error("RUNNER_EXITED"));
+  pending.clear();
+  listeners.forEach((listener) => listener({ type: "error", message: "RUNNER_EXITED" }));
+
+  if (id !== null) {
+    await invoke("kill_agent_runner", { id }).catch(() => undefined);
+  }
 }
