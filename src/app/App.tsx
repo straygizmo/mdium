@@ -29,6 +29,7 @@ import { PreviewPanel } from "@/features/preview/components/PreviewPanel";
 import { SearchReplace } from "@/features/search/components/SearchReplace";
 import { SettingsDialog } from "@/features/settings/components/SettingsDialog";
 import { Terminal } from "@/features/terminal/components/Terminal";
+import { TERMINAL_KINDS, getTerminalCommand, getTerminalThemeType, type TerminalKind } from "@/features/terminal/terminal-session";
 import { RagPanel } from "@/features/rag/components/RagPanel";
 import MindmapEditor from "@/features/mindmap/components/MindmapEditor";
 import { ImageCanvas } from "@/features/image/components/ImageCanvas";
@@ -46,6 +47,14 @@ import appIconUrl from "../../app-icon.svg";
 import "./App.css";
 
 const APP_TITLE = "MDium";
+
+const TERMINAL_KIND_LABEL_KEYS: Record<TerminalKind, string> = {
+  "claude-code": "terminalClaudeCode",
+  codex: "terminalCodex",
+  "github-copilot": "terminalGitHubCopilot",
+  opencode: "terminalOpencode",
+  terminal: "terminal",
+};
 
 export function App() {
   const { t } = useTranslation();
@@ -72,13 +81,38 @@ export function App() {
   const setEditorRatio = useUiStore((s) => s.setEditorRatio);
   const folderPanelRatio = useUiStore((s) => s.folderPanelRatio);
   const bottomTerminalVisible = useUiStore((s) => s.bottomTerminalVisible);
-  const bottomTerminalTab = useUiStore((s) => s.bottomTerminalTab);
-  const bottomTerminalOpenTabs = useUiStore((s) => s.bottomTerminalOpenTabs);
-  const setBottomTerminalTab = useUiStore((s) => s.setBottomTerminalTab);
-  const closeBottomTerminalTab = useUiStore((s) => s.closeBottomTerminalTab);
+  const terminalSessions = useUiStore((s) => s.terminalSessions);
+  const activeTerminalSessionId = useUiStore((s) => s.activeTerminalSessionId);
+  const initializeTerminalSessions = useUiStore((s) => s.initializeTerminalSessions);
+  const addTerminalSession = useUiStore((s) => s.addTerminalSession);
+  const setActiveTerminalSession = useUiStore((s) => s.setActiveTerminalSession);
+  const removeTerminalSession = useUiStore((s) => s.removeTerminalSession);
+  const pruneTerminalSessions = useUiStore((s) => s.pruneTerminalSessions);
   const isZennMode = useUiStore((s) => s.isZennMode);
   const { autoSave, themeId, aiSettings } = useSettingsStore();
   const themeType = getThemeById(themeId).type;
+
+  const activeFolderTerminalSessions = terminalSessions.filter(
+    (session) => session.folderPath === (activeFolderPath ?? ""),
+  );
+
+  // Create the folder's first terminal lazily when the view is shown.
+  useEffect(() => {
+    if (bottomTerminalVisible) initializeTerminalSessions(activeFolderPath ?? "");
+  }, [activeFolderPath, bottomTerminalVisible, initializeTerminalSessions]);
+
+  // Closing a folder ends the terminal processes started in it.
+  useEffect(() => {
+    for (const id of pruneTerminalSessions(openFolderPaths)) {
+      invoke("kill_pty", { id }).catch(() => {});
+    }
+  }, [openFolderPaths, pruneTerminalSessions]);
+
+  const handleCloseTerminalSession = (id: string) => {
+    void invoke("kill_pty", { id })
+      .catch(() => {})
+      .finally(() => removeTerminalSession(id));
+  };
 
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
@@ -1266,61 +1300,75 @@ export function App() {
               >
                 <div className="app__bottom-terminal-toolbar">
                   <div className="app__bottom-terminal-tabs">
-                    {bottomTerminalOpenTabs.map((tab) => (
-                      <button
-                        key={tab}
-                        className={`app__bottom-terminal-tab${bottomTerminalTab === tab ? " active" : ""}`}
-                        onClick={() => setBottomTerminalTab(tab)}
-                      >
-                        <span className="app__bottom-terminal-tab-label">
-                          {tab === "terminal" ? t("terminal") : "Claude Code"}
-                        </span>
-                        {tab !== "terminal" && (
-                          <span
+                    {activeFolderTerminalSessions.map((session, index) => {
+                      const number = activeFolderTerminalSessions
+                        .slice(0, index + 1)
+                        .filter((candidate) => candidate.kind === session.kind).length;
+                      const label = t("terminalSessionLabel", {
+                        name: t(TERMINAL_KIND_LABEL_KEYS[session.kind]),
+                        number,
+                      });
+                      return (
+                        <div
+                          key={session.id}
+                          className={`app__bottom-terminal-tab-item${activeTerminalSessionId === session.id ? " active" : ""}`}
+                        >
+                          <button
+                            type="button"
+                            className="app__bottom-terminal-tab"
+                            onClick={() => setActiveTerminalSession(session.id)}
+                          >
+                            <span className="app__bottom-terminal-tab-label">{label}</span>
+                          </button>
+                          <button
+                            type="button"
                             className="app__bottom-terminal-tab-close"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              closeBottomTerminalTab(tab);
-                            }}
+                            aria-label={t("terminalCloseSession", { name: label })}
+                            title={t("terminalCloseSession", { name: label })}
+                            onClick={() => handleCloseTerminalSession(session.id)}
                           >
                             ×
-                          </span>
-                        )}
-                      </button>
-                    ))}
+                          </button>
+                        </div>
+                      );
+                    })}
                   </div>
                   <div className="app__bottom-terminal-actions">
+                    <select
+                      className="app__bottom-terminal-add-select"
+                      aria-label={t("terminalAdd")}
+                      value=""
+                      onChange={(event) => {
+                        const kind = event.target.value as TerminalKind;
+                        if (TERMINAL_KINDS.includes(kind)) addTerminalSession(kind, activeFolderPath ?? "");
+                      }}
+                    >
+                      <option value="" disabled>{t("terminalAdd")}</option>
+                      {TERMINAL_KINDS.map((kind) => (
+                        <option key={kind} value={kind}>{t(TERMINAL_KIND_LABEL_KEYS[kind])}</option>
+                      ))}
+                    </select>
                   </div>
                 </div>
                 <div className="app__bottom-terminal-body">
-                  {bottomTerminalOpenTabs.flatMap((tab) => {
-                    const folders = openFolderPaths.length > 0 ? openFolderPaths : [""];
-                    return folders.map((folder) => {
-                      const isActive = bottomTerminalTab === tab && (activeFolderPath ?? "") === folder;
-                      const folderId = folder ? folder.replace(/[^a-zA-Z0-9]/g, "_") : "nofolder";
-                      return (
-                        <div
-                          key={`${tab}-${folderId}`}
-                          className="app__bottom-terminal-pane"
-                          style={{
-                            visibility: isActive ? "visible" : "hidden",
-                            zIndex: isActive ? 1 : 0,
-                          }}
-                        >
-                          <Terminal
-                            id={`bottom-${tab}-${folderId}`}
-                            folderPath={folder}
-                            themeType={themeType}
-                            active={isActive}
-                            command={
-                              tab === "claude-code"
-                                ? "claude"
-                                : undefined
-                            }
-                          />
-                        </div>
-                      );
-                    });
+                  {terminalSessions.map((session) => {
+                    const isActive = activeTerminalSessionId === session.id
+                      && session.folderPath === (activeFolderPath ?? "");
+                    return (
+                      <div
+                        key={session.id}
+                        className="app__bottom-terminal-pane"
+                        style={{ visibility: isActive ? "visible" : "hidden", zIndex: isActive ? 1 : 0 }}
+                      >
+                        <Terminal
+                          id={session.id}
+                          folderPath={session.folderPath}
+                          themeType={getTerminalThemeType(session.kind, themeType)}
+                          active={isActive}
+                          command={getTerminalCommand(session.kind)}
+                        />
+                      </div>
+                    );
                   })}
                 </div>
               </div>

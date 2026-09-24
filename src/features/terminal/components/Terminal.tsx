@@ -137,11 +137,9 @@ export function Terminal({ id, folderPath, themeType, command, active = true }: 
       resizeObserver.disconnect();
       unlistenFn?.();
       xterm.dispose();
-      invoke("kill_pty", { id }).catch(() => {});
     };
-  // folderPath is intentionally excluded: each Terminal instance is rendered
-  // per-folder with a unique key, so folderPath never changes during its lifetime.
-  // Including it would kill & respawn PTY processes on folder tab switches.
+  // folderPath is intentionally excluded: a session captures its working
+  // directory at creation and its PTY survives when this view is unmounted.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, themeType, command]);
 

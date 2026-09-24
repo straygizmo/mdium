@@ -30,10 +30,13 @@ pub fn spawn_pty(
     rows: u16,
     command: Option<String>,
 ) -> Result<(), String> {
-    // Kill existing PTY with same id if any
+    // A remounted xterm reconnects with the same session id. Keep its process
+    // alive instead of replacing it so closing and reopening the panel is safe.
     {
-        let mut guard = pty_store().lock().unwrap();
-        guard.remove(&id);
+        let guard = pty_store().lock().unwrap();
+        if guard.contains_key(&id) {
+            return Ok(());
+        }
     }
 
     let pty_system = native_pty_system();
@@ -46,8 +49,8 @@ pub fn spawn_pty(
         })
         .map_err(|e| format!("Failed to open PTY: {}", e))?;
 
-    let cmd = if let Some(ref command_str) = command {
-        let mut cmd = if cfg!(target_os = "windows") {
+    let mut cmd = if let Some(ref command_str) = command {
+        if cfg!(target_os = "windows") {
             let mut c = CommandBuilder::new("cmd.exe");
             c.args(["/C", command_str]);
             c
@@ -55,14 +58,13 @@ pub fn spawn_pty(
             let mut c = CommandBuilder::new("bash");
             c.args(["-c", command_str]);
             c
-        };
-        cmd.cwd(&cwd);
-        cmd
+        }
     } else {
-        let mut cmd = CommandBuilder::new_default_prog();
-        cmd.cwd(&cwd);
-        cmd
+        CommandBuilder::new_default_prog()
     };
+    if !cwd.is_empty() {
+        cmd.cwd(&cwd);
+    }
 
     pair.slave
         .spawn_command(cmd)
