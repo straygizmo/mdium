@@ -8,6 +8,7 @@ import { useTabStore } from "@/stores/tab-store";
 import { useGitStore } from "@/stores/git-store";
 import { useOpencodeServerStore } from "@/stores/opencode-server-store";
 import { killClaudeSidecar } from "@/features/claude-config/hooks/useClaudeChat";
+import { shutdownRunner } from "@/features/agent-chat/lib/agent-runner-client";
 import { getOfficeExt, getMindmapExt, getKityMinderImportExt, getImageExt, getPdfExt, getCsvExt, getPptxExt, isCodeFile } from "@/shared/lib/constants";
 import { detectDelimiter } from "@/features/preview/lib/detect-delimiter";
 import { useFileStore } from "@/stores/file-store";
@@ -339,6 +340,7 @@ export function App() {
     const handleBeforeUnload = () => {
       useOpencodeServerStore.getState().removeAllServers();
       void killClaudeSidecar();
+      void shutdownRunner();
     };
     window.addEventListener("beforeunload", handleBeforeUnload);
 
@@ -354,6 +356,7 @@ export function App() {
       }
       await useOpencodeServerStore.getState().removeAllServers();
       await killClaudeSidecar();
+      void shutdownRunner();
     }).then((fn) => { unlisten = fn; });
 
     return () => {
