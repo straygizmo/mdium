@@ -733,82 +733,84 @@ export function McpServersSection() {
         </div>
       ) : (
         <>
-          {scopedEntries.length === 0 && <div className="oc-section__empty">{t("mcpEmpty")}</div>}
-          {scopedEntries.map(({ scope: itemScope, data: { name, server } }) => {
-            const serverType = server.type ?? "local";
-            const isEnabled = server.enabled !== false;
-            const tools = serverTools[name];
-            const testError = testErrors[name];
-            return (
-              <div key={`${itemScope}-${name}`} className={`oc-section__item oc-section__item--${itemScope}${!isEnabled ? " oc-section__item--disabled" : ""}`} style={{ marginBottom: 4 }}>
-                <div className="oc-section__item-info">
-                  <span className="oc-section__item-name">
-                    {name}
-                    {isBuiltinMcp(name) && (
-                      <span className="oc-section__builtin-badge">Built-in</span>
-                    )}
-                    <span className={`oc-section__item-badge${serverType === "remote" ? " oc-section__item-badge--remote" : ""}`}>
-                      {serverType}
-                    </span>
-                    {tools && tools.length > 0 && (
-                      <span
-                        className="oc-section__tools-badge"
-                        onClick={() => openToolsDialog(name)}
-                        title={t("mcpTools", { count: tools.length })}
-                      >
-                        {t("mcpTools", { count: tools.length })}
+          <div className="oc-mcp-servers__list">
+            {scopedEntries.length === 0 && <div className="oc-section__empty">{t("mcpEmpty")}</div>}
+            {scopedEntries.map(({ scope: itemScope, data: { name, server } }) => {
+              const serverType = server.type ?? "local";
+              const isEnabled = server.enabled !== false;
+              const tools = serverTools[name];
+              const testError = testErrors[name];
+              return (
+                <div key={`${itemScope}-${name}`} className={`oc-section__item oc-section__item--${itemScope}${!isEnabled ? " oc-section__item--disabled" : ""}`} style={{ marginBottom: 4 }}>
+                  <div className="oc-section__item-info">
+                    <span className="oc-section__item-name">
+                      {name}
+                      {isBuiltinMcp(name) && (
+                        <span className="oc-section__builtin-badge">Built-in</span>
+                      )}
+                      <span className={`oc-section__item-badge${serverType === "remote" ? " oc-section__item-badge--remote" : ""}`}>
+                        {serverType}
                       </span>
+                      {tools && tools.length > 0 && (
+                        <span
+                          className="oc-section__tools-badge"
+                          onClick={() => openToolsDialog(name)}
+                          title={t("mcpTools", { count: tools.length })}
+                        >
+                          {t("mcpTools", { count: tools.length })}
+                        </span>
+                      )}
+                    </span>
+                    <span className="oc-section__item-detail">{getServerDetail(server)}</span>
+                    {testError && (
+                      <span className="oc-section__test-status oc-section__test-status--error">{testError}</span>
                     )}
-                  </span>
-                  <span className="oc-section__item-detail">{getServerDetail(server)}</span>
-                  {testError && (
-                    <span className="oc-section__test-status oc-section__test-status--error">{testError}</span>
-                  )}
+                  </div>
+                  <div className="oc-section__item-actions">
+                    <label className="oc-section__toggle" style={{ padding: 0 }}>
+                      <input
+                        type="checkbox"
+                        checked={isEnabled}
+                        onChange={async (e) => {
+                          const nowEnabled = e.target.checked;
+                          const updated = { ...server, enabled: nowEnabled };
+                          if (itemScope === "global") {
+                            await saveMcpServer(name, updated);
+                          } else if (activeFolderPath) {
+                            await saveProjectMcpServer(activeFolderPath, name, updated);
+                          }
+                          // Sync toggle to running opencode serve instance
+                          await syncMcpToServer(name, updated);
+                          // Test server on enable to show tool count badge
+                          if (nowEnabled) {
+                            const sType = server.type ?? "local";
+                            const cmdArr = normalizeCommand(server);
+                            invoke<McpTestResult>("mcp_test_server", {
+                              serverType: sType,
+                              command: cmdArr[0] ?? null,
+                              args: cmdArr.length > 1 ? cmdArr.slice(1) : null,
+                              env: server.environment ?? null,
+                              url: server.url ?? null,
+                              headers: server.headers ?? null,
+                            }).then((result) => {
+                              if (result.success) {
+                                setServerTools((prev) => ({ ...prev, [name]: result.tools }));
+                              }
+                            }).catch(() => {});
+                          } else {
+                            setServerTools((prev) => { const next = { ...prev }; delete next[name]; return next; });
+                          }
+                        }}
+                      />
+                    </label>
+                    <button className="oc-section__edit-btn" onClick={() => startEdit(name, server, itemScope)}>{t("edit")}</button>
+                    <button className="oc-section__delete-btn" onClick={() => handleDelete(name, itemScope)}>×</button>
+                  </div>
                 </div>
-                <div className="oc-section__item-actions">
-                  <label className="oc-section__toggle" style={{ padding: 0 }}>
-                    <input
-                      type="checkbox"
-                      checked={isEnabled}
-                      onChange={async (e) => {
-                        const nowEnabled = e.target.checked;
-                        const updated = { ...server, enabled: nowEnabled };
-                        if (itemScope === "global") {
-                          await saveMcpServer(name, updated);
-                        } else if (activeFolderPath) {
-                          await saveProjectMcpServer(activeFolderPath, name, updated);
-                        }
-                        // Sync toggle to running opencode serve instance
-                        await syncMcpToServer(name, updated);
-                        // Test server on enable to show tool count badge
-                        if (nowEnabled) {
-                          const sType = server.type ?? "local";
-                          const cmdArr = normalizeCommand(server);
-                          invoke<McpTestResult>("mcp_test_server", {
-                            serverType: sType,
-                            command: cmdArr[0] ?? null,
-                            args: cmdArr.length > 1 ? cmdArr.slice(1) : null,
-                            env: server.environment ?? null,
-                            url: server.url ?? null,
-                            headers: server.headers ?? null,
-                          }).then((result) => {
-                            if (result.success) {
-                              setServerTools((prev) => ({ ...prev, [name]: result.tools }));
-                            }
-                          }).catch(() => {});
-                        } else {
-                          setServerTools((prev) => { const next = { ...prev }; delete next[name]; return next; });
-                        }
-                      }}
-                    />
-                  </label>
-                  <button className="oc-section__edit-btn" onClick={() => startEdit(name, server, itemScope)}>{t("edit")}</button>
-                  <button className="oc-section__delete-btn" onClick={() => handleDelete(name, itemScope)}>×</button>
-                </div>
-              </div>
-            );
-          })}
-          <div style={{ display: "flex", alignItems: "center", marginTop: 4, position: "relative" }}>
+              );
+            })}
+          </div>
+          <div className="oc-mcp-servers__actions" style={{ display: "flex", alignItems: "center", marginTop: 4, position: "relative" }}>
             <button className="oc-section__add-btn" onClick={startAdd}>+ {t("add")}</button>
             {missingBuiltins.length > 0 && (
               <div ref={builtinMenuRef} style={{ position: "relative" }}>

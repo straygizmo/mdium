@@ -343,6 +343,17 @@
   padding: 12px;
 }
 
+.oc-mcp-servers__list {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.oc-mcp-servers__actions {
+  flex-shrink: 0;
+}
+
 /* Scope color variables */
 .oc-dialog__body,
 .oc-panel__body {
