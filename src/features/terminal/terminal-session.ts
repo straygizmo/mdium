@@ -8,6 +8,15 @@ export const TERMINAL_KINDS = [
 
 export type TerminalKind = (typeof TERMINAL_KINDS)[number];
 
+// i18n keys for each terminal kind's display label.
+export const TERMINAL_KIND_LABEL_KEYS: Record<TerminalKind, string> = {
+  "claude-code": "terminalClaudeCode",
+  codex: "terminalCodex",
+  "github-copilot": "terminalGitHubCopilot",
+  opencode: "terminalOpencode",
+  terminal: "terminal",
+};
+
 export interface TerminalSession {
   id: string;
   kind: TerminalKind;

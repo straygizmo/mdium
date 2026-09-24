@@ -29,7 +29,8 @@ import { PreviewPanel } from "@/features/preview/components/PreviewPanel";
 import { SearchReplace } from "@/features/search/components/SearchReplace";
 import { SettingsDialog } from "@/features/settings/components/SettingsDialog";
 import { Terminal } from "@/features/terminal/components/Terminal";
-import { TERMINAL_KINDS, getTerminalCommand, getTerminalThemeType, type TerminalKind } from "@/features/terminal/terminal-session";
+import { TerminalAddMenu } from "@/features/terminal/components/TerminalAddMenu";
+import { TERMINAL_KIND_LABEL_KEYS, getTerminalCommand, getTerminalThemeType } from "@/features/terminal/terminal-session";
 import { RagPanel } from "@/features/rag/components/RagPanel";
 import MindmapEditor from "@/features/mindmap/components/MindmapEditor";
 import { ImageCanvas } from "@/features/image/components/ImageCanvas";
@@ -47,14 +48,6 @@ import appIconUrl from "../../app-icon.svg";
 import "./App.css";
 
 const APP_TITLE = "MDium";
-
-const TERMINAL_KIND_LABEL_KEYS: Record<TerminalKind, string> = {
-  "claude-code": "terminalClaudeCode",
-  codex: "terminalCodex",
-  "github-copilot": "terminalGitHubCopilot",
-  opencode: "terminalOpencode",
-  terminal: "terminal",
-};
 
 export function App() {
   const { t } = useTranslation();
@@ -1338,20 +1331,9 @@ export function App() {
                     })}
                   </div>
                   <div className="app__bottom-terminal-actions">
-                    <select
-                      className="app__bottom-terminal-add-select"
-                      aria-label={t("terminalAdd")}
-                      value=""
-                      onChange={(event) => {
-                        const kind = event.target.value as TerminalKind;
-                        if (TERMINAL_KINDS.includes(kind)) addTerminalSession(kind, activeFolderPath ?? "");
-                      }}
-                    >
-                      <option value="" disabled>{t("terminalAdd")}</option>
-                      {TERMINAL_KINDS.map((kind) => (
-                        <option key={kind} value={kind}>{t(TERMINAL_KIND_LABEL_KEYS[kind])}</option>
-                      ))}
-                    </select>
+                    <TerminalAddMenu
+                      onAdd={(kind) => addTerminalSession(kind, activeFolderPath ?? "")}
+                    />
                   </div>
                 </div>
                 <div className="app__bottom-terminal-body">

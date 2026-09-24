@@ -258,16 +258,18 @@ body {
   flex-shrink: 0;
 }
 
+/* Shared visual style for the terminal-add trigger button (previously a <select>). */
 .app__bottom-terminal-add-select {
   height: 24px;
   min-width: 142px;
-  padding: 2px 24px 2px 8px;
+  padding: 2px 8px;
   background: var(--bg-base);
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--text-secondary);
   font-size: 11px;
   cursor: pointer;
+  text-align: left;
 }
 
 .app__bottom-terminal-add-select:hover,

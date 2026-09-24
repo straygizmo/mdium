@@ -1,0 +1,35 @@
+.terminal-add-menu {
+  position: relative;
+}
+
+.terminal-add-menu__menu {
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  margin-bottom: 4px;
+  min-width: 142px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  z-index: 100;
+  padding: 4px 0;
+}
+
+.terminal-add-menu__item {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  font-size: 11px;
+}
+
+.terminal-add-menu__item:hover,
+.terminal-add-menu__item:focus {
+  background: var(--bg-base);
+  outline: none;
+}
