@@ -215,4 +215,88 @@ describe("RunnerCore", () => {
     startDeferred.resolve(session);
     await first;
   });
+
+  it("closes a session whose start_session resolves after shutdown, without sending session_started", async () => {
+    const sent: RunnerOutbound[] = [];
+    const startDeferred = deferred<AdapterSession>();
+    const session: AdapterSession = {
+      nativeSessionId: () => "native-1",
+      runTurn: vi.fn(),
+      close: vi.fn(async () => {}),
+    };
+    const adapter: ProviderAdapter = {
+      probe: vi.fn(async () => ({ kind: "available" as const, version: "1.0.0" })),
+      startSession: vi.fn(() => startDeferred.promise),
+    };
+    const core = new RunnerCore({ adapters: { codex: adapter, copilot: adapter }, send: (m) => sent.push(m) });
+    const starting = core.handleLine(
+      JSON.stringify({ type: "start_session", requestId: "r1", sessionId: "s1", provider: "codex", workingDirectory: "C:/w", permission: "cli-default" }),
+    );
+    const shuttingDown = core.shutdown();
+    startDeferred.resolve(session);
+    await starting;
+    await shuttingDown;
+    expect(session.close).toHaveBeenCalled();
+    expect(sent.some((m) => m.type === "session_started")).toBe(false);
+  });
+
+  it("silences a closed session: onEvent drops events and requestPermission resolves false", async () => {
+    const t = setup();
+    await t.start();
+    await t.line({ type: "close_session", sessionId: "s1" });
+    t.callbacks().onEvent({ type: "assistant_message", text: "late" });
+    expect(t.sent.some((m) => m.type === "event")).toBe(false);
+    await expect(t.callbacks().requestPermission({ kind: "shell", summary: "ls" })).resolves.toBe(false);
+    expect(t.sent.some((m) => m.type === "permission_request")).toBe(false);
+  });
+
+  it("frees the session id after a failed start_session so retrying with the same id succeeds", async () => {
+    const t = setup();
+    (t.adapter.startSession as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("boom"));
+    await t.start();
+    expect(t.sent).toContainEqual({ type: "error", requestId: "r1", sessionId: "s1", message: "boom" });
+    await t.start();
+    expect(t.sent).toContainEqual({ type: "session_started", requestId: "r1", sessionId: "s1", nativeSessionId: "native-1" });
+  });
+
+  it("bounds close_session to 5s even when the adapter's close() never resolves", async () => {
+    vi.useFakeTimers();
+    try {
+      const sent: RunnerOutbound[] = [];
+      const session: AdapterSession = {
+        nativeSessionId: () => "native-1",
+        runTurn: vi.fn(),
+        close: vi.fn(() => new Promise<void>(() => {})),
+      };
+      const adapter: ProviderAdapter = {
+        probe: vi.fn(async () => ({ kind: "available" as const, version: "1.0.0" })),
+        startSession: vi.fn(async () => session),
+      };
+      const core = new RunnerCore({ adapters: { codex: adapter, copilot: adapter }, send: (m) => sent.push(m) });
+      await core.handleLine(
+        JSON.stringify({ type: "start_session", requestId: "r1", sessionId: "s1", provider: "codex", workingDirectory: "C:/w", permission: "cli-default" }),
+      );
+      const closing = core.handleLine(JSON.stringify({ type: "close_session", sessionId: "s1" }));
+      await vi.advanceTimersByTimeAsync(5000);
+      await closing;
+      expect(session.close).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("denies pending permissions immediately when the turn timeout fires", async () => {
+    vi.useFakeTimers();
+    try {
+      const t = setup();
+      await t.line({ type: "start_session", requestId: "r1", sessionId: "s1", provider: "codex", workingDirectory: "C:/w", permission: "read-only", timeoutMs: 1000 });
+      await t.line({ type: "send", sessionId: "s1", text: "a" });
+      const pending = t.callbacks().requestPermission({ kind: "shell", summary: "ls" });
+      await vi.advanceTimersByTimeAsync(1000);
+      // Must resolve without needing the turn's own rejection to propagate first.
+      await expect(pending).resolves.toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

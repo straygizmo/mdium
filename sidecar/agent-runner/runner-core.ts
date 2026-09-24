@@ -16,6 +16,8 @@ interface SessionEntry {
   timeoutMs?: number;
   turn?: ActiveTurn;
   permissions: Map<string, (allow: boolean) => void>;
+  /** Set by closeSession; once true, late adapter callbacks are silenced. */
+  closed: boolean;
 }
 
 /** A session id reserved while its start_session is still pending. */
@@ -123,6 +125,10 @@ export class RunnerCore {
   }
 
   async shutdown(): Promise<void> {
+    // Mark every still-pending start closed first, so a start_session that
+    // resolves after shutdown has begun closes itself instead of publishing
+    // session_started for a process that is already on its way out.
+    for (const reservation of this.starting.values()) reservation.closed = true;
     await Promise.all([...this.sessions.keys()].map((id) => this.closeSession(id)));
   }
 
@@ -138,6 +144,10 @@ export class RunnerCore {
     const reservation: StartingEntry = { closed: false };
     this.starting.set(msg.sessionId, reservation);
     const permissions = new Map<string, (allow: boolean) => void>();
+    // Captured by the callbacks below (as a variable, not a snapshot): once
+    // the session is created and assigned, closeSession can flip its
+    // `closed` flag and have late adapter callbacks observe it immediately.
+    let entry: SessionEntry | undefined;
     try {
       const session = await this.deps.adapters[msg.provider].startSession(
         {
@@ -148,9 +158,16 @@ export class RunnerCore {
           ...(msg.env ? { env: msg.env } : {}),
         },
         {
-          onEvent: (event) => this.deps.send({ type: "event", sessionId: msg.sessionId, event }),
+          onEvent: (event) => {
+            if (entry?.closed) return;
+            this.deps.send({ type: "event", sessionId: msg.sessionId, event });
+          },
           requestPermission: (request: ToolRequest) =>
             new Promise<boolean>((resolve) => {
+              if (entry?.closed) {
+                resolve(false);
+                return;
+              }
               const permissionId = this.newId();
               permissions.set(permissionId, resolve);
               this.deps.send({ type: "permission_request", sessionId: msg.sessionId, permissionId, request });
@@ -164,8 +181,9 @@ export class RunnerCore {
         this.deps.send({ type: "error", ...ids, message: "SESSION_CLOSED" });
         return;
       }
-      this.sessions.set(msg.sessionId, { session, timeoutMs: msg.timeoutMs, permissions });
       const nativeSessionId = session.nativeSessionId();
+      entry = { session, timeoutMs: msg.timeoutMs, permissions, closed: false };
+      this.sessions.set(msg.sessionId, entry);
       this.deps.send({ type: "session_started", ...ids, ...(nativeSessionId ? { nativeSessionId } : {}) });
     } catch (error) {
       this.starting.delete(msg.sessionId);
@@ -232,6 +250,7 @@ export class RunnerCore {
     const entry = this.sessions.get(sessionId);
     if (!entry) return;
     this.sessions.delete(sessionId);
+    entry.closed = true;
     if (entry.turn) {
       entry.turn.suppressCancelEvent = true;
       entry.turn.controller.abort();
