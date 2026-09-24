@@ -175,7 +175,7 @@ interface Workflow {
   maxReentryCount: number;                  // 既定 5
   maxConcurrentRuns: number;                // 既定 1
   implementNetwork: boolean;                // 実装本実行のネットワーク許可。既定 false
-  designDocPath?: string;                   // 設計書の保存先（空なら保存しない）。例 ".superpowers/specs/{date}-{slug}-design.md"
+  designDocPath?: string;                   // 設計書の保存先（空なら保存しない）。有効化時の初期値 "docs/designs/{date}-{slug}-design.md"
   issueTracking: "auto" | "off";            // auto: origin が GitHub/GitLab なら連携
 }
 
@@ -250,6 +250,9 @@ interface Stage<R extends "design" | "implement" | "review"> {
 - 出力契約: 最終応答は YAML frontmatter（`outcome`、`reason`、必要に応じ `question`）＋ Markdown 本文とする。frontmatter が無い・解析できない場合は `attention`（理由: 出力形式不正）とする。
 - 成果物の保存はエージェントではなく MDium（Rust）が行う: 試行成果物ファイル、子タスク本文、Issue コメント（パート4）。
 - `designDocPath` が設定されている場合、設計工程の完了時に MDium が worktree の該当パスへ設計書を書き出してコミットする（再設計時は上書きして新しいコミット）。
+  - 主に Issue トラッカーを使わない運用で、設計の記録をリポジトリに残すための設定である（Issue 連携の有無とは独立して設定できる）。
+  - ワークフロー編集ダイアログで保存を有効にすると、初期値として `docs/designs/{date}-{slug}-design.md` が入る。`{date}` はフロー実行開始日（YYYY-MM-DD）、`{slug}` はルートタスクのタイトルから生成する。
+  - パスはリポジトリ相対とし、リポジトリ外・`.git/`・`.mdium/` を指すものは保存時に検証エラーとする。
 
 ### 3.9 承認（実装工程）
 
