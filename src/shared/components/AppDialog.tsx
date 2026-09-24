@@ -24,6 +24,7 @@ export function AppDialog() {
 
   return (
     <div className="app-dialog__overlay" onMouseDown={() => {
+      if (entry.closeOnOverlayClick === false) return;
       if (entry.type === "message") handleResolve(true);
       else handleResolve(entry.type === "confirm" ? false : null);
     }}>

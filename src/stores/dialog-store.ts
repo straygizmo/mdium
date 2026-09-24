@@ -14,6 +14,7 @@ interface DialogEntry {
   title?: string;
   text: string;
   kind?: DialogKind;
+  closeOnOverlayClick?: boolean;
   defaultValue?: string;
   choices?: ChoiceOption[];
   resolve: (value: boolean | string | null) => void;
@@ -62,7 +63,7 @@ export function showMessage(
 /** Show a confirm dialog (OK / Cancel). Resolves to true if confirmed. */
 export function showConfirm(
   text: string,
-  options?: { title?: string; kind?: DialogKind },
+  options?: { title?: string; kind?: DialogKind; closeOnOverlayClick?: boolean },
 ): Promise<boolean> {
   return new Promise((resolve) => {
     useDialogStore.getState()._push({
@@ -70,6 +71,7 @@ export function showConfirm(
       text,
       title: options?.title,
       kind: options?.kind,
+      closeOnOverlayClick: options?.closeOnOverlayClick,
       resolve: (v) => resolve(v as boolean),
     });
   });
