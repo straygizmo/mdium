@@ -21,15 +21,15 @@ export function toolRequestFromCopilot(request: { kind: string; [k: string]: unk
     case "shell":
       return { kind: "shell", summary: field(request, "fullCommandText", "intention") ?? "shell" };
     case "write":
-      return { kind: "write", summary: field(request, "fileName", "path") ?? "write" };
+      return { kind: "write", summary: field(request, "fileName") ?? "write" };
     case "read":
-      return { kind: "read", summary: field(request, "path", "fileName") ?? "read" };
+      return { kind: "read", summary: field(request, "path") ?? "read" };
     case "url":
       return { kind: "network", summary: field(request, "url") ?? "url" };
     case "mcp": {
       const server = field(request, "serverName");
       const tool = field(request, "toolName");
-      return { kind: "other", summary: server && tool ? `${server}/${tool}` : (tool ?? "mcp") };
+      return { kind: "other", summary: server && tool ? `${server}/${tool}` : (tool ?? server ?? "mcp") };
     }
     default:
       return { kind: "other", summary: request.kind };

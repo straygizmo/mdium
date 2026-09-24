@@ -16,6 +16,7 @@ describe("toolRequestFromCopilot", () => {
     expect(toolRequestFromCopilot({ kind: "read", path: "README.md" })).toEqual({ kind: "read", summary: "README.md" });
     expect(toolRequestFromCopilot({ kind: "url", url: "https://x.test" })).toEqual({ kind: "network", summary: "https://x.test" });
     expect(toolRequestFromCopilot({ kind: "mcp", serverName: "fs", toolName: "list" })).toEqual({ kind: "other", summary: "fs/list" });
+    expect(toolRequestFromCopilot({ kind: "mcp", serverName: "fs" })).toEqual({ kind: "other", summary: "fs" });
     expect(toolRequestFromCopilot({ kind: "memory" })).toEqual({ kind: "other", summary: "memory" });
   });
 });
