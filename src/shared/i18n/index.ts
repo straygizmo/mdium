@@ -32,6 +32,9 @@ import enReplacement from "./locales/en/replacement.json";
 import jaClaudeConfig from "./locales/ja/claude-config.json";
 import enClaudeConfig from "./locales/en/claude-config.json";
 
+import jaAgentChat from "./locales/ja/agent-chat.json";
+import enAgentChat from "./locales/en/agent-chat.json";
+
 const savedLanguage = localStorage.getItem("mdium-lang") ?? "ja";
 
 i18n.use(initReactI18next).init({
@@ -49,6 +52,7 @@ i18n.use(initReactI18next).init({
       csv: jaCsv,
       replacement: jaReplacement,
       "claude-config": jaClaudeConfig,
+      "agent-chat": jaAgentChat,
     },
     en: {
       common: enCommon,
@@ -63,6 +67,7 @@ i18n.use(initReactI18next).init({
       csv: enCsv,
       replacement: enReplacement,
       "claude-config": enClaudeConfig,
+      "agent-chat": enAgentChat,
     },
   },
   lng: savedLanguage,

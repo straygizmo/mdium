@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { useUiStore } from "@/stores/ui-store";
@@ -8,13 +8,11 @@ import { useSettingsStore } from "@/stores/settings-store";
 import { FileTree } from "./FileTree";
 import { OutlinePanel } from "./OutlinePanel";
 import { RagPanel } from "@/features/rag/components/RagPanel";
-import { OpencodeConfigPanel } from "@/features/opencode-config/components/OpencodeConfigPanel";
+import { AgentChatPanel } from "@/features/agent-chat/components/AgentChatPanel";
 import { ClaudePanel } from "@/features/claude-config/components/ClaudePanel";
 import { GitPanel } from "@/features/git/components/GitPanel";
 import { ReplacementPanel } from "@/features/replacement/components/ReplacementPanel";
 import { useGitStore } from "@/stores/git-store";
-import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
-import { useChatUIStore } from "@/features/opencode-config/hooks/useOpencodeChat";
 import { collectConvertibleFiles, buildConvertibleTree } from "@/features/export/lib/collectConvertibleFiles";
 import { BatchConvertModal } from "@/features/export/components/BatchConvertModal";
 import "./LeftPanel.css";
@@ -70,17 +68,15 @@ export function LeftPanel({
   const { aiSettings } = useSettingsStore();
   const setShowSettings = useSettingsStore((s) => s.setShowSettings);
   const collapseAllDirs = useFileStore((s) => s.collapseAllDirs);
-  const ocConfigAgents = useOpencodeConfigStore((s) => s.config.agents);
-  const ocSelectedAgent = useChatUIStore((s) => s.selectedAgent);
-  const ocModel = useMemo(() => {
-    const agentModel = ocSelectedAgent && ocConfigAgents?.[ocSelectedAgent]?.model;
-    if (agentModel) return agentModel;
-    return `${aiSettings.provider}/${aiSettings.model}`;
-  }, [ocSelectedAgent, ocConfigAgents, aiSettings.provider, aiSettings.model]);
   const gitFileCount = useGitStore((s) => s.files.length);
   const [showBatchConvert, setShowBatchConvert] = useState(false);
   const convertibleFiles = useMemo(() => collectConvertibleFiles(fileTree), [fileTree]);
   const convertibleTree = useMemo(() => buildConvertibleTree(fileTree), [fileTree]);
+  // Mount AGENT CHAT on first open only; keep it mounted afterwards.
+  const [agentChatMounted, setAgentChatMounted] = useState(false);
+  useEffect(() => {
+    if (leftPanel === "opencode-config") setAgentChatMounted(true);
+  }, [leftPanel]);
 
   return (
     <div className="left-panel">
@@ -150,7 +146,7 @@ export function LeftPanel({
           <button
             className={`left-panel__activity-btn ${leftPanel === "opencode-config" ? "left-panel__activity-btn--active" : ""}`}
             onClick={() => { setLeftPanel("opencode-config"); setFolderLeftPanel("opencode-config"); }}
-            title="opencode"
+            title={t("title", { ns: "agent-chat" })}
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <rect x="4" y="2" width="16" height="20" />
@@ -218,18 +214,7 @@ export function LeftPanel({
                 </span>
               </>
             )}
-            {leftPanel === "opencode-config" && (
-              <>
-                OPENCODE
-                {ocModel && (
-                  <span className="left-panel__section-header-model">
-                    ({ocModel.includes("/")
-                      ? `${ocModel.split("/")[0]} / ${ocModel.split("/").slice(1).join("/")}`
-                      : ocModel})
-                  </span>
-                )}
-              </>
-            )}
+            {leftPanel === "opencode-config" && t("title", { ns: "agent-chat" })}
             {leftPanel === "git" && t("sourceControl", { ns: "git" }).toUpperCase()}
             {leftPanel === "replacement" && t("title", { ns: "replacement" }).toUpperCase()}
             {leftPanel === "claude" && "CLAUDE"}
@@ -384,8 +369,10 @@ export function LeftPanel({
             onOpenFile={onFileSelect}
           />
         </div>
-        {leftPanel === "opencode-config" && (
-          <OpencodeConfigPanel />
+        {agentChatMounted && (
+          <div style={{ display: leftPanel === "opencode-config" ? "contents" : "none" }}>
+            <AgentChatPanel />
+          </div>
         )}
         {leftPanel === "claude" && <ClaudePanel />}
         {leftPanel === "git" && <GitPanel />}
