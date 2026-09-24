@@ -456,6 +456,8 @@ export function SkillsSection() {
                 <label className="oc-section__toggle" style={{ padding: 0 }}>
                   <input
                     type="checkbox"
+                    data-switch
+                    role="switch"
                     checked={skill.enabled !== false}
                     onChange={(e) => handleToggleEnabled(skill.dir_name, itemScope, e.target.checked)}
                   />

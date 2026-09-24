@@ -177,6 +177,8 @@ export function PluginsSection() {
               <label className="oc-section__toggle" style={{ padding: 0 }}>
                 <input
                   type="checkbox"
+                  data-switch
+                  role="switch"
                   checked={enabled}
                   onChange={(e) => handleToggle(spec, e.target.checked)}
                 />

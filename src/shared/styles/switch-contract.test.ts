@@ -6,13 +6,29 @@ const root = process.cwd();
 const switchStylesheet = resolve(root, "src/shared/styles/switch.css");
 
 // Feature stylesheets that style switches. Extended as features adopt data-switch.
-const targetStylesheets: string[] = [];
+const targetStylesheets: string[] = [
+  "src/features/settings/components/SettingsDialog.css",
+  "src/features/opencode-config/components/OpencodeConfigDialog.css",
+  "src/features/opencode-config/components/OpencodeChat.css",
+  "src/features/claude-config/components/PluginsTab.css",
+];
 
 // Components that render span-based switches. Extended as features adopt data-switch.
 const keyboardSwitchComponents: string[] = [];
 
 // Components whose every checkbox is a switch.
-const checkboxSwitchComponents: string[] = [];
+const checkboxSwitchComponents: string[] = [
+  "src/features/settings/components/SettingsDialog.tsx",
+  "src/features/opencode-config/components/OpencodeChat.tsx",
+  "src/features/opencode-config/components/sections/AgentsSection.tsx",
+  "src/features/opencode-config/components/sections/McpServersSection.tsx",
+  "src/features/opencode-config/components/sections/PluginsSection.tsx",
+  "src/features/opencode-config/components/sections/SkillsSection.tsx",
+  "src/features/opencode-config/components/sections/ToolsSection.tsx",
+  "src/features/opencode-config/components/sections/WebUiSection.tsx",
+  "src/features/opencode-config/components/shared/ScopeToggle.tsx",
+  "src/features/claude-config/components/PluginsTab.tsx",
+];
 
 function cssRules(css: string): Array<[selector: string, body: string]> {
   return [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(([, selector, body]) => [selector.replace(/\s+/g, " ").trim(), body]);

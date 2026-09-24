@@ -44,6 +44,8 @@ export function ToolsSection() {
             </span>
             <input
               type="checkbox"
+              data-switch
+              role="switch"
               checked={enabled}
               onChange={(e) => setToolEnabled(name, e.target.checked)}
             />

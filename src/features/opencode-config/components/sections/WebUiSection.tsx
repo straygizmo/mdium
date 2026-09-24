@@ -27,6 +27,8 @@ export function WebUiSection() {
         <span>{t("webuiEnabled")}</span>
         <input
           type="checkbox"
+          data-switch
+          role="switch"
           checked={local.enabled ?? false}
           onChange={(e) => setLocal({ ...local, enabled: e.target.checked })}
         />

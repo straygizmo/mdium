@@ -387,6 +387,8 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
                   <span>{t("autoSave")}</span>
                   <input
                     type="checkbox"
+                    data-switch
+                    role="switch"
                     checked={localAutoSave}
                     onChange={(e) => setLocalAutoSave(e.target.checked)}
                   />
@@ -401,6 +403,8 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
                   <span>{t("restoreLastFolders")}</span>
                   <input
                     type="checkbox"
+                    data-switch
+                    role="switch"
                     checked={localRestoreLastFolders}
                     onChange={(e) => setLocalRestoreLastFolders(e.target.checked)}
                   />
@@ -415,6 +419,8 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
                   <span>{t("speechInput")}</span>
                   <input
                     type="checkbox"
+                    data-switch
+                    role="switch"
                     checked={localSpeechEnabled}
                     onChange={(e) => setLocalSpeechEnabled(e.target.checked)}
                   />
@@ -602,6 +608,8 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
                   <span>{t("showImagesBtn")}</span>
                   <input
                     type="checkbox"
+                    data-switch
+                    role="switch"
                     checked={localVisibility.showImages}
                     onChange={(e) => handleVisibilityChange("showImages", e.target.checked)}
                   />
@@ -616,6 +624,8 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
                   <span>{t("showDocxBtn")}</span>
                   <input
                     type="checkbox"
+                    data-switch
+                    role="switch"
                     checked={localVisibility.showDocx}
                     onChange={(e) => handleVisibilityChange("showDocx", e.target.checked)}
                   />
@@ -626,6 +636,8 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
                   <span>{t("showXlsBtn")}</span>
                   <input
                     type="checkbox"
+                    data-switch
+                    role="switch"
                     checked={localVisibility.showXls}
                     onChange={(e) => handleVisibilityChange("showXls", e.target.checked)}
                   />
@@ -636,6 +648,8 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
                   <span>{t("showPptxBtn")}</span>
                   <input
                     type="checkbox"
+                    data-switch
+                    role="switch"
                     checked={localVisibility.showPptx}
                     onChange={(e) => handleVisibilityChange("showPptx", e.target.checked)}
                   />
@@ -650,6 +664,8 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
                   <span>{t("showPdfBtn")}</span>
                   <input
                     type="checkbox"
+                    data-switch
+                    role="switch"
                     checked={localVisibility.showPdf}
                     onChange={(e) => handleVisibilityChange("showPdf", e.target.checked)}
                   />
@@ -664,6 +680,8 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
                   <span>{t("showKmBtn")}</span>
                   <input
                     type="checkbox"
+                    data-switch
+                    role="switch"
                     checked={localVisibility.showKm}
                     onChange={(e) => handleVisibilityChange("showKm", e.target.checked)}
                   />

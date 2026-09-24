@@ -493,11 +493,11 @@ export function AgentsSection() {
             </div>
           </div>
           <label className="oc-section__toggle oc-section__toggle--inline">
-            <input type="checkbox" checked={formHidden} onChange={(e) => setFormHidden(e.target.checked)} />
+            <input type="checkbox" data-switch role="switch" checked={formHidden} onChange={(e) => setFormHidden(e.target.checked)} />
             {t("agentHidden")}
           </label>
           <label className="oc-section__toggle oc-section__toggle--inline">
-            <input type="checkbox" checked={!formDisable} onChange={(e) => setFormDisable(!e.target.checked)} />
+            <input type="checkbox" data-switch role="switch" checked={!formDisable} onChange={(e) => setFormDisable(!e.target.checked)} />
             {t("agentEnabled")}
           </label>
           <div className="oc-section__form-actions" style={{ marginTop: 8 }}>

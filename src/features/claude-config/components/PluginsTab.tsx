@@ -65,6 +65,8 @@ export function PluginsTab() {
               <label className="plugins-tab__toggle">
                 <input
                   type="checkbox"
+                  data-switch
+                  role="switch"
                   checked={p.enabled}
                   onChange={async (e) => {
                     try {

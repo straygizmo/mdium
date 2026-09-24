@@ -134,41 +134,32 @@
   flex-shrink: 0;
 }
 
-.oc-chat__md-toggle-bar input {
-  display: none;
-}
-
-.oc-chat__md-toggle-bar .oc-chat__md-toggle-slider {
+.oc-chat__md-toggle-bar input[data-switch] {
+  appearance: none;
+  -webkit-appearance: none;
   position: relative;
   width: 26px;
   height: 14px;
-  background: var(--bg-overlay);
-  border: 1px solid var(--border);
   border-radius: 7px;
+  cursor: pointer;
   transition: background 0.2s;
   flex-shrink: 0;
 }
 
-.oc-chat__md-toggle-bar .oc-chat__md-toggle-slider::after {
+.oc-chat__md-toggle-bar input[data-switch]::after {
   content: "";
   position: absolute;
-  top: 1px;
+  top: 50%;
+  margin-top: -5px;
   left: 1px;
   width: 10px;
   height: 10px;
-  background: var(--text-muted);
   border-radius: 50%;
   transition: transform 0.2s, background 0.2s;
 }
 
-.oc-chat__md-toggle-bar input:checked + .oc-chat__md-toggle-slider {
-  background: var(--accent-green);
-  border-color: var(--accent-green);
-}
-
-.oc-chat__md-toggle-bar input:checked + .oc-chat__md-toggle-slider::after {
+.oc-chat__md-toggle-bar input[data-switch]:checked::after {
   transform: translateX(12px);
-  background: #fff;
 }
 
 .oc-chat__md-toggle-bar .oc-chat__md-toggle-label {
@@ -180,13 +171,8 @@
   white-space: nowrap;
 }
 
-.oc-chat__md-toggle-bar input:checked ~ .oc-chat__md-toggle-label {
-  color: var(--accent-green);
-}
-
 .oc-chat__md-toggle-bar--disabled {
   cursor: not-allowed;
-  opacity: 0.5;
 }
 
 /* Splittable area container */

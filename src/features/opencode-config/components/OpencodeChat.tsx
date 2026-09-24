@@ -640,11 +640,12 @@ export function OpencodeChat() {
           >
             <input
               type="checkbox"
+              data-switch
+              role="switch"
               checked={mdContextActive}
               disabled={!canUseMdContext}
               onChange={(e) => setUseMdContext(e.target.checked)}
             />
-            <span className="oc-chat__md-toggle-slider" />
             <span className="oc-chat__md-toggle-label">
               {t("ocChatMdToggleLabel", { name: canUseMdContext ? (activeTabName ?? "MD") : "MD" })}
             </span>

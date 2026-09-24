@@ -688,7 +688,7 @@ export function McpServersSection() {
             {/* Enabled toggle */}
             <label className="oc-section__toggle oc-section__toggle--inline">
               <span>{t("mcpEnabled")}</span>
-              <input type="checkbox" checked={formEnabled} onChange={(e) => setFormEnabled(e.target.checked)} />
+              <input type="checkbox" data-switch role="switch" checked={formEnabled} onChange={(e) => setFormEnabled(e.target.checked)} />
             </label>
           </ScopeFormWrapper>
 
@@ -770,6 +770,8 @@ export function McpServersSection() {
                     <label className="oc-section__toggle" style={{ padding: 0 }}>
                       <input
                         type="checkbox"
+                        data-switch
+                        role="switch"
                         checked={isEnabled}
                         onChange={async (e) => {
                           const nowEnabled = e.target.checked;

@@ -14,6 +14,8 @@ export function ScopeToggle({ value, onChange }: ScopeToggleProps) {
       <span className="oc-section__scope-toggle-label">{t("scopeGlobal")}</span>
       <input
         type="checkbox"
+        data-switch
+        role="switch"
         checked={value === "global"}
         onChange={(e) => onChange(e.target.checked ? "global" : "project")}
       />
