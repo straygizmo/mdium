@@ -95,7 +95,6 @@ export function OpencodeUsagePopover() {
     .filter((k) => k >= cutoff)
     .sort()
     .reverse();
-  const sessionHasUsage = sessionTotals.cost > 0 || tokenSum(sessionTotals) > 0;
 
   return (
     <div className="oc-chat__usage" ref={rootRef}>
@@ -112,11 +111,7 @@ export function OpencodeUsagePopover() {
         <div className="oc-chat__usage-popover">
           <div className="oc-chat__usage-section">
             <div className="oc-chat__usage-heading">{t("ocUsageSession")}</div>
-            {sessionHasUsage ? (
-              <TotalsRows totals={sessionTotals} />
-            ) : (
-              <div className="oc-chat__usage-empty">{t("ocUsageEmpty")}</div>
-            )}
+            <TotalsRows totals={sessionTotals} />
           </div>
           <div className="oc-chat__usage-section">
             <div className="oc-chat__usage-heading">{t("ocUsageToday")}</div>
