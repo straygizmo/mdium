@@ -36,10 +36,14 @@ export function toolRequestFromCopilot(request: { kind: string; [k: string]: unk
   }
 }
 
-/** Decide a Copilot permission request for a mode; "ask" routes it to the user. */
+/**
+ * Decide a Copilot permission request for a mode; "ask" routes it to the
+ * user. Reads are auto-approved only under `read-only` and `full-access`;
+ * under `cli-default` every request, including reads, is confirmed by the
+ * user each time (spec 2.1).
+ */
 export function copilotDecision(permission: AgentPermission, request: ToolRequest): "approve" | "reject" | "ask" {
-  if (request.kind === "read") return "approve";
-  if (permission === "read-only") return "reject";
+  if (permission === "read-only") return request.kind === "read" ? "approve" : "reject";
   if (permission === "full-access") return "approve";
   return "ask";
 }

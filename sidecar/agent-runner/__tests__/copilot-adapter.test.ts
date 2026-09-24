@@ -302,12 +302,13 @@ describe("CopilotAdapter", () => {
     ]);
   });
 
-  it("maps permission requests through the mode", async () => {
+  it("asks the user for every request under cli-default, including reads", async () => {
     const session = fakeSession([]);
     const { client, permission } = fakeClient(session);
     const ask = vi.fn(async () => false);
     await make(client).startSession(opts, { onEvent: () => {}, requestPermission: ask });
-    await expect(permission({ kind: "read", path: "a" })).resolves.toEqual({ kind: "approve-once" });
+    await expect(permission({ kind: "read", path: "a" })).resolves.toEqual({ kind: "reject" });
+    expect(ask).toHaveBeenCalledWith({ kind: "read", summary: "a" });
     await expect(permission({ kind: "shell", fullCommandText: "ls" })).resolves.toEqual({ kind: "reject" });
     expect(ask).toHaveBeenCalledWith({ kind: "shell", summary: "ls" });
   });

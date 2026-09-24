@@ -31,8 +31,8 @@ describe("copilotDecision", () => {
   it("full-access approves everything", () => {
     expect(copilotDecision("full-access", shell)).toBe("approve");
   });
-  it("cli-default asks the user for everything except reads", () => {
-    expect(copilotDecision("cli-default", read)).toBe("approve");
+  it("cli-default asks the user for everything, including reads", () => {
+    expect(copilotDecision("cli-default", read)).toBe("ask");
     expect(copilotDecision("cli-default", shell)).toBe("ask");
   });
 });
