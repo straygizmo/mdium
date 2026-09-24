@@ -190,6 +190,10 @@
   cursor: not-allowed;
 }
 
+.oc-chat__md-toggle-bar--disabled .oc-chat__md-toggle-label {
+  opacity: 0.5;
+}
+
 /* Splittable area container */
 .oc-chat__split {
   display: flex;
