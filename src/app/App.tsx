@@ -1098,8 +1098,9 @@ export function App() {
         handleOpenFolder();
       } else if (e.ctrlKey && e.shiftKey && (e.key === "O" || e.key === "o")) {
         e.preventDefault();
-        useUiStore.getState().setLeftPanel("claude");
-        useTabStore.getState().setFolderLeftPanel("claude");
+        useUiStore.getState().setLeftPanel("opencode-config");
+        useTabStore.getState().setFolderLeftPanel("opencode-config");
+        useAgentChatStore.getState().setSelectedTab("claude");
       } else if (e.ctrlKey && e.key === "o") {
         e.preventDefault();
         useUiStore.getState().setLeftPanel("opencode-config");

@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { useOpencodeServerStore } from "./opencode-server-store";
 import { useOpencodeConfigStore } from "./opencode-config-store";
-import { useUiStore, type LeftPanel } from "./ui-store";
+import { normalizeLeftPanel, useUiStore, type LeftPanel } from "./ui-store";
 import type { editor } from "monaco-editor";
 import type { CsvDelimiter } from "@/features/preview/lib/delimiter";
 
@@ -543,6 +543,14 @@ export const useTabStore = create<TabState>()(
         activeFolderPath: state.activeFolderPath,
         folderLeftPanel: state.folderLeftPanel,
       }),
+      // Saved panel ids may predate panel changes (e.g. the retired "claude" panel).
+      merge: (persisted, current) => {
+        const saved = (persisted ?? {}) as Partial<TabState>;
+        const folderLeftPanel = Object.fromEntries(
+          Object.entries(saved.folderLeftPanel ?? {}).map(([folder, panel]) => [folder, normalizeLeftPanel(panel)]),
+        );
+        return { ...current, ...saved, folderLeftPanel };
+      },
     }
   )
 );

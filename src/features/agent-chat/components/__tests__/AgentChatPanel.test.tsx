@@ -7,6 +7,9 @@ import i18n from "@/shared/i18n";
 vi.mock("@/features/opencode-config/components/OpencodeConfigPanel", () => ({
   OpencodeConfigPanel: () => <div data-testid="opencode-panel" />,
 }));
+vi.mock("@/features/claude-config/components/ClaudePanel", () => ({
+  ClaudePanel: () => <div data-testid="claude-panel" />,
+}));
 vi.mock("../../lib/agent-runner-client", () => ({
   sendToRunner: vi.fn(async () => {}),
   requestRunner: vi.fn(async () => ({ availability: { kind: "missing", detail: "codex" } })),
@@ -50,17 +53,27 @@ describe("AgentChatPanel", () => {
     await act(async () => root.render(<AgentChatPanel />));
     expect(container.querySelector('[data-testid="opencode-panel"]')).not.toBeNull();
     const tabs = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
-    expect(tabs.map((t) => t.textContent)).toEqual(["opencode", "Codex", "Copilot"]);
+    expect(tabs.map((t) => t.textContent)).toEqual(["opencode", "Claude", "Codex", "Copilot"]);
 
-    await act(async () => tabs[2].click());
+    await act(async () => tabs[3].click());
     expect(useAgentChatStore.getState().selectedTab).toBe("copilot");
     expect(container.querySelector('[data-testid="opencode-panel"]')).toBeNull();
     expect(container.querySelector("textarea")).not.toBeNull();
   });
 
+  it("hosts the existing Claude panel in an always-enabled Claude tab", async () => {
+    await act(async () => root.render(<AgentChatPanel />));
+    const claude = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')][1];
+    expect(claude.disabled).toBe(false);
+    await act(async () => claude.click());
+    expect(useAgentChatStore.getState().selectedTab).toBe("claude");
+    expect(container.querySelector('[data-testid="claude-panel"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="opencode-panel"]')).toBeNull();
+  });
+
   it("disables an unavailable provider tab and explains why", async () => {
     await act(async () => root.render(<AgentChatPanel />));
-    const codex = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')][1];
+    const codex = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')][2];
     expect(codex.disabled).toBe(true);
     expect(codex.title).toBe(i18n.t("unavailableMissing", { ns: "agent-chat", name: "Codex" }));
   });
@@ -93,7 +106,7 @@ describe("AgentChatPanel", () => {
       availability: { codex: { kind: "error", detail: "spawn" }, copilot: { kind: "error", detail: "version" } },
     });
     await act(async () => root.render(<AgentChatPanel />));
-    const [, codex, copilot] = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+    const [, , codex, copilot] = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
     const expected = i18n.t("availabilityCheckFailed", { ns: "agent-chat", name: "Codex" });
     expect(codex.title).toBe(expected);
     expect(codex.title).not.toContain("spawn");
@@ -106,7 +119,7 @@ describe("AgentChatPanel", () => {
       availability: { codex: { kind: "error", detail: "RUNNER_EXITED" }, copilot: { kind: "error", detail: "RUNNER_START_TIMEOUT" } },
     });
     await act(async () => root.render(<AgentChatPanel />));
-    const [, codex, copilot] = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+    const [, , codex, copilot] = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
     expect(codex.title).toBe(i18n.t("availabilityRunnerFailed", { ns: "agent-chat", name: "Codex" }));
     expect(copilot.title).toBe(i18n.t("availabilityRunnerFailed", { ns: "agent-chat", name: "Copilot" }));
   });
@@ -117,7 +130,7 @@ describe("AgentChatPanel", () => {
       availability: { codex: { kind: "error", detail: "ENOENT: something weird" }, copilot: { kind: "available", version: "1" } },
     });
     await act(async () => root.render(<AgentChatPanel />));
-    const codex = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')][1];
+    const codex = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')][2];
     expect(codex.title).toBe(i18n.t("unavailableError", { ns: "agent-chat", name: "Codex" }));
     expect(codex.title).not.toContain("ENOENT");
   });
@@ -127,7 +140,7 @@ describe("AgentChatPanel", () => {
       availability: { codex: { kind: "too_old", detail: "1.2.3" }, copilot: { kind: "available", version: "1" } },
     });
     await act(async () => root.render(<AgentChatPanel />));
-    const codex = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')][1];
+    const codex = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')][2];
     expect(codex.title).toBe(i18n.t("unavailableTooOld", { ns: "agent-chat", name: "Codex", minimum: "1.2.3", found: i18n.t("unknownVersion", { ns: "agent-chat" }) }));
     expect(codex.title).not.toContain("?");
   });

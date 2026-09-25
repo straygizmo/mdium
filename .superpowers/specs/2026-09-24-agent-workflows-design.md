@@ -126,9 +126,9 @@ interface SessionOptions {
 
 ### 2.2 AGENT CHAT パネル
 
-左パネルの opencode ボタンを「AGENT CHAT」に置き換え、上部タブで opencode / Codex / Copilot を切り替えるチャットにする。
+左パネルの opencode ボタンを「AGENT CHAT」に置き換え、上部タブで opencode / Claude / Codex / Copilot を切り替えるチャットにする。
 
-- opencode タブは既存の opencode パネルをそのまま表示する。
+- opencode タブは既存の opencode パネルを、Claude タブは既存の Claude パネル（チャット・設定）をそのまま表示する。独立した Claude ボタンは廃止し、保存済みの「最後に開いたパネル」が Claude の場合は AGENT CHAT を開く。Claude パネルを開くショートカット（Ctrl+Shift+O）は AGENT CHAT の Claude タブを開く。
 - Codex / Copilot タブはランナーを使うネイティブチャット（新規セッション、送信、履歴一覧と再開は対応プロバイダーのみ）。
 - 利用できないプロバイダーのタブは無効表示とし、理由をツールチップで示す。
 - パネルを切り替えてもチャット状態を保持する。

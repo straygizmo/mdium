@@ -9,7 +9,6 @@ import { FileTree } from "./FileTree";
 import { OutlinePanel } from "./OutlinePanel";
 import { RagPanel } from "@/features/rag/components/RagPanel";
 import { AgentChatPanel } from "@/features/agent-chat/components/AgentChatPanel";
-import { ClaudePanel } from "@/features/claude-config/components/ClaudePanel";
 import { GitPanel } from "@/features/git/components/GitPanel";
 import { ReplacementPanel } from "@/features/replacement/components/ReplacementPanel";
 import { useGitStore } from "@/stores/git-store";
@@ -164,17 +163,6 @@ export function LeftPanel({
               <rect x="8" y="6" width="8" height="12" />
             </svg>
           </button>
-          <button
-            className={`left-panel__activity-btn ${leftPanel === "claude" ? "left-panel__activity-btn--active" : ""}`}
-            onClick={() => { setLeftPanel("claude"); setFolderLeftPanel("claude"); }}
-            title="Claude"
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 2v20" />
-              <path d="M4 7l16 10" />
-              <path d="M20 7L4 17" />
-            </svg>
-          </button>
         </div>
         <div className="left-panel__activity-bar-bottom">
           {activeFolderPath && (
@@ -239,7 +227,6 @@ export function LeftPanel({
             )}
             {leftPanel === "git" && t("sourceControl", { ns: "git" }).toUpperCase()}
             {leftPanel === "replacement" && t("title", { ns: "replacement" }).toUpperCase()}
-            {leftPanel === "claude" && "CLAUDE"}
           </span>
           {leftPanel === "folder" && !!activeFolderPath && (
             <div className="left-panel__section-header-actions">
@@ -396,7 +383,6 @@ export function LeftPanel({
             <AgentChatPanel />
           </div>
         )}
-        {leftPanel === "claude" && <ClaudePanel />}
         {leftPanel === "git" && <GitPanel />}
         {leftPanel === "replacement" && <ReplacementPanel />}
       </div>

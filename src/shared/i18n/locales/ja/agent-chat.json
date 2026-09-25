@@ -2,6 +2,7 @@
   "title": "AGENT CHAT",
   "tabList": "エージェントの種類",
   "providerOpencode": "opencode",
+  "providerClaude": "Claude",
   "providerCodex": "Codex",
   "providerCopilot": "Copilot",
   "newSession": "新しいセッション",

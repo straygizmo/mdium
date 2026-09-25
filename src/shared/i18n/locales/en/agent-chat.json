@@ -2,6 +2,7 @@
   "title": "AGENT CHAT",
   "tabList": "Agent providers",
   "providerOpencode": "opencode",
+  "providerClaude": "Claude",
   "providerCodex": "Codex",
   "providerCopilot": "Copilot",
   "newSession": "New session",

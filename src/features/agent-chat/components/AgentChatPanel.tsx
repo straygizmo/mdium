@@ -4,14 +4,16 @@ import type { AgentProvider, Availability } from "@/shared/types/agent-runner";
 import { useTabStore } from "@/stores/tab-store";
 import { useUiStore } from "@/stores/ui-store";
 import { OpencodeConfigPanel } from "@/features/opencode-config/components/OpencodeConfigPanel";
+import { ClaudePanel } from "@/features/claude-config/components/ClaudePanel";
 import { useAgentChatStore, type ChatProviderTab } from "../agent-chat-store";
 import { NativeChat } from "./NativeChat";
 import "@/features/opencode-config/components/OpencodeConfigPanel.css";
 import "./AgentChatPanel.css";
 
-const TABS: ChatProviderTab[] = ["opencode", "codex", "copilot"];
+const TABS: ChatProviderTab[] = ["opencode", "claude", "codex", "copilot"];
 const LABEL_KEYS: Record<ChatProviderTab, string> = {
   opencode: "providerOpencode",
+  claude: "providerClaude",
   codex: "providerCodex",
   copilot: "providerCopilot",
 };
@@ -72,7 +74,7 @@ export function AgentChatPanel() {
     <div className="agent-chat">
       <div className="agent-chat__tabs oc-panel__top-tabs" role="tablist" aria-label={t("tabList")}>
         {TABS.map((tab) => {
-          const why = tab === "opencode" ? null : reason(tab, availability[tab]);
+          const why = tab === "opencode" || tab === "claude" ? null : reason(tab, availability[tab]);
           return (
             <button
               key={tab}
@@ -92,6 +94,8 @@ export function AgentChatPanel() {
       <div className="agent-chat__body">
         {selectedTab === "opencode" ? (
           <OpencodeConfigPanel />
+        ) : selectedTab === "claude" ? (
+          <ClaudePanel />
         ) : folder ? (
           <NativeChat folder={folder} provider={selectedTab} />
         ) : (

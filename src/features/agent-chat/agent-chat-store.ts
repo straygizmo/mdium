@@ -2,7 +2,8 @@ import { create } from "zustand";
 import type { AgentEvent, AgentProvider, AgentSessionSummary, Availability, RunnerOutbound, ToolRequest } from "@/shared/types/agent-runner";
 import { newRunnerId, onRunnerMessage, requestRunner, sendToRunner } from "./lib/agent-runner-client";
 
-export type ChatProviderTab = "opencode" | AgentProvider;
+/** AGENT CHAT tabs: opencode and Claude host their existing panels; the rest are runner providers. */
+export type ChatProviderTab = "opencode" | "claude" | AgentProvider;
 
 export interface ChatEntry {
   id: string;

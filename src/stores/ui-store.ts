@@ -2,7 +2,18 @@ import { create } from "zustand";
 import type { OpencodeConfigTab, OpencodeTopTab, ClaudeTopTab, ClaudeSettingsTab } from "@/shared/types";
 import type { TerminalKind, TerminalSession } from "@/features/terminal/terminal-session";
 
-export type LeftPanel = "folder" | "outline" | "rag" | "opencode-config" | "git" | "replacement" | "claude";
+export type LeftPanel = "folder" | "outline" | "rag" | "opencode-config" | "git" | "replacement";
+
+const LEFT_PANELS: readonly LeftPanel[] = ["folder", "outline", "rag", "opencode-config", "git", "replacement"];
+
+/**
+ * Normalize a persisted left panel id. The standalone Claude panel now lives
+ * inside AGENT CHAT, so a saved "claude" maps to the AGENT CHAT panel.
+ */
+export function normalizeLeftPanel(value: string | undefined): LeftPanel {
+  if (value === "claude") return "opencode-config";
+  return LEFT_PANELS.includes(value as LeftPanel) ? (value as LeftPanel) : "folder";
+}
 type ViewTab = "preview" | "table" | "pdf-preview" | "docx-preview" | "html-preview" | "xlsx-preview" | "slidev-preview" | "video";
 type FolderPanelTab = "terminal" | "rag";
 export type SearchMode = "search" | "replace";
