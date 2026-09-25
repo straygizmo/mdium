@@ -8,6 +8,7 @@
 
 pub mod containment;
 pub mod errors;
+pub mod frontmatter;
 pub mod fsutil;
 pub mod gitops;
 pub mod integrity;

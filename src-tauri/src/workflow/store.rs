@@ -4,6 +4,9 @@
 //! Task 4 extends this same file with workflow runs / attempt artifacts,
 //! reusing [`StoreError`] and [`WorkflowStore`].
 
+use crate::workflow::frontmatter::{
+    split_frontmatter, strip_bom, DelimiterMatch, SplitError, FRONTMATTER_DELIMITER,
+};
 use crate::workflow::fsutil::{self, InvalidId, MdiumPaths};
 use crate::workflow::model::{
     Task, TaskMeta, ValidationError, Workflow, WorkflowRun, WorkflowsFile,
@@ -159,12 +162,6 @@ struct SchemaProbe {
     schema_version: u32,
 }
 
-/// Frontmatter delimiter line of a task document.
-const FRONTMATTER_DELIMITER: &str = "---";
-
-/// UTF-8 byte order mark that some Windows editors prepend.
-const BOM: char = '\u{feff}';
-
 /// Serializes a task document as `---\n<YAML>---\n\n<body>`. The body is
 /// written verbatim.
 fn encode_task(task: &Task) -> Result<String, StoreError> {
@@ -176,49 +173,22 @@ fn encode_task(task: &Task) -> Result<String, StoreError> {
     ))
 }
 
-/// Splits the first line off `text`, returning `(line, rest)`. The line
-/// excludes its terminator, and a trailing `\r` is dropped so CRLF files
-/// are handled like LF files.
-fn split_line(text: &str) -> (&str, &str) {
-    let (line, rest) = match text.find('\n') {
-        Some(pos) => (&text[..pos], &text[pos + 1..]),
-        None => (text, ""),
-    };
-    (line.strip_suffix('\r').unwrap_or(line), rest)
-}
-
 /// Parses a task document. Only the FIRST frontmatter block is metadata:
 /// everything after its closing delimiter (minus the single blank separator
 /// line) is the body, verbatim, even if it starts with `---` itself.
 fn decode_task(text: &str) -> Result<Task, StoreError> {
-    let text = text.strip_prefix(BOM).unwrap_or(text);
-
-    let (first, mut rest) = split_line(text);
-    if first != FRONTMATTER_DELIMITER {
-        return Err(StoreError::Corrupt(
-            "missing opening frontmatter delimiter".to_string(),
-        ));
-    }
-
-    let mut yaml = String::new();
-    let body = loop {
-        if rest.is_empty() {
-            return Err(StoreError::Corrupt(
-                "missing closing frontmatter delimiter".to_string(),
-            ));
-        }
-        let (line, next) = split_line(rest);
-        rest = next;
-        if line == FRONTMATTER_DELIMITER {
-            // Drop the one blank separator line written by `encode_task`.
-            break match rest.strip_prefix("\r\n") {
-                Some(body) => body,
-                None => rest.strip_prefix('\n').unwrap_or(rest),
-            };
-        }
-        yaml.push_str(line);
-        yaml.push('\n');
-    };
+    // Only the opening/closing lines exactly `---` count: MDium writes
+    // this file itself (see `encode_task`).
+    let (yaml, body) =
+        split_frontmatter(strip_bom(text), DelimiterMatch::Exact).map_err(|err| {
+            StoreError::Corrupt(
+                match err {
+                    SplitError::MissingOpening => "missing opening frontmatter delimiter",
+                    SplitError::MissingClosing => "missing closing frontmatter delimiter",
+                }
+                .to_string(),
+            )
+        })?;
 
     let probe: SchemaProbe =
         serde_yaml_ng::from_str(&yaml).map_err(|err| StoreError::Corrupt(err.to_string()))?;

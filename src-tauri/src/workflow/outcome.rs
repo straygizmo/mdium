@@ -2,6 +2,7 @@
 //! start with YAML frontmatter declaring `outcome` (plus `reason` /
 //! `question` where relevant), followed by a Markdown body.
 
+use crate::workflow::frontmatter::{split_frontmatter, split_line, strip_bom, DelimiterMatch};
 use serde::Deserialize;
 
 /// The declared result of one stage attempt.
@@ -62,12 +63,6 @@ impl std::fmt::Display for OutcomeError {
 
 crate::workflow::errors::impl_workflow_error!(OutcomeError);
 
-/// Frontmatter delimiter line.
-const FRONTMATTER_DELIMITER: &str = "---";
-
-/// UTF-8 byte order mark that some Windows tools prepend.
-const BOM: char = '\u{feff}';
-
 /// Parses an agent's final response into a [`StageOutcome`].
 ///
 /// Tolerated: a BOM, leading whitespace/blank lines, CRLF line endings, a
@@ -76,9 +71,10 @@ const BOM: char = '\u{feff}';
 /// `reason` / `question` (stringified). The body is everything after the
 /// closing `---` (minus one optional blank line), verbatim.
 pub fn parse_outcome(text: &str) -> Result<StageOutcome, OutcomeError> {
-    let text = text.strip_prefix(BOM).unwrap_or(text).trim_start();
+    let text = strip_bom(text).trim_start();
     let text = strip_wrapping_fence(text).trim_start();
-    let (yaml, body) = split_frontmatter(text).ok_or(OutcomeError::MissingFrontmatter)?;
+    let (yaml, body) = split_frontmatter(text, DelimiterMatch::TrimEnd)
+        .map_err(|_| OutcomeError::MissingFrontmatter)?;
     let raw = decode_frontmatter(&yaml)?;
 
     let value = match raw.outcome.map(scalar_to_string).transpose()?.flatten() {
@@ -139,17 +135,6 @@ fn non_blank(value: Option<serde_yaml_ng::Value>) -> Result<Option<String>, Outc
     Ok((!text.is_empty()).then(|| text.to_string()))
 }
 
-/// Splits the first line off `text`, returning `(line, rest)`. The line
-/// excludes its terminator, and a trailing `\r` is dropped so CRLF input is
-/// handled like LF input.
-fn split_line(text: &str) -> (&str, &str) {
-    let (line, rest) = match text.find('\n') {
-        Some(pos) => (&text[..pos], &text[pos + 1..]),
-        None => (text, ""),
-    };
-    (line.strip_suffix('\r').unwrap_or(line), rest)
-}
-
 /// If `text` opens with a bare or `markdown`/`md` code fence (three or more
 /// backticks, or `~~~`), removes that opening line and, when present, the
 /// closing fence on the last non-blank line. The closer must repeat the
@@ -184,34 +169,6 @@ fn strip_wrapping_fence(text: &str) -> &str {
         &rest[..last_line_start]
     } else {
         rest
-    }
-}
-
-/// Splits `text` into `(yaml, body)` if it starts with a `---` delimited
-/// frontmatter block. One blank line directly after the closing delimiter
-/// is dropped; the rest of the body is returned verbatim.
-fn split_frontmatter(text: &str) -> Option<(String, &str)> {
-    let (first, mut rest) = split_line(text);
-    if first.trim_end() != FRONTMATTER_DELIMITER {
-        return None;
-    }
-
-    let mut yaml = String::new();
-    loop {
-        if rest.is_empty() {
-            return None;
-        }
-        let (line, next) = split_line(rest);
-        rest = next;
-        if line.trim_end() == FRONTMATTER_DELIMITER {
-            let body = match rest.strip_prefix("\r\n") {
-                Some(body) => body,
-                None => rest.strip_prefix('\n').unwrap_or(rest),
-            };
-            return Some((yaml, body));
-        }
-        yaml.push_str(line);
-        yaml.push('\n');
     }
 }
 
