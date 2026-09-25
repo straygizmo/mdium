@@ -213,7 +213,8 @@ fn io_error(path: &Path, err: std::io::Error) -> GitError {
 
 /// One hashed entry: a label (a `/`-separated relative path, as raw
 /// encoded bytes), a kind (`d`ir, `f`ile, sym`l`ink, `t`arget content of a
-/// symlink to a file) and content.
+/// symlink to a file, `r`oot that is a file rather than a directory) and
+/// content.
 type Entry = (Vec<u8>, u8, Vec<u8>);
 
 /// Hex sha256 over `entries` sorted by label. Label and content are
@@ -242,17 +243,39 @@ fn push_file(out: &mut Vec<Entry>, label: Vec<u8>, path: &Path) -> Result<(), Gi
     Ok(())
 }
 
-/// Adds every entry under `root` with labels `<prefix><relative path>`. A
-/// missing `root` (or one that is not a directory) adds nothing.
+/// Adds every entry under `root` with labels `<prefix><relative path>`.
+/// `root` itself may be a symlink and is followed. A missing `root` adds
+/// nothing; a dangling `root` symlink adds its target; a `root` that is not
+/// a directory is hashed as a single file labeled `<prefix>`. Any other
+/// error (e.g. permission denied) fails closed with `IO_FAILED`.
 fn collect_tree(root: &Path, prefix: &[u8], out: &mut Vec<Entry>) -> Result<(), GitError> {
-    if !root.is_dir() {
-        return Ok(());
+    match std::fs::metadata(root) {
+        Ok(meta) if meta.is_dir() => collect_entries(root, prefix, out),
+        Ok(_) => {
+            let content = std::fs::read(root).map_err(|err| io_error(root, err))?;
+            out.push((prefix.to_vec(), b'r', content));
+            Ok(())
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            match std::fs::symlink_metadata(root) {
+                Ok(meta) if meta.file_type().is_symlink() => {
+                    let target = std::fs::read_link(root).map_err(|err| io_error(root, err))?;
+                    let target = target.as_os_str().as_encoded_bytes().to_vec();
+                    out.push((prefix.to_vec(), b'l', target));
+                    Ok(())
+                }
+                Ok(_) => Err(io_error(root, err)),
+                Err(inner) if inner.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(inner) => Err(io_error(root, inner)),
+            }
+        }
+        Err(err) => Err(io_error(root, err)),
     }
-    collect_entries(root, prefix, out)
 }
 
-/// Symlinks are recorded by target and not descended into; a symlink that
-/// resolves to a regular file also contributes that file's content.
+/// Symlinks are recorded by target and never descended into, so a symlink
+/// to a directory records only its target; a symlink that resolves to a
+/// regular file also contributes that file's content.
 fn collect_entries(dir: &Path, prefix: &[u8], out: &mut Vec<Entry>) -> Result<(), GitError> {
     let reader = std::fs::read_dir(dir).map_err(|err| io_error(dir, err))?;
     for entry in reader {
@@ -862,6 +885,34 @@ mod tests {
         write_file(outside.path(), "pre-commit", "two\n");
         let changes = compare(&before, &snap(&fixture));
         assert_eq!(codes(&changes), ["HOOKS_CHANGED"]);
+    }
+
+    #[test]
+    fn hooks_path_pointing_at_a_file_is_hashed_as_a_file() {
+        let fixture = Fixture::new();
+        fixture.write("hookfile", "one\n");
+        fixture.run(&["config", "core.hooksPath", "hookfile"]);
+        let before = snap(&fixture);
+        fixture.write("hookfile", "two\n");
+        let changes = compare(&before, &snap(&fixture));
+        assert_eq!(codes(&changes), ["HOOKS_CHANGED"]);
+    }
+
+    #[test]
+    fn collect_tree_treats_only_missing_as_empty() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut entries = Vec::new();
+        collect_tree(&dir.path().join("missing"), b"x/", &mut entries).unwrap();
+        assert!(entries.is_empty());
+        // A path through a regular file is an error, not "missing" (Unix
+        // reports ENOTDIR; Windows maps this case to NotFound).
+        #[cfg(unix)]
+        {
+            write_file(dir.path(), "file", "x\n");
+            let err = collect_tree(&dir.path().join("file").join("sub"), b"x/", &mut entries)
+                .unwrap_err();
+            assert_eq!(err.code, "IO_FAILED");
+        }
     }
 
     #[test]
