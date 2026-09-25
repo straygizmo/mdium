@@ -142,9 +142,9 @@ pub fn worktree_path_for(repo_root: &Path, root_task_id: &str) -> PathBuf {
 fn worktree_path_in(base_dir: &Path, repo: &Path, root_task_id: &str) -> PathBuf {
     let top = repo_root(repo).unwrap_or_else(|_| repo.to_path_buf());
     let canonical = std::fs::canonicalize(&top).unwrap_or(top);
-    let digest = Sha256::digest(canonical.to_string_lossy().as_bytes());
-    let hash: String = format!("{digest:x}").chars().take(16).collect();
-    worktrees_dir(base_dir).join(hash).join(root_task_id)
+    worktrees_dir(base_dir)
+        .join(repo_hash(&canonical))
+        .join(root_task_id)
 }
 
 /// `mdium/<first 8 chars of id>-<slug>`. The slug keeps lowercase ASCII
@@ -280,6 +280,98 @@ pub(crate) fn validate_info(
     validate_worktree_path(base_dir, repo, &info.path)
 }
 
+/// Error code for a worktree whose link to the user's repository is not
+/// the one git created.
+const WORKTREE_LINK_TAMPERED: &str = "WORKTREE_LINK_TAMPERED";
+
+/// Global options for every git command MDium runs inside an agent
+/// worktree: never run an fsmonitor hook the agent may have configured.
+const WORKTREE_SAFE_OPTS: [&str; 2] = ["-c", "core.fsmonitor=false"];
+
+/// `WORKTREE_SAFE_OPTS` followed by `args`.
+fn worktree_args<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    let mut full = WORKTREE_SAFE_OPTS.to_vec();
+    full.extend_from_slice(args);
+    full
+}
+
+/// First 16 hex chars of sha256 over a canonical repo path (the hash
+/// directory of that repo's worktrees).
+fn repo_hash(canonical_repo: &Path) -> String {
+    let digest = Sha256::digest(canonical_repo.to_string_lossy().as_bytes());
+    format!("{digest:x}").chars().take(16).collect()
+}
+
+/// Reads a one-line path file (`.git`, `gitdir`, `commondir`), strips an
+/// optional `prefix`, resolves a relative path against `base`, and
+/// canonicalizes it. `None` on any failure.
+fn read_link_file(file: &Path, prefix: &str, base: &Path) -> Option<PathBuf> {
+    let content = std::fs::read_to_string(file).ok()?;
+    let target = content.strip_prefix(prefix)?.trim_end_matches(['\r', '\n']);
+    if target.is_empty() {
+        return None;
+    }
+    std::fs::canonicalize(base.join(target)).ok()
+}
+
+/// Verifies that the agent worktree is still linked to the user's
+/// repository exactly as git created it, so MDium's own git commands in the
+/// worktree cannot be redirected to a git dir (and config) the agent
+/// controls. Checks:
+/// - `<worktree>/.git` is a regular file (not a directory or symlink)
+///   whose `gitdir:` resolves to `<common>/worktrees/<name>`;
+/// - `<common>` is `<repo>/.git` of the repo whose path hash names the
+///   worktree's hash directory (binding it to the user's repository);
+/// - the admin dir's `commondir` resolves to `<common>` and its `gitdir`
+///   back-link resolves to `<worktree>/.git`.
+///
+/// Returns the canonical admin dir. Error: `WORKTREE_LINK_TAMPERED`.
+/// A repository whose git dir is not `<repo>/.git` (e.g.
+/// `--separate-git-dir`) cannot be bound this way and is rejected too.
+pub(crate) fn verify_worktree_link(info: &WorktreeInfo) -> Result<PathBuf, GitError> {
+    let tampered =
+        |what: &str| GitError::new(WORKTREE_LINK_TAMPERED, format!("{what}: {}", info.path));
+    let wt = std::fs::canonicalize(&info.path).map_err(|_| tampered("worktree"))?;
+    let dot_git = wt.join(".git");
+    let meta = std::fs::symlink_metadata(&dot_git).map_err(|_| tampered(".git"))?;
+    if !meta.file_type().is_file() {
+        return Err(tampered(".git"));
+    }
+    let admin = read_link_file(&dot_git, "gitdir: ", &wt).ok_or_else(|| tampered(".git"))?;
+    let worktrees = admin.parent().ok_or_else(|| tampered("gitdir"))?;
+    let common = worktrees.parent().ok_or_else(|| tampered("gitdir"))?;
+    let repo = common.parent().ok_or_else(|| tampered("gitdir"))?;
+    let hash_dir = wt.parent().and_then(Path::file_name);
+    if worktrees.file_name() != Some(OsStr::new("worktrees"))
+        || common.file_name() != Some(OsStr::new(".git"))
+        || hash_dir != Some(OsStr::new(&repo_hash(repo)))
+    {
+        return Err(tampered("gitdir"));
+    }
+    let commondir = read_link_file(&admin.join("commondir"), "", &admin);
+    if commondir.as_deref() != Some(common) {
+        return Err(tampered("commondir"));
+    }
+    let backlink = read_link_file(&admin.join("gitdir"), "", &admin);
+    if backlink.as_deref() != Some(dot_git.as_path()) {
+        return Err(tampered("backlink"));
+    }
+    Ok(admin)
+}
+
+/// [`validate_info`] plus [`verify_worktree_link`]: the guard for every
+/// operation that runs git inside the worktree.
+pub(crate) fn validate_worktree(base_dir: &Path, info: &WorktreeInfo) -> Result<(), GitError> {
+    validate_info(base_dir, None, info)?;
+    verify_worktree_link(info).map(|_| ())
+}
+
+/// Runs git inside a verified agent worktree with [`WORKTREE_SAFE_OPTS`],
+/// returning stdout or `GIT_FAILED`.
+pub(crate) fn worktree_git(wt: &Path, args: &[&str]) -> Result<String, GitError> {
+    git(wt, &worktree_args(args))
+}
+
 /// Creates the run's worktree on a new branch off the repo's current HEAD.
 /// Errors: `INVALID_ID`, `NOT_A_REPO`, `DETACHED_HEAD`, `WORKTREE_EXISTS`.
 pub fn create_worktree(
@@ -387,9 +479,9 @@ pub fn diff_against_base(info: &WorktreeInfo) -> Result<String, GitError> {
 }
 
 fn diff_against_base_in(base_dir: &Path, info: &WorktreeInfo) -> Result<String, GitError> {
-    validate_info(base_dir, None, info)?;
+    validate_worktree(base_dir, info)?;
     let wt = Path::new(&info.path);
-    let mut out = git(
+    let mut out = worktree_git(
         wt,
         &[
             "diff",
@@ -403,7 +495,7 @@ fn diff_against_base_in(base_dir: &Path, info: &WorktreeInfo) -> Result<String, 
             "--",
         ],
     )?;
-    let untracked = git(wt, &["ls-files", "--others", "--exclude-standard"])?;
+    let untracked = worktree_git(wt, &["ls-files", "--others", "--exclude-standard"])?;
     let untracked: Vec<&str> = untracked.lines().filter(|l| !l.is_empty()).collect();
     if !untracked.is_empty() {
         if !out.is_empty() && !out.ends_with('\n') {
@@ -427,9 +519,9 @@ fn commits_since_base_in(
     base_dir: &Path,
     info: &WorktreeInfo,
 ) -> Result<Vec<CommitSummary>, GitError> {
-    validate_info(base_dir, None, info)?;
+    validate_worktree(base_dir, info)?;
     let range = format!("{}..HEAD", info.base_commit);
-    let out = git(
+    let out = worktree_git(
         Path::new(&info.path),
         &[
             "log",
@@ -467,28 +559,31 @@ fn commit_paths_in(
     paths: &[&str],
     message: &str,
 ) -> Result<Option<String>, GitError> {
-    validate_info(base_dir, None, info)?;
+    validate_worktree(base_dir, info)?;
     if paths.is_empty() {
         return Ok(None);
     }
     let wt = Path::new(&info.path);
-    let mut add = vec!["--literal-pathspecs", "add", "--"];
+    let mut add = worktree_args(&["--literal-pathspecs", "add", "--"]);
     add.extend_from_slice(paths);
     git(wt, &add)?;
 
-    let mut staged = vec!["--literal-pathspecs", "diff", "--cached", "--quiet", "--"];
+    let mut staged = worktree_args(&["--literal-pathspecs", "diff", "--cached", "--quiet", "--"]);
     staged.extend_from_slice(paths);
     if run_git_raw(wt, &staged)?.success {
         return Ok(None);
     }
 
-    let mut commit = vec!["--literal-pathspecs", "commit", "-m", message, "--"];
+    // Hooks stay enabled for the commit itself: they are the user's own.
+    let mut commit = worktree_args(&["--literal-pathspecs", "commit", "-m", message, "--"]);
     commit.extend_from_slice(paths);
     let output = git_with_identity(wt, &commit)?;
     if !output.success {
         return Err(GitError::new(GIT_FAILED, output.stderr));
     }
-    Ok(Some(git(wt, &["rev-parse", "HEAD"])?.trim().to_string()))
+    Ok(Some(
+        worktree_git(wt, &["rev-parse", "HEAD"])?.trim().to_string(),
+    ))
 }
 
 /// True if a merge is in progress in `repo`.
@@ -1161,6 +1256,126 @@ mod tests {
         // Nothing was touched.
         assert!(fixture.root().join("a.txt").is_file());
         assert!(Path::new(&good.path).join("a.txt").is_file());
+    }
+
+    /// Error codes of every MDium git op that runs inside the worktree.
+    fn worktree_op_codes(fixture: &Fixture, info: &WorktreeInfo) -> Vec<String> {
+        vec![
+            diff_against_base_in(fixture.base(), info)
+                .map(|_| String::new())
+                .unwrap_or_else(|err| err.code),
+            commits_since_base_in(fixture.base(), info)
+                .map(|_| String::new())
+                .unwrap_or_else(|err| err.code),
+            commit_paths_in(fixture.base(), info, &["a.txt"], "m")
+                .map(|_| String::new())
+                .unwrap_or_else(|err| err.code),
+        ]
+    }
+
+    /// The admin dir `<common>/worktrees/<name>` the worktree links to.
+    fn admin_dir(info: &WorktreeInfo) -> PathBuf {
+        let out = wt_git(info, &["rev-parse", "--absolute-git-dir"]);
+        PathBuf::from(out.trim())
+    }
+
+    #[test]
+    fn untampered_worktree_link_is_accepted() {
+        let fixture = Fixture::new();
+        let info = fixture.create("t");
+        verify_worktree_link(&info).unwrap();
+        assert_eq!(worktree_op_codes(&fixture, &info), ["", "", ""]);
+    }
+
+    #[test]
+    fn worktree_git_file_pointing_elsewhere_is_rejected() {
+        let fixture = Fixture::new();
+        let info = fixture.create("t");
+        // A look-alike worktree admin dir of another repository.
+        let other = Fixture::new();
+        let other_info = other.create("t");
+        let foreign_admin = admin_dir(&other_info);
+        let dot_git = Path::new(&info.path).join(".git");
+        fs::write(
+            &dot_git,
+            format!("gitdir: {}\n", foreign_admin.to_string_lossy()),
+        )
+        .unwrap();
+        assert_eq!(
+            verify_worktree_link(&info).unwrap_err().code,
+            "WORKTREE_LINK_TAMPERED"
+        );
+        for code in worktree_op_codes(&fixture, &info) {
+            assert_eq!(code, "WORKTREE_LINK_TAMPERED");
+        }
+    }
+
+    #[test]
+    fn worktree_git_dir_or_missing_link_is_rejected() {
+        let fixture = Fixture::new();
+        let info = fixture.create("t");
+        let dot_git = Path::new(&info.path).join(".git");
+        fs::remove_file(&dot_git).unwrap();
+        assert_eq!(
+            verify_worktree_link(&info).unwrap_err().code,
+            "WORKTREE_LINK_TAMPERED"
+        );
+        // A full repository in place of the link file.
+        git(Path::new(&info.path), &["init", "-b", "main"]).unwrap();
+        assert!(dot_git.is_dir());
+        for code in worktree_op_codes(&fixture, &info) {
+            assert_eq!(code, "WORKTREE_LINK_TAMPERED");
+        }
+    }
+
+    #[test]
+    fn worktree_admin_commondir_or_backlink_change_is_rejected() {
+        let fixture = Fixture::new();
+        let info = fixture.create("t");
+        let admin = admin_dir(&info);
+        let other = Fixture::new();
+        let other_common = other.root().join(".git");
+
+        let commondir = fs::read_to_string(admin.join("commondir")).unwrap();
+        fs::write(
+            admin.join("commondir"),
+            format!("{}\n", other_common.to_string_lossy()),
+        )
+        .unwrap();
+        assert_eq!(
+            verify_worktree_link(&info).unwrap_err().code,
+            "WORKTREE_LINK_TAMPERED"
+        );
+        fs::write(admin.join("commondir"), commondir).unwrap();
+        verify_worktree_link(&info).unwrap();
+
+        let outside = TempDir::new().unwrap();
+        fs::write(
+            admin.join("gitdir"),
+            format!("{}\n", outside.path().join(".git").to_string_lossy()),
+        )
+        .unwrap();
+        assert_eq!(
+            verify_worktree_link(&info).unwrap_err().code,
+            "WORKTREE_LINK_TAMPERED"
+        );
+    }
+
+    #[test]
+    fn read_only_worktree_git_calls_disable_fsmonitor() {
+        let fixture = Fixture::new();
+        let info = fixture.create("t");
+        let marker = fixture.worktrees.path().join("fsmonitor-ran");
+        let marker_str = marker.to_string_lossy().replace('\\', "/");
+        fixture.run(&[
+            "config",
+            "core.fsmonitor",
+            &format!("echo ran > '{marker_str}'; exit 1"),
+        ]);
+        write_file(Path::new(&info.path), "a.txt", "changed\n");
+        diff_against_base_in(fixture.base(), &info).unwrap();
+        commits_since_base_in(fixture.base(), &info).unwrap();
+        assert!(!marker.exists(), "fsmonitor hook must not run");
     }
 
     #[test]

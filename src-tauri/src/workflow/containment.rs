@@ -23,17 +23,33 @@ pub fn containment_env(data_dir: &Path) -> io::Result<Vec<(String, String)>> {
 
     let mut env: Vec<(String, String)> = [
         // Deny every git transport by default, then re-allow local file access
-        // so worktree and local-repo operations keep working.
-        ("GIT_CONFIG_COUNT", "2"),
+        // so worktree and local-repo operations keep working. Env-provided
+        // config has command-line scope, so denying each remote transport
+        // explicitly keeps a repo-local `protocol.<name>.allow=always` (which
+        // would override the `protocol.allow` default) from re-enabling it.
+        ("GIT_CONFIG_COUNT", "7"),
         ("GIT_CONFIG_KEY_0", "protocol.allow"),
         ("GIT_CONFIG_VALUE_0", "never"),
         ("GIT_CONFIG_KEY_1", "protocol.file.allow"),
         ("GIT_CONFIG_VALUE_1", "always"),
+        ("GIT_CONFIG_KEY_2", "protocol.https.allow"),
+        ("GIT_CONFIG_VALUE_2", "never"),
+        ("GIT_CONFIG_KEY_3", "protocol.http.allow"),
+        ("GIT_CONFIG_VALUE_3", "never"),
+        ("GIT_CONFIG_KEY_4", "protocol.ssh.allow"),
+        ("GIT_CONFIG_VALUE_4", "never"),
+        ("GIT_CONFIG_KEY_5", "protocol.git.allow"),
+        ("GIT_CONFIG_VALUE_5", "never"),
+        ("GIT_CONFIG_KEY_6", "protocol.ext.allow"),
+        ("GIT_CONFIG_VALUE_6", "never"),
         ("GIT_TERMINAL_PROMPT", "0"),
         ("GCM_INTERACTIVE", "never"),
         ("GH_TOKEN", BLOCKED_TOKEN),
         ("GITHUB_TOKEN", BLOCKED_TOKEN),
         ("GITLAB_TOKEN", BLOCKED_TOKEN),
+        ("GH_ENTERPRISE_TOKEN", BLOCKED_TOKEN),
+        ("GITHUB_ENTERPRISE_TOKEN", BLOCKED_TOKEN),
+        ("GITLAB_ACCESS_TOKEN", BLOCKED_TOKEN),
     ]
     .iter()
     .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -110,16 +126,29 @@ mod tests {
         let gh_dir = tmp.path().join("containment").join("gh");
         let glab_dir = tmp.path().join("containment").join("glab");
         let mut expected: HashMap<String, String> = [
-            ("GIT_CONFIG_COUNT", "2"),
+            ("GIT_CONFIG_COUNT", "7"),
             ("GIT_CONFIG_KEY_0", "protocol.allow"),
             ("GIT_CONFIG_VALUE_0", "never"),
             ("GIT_CONFIG_KEY_1", "protocol.file.allow"),
             ("GIT_CONFIG_VALUE_1", "always"),
+            ("GIT_CONFIG_KEY_2", "protocol.https.allow"),
+            ("GIT_CONFIG_VALUE_2", "never"),
+            ("GIT_CONFIG_KEY_3", "protocol.http.allow"),
+            ("GIT_CONFIG_VALUE_3", "never"),
+            ("GIT_CONFIG_KEY_4", "protocol.ssh.allow"),
+            ("GIT_CONFIG_VALUE_4", "never"),
+            ("GIT_CONFIG_KEY_5", "protocol.git.allow"),
+            ("GIT_CONFIG_VALUE_5", "never"),
+            ("GIT_CONFIG_KEY_6", "protocol.ext.allow"),
+            ("GIT_CONFIG_VALUE_6", "never"),
             ("GIT_TERMINAL_PROMPT", "0"),
             ("GCM_INTERACTIVE", "never"),
             ("GH_TOKEN", "mdium-blocked"),
             ("GITHUB_TOKEN", "mdium-blocked"),
             ("GITLAB_TOKEN", "mdium-blocked"),
+            ("GH_ENTERPRISE_TOKEN", "mdium-blocked"),
+            ("GITHUB_ENTERPRISE_TOKEN", "mdium-blocked"),
+            ("GITLAB_ACCESS_TOKEN", "mdium-blocked"),
         ]
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -147,6 +176,43 @@ mod tests {
         fs::write(tmp.path().join("f"), "x").unwrap();
         assert!(!is_empty_dir(tmp.path()));
         assert!(!is_empty_dir(&tmp.path().join("missing")));
+    }
+
+    /// Runs git in `dir` with `env` and without a console window.
+    fn git_with_env(dir: &Path, env: &[(String, String)], args: &[&str]) -> std::process::Output {
+        let mut cmd = Command::new("git");
+        cmd.args(args)
+            .current_dir(dir)
+            .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        cmd.output().expect("git must be runnable")
+    }
+
+    #[test]
+    fn repo_local_protocol_config_cannot_reenable_remotes() {
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let env = containment_env(&tmp.path().join("data")).unwrap();
+        for args in [
+            &["init", "-b", "main"][..],
+            &["config", "protocol.https.allow", "always"][..],
+            &["config", "protocol.allow", "always"][..],
+        ] {
+            assert!(git_with_env(&repo, &[], args).status.success(), "{args:?}");
+        }
+        let output = git_with_env(
+            &repo,
+            &env,
+            &["ls-remote", "https://example.invalid/mdium/blocked.git"],
+        );
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("transport 'https' not allowed"),
+            "unexpected stderr: {stderr}"
+        );
     }
 
     #[test]

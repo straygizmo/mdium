@@ -126,10 +126,10 @@ pub fn spawn_with_handlers(
 /// Shared implementation of [`spawn`] and [`spawn_with_handlers`].
 ///
 /// Every callback receives the sidecar id (the child's pid). The child is
-/// always reaped by a dedicated thread, which waits (bounded by
+/// always reaped by a dedicated thread, which removes its stdin entry from
+/// the shared map as soon as the child is reaped, then waits (bounded by
 /// [`READER_DRAIN_BUDGET`]) for stdout/stderr to reach EOF so all output is
-/// delivered first, then removes its stdin entry from the shared map and
-/// calls `on_exit`.
+/// delivered before it calls `on_exit`.
 fn spawn_impl(
     script_path: &str,
     env: &[(String, String)],
@@ -208,6 +208,16 @@ fn spawn_impl(
 
     std::thread::spawn(move || {
         let code = child.wait().ok().and_then(|s| s.code());
+        {
+            // Only remove our own entry: once the child is reaped its pid can
+            // be reused by a newer sidecar that registered under the same id.
+            // Removing it right after the reap keeps `kill` from signalling
+            // a pid that may already belong to an unrelated process.
+            let mut map = stdin_map().lock().unwrap();
+            if map.get(&id).is_some_and(|e| Arc::ptr_eq(e, &stdin_entry)) {
+                map.remove(&id);
+            }
+        }
         // Give both readers a bounded time to drain. A grandchild that
         // inherited the pipes can keep them open past the child's exit, so
         // the exit is delivered anyway once the budget runs out.
@@ -216,14 +226,6 @@ fn spawn_impl(
             let left = deadline.saturating_duration_since(Instant::now());
             if eof_rx.recv_timeout(left).is_err() {
                 break;
-            }
-        }
-        {
-            // Only remove our own entry: once the child is reaped its pid can
-            // be reused by a newer sidecar that registered under the same id.
-            let mut map = stdin_map().lock().unwrap();
-            if map.get(&id).is_some_and(|e| Arc::ptr_eq(e, &stdin_entry)) {
-                map.remove(&id);
             }
         }
         drop(stdin_entry);
@@ -253,9 +255,14 @@ pub fn write(id: u32, line: &str) -> Result<(), String> {
 #[cfg(target_os = "windows")]
 const TASKKILL_NOT_FOUND: i32 = 128;
 
+/// Kills sidecar `id` (and its process tree). A sidecar with no stdin entry
+/// has already been reaped (or killed) and its pid may belong to an
+/// unrelated process by now, so it is left alone and `Ok` is returned.
 pub fn kill(id: u32) -> Result<(), String> {
     // Dropping stdin lets a healthy sidecar exit on rl "close".
-    stdin_map().lock().unwrap().remove(&id);
+    if stdin_map().lock().unwrap().remove(&id).is_none() {
+        return Ok(());
+    }
     #[cfg(target_os = "windows")]
     {
         let output = Command::new("taskkill")
@@ -417,5 +424,21 @@ mod tests {
         );
         // Killing an already-exited sidecar is not an error.
         assert!(kill(id).is_ok());
+    }
+
+    #[test]
+    fn kill_leaves_processes_that_are_not_live_sidecars_alone() {
+        // A process that is not a registered sidecar stands in for one that
+        // reused the pid of an already-reaped sidecar.
+        let mut other = std::process::Command::new("node")
+            .args(["-e", "setTimeout(() => {}, 30000)"])
+            .spawn()
+            .expect("spawn node");
+        assert!(kill(other.id()).is_ok());
+        std::thread::sleep(Duration::from_millis(300));
+        let still_running = other.try_wait().unwrap().is_none();
+        let _ = other.kill();
+        let _ = other.wait();
+        assert!(still_running, "kill must not touch an unknown pid");
     }
 }

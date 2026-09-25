@@ -9,7 +9,9 @@
 //! It also finds changed paths in a worktree that match agent-config (or
 //! merge-review) patterns, so such changes can be surfaced to the user.
 
-use crate::workflow::gitops::{default_worktree_base, git, run_git_raw, validate_info, GitError};
+use crate::workflow::gitops::{
+    default_worktree_base, git, run_git_raw, validate_worktree, worktree_git, GitError,
+};
 use crate::workflow::model::WorktreeInfo;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -52,7 +54,8 @@ pub struct IntegrityChange {
     pub detail: String,
 }
 
-/// Paths that configure coding agents (or git submodules / agent hooks).
+/// Paths that configure coding agents (or git submodules / agent hooks, or
+/// MDium's own workflow files under `.mdium/`).
 /// A `dir/**` pattern matches everything inside `dir`; any other pattern
 /// matches that exact trailing path. Both match at any depth.
 pub const AGENT_CONFIG_PATTERNS: &[&str] = &[
@@ -68,6 +71,7 @@ pub const AGENT_CONFIG_PATTERNS: &[&str] = &[
     ".vscode/mcp.json",
     ".gitmodules",
     ".github/hooks/**",
+    ".mdium/**",
 ];
 
 /// Paths whose changes warrant extra review before merging: the agent
@@ -85,6 +89,7 @@ pub const MERGE_REVIEW_PATTERNS: &[&str] = &[
     ".vscode/mcp.json",
     ".gitmodules",
     ".github/hooks/**",
+    ".mdium/**",
     ".github/**",
     "AGENTS.md",
     "CLAUDE.md",
@@ -106,6 +111,21 @@ const DETACHED_PREFIX: &str = "detached:";
 pub fn snapshot(
     repo_root: &Path,
     base_branch: Option<&str>,
+) -> Result<IntegritySnapshot, GitError> {
+    snapshot_with_worktree(repo_root, base_branch, None)
+}
+
+/// [`snapshot`] that also covers an agent worktree's admin state: the
+/// `config.worktree` of the admin dir `<common-dir>/worktrees/<name>` whose
+/// `gitdir` back-link names `worktree`, hashed into `git_config_hash`. The
+/// admin dir is found from the user's common dir, never via the
+/// agent-writable `<worktree>/.git` file; if none is found the entry hashes
+/// as empty (see [`crate::workflow::gitops::verify_worktree_link`] for the
+/// link itself).
+pub fn snapshot_with_worktree(
+    repo_root: &Path,
+    base_branch: Option<&str>,
+    worktree: Option<&WorktreeInfo>,
 ) -> Result<IntegritySnapshot, GitError> {
     let common = git_path(repo_root, &["rev-parse", "--git-common-dir"])?;
     let git_dir = git_path(repo_root, &["rev-parse", "--git-dir"])?;
@@ -138,6 +158,14 @@ pub fn snapshot(
         b"config.worktree".to_vec(),
         &git_dir.join("config.worktree"),
     )?;
+    if let Some(info) = worktree {
+        let admin = find_worktree_admin_dir(&common, Path::new(&info.path))?;
+        let label = b"agent-worktree/config.worktree".to_vec();
+        match admin {
+            Some(admin) => push_file(&mut config, label, &admin.join("config.worktree"))?,
+            None => config.push((label, b'f', Vec::new())),
+        }
+    }
     let mut hooks = Vec::new();
     collect_tree(&common.join("hooks"), b"common/", &mut hooks)?;
     if !same_path(&effective_hooks, &common.join("hooks")) {
@@ -164,6 +192,38 @@ pub fn snapshot(
         hooks_hash: hash_entries(hooks),
         hooks_path: (!hooks_path.is_empty()).then_some(hooks_path),
     })
+}
+
+/// The admin dir under `<common>/worktrees` whose `gitdir` file points at
+/// `<worktree>/.git` (compared on the canonical worktree directory, so a
+/// removed or replaced `.git` still matches). `None` if there is none.
+fn find_worktree_admin_dir(common: &Path, worktree: &Path) -> Result<Option<PathBuf>, GitError> {
+    let Ok(target) = std::fs::canonicalize(worktree) else {
+        return Ok(None);
+    };
+    let dir = common.join("worktrees");
+    let reader = match std::fs::read_dir(&dir) {
+        Ok(reader) => reader,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(io_error(&dir, err)),
+    };
+    for entry in reader {
+        let entry = entry.map_err(|err| io_error(&dir, err))?;
+        let admin = entry.path();
+        let Ok(content) = std::fs::read_to_string(admin.join("gitdir")) else {
+            continue;
+        };
+        let linked = admin.join(content.trim_end_matches(['\r', '\n']));
+        let points_here = linked.file_name() == Some(std::ffi::OsStr::new(".git"))
+            && linked
+                .parent()
+                .and_then(|parent| std::fs::canonicalize(parent).ok())
+                .is_some_and(|parent| parent == target);
+        if points_here {
+            return Ok(Some(admin));
+        }
+    }
+    Ok(None)
 }
 
 /// Runs a git command printing one path and makes the result absolute
@@ -409,12 +469,12 @@ fn changed_paths_matching_in(
     info: &WorktreeInfo,
     patterns: &[&str],
 ) -> Result<Vec<String>, GitError> {
-    validate_info(base_dir, None, info)?;
+    validate_worktree(base_dir, info)?;
     let wt = Path::new(&info.path);
     let diff = |extra: &[&str]| -> Result<String, GitError> {
         let mut args = vec!["diff", "--name-only", "--no-renames", "-z"];
         args.extend_from_slice(extra);
-        git(wt, &args)
+        worktree_git(wt, &args)
     };
     // Untracked and ignored: agent settings such as
     // `.claude/settings.local.json` are commonly gitignored (often globally)
@@ -423,7 +483,7 @@ fn changed_paths_matching_in(
     // cheap); those named like a pattern's first segment (e.g. `.vscode/`)
     // are listed file by file. Agent config deeper inside some other
     // ignored directory (e.g. `build/.claude/`) is not found.
-    let mut ignored = git(
+    let mut ignored = worktree_git(
         wt,
         &[
             "ls-files",
@@ -451,7 +511,7 @@ fn changed_paths_matching_in(
         .map(str::to_string)
         .collect();
     for dir in collapsed {
-        let files = git(
+        let files = worktree_git(
             wt,
             &[
                 "--literal-pathspecs",
@@ -477,7 +537,7 @@ fn changed_paths_matching_in(
         // Unstaged (working tree against HEAD).
         diff(&["--end-of-options", "HEAD", "--"])?,
         // Untracked, not ignored.
-        git(wt, &["ls-files", "-z", "--others", "--exclude-standard"])?,
+        worktree_git(wt, &["ls-files", "-z", "--others", "--exclude-standard"])?,
         ignored,
     ];
     let paths: BTreeSet<&str> = outputs
@@ -798,6 +858,69 @@ mod tests {
     }
 
     #[test]
+    fn changed_paths_reject_tampered_worktree_link() {
+        let fixture = Fixture::new();
+        let info = fixture.create("t");
+        std::fs::remove_file(Path::new(&info.path).join(".git")).unwrap();
+        git(Path::new(&info.path), &["init", "-b", "main"]).unwrap();
+        let err =
+            changed_paths_matching_in(fixture.base(), &info, AGENT_CONFIG_PATTERNS).unwrap_err();
+        assert_eq!(err.code, "WORKTREE_LINK_TAMPERED");
+    }
+
+    #[test]
+    fn changed_paths_do_not_run_fsmonitor() {
+        let fixture = Fixture::new();
+        let info = fixture.create("t");
+        let marker = fixture.worktrees.path().join("fsmonitor-ran");
+        let marker_str = marker.to_string_lossy().replace('\\', "/");
+        fixture.run(&[
+            "config",
+            "core.fsmonitor",
+            &format!("echo ran > '{marker_str}'; exit 1"),
+        ]);
+        write_file(Path::new(&info.path), "a.txt", "changed\n");
+        changed_paths_matching_in(fixture.base(), &info, AGENT_CONFIG_PATTERNS).unwrap();
+        assert!(!marker.exists(), "fsmonitor hook must not run");
+    }
+
+    #[test]
+    fn agent_worktree_config_change_is_detected() {
+        let fixture = Fixture::new();
+        fixture.run(&["config", "extensions.worktreeConfig", "true"]);
+        let info = fixture.create("t");
+        let admin = crate::workflow::gitops::verify_worktree_link(&info).unwrap();
+        let plain_before = snap(&fixture);
+        let before = snapshot_with_worktree(fixture.root(), Some("main"), Some(&info)).unwrap();
+        assert_eq!(before.git_config_hash.len(), 64);
+
+        // The agent sets worktree-scoped config from inside its worktree.
+        git(
+            Path::new(&info.path),
+            &["config", "--worktree", "core.pager", "evil"],
+        )
+        .unwrap();
+        assert!(admin.join("config.worktree").is_file());
+
+        let after = snapshot_with_worktree(fixture.root(), Some("main"), Some(&info)).unwrap();
+        assert_eq!(codes(&compare(&before, &after)), ["GIT_CONFIG_CHANGED"]);
+        // The plain snapshot of the user's checkout does not see it.
+        assert!(compare(&plain_before, &snap(&fixture)).is_empty());
+    }
+
+    #[test]
+    fn mdium_dir_matches_both_pattern_lists() {
+        for patterns in [AGENT_CONFIG_PATTERNS, MERGE_REVIEW_PATTERNS] {
+            assert!(patterns
+                .iter()
+                .any(|p| path_matches(".mdium/workflows.json", p)));
+            assert!(patterns
+                .iter()
+                .any(|p| path_matches(".mdium/tasks/0123456789abcdef.md", p)));
+        }
+    }
+
+    #[test]
     fn pattern_matching_rules() {
         let yes = |path: &str, pattern: &str| path_matches(path, pattern);
         // `/**` patterns match the directory's contents at any depth.
@@ -990,6 +1113,7 @@ mod tests {
             ".vscode/mcp.json",
             ".gitmodules",
             ".github/hooks/**",
+            ".mdium/**",
         ] {
             assert!(AGENT_CONFIG_PATTERNS.contains(&p), "{p}");
             assert!(MERGE_REVIEW_PATTERNS.contains(&p), "{p}");
@@ -1004,7 +1128,7 @@ mod tests {
         ] {
             assert!(MERGE_REVIEW_PATTERNS.contains(&p), "{p}");
         }
-        assert_eq!(AGENT_CONFIG_PATTERNS.len(), 12);
-        assert_eq!(MERGE_REVIEW_PATTERNS.len(), 18);
+        assert_eq!(AGENT_CONFIG_PATTERNS.len(), 13);
+        assert_eq!(MERGE_REVIEW_PATTERNS.len(), 19);
     }
 }

@@ -122,6 +122,8 @@ pub struct StartSessionParams {
     pub model: Option<String>,
     pub resume_native_id: Option<String>,
     /// Enables the runner's safety guard rooted at this absolute path.
+    /// Required: [`RunnerClient::start_session`] rejects `None` with
+    /// `GUARD_REQUIRED`.
     pub guard_workspace_root: Option<String>,
     pub timeout_ms: Option<u64>,
 }
@@ -390,10 +392,12 @@ impl RunnerClient {
         if params.timeout_ms == Some(0) {
             return invalid("INVALID_TIMEOUT");
         }
-        if let Some(root) = &params.guard_workspace_root {
-            if !is_absolute_path(root) {
-                return invalid("INVALID_GUARD_ROOT");
-            }
+        // Every workflow session runs under the runner's safety guard,
+        // whatever its permission.
+        match &params.guard_workspace_root {
+            None => return invalid("GUARD_REQUIRED"),
+            Some(root) if !is_absolute_path(root) => return invalid("INVALID_GUARD_ROOT"),
+            Some(_) => {}
         }
         let session_id = params.session_id.clone();
         let request_id = self.new_request_id();
@@ -806,6 +810,21 @@ mod tests {
                     ..params("s")
                 },
                 "INVALID_GUARD_ROOT",
+            ),
+            (
+                StartSessionParams {
+                    guard_workspace_root: None,
+                    ..params("s")
+                },
+                "GUARD_REQUIRED",
+            ),
+            (
+                StartSessionParams {
+                    permission: RunnerPermission::ReadOnly,
+                    guard_workspace_root: None,
+                    ..params("s")
+                },
+                "GUARD_REQUIRED",
             ),
         ];
         for (p, code) in cases {
