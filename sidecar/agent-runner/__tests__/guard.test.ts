@@ -458,3 +458,68 @@ describe("checkToolRequest: fix round 2", () => {
     expect(Date.now() - started).toBeLessThan(3000);
   });
 });
+
+describe("checkToolRequest: agent-config", () => {
+  const posix: GuardContext = { workspaceRoot: "/home/me/wt", homeDir: "/home/me", platform: "linux" };
+
+  it("blocks write requests to agent and git configuration", () => {
+    for (const target of [
+      ".claude/settings.local.json",
+      ".claude\\commands\\x.md",
+      "C:\\wt\\task1\\.mcp.json",
+      "opencode.json",
+      "opencode.jsonc",
+      ".opencode/agent/x.md",
+      ".codex/config.toml",
+      ".copilot/x.json",
+      ".vscode/settings.json",
+      ".vscode/tasks.json",
+      ".vscode/mcp.json",
+      ".git/hooks/pre-commit",
+      "sub/.git/config",
+      ".gitmodules",
+    ]) {
+      expect(verdict(write(target)), target).toEqual({ ok: false, rule: "agent-config" });
+    }
+  });
+
+  it("allows ordinary documentation and editor files", () => {
+    for (const target of ["CLAUDE.md", ".github/copilot-instructions.md", ".vscode/launch.json", ".gitignore", ".github/workflows/ci.yml"]) {
+      expect(verdict(write(target)), target).toEqual({ ok: true });
+    }
+    expect(verdict(read(".claude/settings.json"))).toEqual({ ok: true });
+  });
+
+  it.each([
+    "echo {} > .mcp.json",
+    "Set-Content opencode.json x",
+    "cp evil.sh .git/hooks/pre-commit",
+    "mkdir .claude\\commands",
+    "rm -rf .opencode",
+    "New-Item -ItemType File .mcp.json",
+    "mv a.txt .codex\\x",
+    "echo x > sub\\.gitmodules",
+    "cd .claude && echo {} > settings.json",
+    "[IO.File]::WriteAllText(\".mcp.json\", \"{}\")",
+    "Copy-Item evil.json -Destination .vscode\\tasks.json",
+  ])("blocks %s as agent-config", (cmd) => {
+    expect(verdict(shell(cmd))).toEqual({ ok: false, rule: "agent-config" });
+  });
+
+  it.each([
+    "Get-Content .claude/settings.json",
+    "git add .claude",
+    "cat .git/config",
+    "Copy-Item .claude/settings.json backup.json",
+    "echo node_modules >> .gitignore",
+    "git status",
+  ])("allows %s", (cmd) => {
+    expect(verdict(shell(cmd))).toEqual({ ok: true });
+  });
+
+  it("checks posix shell writes", () => {
+    expect(checkToolRequest(shell("tee .claude/settings.json < x"), posix)).toEqual({ ok: false, rule: "agent-config" });
+    expect(checkToolRequest(shell("cp x /home/me/wt/.git/hooks/post-checkout"), posix)).toEqual({ ok: false, rule: "agent-config" });
+    expect(checkToolRequest(shell("cat .claude/settings.json"), posix)).toEqual({ ok: true });
+  });
+});

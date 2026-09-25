@@ -5,7 +5,14 @@ export type AgentProvider = "codex" | "copilot";
 export type RunnerProvider = "codex" | "copilot" | "opencode" | "claude";
 
 /** Guard rule ids that can trigger a `guard_violation`. */
-export type GuardRule = "git-remote" | "forge-cli" | "outside-workspace" | "credentials" | "network-send" | "system-config";
+export type GuardRule =
+  | "git-remote"
+  | "forge-cli"
+  | "outside-workspace"
+  | "credentials"
+  | "network-send"
+  | "system-config"
+  | "agent-config";
 
 /**
  * cli-default: do not override the CLI's own configuration (AGENT CHAT).

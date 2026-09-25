@@ -4,10 +4,10 @@
  *
  * This is a best-effort, defense-in-depth deny list, NOT a sandbox. It inspects the normalized
  * ToolRequest an adapter reports and blocks well-known dangerous operations (remote git changes,
- * forge CLIs, credential access, outbound uploads and publishing, system configuration changes,
- * writes outside the worktree). It is designed to produce no false positives on everyday
- * development commands, and it is complemented by environment containment and post-run checks
- * (spec 3.7, layers 3-4).
+ * forge CLIs, credential access, writes to agent/tool or git configuration inside the worktree,
+ * outbound uploads and publishing, system configuration changes, writes outside the worktree).
+ * It is designed to produce no false positives on everyday development commands, and it is
+ * complemented by environment containment and post-run checks (spec 3.7, layers 3-4).
  *
  * How shell commands are inspected: the command is lexed (quotes, newlines, `&&`/`||`/`;`/`|`/`&`,
  * parentheses/braces, redirections `>`/`<`/`<<<`; PowerShell backtick and posix backslash line
@@ -47,7 +47,12 @@
  * - Credential locations are matched conservatively in any argument (e.g. `openssl ... -out
  *   cert.pem`); git commit/tag messages are exempt, env templates (`.env.example`, ...) and env
  *   source files (`.env.ts`) are allowed, and writing an env file (copy destination, output
- *   redirect, `Set-Content`) is allowed. `.git/config` is allowed (inside the worktree; git needs it).
+ *   redirect, `Set-Content`) is allowed. Reading `.git/config` is allowed (git needs it).
+ * - Agent configuration writes (`.claude/`, `.opencode/`, `opencode.json(c)`, `.mcp.json`, `.codex/`,
+ *   `.copilot/`, `.vscode/{settings,tasks,mcp}.json`, `.git/`, `.gitmodules`) are only detected for
+ *   write requests, write verbs, redirections and static .NET writes; writes by other programs
+ *   (`sed -i`, `node -e`, `git config --file`, `git checkout` of such files), 8.3 short names and
+ *   symlinks/junctions pointing into those directories pass.
  */
 import * as path from "node:path";
 import type { GuardRule, ToolRequest } from "../../src/shared/types/agent-runner";
@@ -792,17 +797,21 @@ function scannableArgs(inv: Invocation): string[] {
   return inv.args.filter((_, i) => !skipped.has(i));
 }
 
+/** Destination arguments of a copy command (`-Destination`, `-t`, or the last positional). */
+function copyDestinations(args: string[]): string[] {
+  const flagged = args.findIndex((a) => /^(?:-destination|-t|--target-directory)$/i.test(a));
+  if (flagged >= 0) return args.slice(flagged + 1, flagged + 2);
+  const inline = args.find((a) => a.startsWith("--target-directory="));
+  if (inline) return [inline.slice("--target-directory=".length)];
+  const positional = args.filter((a) => !a.startsWith("-"));
+  return positional.length >= 2 ? positional.slice(-1) : [];
+}
+
 /** Arguments that are only written to (so naming an env file there does not read secrets). */
 function envWriteTargets(inv: Invocation): Set<string> {
   const { name, args } = inv;
   if (ENV_FILE_WRITERS.has(name)) return new Set(args);
-  if (!COPY_VERBS.has(name)) return new Set();
-  const flagged = args.findIndex((a) => /^(?:-destination|-t|--target-directory)$/i.test(a));
-  if (flagged >= 0) return new Set(args.slice(flagged + 1, flagged + 2));
-  const inline = args.find((a) => a.startsWith("--target-directory="));
-  if (inline) return new Set([inline.slice("--target-directory=".length)]);
-  const positional = args.filter((a) => !a.startsWith("-"));
-  return new Set(positional.length >= 2 ? positional.slice(-1) : []);
+  return new Set(COPY_VERBS.has(name) ? copyDestinations(args) : []);
 }
 
 function dumpsEnvironment(inv: Invocation): boolean {
@@ -1054,14 +1063,18 @@ function changeDirTarget(inv: Invocation): string | undefined {
   return inv.args.find((a) => !a.startsWith("-") && !/^\/d$/i.test(a));
 }
 
-/** `[IO.File]::WriteAllText("C:\x", ...)` and similar static .NET writes. */
-function dotnetWritesOutside(command: string, ctx: GuardContext): boolean {
+/** String literals passed to `[IO.File]::WriteAllText(...)` and similar static .NET writes. */
+function dotnetWriteLiterals(command: string): string[] {
+  const literals: string[] = [];
   for (const call of command.matchAll(DOTNET_IO_CALL)) {
     if (!DOTNET_WRITE_METHOD.test(call[1])) continue;
-    const literals = [...call[2].matchAll(/"([^"]*)"|'([^']*)'/g)].map((l) => l[1] ?? l[2]);
-    if (anyOutside(literals, ctx, atWorkspace(ctx))) return true;
+    literals.push(...[...call[2].matchAll(/"([^"]*)"|'([^']*)'/g)].map((l) => l[1] ?? l[2]));
   }
-  return false;
+  return literals;
+}
+
+function dotnetWritesOutside(command: string, ctx: GuardContext): boolean {
+  return anyOutside(dotnetWriteLiterals(command), ctx, atWorkspace(ctx));
 }
 
 /** Current directory tracked as segments so each `cd` costs only its own length. */
@@ -1139,6 +1152,72 @@ function writesOutsideWorkspace(invocations: Invocation[], ctx: GuardContext): b
 }
 
 // ---------------------------------------------------------------------------
+// Rule: agent-config
+// ---------------------------------------------------------------------------
+
+// Agent CLIs load these from the workspace on the next turn (hooks, permissions, MCP servers),
+// outside the guard, and they would reach the user's repository through the task branch. Inside
+// a worktree `.git` points at the shared repository, so its hooks and config are covered too.
+const AGENT_CONFIG_DIRS = new Set([".claude", ".opencode", ".codex", ".copilot", ".git"]);
+const AGENT_CONFIG_FILES = new Set(["opencode.json", "opencode.jsonc", ".mcp.json", ".gitmodules"]);
+const VSCODE_AGENT_FILES = new Set(["settings.json", "tasks.json", "mcp.json"]);
+const COPY_DESTINATION_VERBS = new Set(["cp", "copy", "copy-item", "cpi"]);
+
+/** Lowercased path segments relative to the containing writable root (whole path when outside). */
+function relativeSegments(absolute: string, ctx: GuardContext): string[] {
+  const lib = pathLib(ctx.platform);
+  const root = writableRoots(ctx).find((r) => isInside(absolute, r, ctx.platform));
+  const relative = root ? lib.relative(lib.resolve(root), absolute) : absolute;
+  return relative
+    .split(/[\\/]+/)
+    .filter(Boolean)
+    // Windows ignores NTFS stream suffixes and trailing dots/spaces in names.
+    .map((part) => part.toLowerCase().replace(/::\$data$/, "").replace(/[. ]+$/, ""));
+}
+
+function isAgentConfigPath(absolute: string, ctx: GuardContext): boolean {
+  const parts = relativeSegments(absolute, ctx);
+  const last = parts.length - 1;
+  return parts.some(
+    (part, i) =>
+      AGENT_CONFIG_DIRS.has(part) ||
+      (i === last && AGENT_CONFIG_FILES.has(part)) ||
+      (part === ".vscode" && i === last - 1 && VSCODE_AGENT_FILES.has(parts[last])),
+  );
+}
+
+/** Arguments a writing command writes to; copies only write their destination. */
+function writtenArgs(inv: Invocation): string[] {
+  if (COPY_DESTINATION_VERBS.has(inv.name)) return copyDestinations(inv.args);
+  return WRITE_VERBS.has(inv.name) ? inv.args : [];
+}
+
+/** Path-like tokens (option prefixes removed, comma arrays split, options and devices dropped). */
+function pathCandidates(tokens: string[]): string[] {
+  return tokens
+    .map((t) => (t.startsWith("-") ? t.replace(PARAM_PREFIX, "") : t))
+    .flatMap((t) => t.split(","))
+    .map(stripQuotes)
+    .filter((t) => t && !t.startsWith("-") && !DEVICE_TARGETS.test(t));
+}
+
+/** Shell writes (write verbs, redirections, static .NET writes) into agent or git configuration. */
+function writesAgentConfig(command: string, invocations: Invocation[], ctx: GuardContext): boolean {
+  const cwd = new TrackedDirectory(ctx, pathLib(ctx.platform));
+  const hits = (tokens: string[]) =>
+    pathCandidates(tokens).some((t) => isAgentConfigPath(normalizePath(t, ctx, cwd.toString()), ctx));
+  for (const inv of invocations) {
+    if (CHANGE_DIR.has(inv.name)) {
+      const target = changeDirTarget(inv);
+      if (target && target !== "-") cwd.change(target);
+    } else if (hits(inv.redirects) || hits(writtenArgs(inv))) {
+      return true;
+    }
+  }
+  return dotnetWriteLiterals(command).some((l) => isAgentConfigPath(normalizePath(l, ctx), ctx));
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -1161,6 +1240,7 @@ function shellViolation(command: string, ctx: GuardContext): GuardRule | null {
   const { invocations, settings, overflow } = inspectShell(command, ctx);
   if (overflow) return "outside-workspace";
   if (shellTouchesCredentials(command, invocations)) return "credentials";
+  if (writesAgentConfig(command, invocations, ctx)) return "agent-config";
   if (invocations.some(changesGitRemote) || settings.some((s) => transientSettingBlocked(s, ctx))) return "git-remote";
   if (invocations.some(usesForgeCli)) return "forge-cli";
   if (invocations.some(sendsOverNetwork)) return "network-send";
@@ -1177,6 +1257,7 @@ function firstViolation(request: ToolRequest, ctx: GuardContext): GuardRule | nu
   if (kind === "shell") return shellViolation(summary, ctx);
   // Writing an env file does not expose secrets; reading one does.
   if (isCredentialPath(summary) || (kind !== "write" && isSecretEnvFile(summary))) return "credentials";
+  if (kind === "write" && isAgentConfigPath(normalizePath(summary, ctx), ctx)) return "agent-config";
   if (kind === "write" && !isWritable(normalizePath(summary, ctx), ctx)) return "outside-workspace";
   if (kind === "network" && isTokenBearingUrl(summary)) return "network-send";
   return null;
