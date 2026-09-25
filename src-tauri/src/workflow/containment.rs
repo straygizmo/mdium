@@ -165,7 +165,11 @@ mod tests {
 
         for dir in [&gh_dir, &glab_dir] {
             assert!(dir.is_dir(), "{dir:?} must exist");
-            assert_eq!(fs::read_dir(dir).unwrap().count(), 0, "{dir:?} must be empty");
+            assert_eq!(
+                fs::read_dir(dir).unwrap().count(),
+                0,
+                "{dir:?} must be empty"
+            );
         }
     }
 

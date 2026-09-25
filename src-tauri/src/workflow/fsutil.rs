@@ -411,7 +411,10 @@ mod tests {
     fn now_is_rfc3339_with_millis_and_zulu_suffix() {
         let ts = now();
         assert!(ts.ends_with('Z'), "expected Zulu suffix: {ts}");
-        assert!(chrono::DateTime::parse_from_rfc3339(&ts).is_ok(), "not RFC 3339: {ts}");
+        assert!(
+            chrono::DateTime::parse_from_rfc3339(&ts).is_ok(),
+            "not RFC 3339: {ts}"
+        );
     }
 
     #[test]
@@ -425,7 +428,10 @@ mod tests {
         assert!(paths.attempt_output(valid, "../x", valid).is_err());
         assert!(paths.attempt_output(valid, valid, "../x").is_err());
         assert!(paths.attempt_log("../x", valid, valid).is_err());
-        assert!(paths.task_file("0123456789ABCDEF").is_err(), "uppercase must be rejected");
+        assert!(
+            paths.task_file("0123456789ABCDEF").is_err(),
+            "uppercase must be rejected"
+        );
         assert!(paths.task_file("short").is_err());
     }
 
@@ -437,7 +443,10 @@ mod tests {
         let attempt_id = "cccccccccccccccc";
 
         assert_eq!(paths.root(), Path::new("project/.mdium"));
-        assert_eq!(paths.workflows_file(), Path::new("project/.mdium/workflows.json"));
+        assert_eq!(
+            paths.workflows_file(),
+            Path::new("project/.mdium/workflows.json")
+        );
         assert_eq!(paths.tasks_dir(), Path::new("project/.mdium/tasks"));
         assert_eq!(
             paths.task_file(task_id).unwrap(),
@@ -491,10 +500,7 @@ mod tests {
         // `place_via_rename` never touches the temp file itself; only the
         // caller (`atomic_write_impl`) decides whether it is now safe to
         // discard it.
-        assert_eq!(
-            std::fs::read_to_string(&temp_path).unwrap(),
-            "new content"
-        );
+        assert_eq!(std::fs::read_to_string(&temp_path).unwrap(), "new content");
 
         // The backup was successfully restored, so no stray backup file
         // is left behind.
@@ -537,10 +543,7 @@ mod tests {
 
         // Neither copy was deleted: the temp file still holds the new
         // content...
-        assert_eq!(
-            std::fs::read_to_string(&temp_path).unwrap(),
-            "new content"
-        );
+        assert_eq!(std::fs::read_to_string(&temp_path).unwrap(), "new content");
         // ...and the original content survives under the generated backup
         // name.
         let backup_content = std::fs::read_dir(dir.path())
