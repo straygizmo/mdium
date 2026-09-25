@@ -1,0 +1,429 @@
+import { describe, expect, it, vi } from "vitest";
+import { OpencodeAdapter, opencodeServerConfig, type OpencodeClientLike } from "../opencode-adapter";
+import type { AgentEvent, ToolRequest } from "../../../src/shared/types/agent-runner";
+import type { SessionCallbacks, SessionOptions } from "../adapter";
+
+type RawEvent = { type: string; properties: Record<string, unknown> };
+
+/** Async event queue backing a fake SSE stream; each subscription starts with server.connected. */
+class EventQueue {
+  private readonly items: RawEvent[] = [];
+  private wake: (() => void) | undefined;
+  private ended = false;
+
+  push(...events: RawEvent[]): void {
+    this.items.push(...events);
+    this.wake?.();
+  }
+
+  end(): void {
+    this.ended = true;
+    this.wake?.();
+  }
+
+  async *stream(signal: AbortSignal): AsyncGenerator<RawEvent> {
+    this.items.unshift({ type: "server.connected", properties: {} });
+    const onAbort = () => this.wake?.();
+    signal.addEventListener("abort", onAbort);
+    try {
+      for (;;) {
+        if (signal.aborted) return;
+        const next = this.items.shift();
+        if (next) {
+          yield next;
+          continue;
+        }
+        if (this.ended) return;
+        await new Promise<void>((resolve) => (this.wake = resolve));
+        this.wake = undefined;
+      }
+    } finally {
+      signal.removeEventListener("abort", onAbort);
+    }
+  }
+}
+
+function fakeClient() {
+  const queue = new EventQueue();
+  const subscribeSignals: AbortSignal[] = [];
+  const client = {
+    session: {
+      create: vi.fn(async (_options: unknown) => ({ data: { id: "ses_1" } })),
+      promptAsync: vi.fn(async (_options: unknown) => ({ data: undefined })),
+      abort: vi.fn(async (_options: unknown) => ({ data: true })),
+    },
+    event: {
+      subscribe: vi.fn(async (options: { signal: AbortSignal }) => {
+        subscribeSignals.push(options.signal);
+        return { stream: queue.stream(options.signal) };
+      }),
+    },
+    postSessionIdPermissionsPermissionId: vi.fn(async (_options: unknown) => ({ data: true })),
+  };
+  return { client, queue, subscribeSignals };
+}
+
+function setup(clientFactory = fakeClient) {
+  const fake = clientFactory();
+  const server = { url: "http://127.0.0.1:1", close: vi.fn() };
+  const startServer = vi.fn(async () => server);
+  const createClient = vi.fn((_baseUrl: string, _directory: string) => fake.client as unknown as OpencodeClientLike);
+  const run = vi.fn(async () => ({ status: 0, stdout: "1.18.32\n", stderr: "" }));
+  const adapter = new OpencodeAdapter({ startServer, createClient, run });
+  return { adapter, fake, server, startServer, createClient, run };
+}
+
+const baseOptions: SessionOptions = { workingDirectory: "C:/work", permission: "full-access", guarded: false };
+
+function callbacks(events: AgentEvent[], overrides: Partial<SessionCallbacks> = {}): SessionCallbacks {
+  return {
+    onEvent: (e) => events.push(e),
+    requestPermission: async () => false,
+    checkTool: () => true,
+    ...overrides,
+  };
+}
+
+const ev = (type: string, properties: Record<string, unknown>): RawEvent => ({ type, properties });
+const message = (id: string, role: "user" | "assistant", sessionID = "ses_1") =>
+  ev("message.updated", { info: { id, role, sessionID } });
+const textPart = (id: string, messageID: string, text: string, sessionID = "ses_1") =>
+  ev("message.part.updated", { part: { id, messageID, sessionID, type: "text", text } });
+const toolPart = (callID: string, status: string, sessionID = "ses_1") =>
+  ev("message.part.updated", { part: { id: `prt_${callID}`, messageID: "msg_a", sessionID, type: "tool", callID, tool: "bash", state: { status, input: {} } } });
+const idle = (sessionID = "ses_1") => ev("session.idle", { sessionID });
+
+/** Wait until the adapter sent the prompt (it does so after the event stream connected). */
+async function prompted(fake: ReturnType<typeof fakeClient>) {
+  await vi.waitFor(() => expect(fake.client.session.promptAsync).toHaveBeenCalled());
+}
+
+type PromptBody = { agent: string; model?: { providerID: string; modelID: string }; parts: Array<{ type: string; text: string }> };
+const promptBody = (fake: ReturnType<typeof fakeClient>, call = 0) =>
+  (fake.client.session.promptAsync.mock.calls[call][0] as { body: PromptBody }).body;
+
+describe("OpencodeAdapter", () => {
+  it("streams text and tool events and resolves with the assistant text on idle", async () => {
+    const { adapter, fake, createClient } = setup();
+    const events: AgentEvent[] = [];
+    const session = await adapter.startSession({ ...baseOptions, model: "anthropic/claude-x" }, callbacks(events));
+    expect(createClient).toHaveBeenCalledWith("http://127.0.0.1:1", "C:/work");
+    expect(fake.client.session.create).toHaveBeenCalledWith(expect.objectContaining({ body: { title: "MDium workflow" } }));
+    expect(session.nativeSessionId()).toBe("ses_1");
+
+    const turn = session.runTurn("hi", new AbortController().signal);
+    await prompted(fake);
+    const body = promptBody(fake);
+    expect(body.agent).toMatch(/^mdium-open-[0-9a-f]+$/);
+    expect(body.model).toEqual({ providerID: "anthropic", modelID: "claude-x" });
+    expect(body.parts).toEqual([{ type: "text", text: "hi" }]);
+
+    fake.queue.push(
+      ev("session.status", { sessionID: "ses_1", status: { type: "busy" } }),
+      message("msg_u", "user"),
+      textPart("prt_u", "msg_u", "hi"),
+      message("msg_a", "assistant"),
+      textPart("prt_1", "msg_a", ""),
+      ev("message.part.delta", { sessionID: "ses_1", messageID: "msg_a", partID: "prt_1", field: "text", delta: "Hel" }),
+      ev("message.part.delta", { sessionID: "ses_1", messageID: "msg_a", partID: "prt_1", field: "text", delta: "lo" }),
+      toolPart("call_1", "pending"),
+      toolPart("call_1", "running"),
+      toolPart("call_1", "running"),
+      toolPart("call_1", "completed"),
+      message("msg_b", "assistant"),
+      // v1 servers carry the delta on message.part.updated.
+      { type: "message.part.updated", properties: { part: { id: "prt_2", messageID: "msg_b", sessionID: "ses_1", type: "text", text: "Done" }, delta: "Done" } },
+      textPart("prt_3", "msg_b", " here"),
+      idle(),
+    );
+
+    await expect(turn).resolves.toBe("Done here");
+    expect(events).toEqual([
+      { type: "assistant_delta", text: "Hel" },
+      { type: "assistant_delta", text: "lo" },
+      { type: "tool_started", toolId: "call_1", title: "bash" },
+      { type: "tool_finished", toolId: "call_1", ok: true },
+      { type: "assistant_delta", text: "Done" },
+      { type: "assistant_message", text: "Done here" },
+    ]);
+    // The event subscription is released once the turn settles.
+    expect(fake.subscribeSignals[0].aborted).toBe(true);
+  });
+
+  it("uses the read-only agent for read-only sessions and the guarded agent for guarded sessions", async () => {
+    const { adapter, fake } = setup();
+    const readOnly = await adapter.startSession({ ...baseOptions, permission: "read-only" }, callbacks([]));
+    const t1 = readOnly.runTurn("a", new AbortController().signal);
+    await prompted(fake);
+    fake.queue.push(ev("session.status", { sessionID: "ses_1", status: { type: "busy" } }), idle());
+    await expect(t1).resolves.toBe("");
+    expect(promptBody(fake, 0).agent).toMatch(/^mdium-read-only-[0-9a-f]+$/);
+    expect(promptBody(fake, 0).model).toBeUndefined();
+
+    const guarded = await adapter.startSession({ ...baseOptions, guarded: true }, callbacks([]));
+    const t2 = guarded.runTurn("b", new AbortController().signal);
+    await vi.waitFor(() => expect(fake.client.session.promptAsync).toHaveBeenCalledTimes(2));
+    fake.queue.push(ev("session.status", { sessionID: "ses_1", status: { type: "busy" } }), idle());
+    await t2;
+    expect(promptBody(fake, 1).agent).toMatch(/^mdium-guarded-[0-9a-f]+$/);
+  });
+
+  it("ignores an idle that arrives before the turn shows any activity", async () => {
+    const { adapter, fake } = setup();
+    const session = await adapter.startSession(baseOptions, callbacks([]));
+    const turn = session.runTurn("hi", new AbortController().signal);
+    await prompted(fake);
+    let settled = false;
+    void turn.then(() => (settled = true));
+    fake.queue.push(idle());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(settled).toBe(false);
+    fake.queue.push(message("msg_a", "assistant"), textPart("prt_1", "msg_a", "ok"), idle());
+    await expect(turn).resolves.toBe("ok");
+  });
+
+  it("rejects a model that is not provider/model", async () => {
+    const { adapter, fake } = setup();
+    const session = await adapter.startSession({ ...baseOptions, model: "claude-x" }, callbacks([]));
+    await expect(session.runTurn("hi", new AbortController().signal)).rejects.toThrow("OPENCODE_BAD_MODEL");
+    expect(fake.client.session.promptAsync).not.toHaveBeenCalled();
+  });
+
+  it("rejects a guard-blocked permission without asking", async () => {
+    const { adapter, fake } = setup();
+    const requestPermission = vi.fn(async () => true);
+    const checked: ToolRequest[] = [];
+    const session = await adapter.startSession(
+      { ...baseOptions, guarded: true },
+      callbacks([], { requestPermission, checkTool: (r) => (checked.push(r), !r.summary.startsWith("git push")) }),
+    );
+    const turn = session.runTurn("push it", new AbortController().signal);
+    await prompted(fake);
+    fake.queue.push(
+      ev("permission.asked", {
+        id: "per_1",
+        sessionID: "ses_1",
+        permission: "bash",
+        patterns: ["git push *"],
+        metadata: { command: "git push origin main" },
+        always: ["git push *"],
+        tool: { messageID: "msg_a", callID: "call_1" },
+      }),
+    );
+    await vi.waitFor(() => expect(fake.client.postSessionIdPermissionsPermissionId).toHaveBeenCalled());
+    expect(fake.client.postSessionIdPermissionsPermissionId).toHaveBeenCalledWith(
+      expect.objectContaining({ path: { id: "ses_1", permissionID: "per_1" }, body: { response: "reject" } }),
+    );
+    expect(checked).toEqual([{ kind: "shell", summary: "git push origin main", rawKind: "bash" }]);
+    expect(requestPermission).not.toHaveBeenCalled();
+    fake.queue.push(ev("session.status", { sessionID: "ses_1", status: { type: "busy" } }), idle());
+    await turn;
+  });
+
+  it("checks every path of a multi-file edit with the guard", async () => {
+    const { adapter, fake } = setup();
+    const checked: string[] = [];
+    const session = await adapter.startSession(
+      { ...baseOptions, guarded: true },
+      callbacks([], { checkTool: (r) => (checked.push(r.summary), r.summary !== "../outside.ts") }),
+    );
+    const turn = session.runTurn("patch", new AbortController().signal);
+    await prompted(fake);
+    fake.queue.push(ev("permission.asked", { id: "per_1", sessionID: "ses_1", permission: "edit", patterns: ["a.ts", "../outside.ts"], metadata: { filepath: "a.ts, ../outside.ts" }, always: ["*"] }));
+    await vi.waitFor(() => expect(fake.client.postSessionIdPermissionsPermissionId).toHaveBeenCalled());
+    expect(checked).toEqual(["a.ts", "../outside.ts"]);
+    expect((fake.client.postSessionIdPermissionsPermissionId.mock.calls[0][0] as { body: unknown }).body).toEqual({ response: "reject" });
+    fake.queue.push(message("msg_a", "assistant"), idle());
+    await turn;
+  });
+
+  it("rejects writes in read-only sessions without asking", async () => {
+    const { adapter, fake } = setup();
+    const requestPermission = vi.fn(async () => true);
+    const session = await adapter.startSession({ ...baseOptions, permission: "read-only" }, callbacks([], { requestPermission }));
+    const turn = session.runTurn("edit", new AbortController().signal);
+    await prompted(fake);
+    // v1 permission.updated shape.
+    fake.queue.push(ev("permission.updated", { id: "per_1", sessionID: "ses_1", type: "edit", pattern: ["a.ts"], title: "Edit a.ts", metadata: { filePath: "C:/work/a.ts" } }));
+    await vi.waitFor(() => expect(fake.client.postSessionIdPermissionsPermissionId).toHaveBeenCalled());
+    expect((fake.client.postSessionIdPermissionsPermissionId.mock.calls[0][0] as { body: unknown }).body).toEqual({ response: "reject" });
+    expect(requestPermission).not.toHaveBeenCalled();
+    fake.queue.push(message("msg_a", "assistant"), idle());
+    await turn;
+  });
+
+  it("asks the user under cli-default and approves once when allowed", async () => {
+    const { adapter, fake } = setup();
+    const requestPermission = vi.fn(async () => true);
+    const session = await adapter.startSession({ ...baseOptions, permission: "cli-default" }, callbacks([], { requestPermission }));
+    const turn = session.runTurn("test", new AbortController().signal);
+    await prompted(fake);
+    fake.queue.push(ev("permission.asked", { id: "per_1", sessionID: "ses_1", permission: "bash", patterns: ["npm test"], metadata: { command: "npm test" }, always: [] }));
+    await vi.waitFor(() => expect(fake.client.postSessionIdPermissionsPermissionId).toHaveBeenCalled());
+    expect(requestPermission).toHaveBeenCalledWith({ kind: "shell", summary: "npm test", rawKind: "bash" });
+    expect((fake.client.postSessionIdPermissionsPermissionId.mock.calls[0][0] as { body: unknown }).body).toEqual({ response: "once" });
+    fake.queue.push(message("msg_a", "assistant"), idle());
+    await turn;
+  });
+
+  it("answers permissions of sub-agent sessions and ignores their output", async () => {
+    const { adapter, fake } = setup();
+    const events: AgentEvent[] = [];
+    const session = await adapter.startSession(baseOptions, callbacks(events));
+    const turn = session.runTurn("delegate", new AbortController().signal);
+    await prompted(fake);
+    fake.queue.push(
+      message("msg_a", "assistant"),
+      ev("session.created", { info: { id: "ses_child", parentID: "ses_1" } }),
+      message("msg_c", "assistant", "ses_child"),
+      textPart("prt_c", "msg_c", "child text", "ses_child"),
+      toolPart("call_c", "running", "ses_child"),
+      ev("permission.asked", { id: "per_c", sessionID: "ses_child", permission: "bash", patterns: ["ls"], metadata: { command: "ls" }, always: [] }),
+    );
+    await vi.waitFor(() => expect(fake.client.postSessionIdPermissionsPermissionId).toHaveBeenCalled());
+    expect(fake.client.postSessionIdPermissionsPermissionId).toHaveBeenCalledWith(
+      expect.objectContaining({ path: { id: "ses_child", permissionID: "per_c" }, body: { response: "once" } }),
+    );
+    fake.queue.push(ev("session.idle", { sessionID: "ses_child" }), textPart("prt_1", "msg_a", "parent"), idle());
+    await expect(turn).resolves.toBe("parent");
+    expect(events).toEqual([{ type: "assistant_message", text: "parent" }]);
+  });
+
+  it("ignores events of unrelated sessions", async () => {
+    const { adapter, fake } = setup();
+    const events: AgentEvent[] = [];
+    const session = await adapter.startSession(baseOptions, callbacks(events));
+    const turn = session.runTurn("hi", new AbortController().signal);
+    await prompted(fake);
+    fake.queue.push(
+      message("msg_x", "assistant", "ses_other"),
+      textPart("prt_x", "msg_x", "other", "ses_other"),
+      ev("message.part.delta", { sessionID: "ses_other", messageID: "msg_x", partID: "prt_x", field: "text", delta: "other" }),
+      ev("permission.asked", { id: "per_x", sessionID: "ses_other", permission: "bash", patterns: ["ls"], metadata: {}, always: [] }),
+      ev("session.error", { sessionID: "ses_other", error: { name: "UnknownError", data: { message: "boom" } } }),
+      idle("ses_other"),
+      message("msg_a", "assistant"),
+      textPart("prt_1", "msg_a", "mine"),
+      idle(),
+    );
+    await expect(turn).resolves.toBe("mine");
+    expect(events).toEqual([{ type: "assistant_message", text: "mine" }]);
+    expect(fake.client.postSessionIdPermissionsPermissionId).not.toHaveBeenCalled();
+  });
+
+  it("rejects on session.error with the error name and message", async () => {
+    const { adapter, fake } = setup();
+    const session = await adapter.startSession(baseOptions, callbacks([]));
+    const turn = session.runTurn("hi", new AbortController().signal);
+    await prompted(fake);
+    fake.queue.push(ev("session.error", { sessionID: "ses_1", error: { name: "ProviderAuthError", data: { providerID: "x", message: "bad key" } } }));
+    await expect(turn).rejects.toThrow("OPENCODE_FAILED: ProviderAuthError: bad key");
+  });
+
+  it("rejects when the event stream ends before the turn completes", async () => {
+    const { adapter, fake } = setup();
+    const session = await adapter.startSession(baseOptions, callbacks([]));
+    const turn = session.runTurn("hi", new AbortController().signal);
+    await prompted(fake);
+    fake.queue.end();
+    await expect(turn).rejects.toThrow("OPENCODE_DISCONNECTED");
+  });
+
+  it("aborts the session and rejects with AbortError", async () => {
+    const { adapter, fake } = setup();
+    const session = await adapter.startSession(baseOptions, callbacks([]));
+    const controller = new AbortController();
+    const turn = session.runTurn("hi", controller.signal);
+    await prompted(fake);
+    controller.abort();
+    await expect(turn).rejects.toMatchObject({ name: "AbortError" });
+    expect(fake.client.session.abort).toHaveBeenCalledWith(expect.objectContaining({ path: { id: "ses_1" } }));
+    expect(fake.subscribeSignals[0].aborted).toBe(true);
+  });
+
+  it("close() aborts the running turn", async () => {
+    const { adapter, fake } = setup();
+    const session = await adapter.startSession(baseOptions, callbacks([]));
+    const turn = session.runTurn("hi", new AbortController().signal);
+    await prompted(fake);
+    await session.close();
+    await expect(turn).rejects.toMatchObject({ name: "AbortError" });
+    expect(fake.client.session.abort).toHaveBeenCalled();
+  });
+
+  it("resumes an existing session without creating one", async () => {
+    const { adapter, fake } = setup();
+    const session = await adapter.startSession({ ...baseOptions, resumeNativeId: "ses_old" }, callbacks([]));
+    expect(session.nativeSessionId()).toBe("ses_old");
+    expect(fake.client.session.create).not.toHaveBeenCalled();
+  });
+
+  it("starts the server once across sessions and closes it on dispose", async () => {
+    const { adapter, server, startServer } = setup();
+    await adapter.startSession(baseOptions, callbacks([]));
+    await adapter.startSession({ ...baseOptions, workingDirectory: "C:/other" }, callbacks([]));
+    expect(startServer).toHaveBeenCalledTimes(1);
+    await adapter.dispose();
+    expect(server.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("probe runs the version command and never starts the server", async () => {
+    const { adapter, run, startServer } = setup();
+    await expect(adapter.probe()).resolves.toEqual({ kind: "available", version: "1.18.32" });
+    expect(run).toHaveBeenCalledTimes(1);
+    const [command, args] = run.mock.calls[0] as unknown as [string, string[]];
+    if (process.platform === "win32") {
+      expect(args).toEqual(["/d", "/s", "/c", "opencode --version"]);
+    } else {
+      expect([command, args]).toEqual(["opencode", ["--version"]]);
+    }
+    expect(startServer).not.toHaveBeenCalled();
+  });
+
+  it("probe reports a missing CLI", async () => {
+    const missing = new OpencodeAdapter({
+      startServer: vi.fn(),
+      run: async () => ({ status: null, stdout: "", stderr: "", error: Object.assign(new Error("spawn"), { code: "ENOENT" }) }),
+    });
+    await expect(missing.probe()).resolves.toEqual({ kind: "missing", detail: "opencode" });
+    // cmd.exe reports an unknown command with exit code 9009, a posix shell with 127.
+    const notFound = new OpencodeAdapter({ startServer: vi.fn(), run: async () => ({ status: 9009, stdout: "", stderr: "not recognized" }) });
+    await expect(notFound.probe()).resolves.toEqual({ kind: "missing", detail: "opencode" });
+    const broken = new OpencodeAdapter({ startServer: vi.fn(), run: async () => ({ status: 1, stdout: "", stderr: "crash" }) });
+    await expect(broken.probe()).resolves.toEqual({ kind: "error", detail: "version" });
+  });
+});
+
+describe("opencodeServerConfig", () => {
+  const config = opencodeServerConfig({ readOnly: "mdium-read-only-x", guarded: "mdium-guarded-x", open: "mdium-open-x" });
+  const permissionOf = (name: string) => (config.agent as Record<string, { permission: Record<string, string> }>)[name].permission;
+
+  it("asks for edits, shell, fetches, and outside directories server-wide", () => {
+    expect(config.permission).toEqual({ edit: "ask", bash: "ask", webfetch: "ask", external_directory: "ask" });
+  });
+
+  it("restricted agents deny every tool outside the inspectable built-ins", () => {
+    for (const name of ["mdium-read-only-x", "mdium-guarded-x"]) {
+      const permission = permissionOf(name);
+      // "*" must come first: opencode applies the last matching rule.
+      expect(Object.keys(permission)[0]).toBe("*");
+      expect(permission["*"]).toBe("deny");
+      for (const tool of ["read", "glob", "grep", "list"]) expect(permission[tool]).toBe("ask");
+      expect(permission.task).toBeUndefined();
+    }
+  });
+
+  it("read-only denies edits, shell, network, and outside directories", () => {
+    const permission = permissionOf("mdium-read-only-x");
+    for (const tool of ["edit", "bash", "webfetch", "websearch", "external_directory"]) expect(permission[tool]).toBe("deny");
+  });
+
+  it("the guarded agent asks for everything the guard inspects", () => {
+    const permission = permissionOf("mdium-guarded-x");
+    for (const tool of ["edit", "bash", "webfetch", "websearch", "external_directory"]) expect(permission[tool]).toBe("ask");
+  });
+
+  it("disables session sharing", () => {
+    expect(config.share).toBe("disabled");
+  });
+});

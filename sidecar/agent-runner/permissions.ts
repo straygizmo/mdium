@@ -157,3 +157,92 @@ export function claudeHookDecision(permission: AgentPermission, guarded: boolean
 export function claudeDisallowedTools(permission: AgentPermission, guarded: boolean): string[] {
   return guarded || permission === "read-only" ? [...OPAQUE_CLAUDE_TOOLS] : [];
 }
+
+/** An opencode permission request (v1 `permission.updated` shape; `permission.asked` is normalized into it). */
+export interface OpencodePermissionLike {
+  type: string;
+  pattern?: string | string[];
+  title?: string;
+  metadata?: Record<string, unknown>;
+}
+
+function opencodePatterns(permission: OpencodePermissionLike): string[] {
+  const { pattern } = permission;
+  if (typeof pattern === "string") return pattern ? [pattern] : [];
+  return Array.isArray(pattern) ? pattern.filter((p): p is string => typeof p === "string" && p !== "") : [];
+}
+
+/** Normalize an opencode permission request into a provider-neutral ToolRequest. */
+export function toolRequestFromOpencode(permission: OpencodePermissionLike): ToolRequest {
+  return { ...normalizeOpencode(permission), rawKind: permission.type };
+}
+
+function normalizeOpencode(permission: OpencodePermissionLike): Omit<ToolRequest, "rawKind"> {
+  const metadata = permission.metadata ?? {};
+  const patterns = opencodePatterns(permission);
+  const first = patterns[0];
+  switch (permission.type) {
+    case "bash":
+      return { kind: "shell", summary: field(metadata, "command") ?? (patterns.length ? patterns.join("\n") : undefined) ?? permission.title ?? "bash" };
+    case "edit":
+    case "write":
+      return { kind: "write", summary: field(metadata, "filePath", "filepath") ?? first ?? permission.type };
+    case "external_directory":
+      // Treated as a write so the guard's outside-workspace rule applies.
+      return { kind: "write", summary: field(metadata, "filepath", "filePath", "path") ?? first ?? permission.type };
+    case "read":
+    case "list":
+      return { kind: "read", summary: field(metadata, "filePath", "filepath", "path") ?? first ?? permission.type };
+    case "glob":
+      // The glob pattern is not a path; the searched directory is.
+      return { kind: "read", summary: field(metadata, "path") ?? "." };
+    case "grep": {
+      // The search pattern is not a path; an include glob names the files grep reads.
+      const dir = field(metadata, "path") ?? ".";
+      const include = field(metadata, "include");
+      return { kind: "read", summary: include ? `${dir.replace(/[\/]+$/, "")}/${include}` : dir };
+    }
+    case "todowrite":
+      // Task-list bookkeeping with no side effects outside the session.
+      return { kind: "read", summary: permission.type };
+    case "webfetch":
+      return { kind: "network", summary: field(metadata, "url") ?? first ?? permission.type };
+    case "websearch":
+      return { kind: "network", summary: field(metadata, "query") ?? first ?? permission.type };
+    default:
+      return { kind: "other", summary: permission.title ?? permission.type };
+  }
+}
+
+/**
+ * Requests the safety guard must check for an opencode permission: one per
+ * path for multi-path writes (a patch touching several files, a shell
+ * command reaching several outside directories), else the single request.
+ */
+export function toolRequestsFromOpencode(permission: OpencodePermissionLike): ToolRequest[] {
+  const request = toolRequestFromOpencode(permission);
+  const patterns = opencodePatterns(permission);
+  if (request.kind === "write" && patterns.length > 1) {
+    return patterns.map((summary) => ({ kind: "write", summary, rawKind: permission.type }));
+  }
+  return [request];
+}
+
+/** Env files that opencode itself asks about before reading; templates are exempt. */
+function isEnvFile(summary: string): boolean {
+  const name = summary.split(/[\/]/).pop() ?? "";
+  return /^\.env(\..+)?$/i.test(name) && !/^\.env\.(example|sample|template)$/i.test(name);
+}
+
+/**
+ * Decide an opencode permission request for a mode; "ask" routes it to the
+ * user. The dedicated server makes reads ask too, only so that the safety
+ * guard sees them first; they are approved in every mode, except env files
+ * under cli-default (which opencode itself would ask about).
+ */
+export function opencodeDecision(permission: AgentPermission, request: ToolRequest): "once" | "reject" | "ask" {
+  if (request.kind === "read") return permission === "cli-default" && isEnvFile(request.summary) ? "ask" : "once";
+  if (permission === "read-only") return "reject";
+  if (permission === "full-access") return "once";
+  return "ask";
+}

@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { claudeDecision, claudeDisallowedTools, claudeHookDecision, codexSandbox, copilotDecision, toolRequestFromClaude, toolRequestFromCopilot } from "../permissions";
+import {
+  claudeDecision,
+  claudeDisallowedTools,
+  claudeHookDecision,
+  codexSandbox,
+  copilotDecision,
+  opencodeDecision,
+  toolRequestFromClaude,
+  toolRequestFromCopilot,
+  toolRequestFromOpencode,
+  toolRequestsFromOpencode,
+} from "../permissions";
 
 describe("codexSandbox", () => {
   it("maps modes to Codex sandbox values", () => {
@@ -136,5 +147,75 @@ describe("claudeDisallowedTools", () => {
     expect(claudeDisallowedTools("read-only", false)).toEqual(tools);
     expect(claudeDisallowedTools("cli-default", false)).toEqual([]);
     expect(claudeDisallowedTools("full-access", false)).toEqual([]);
+  });
+});
+
+describe("toolRequestFromOpencode", () => {
+  it.each([
+    [{ type: "bash", pattern: ["git push *"], metadata: { command: "git push origin main" } }, { kind: "shell", summary: "git push origin main" }],
+    [{ type: "bash", pattern: ["git status *", "npm test *"] }, { kind: "shell", summary: "git status *\nnpm test *" }],
+    [{ type: "bash", pattern: "ls", metadata: {} }, { kind: "shell", summary: "ls" }],
+    [{ type: "bash", title: "Run ls" }, { kind: "shell", summary: "Run ls" }],
+    [{ type: "edit", pattern: ["src/a.ts"], metadata: { filePath: "C:/w/src/a.ts" } }, { kind: "write", summary: "C:/w/src/a.ts" }],
+    [{ type: "edit", pattern: ["src/a.ts"], metadata: { filepath: "C:/w/src/a.ts" } }, { kind: "write", summary: "C:/w/src/a.ts" }],
+    [{ type: "write", pattern: "src/b.ts" }, { kind: "write", summary: "src/b.ts" }],
+    [{ type: "webfetch", pattern: ["https://a.test"], metadata: { url: "https://b.test" } }, { kind: "network", summary: "https://b.test" }],
+    [{ type: "webfetch", pattern: ["https://a.test"] }, { kind: "network", summary: "https://a.test" }],
+    [{ type: "websearch", pattern: ["q"], metadata: { query: "vitest docs" } }, { kind: "network", summary: "vitest docs" }],
+    // Treated as a write so the guard's outside-workspace rule applies.
+    [{ type: "external_directory", pattern: ["C:/x/**"], metadata: { filepath: "C:/x/a.txt", parentDir: "C:/x" } }, { kind: "write", summary: "C:/x/a.txt" }],
+    [{ type: "external_directory", metadata: { path: "C:/y" } }, { kind: "write", summary: "C:/y" }],
+    [{ type: "external_directory", pattern: ["D:/z/*"], metadata: { command: "ls D:/z" } }, { kind: "write", summary: "D:/z/*" }],
+    [{ type: "read", pattern: ["src/a.ts"], metadata: {} }, { kind: "read", summary: "src/a.ts" }],
+    // Glob and grep patterns are not paths; the searched directory is.
+    [{ type: "glob", pattern: ["**/*.ts"], metadata: { pattern: "**/*.ts", path: "src" } }, { kind: "read", summary: "src" }],
+    [{ type: "glob", pattern: ["**/*.ts"], metadata: { pattern: "**/*.ts" } }, { kind: "read", summary: "." }],
+    [{ type: "grep", pattern: ["foo"], metadata: { pattern: "foo", path: "src/", include: "*.env" } }, { kind: "read", summary: "src/*.env" }],
+    [{ type: "list", pattern: ["docs"] }, { kind: "read", summary: "docs" }],
+    [{ type: "todowrite", pattern: ["*"] }, { kind: "read", summary: "todowrite" }],
+    [{ type: "skill", pattern: ["review"], title: "Load skill" }, { kind: "other", summary: "Load skill" }],
+    [{ type: "doom_loop", pattern: ["bash"] }, { kind: "other", summary: "doom_loop" }],
+  ])("normalizes %j", (permission, expected) => {
+    expect(toolRequestFromOpencode(permission)).toEqual({ ...expected, rawKind: permission.type });
+  });
+});
+
+describe("toolRequestsFromOpencode", () => {
+  it("splits multi-path writes so the guard sees every path", () => {
+    expect(toolRequestsFromOpencode({ type: "edit", pattern: ["a.ts", "b.ts"], metadata: { filepath: "a.ts, b.ts" } })).toEqual([
+      { kind: "write", summary: "a.ts", rawKind: "edit" },
+      { kind: "write", summary: "b.ts", rawKind: "edit" },
+    ]);
+    expect(toolRequestsFromOpencode({ type: "external_directory", pattern: ["C:/x/*", "D:/y/*"], metadata: { command: "cp C:/x/a D:/y/" } })).toEqual([
+      { kind: "write", summary: "C:/x/*", rawKind: "external_directory" },
+      { kind: "write", summary: "D:/y/*", rawKind: "external_directory" },
+    ]);
+  });
+  it("returns the single normalized request otherwise", () => {
+    const bash = { type: "bash", pattern: ["git status *", "npm test *"], metadata: { command: "git status && npm test" } };
+    expect(toolRequestsFromOpencode(bash)).toEqual([toolRequestFromOpencode(bash)]);
+    const edit = { type: "edit", pattern: ["a.ts"], metadata: { filepath: "C:/w/a.ts" } };
+    expect(toolRequestsFromOpencode(edit)).toEqual([toolRequestFromOpencode(edit)]);
+  });
+});
+
+describe("opencodeDecision", () => {
+  const read = toolRequestFromOpencode({ type: "read", pattern: ["src/a.ts"] });
+  const envRead = toolRequestFromOpencode({ type: "read", pattern: ["config/.env.local"] });
+  const edit = toolRequestFromOpencode({ type: "edit", pattern: ["a.ts"] });
+  const bash = toolRequestFromOpencode({ type: "bash", metadata: { command: "ls" } });
+  const fetch = toolRequestFromOpencode({ type: "webfetch", metadata: { url: "https://a.test" } });
+  const skill = toolRequestFromOpencode({ type: "skill", pattern: ["x"] });
+  it("read-only approves reads once and rejects everything else", () => {
+    expect(opencodeDecision("read-only", read)).toBe("once");
+    for (const request of [edit, bash, fetch, skill]) expect(opencodeDecision("read-only", request)).toBe("reject");
+  });
+  it("full-access approves everything once", () => {
+    for (const request of [read, envRead, edit, bash, fetch, skill]) expect(opencodeDecision("full-access", request)).toBe("once");
+  });
+  it("cli-default approves ordinary reads and asks for env files and everything else", () => {
+    expect(opencodeDecision("cli-default", read)).toBe("once");
+    expect(opencodeDecision("cli-default", toolRequestFromOpencode({ type: "read", pattern: [".env.example"] }))).toBe("once");
+    for (const request of [envRead, edit, bash, fetch, skill]) expect(opencodeDecision("cli-default", request)).toBe("ask");
   });
 });
