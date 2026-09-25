@@ -31,7 +31,7 @@ UI 表示名とコード上の識別子を次のとおり統一する。コー�
 | 要件整理 | `intake` | 利用者と LLM が対話で要件を確定するセッション |
 | タスク添付 | `attachment` | ルートタスクに属する、登録時点で固定されたファイル |
 | 定期 JOB | `scheduledJob` | 時刻または間隔でエージェントを起動する、ワークフローから独立した自動化 |
-| エージェントランナー | `agentRunner` | Codex / Copilot / opencode を統一インターフェースで呼び出す Node サイドカー |
+| エージェントランナー | `agentRunner` | Codex / Copilot / opencode / Claude を統一インターフェースで呼び出す Node サイドカー（opencode・Claude のアダプタはパート 3 で追加） |
 
 タスク状態:
 
@@ -116,7 +116,8 @@ interface SessionOptions {
 
 - 権限の対応付け:
   - `read-only`: Codex は sandbox `read-only`、Copilot は権限ハンドラで `read` 以外の要求をすべて拒否、opencode は `plan` エージェントで実行し `read` 以外の権限要求を拒否。
-  - `full-access`: Codex は sandbox `danger-full-access`、Copilot と opencode はすべて許可（ただしランナーのガードフックを通す。3.7）。
+  - `full-access`: Codex は sandbox `danger-full-access`、Copilot と opencode はすべて許可（ただしランナーのガードフックを通す。3.7）。Copilot の拡張機能・環境変数アクセス系の要求（`extension-management`、`extension-permission-access`、`extension-env-access`、`factory`、`custom-tool`、`hook`）は full-access でも拒否する。
+  - Claude（Claude Agent SDK）: `read-only` は `canUseTool` で読み取り系ツール（Read / Grep / Glob / LS 等）以外を拒否、`full-access` は `permissionMode: "default"` のまま `canUseTool` で許可し、ガードフックを通す（`bypassPermissions` は使わない）。AGENT CHAT の Claude タブは既存の Claude パネルを使うため、ランナーの Claude アダプタは工程専用とする。
   - `cli-default`: Codex は sandbox を指定しない（`~/.codex/config.toml` に従う）。Copilot の権限要求は CLI と同じく利用者に都度確認する（チャット UI で承認・拒否）。
 - ガードフック: アダプタはツール実行要求を正規化した `ToolRequest`（種別 `shell` / `write` / `read` / `network` / `other`、コマンドまたはパス）として呼び出し側のポリシーに渡す。事前フックを持つ Copilot / opencode は実行前に判定し、拒否できる。事前フックを持たない Codex は実行開始イベントで判定し、違反時は直ちにターンを中止する。
 - タイムアウトは呼び出し側が指定する。SDK 既定の短いタイムアウトに依存しない。
@@ -153,6 +154,7 @@ interface SessionOptions {
 ```
 
 - 工程の実行制御（取得、実行、結果処理、次工程への遷移、回復）はすべて Rust の orchestrator が行う。UI は表示と操作要求のみを行い、ポーリングしない。複数ウィンドウが開いていても実行主体は一つである。
+- orchestrator は AGENT CHAT とは別に、ワークフロー専用のエージェントランナープロセスを 1 つ起動し、Rust から直接 stdin/stdout の JSON 行プロトコル（2.1）でやり取りする。ランナーの出力を WebView 経由で中継しない。
 - orchestrator はワークフローが有効なプロジェクトに対してのみ動作する。
 
 ### 3.2 データ（プロジェクトの `.mdium/` 配下）
@@ -194,7 +196,7 @@ interface Stage<R extends "design" | "implement" | "review"> {
   name: string;
   prompt: string;              // 工程の指示
   completionCriteria: string;  // 完了要件
-  provider: "codex" | "copilot" | "opencode";
+  provider: "codex" | "copilot" | "opencode" | "claude";
   model?: string;
   requiresApproval: boolean;   // implement のみ有効。既定 false
   timeoutMinutes: number;      // 既定 60
@@ -260,7 +262,7 @@ interface Stage<R extends "design" | "implement" | "review"> {
    - 資格情報の読み取り（`~/.ssh`、`~/.aws`、`~/.config/gh`、`.git-credentials`、`.env` 系、ブラウザのプロファイル等）
    - 外部への送信系コマンド（`curl` / `wget` / `Invoke-WebRequest` / `Invoke-RestMethod` 等でのアップロード・POST）
    - システム設定の変更（レジストリ、サービス、スケジュールタスク、環境変数の永続変更）
-   Copilot / opencode は実行前に拒否する。Codex は実行開始イベントで検出した時点でターンを中止する。いずれも `attention`（理由: 危険操作を検出、内容を表示）とする。
+   Copilot / opencode / Claude は実行前に拒否する。Codex は実行開始イベントで検出した時点でターンを中止する。いずれも `attention`（理由: 危険操作を検出、内容を表示）とする。
 3. 環境による封じ込め: エージェントの子プロセス環境（2.1 の `env`）で、`GIT_CONFIG_COUNT` 等により全リモートの push 先を無効な URL に上書きし、`GH_TOKEN` / `GITLAB_TOKEN` を無効値にする。MDium 自身の Issue 連携は Rust から通常の環境で行うため影響を受けない。
 4. 事後検査: 工程の終了後、利用者の作業ツリー（`git status` とブランチ位置）と base ブランチが工程開始前から変化していないことを確認し、変化していれば `attention`（理由: 作業ツリー外への変更を検出）とする。
 
