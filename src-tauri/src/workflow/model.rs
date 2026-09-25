@@ -40,7 +40,32 @@ pub enum IssueTracking {
     Off,
 }
 
-/// One step of a workflow's design/implement/review pipeline.
+/// Default `Stage::timeout_minutes` (constraints.md).
+pub const DEFAULT_TIMEOUT_MINUTES: u32 = 60;
+/// Default `Workflow::max_reentry_count` (constraints.md).
+pub const DEFAULT_MAX_REENTRY_COUNT: u32 = 5;
+/// Default `Workflow::max_concurrent_runs` (constraints.md).
+pub const DEFAULT_MAX_CONCURRENT_RUNS: u32 = 1;
+
+fn default_timeout_minutes() -> u32 {
+    DEFAULT_TIMEOUT_MINUTES
+}
+
+fn default_max_reentry_count() -> u32 {
+    DEFAULT_MAX_REENTRY_COUNT
+}
+
+fn default_max_concurrent_runs() -> u32 {
+    DEFAULT_MAX_CONCURRENT_RUNS
+}
+
+fn default_review_return_to() -> Role {
+    Role::Design
+}
+
+/// One step of a workflow's design/implement/review pipeline. Fields with
+/// a documented default (constraints.md) may be omitted from a
+/// hand-written `workflows.json`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Stage {
@@ -50,13 +75,18 @@ pub struct Stage {
     pub prompt: String,
     pub completion_criteria: String,
     pub provider: Provider,
+    #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
     pub requires_approval: bool,
+    #[serde(default = "default_timeout_minutes")]
     pub timeout_minutes: u32,
 }
 
 /// A user-defined workflow: exactly three stages (design, implement,
 /// review) plus the policy around re-entry, concurrency and approvals.
+/// Fields with a documented default (constraints.md) may be omitted from a
+/// hand-written `workflows.json`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Workflow {
@@ -65,9 +95,13 @@ pub struct Workflow {
     pub enabled: bool,
     pub archived: bool,
     pub stages: Vec<Stage>,
+    #[serde(default = "default_review_return_to")]
     pub review_return_to: Role,
+    #[serde(default = "default_max_reentry_count")]
     pub max_reentry_count: u32,
+    #[serde(default = "default_max_concurrent_runs")]
     pub max_concurrent_runs: u32,
+    #[serde(default)]
     pub design_doc_path: Option<String>,
     pub issue_tracking: IssueTracking,
 }
@@ -361,14 +395,11 @@ impl Workflow {
         }
     }
 
-    /// The stage for `role`. Panics if there is no such stage; callers
-    /// should only rely on this after `validate()` has confirmed the
-    /// workflow has exactly one stage per role.
-    pub fn stage(&self, role: Role) -> &Stage {
-        self.stages
-            .iter()
-            .find(|stage| stage.role == role)
-            .expect("workflow does not have a stage for the requested role")
+    /// The stage for `role`, or `None` if the workflow has no such stage.
+    /// A workflow that passed `validate()` always has exactly one stage per
+    /// role, but this never panics on one that did not.
+    pub fn stage(&self, role: Role) -> Option<&Stage> {
+        self.stages.iter().find(|stage| stage.role == role)
     }
 }
 
@@ -723,6 +754,51 @@ mod tests {
     #[test]
     fn stage_returns_matching_role() {
         let workflow = valid_workflow();
-        assert_eq!(workflow.stage(Role::Implement).id, "implement");
+        assert_eq!(workflow.stage(Role::Implement).unwrap().id, "implement");
+    }
+
+    #[test]
+    fn stage_returns_none_for_missing_role_instead_of_panicking() {
+        let mut workflow = valid_workflow();
+        workflow.stages.retain(|stage| stage.role != Role::Review);
+        assert!(workflow.stage(Role::Review).is_none());
+    }
+
+    #[test]
+    fn workflow_missing_defaulted_fields_loads_with_constraint_defaults() {
+        let stage = |id: &str, role: &str| {
+            json!({
+                "id": id,
+                "role": role,
+                "name": id,
+                "prompt": "p",
+                "completionCriteria": "c",
+                "provider": "codex"
+            })
+        };
+        let value = json!({
+            "id": "wf-1",
+            "name": "Hand written",
+            "enabled": true,
+            "archived": false,
+            "stages": [
+                stage("design", "design"),
+                stage("implement", "implement"),
+                stage("review", "review")
+            ],
+            "issueTracking": "off"
+        });
+
+        let workflow: Workflow = serde_json::from_value(value).unwrap();
+        assert_eq!(workflow.review_return_to, Role::Design);
+        assert_eq!(workflow.max_reentry_count, 5);
+        assert_eq!(workflow.max_concurrent_runs, 1);
+        assert_eq!(workflow.design_doc_path, None);
+        for stage in &workflow.stages {
+            assert_eq!(stage.model, None);
+            assert!(!stage.requires_approval);
+            assert_eq!(stage.timeout_minutes, 60);
+        }
+        assert_eq!(workflow.validate(), Ok(()));
     }
 }

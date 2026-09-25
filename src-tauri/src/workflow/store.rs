@@ -5,7 +5,9 @@
 //! reusing [`StoreError`] and [`WorkflowStore`].
 
 use crate::workflow::fsutil::{self, InvalidId, MdiumPaths};
-use crate::workflow::model::{Task, TaskMeta, ValidationError, WorkflowRun, WorkflowsFile};
+use crate::workflow::model::{
+    Task, TaskMeta, ValidationError, Workflow, WorkflowRun, WorkflowsFile,
+};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
@@ -80,8 +82,9 @@ impl From<InvalidId> for StoreError {
     }
 }
 
-/// A task file that could not be loaded during [`WorkflowStore::list_tasks`].
-/// Listing never fails because of one bad file; it reports it here instead.
+/// A record that could not be loaded while listing (a task or run file, or
+/// one workflow inside `workflows.json`). Listing never fails because of
+/// one bad record; it reports it here instead.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StoreWarning {
     /// Path of the offending file.
@@ -96,6 +99,30 @@ pub struct StoreWarning {
 pub struct TaskList {
     pub tasks: Vec<Task>,
     pub warnings: Vec<StoreWarning>,
+}
+
+/// Result of [`WorkflowStore::load_workflows`]: every workflow that decoded
+/// and passed `Workflow::validate()`, in file order, plus one warning per
+/// workflow that did not.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct WorkflowList {
+    pub workflows: Vec<Workflow>,
+    pub warnings: Vec<StoreWarning>,
+}
+
+/// Result of [`WorkflowStore::list_runs`]: every run that loaded, sorted by
+/// `created_at` then root task id, plus one warning per file that did not.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct RunList {
+    pub runs: Vec<WorkflowRun>,
+    pub warnings: Vec<StoreWarning>,
+}
+
+/// `workflows.json` with each workflow still undecoded, so one malformed
+/// workflow can be skipped without failing the whole file.
+#[derive(Deserialize)]
+struct RawWorkflowsFile {
+    workflows: Vec<serde_json::Value>,
 }
 
 /// Fails with [`StoreError::UnsupportedSchema`] unless `version` is
@@ -228,28 +255,45 @@ impl WorkflowStore {
     }
 
     /// Loads `.mdium/workflows.json`. A missing file is not an error: it is
-    /// treated as an empty file at the current schema version.
-    pub fn load_workflows(&self) -> Result<WorkflowsFile, StoreError> {
+    /// an empty list. The `schemaVersion` is checked before anything else,
+    /// so a file from a newer schema is [`StoreError::UnsupportedSchema`]
+    /// whatever its shape. A file that is not JSON (or has no `workflows`
+    /// array) is [`StoreError::Corrupt`]; a single workflow that does not
+    /// decode or fails `Workflow::validate()` is skipped and reported in
+    /// [`WorkflowList::warnings`] instead.
+    pub fn load_workflows(&self) -> Result<WorkflowList, StoreError> {
         let path = self.paths.workflows_file();
         let bytes = match std::fs::read(&path) {
             Ok(bytes) => bytes,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(WorkflowsFile {
-                    schema_version: CURRENT_SCHEMA_VERSION,
-                    workflows: Vec::new(),
-                });
+                return Ok(WorkflowList::default());
             }
             Err(err) => return Err(StoreError::Io(err.to_string())),
         };
 
-        let file: WorkflowsFile =
+        let probe: SchemaProbe =
+            serde_json::from_slice(&bytes).map_err(|err| StoreError::Corrupt(err.to_string()))?;
+        check_schema_version(probe.schema_version)?;
+        let raw: RawWorkflowsFile =
             serde_json::from_slice(&bytes).map_err(|err| StoreError::Corrupt(err.to_string()))?;
 
-        if file.schema_version != CURRENT_SCHEMA_VERSION {
-            return Err(StoreError::UnsupportedSchema(file.schema_version));
+        let mut list = WorkflowList::default();
+        for (index, value) in raw.workflows.into_iter().enumerate() {
+            let loaded = serde_json::from_value::<Workflow>(value)
+                .map_err(|err| StoreError::Corrupt(err.to_string()))
+                .and_then(|workflow| match workflow.validate() {
+                    Ok(()) => Ok(workflow),
+                    Err(errors) => Err(StoreError::Invalid(errors)),
+                });
+            match loaded {
+                Ok(workflow) => list.workflows.push(workflow),
+                Err(err) => list.warnings.push(StoreWarning {
+                    file: path.display().to_string(),
+                    message: format!("{} (workflows[{index}])", err.describe()),
+                }),
+            }
         }
-
-        Ok(file)
+        Ok(list)
     }
 
     /// Validates every workflow, then atomically writes
@@ -395,7 +439,7 @@ impl WorkflowStore {
     /// become warnings instead of failing the listing; the per-run attempt
     /// artifact directories are ignored. A missing runs directory is an
     /// empty list.
-    pub fn list_runs(&self) -> Result<(Vec<WorkflowRun>, Vec<StoreWarning>), StoreError> {
+    pub fn list_runs(&self) -> Result<RunList, StoreError> {
         let (mut runs, warnings) = scan_records(&self.paths.runs_dir(), ".json", |path, stem| {
             self.paths.run_file(stem)?;
             read_run_file(path, stem)
@@ -405,7 +449,7 @@ impl WorkflowStore {
                 .cmp(&b.created_at)
                 .then_with(|| a.root_task_id.cmp(&b.root_task_id))
         });
-        Ok((runs, warnings))
+        Ok(RunList { runs, warnings })
     }
 
     /// Atomically writes (or replaces) an attempt's output document.
@@ -556,7 +600,9 @@ fn write_run_file(path: &Path, run: &WorkflowRun) -> Result<(), StoreError> {
 
 /// Reads and parses one run file, requiring its `rootTaskId` to match
 /// `expected_root_id` (the file name), so a copied or renamed file can
-/// never be mistaken for a different run.
+/// never be mistaken for a different run, and its embedded workflow
+/// snapshot to pass `Workflow::validate()` (otherwise the file is
+/// [`StoreError::Corrupt`]).
 fn read_run_file(path: &Path, expected_root_id: &str) -> Result<WorkflowRun, StoreError> {
     let text = read_text_file(path)?;
     let probe: SchemaProbe =
@@ -568,6 +614,11 @@ fn read_run_file(path: &Path, expected_root_id: &str) -> Result<WorkflowRun, Sto
         return Err(StoreError::Corrupt(format!(
             "rootTaskId {:?} does not match file name {expected_root_id:?}",
             run.root_task_id
+        )));
+    }
+    if let Err(errors) = run.workflow.validate() {
+        return Err(StoreError::Corrupt(format!(
+            "workflow snapshot is invalid: {errors:?}"
         )));
     }
     Ok(run)
@@ -620,9 +671,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = WorkflowStore::new(dir.path().to_path_buf());
 
-        let file = store.load_workflows().unwrap();
-        assert_eq!(file.schema_version, 1);
-        assert!(file.workflows.is_empty());
+        let list = store.load_workflows().unwrap();
+        assert!(list.workflows.is_empty());
+        assert!(list.warnings.is_empty());
     }
 
     #[test]
@@ -637,7 +688,8 @@ mod tests {
         store.save_workflows(&file).unwrap();
 
         let loaded = store.load_workflows().unwrap();
-        assert_eq!(loaded, file);
+        assert_eq!(loaded.workflows, file.workflows);
+        assert!(loaded.warnings.is_empty());
     }
 
     #[test]
@@ -691,6 +743,96 @@ mod tests {
 
         let err = store.load_workflows().unwrap_err();
         assert_eq!(err.code(), "STORE_CORRUPT");
+    }
+
+    fn write_raw_workflows_file(dir: &std::path::Path, value: &serde_json::Value) {
+        let mdium_dir = dir.join(".mdium");
+        std::fs::create_dir_all(&mdium_dir).unwrap();
+        std::fs::write(
+            mdium_dir.join("workflows.json"),
+            serde_json::to_vec(value).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn load_skips_invalid_workflows_with_warnings() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WorkflowStore::new(dir.path().to_path_buf());
+
+        let mut invalid = sample_workflow();
+        invalid.id = "wf-invalid".to_string();
+        invalid.stages.pop();
+        let mut valid = sample_workflow();
+        valid.id = "wf-valid".to_string();
+        let raw = serde_json::json!({
+            "schemaVersion": 1,
+            "workflows": [
+                serde_json::to_value(&invalid).unwrap(),
+                { "id": "wf-undecodable", "stages": 42 },
+                serde_json::to_value(&valid).unwrap()
+            ]
+        });
+        write_raw_workflows_file(dir.path(), &raw);
+
+        let list = store.load_workflows().unwrap();
+        assert_eq!(list.workflows, vec![valid]);
+        assert_eq!(list.warnings.len(), 2);
+        assert!(list
+            .warnings
+            .iter()
+            .all(|w| w.file.ends_with("workflows.json")));
+        assert!(list.warnings[0].message.starts_with("STORE_INVALID"));
+        assert!(list.warnings[0].message.contains("workflows[0]"));
+        assert!(list.warnings[1].message.starts_with("STORE_CORRUPT"));
+        assert!(list.warnings[1].message.contains("workflows[1]"));
+    }
+
+    #[test]
+    fn load_future_schema_with_different_shape_is_unsupported() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WorkflowStore::new(dir.path().to_path_buf());
+
+        write_raw_workflows_file(
+            dir.path(),
+            &serde_json::json!({ "schemaVersion": 2, "workflows": { "byId": {} } }),
+        );
+
+        assert_eq!(
+            store.load_workflows().unwrap_err(),
+            StoreError::UnsupportedSchema(2)
+        );
+    }
+
+    #[test]
+    fn load_hand_written_workflow_without_defaulted_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WorkflowStore::new(dir.path().to_path_buf());
+
+        let stage = |id: &str| {
+            serde_json::json!({
+                "id": id, "role": id, "name": id, "prompt": "p",
+                "completionCriteria": "c", "provider": "claude"
+            })
+        };
+        write_raw_workflows_file(
+            dir.path(),
+            &serde_json::json!({
+                "schemaVersion": 1,
+                "workflows": [{
+                    "id": "wf-1", "name": "Sample Workflow", "enabled": true,
+                    "archived": false,
+                    "stages": [stage("design"), stage("implement"), stage("review")],
+                    "issueTracking": "auto"
+                }]
+            }),
+        );
+
+        let list = store.load_workflows().unwrap();
+        assert!(list.warnings.is_empty(), "{:?}", list.warnings);
+        assert_eq!(list.workflows.len(), 1);
+        assert_eq!(list.workflows[0].max_reentry_count, 5);
+        assert_eq!(list.workflows[0].stages[2].timeout_minutes, 60);
     }
 
     // ---- Task documents ----
@@ -1243,9 +1385,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = WorkflowStore::new(dir.path().to_path_buf());
 
-        let (runs, warnings) = store.list_runs().unwrap();
-        assert!(runs.is_empty());
-        assert!(warnings.is_empty());
+        let list = store.list_runs().unwrap();
+        assert!(list.runs.is_empty());
+        assert!(list.warnings.is_empty());
     }
 
     #[test]
@@ -1273,7 +1415,7 @@ mod tests {
         )
         .unwrap();
 
-        let (runs, warnings) = store.list_runs().unwrap();
+        let RunList { runs, warnings } = store.list_runs().unwrap();
         let ids: Vec<&str> = runs.iter().map(|r| r.root_task_id.as_str()).collect();
         assert_eq!(ids, vec![TASK_B, TASK_A]);
 
@@ -1301,6 +1443,30 @@ mod tests {
         std::fs::copy(run_path(dir.path(), TASK_A), run_path(dir.path(), TASK_B)).unwrap();
 
         assert_eq!(store.get_run(TASK_B).unwrap_err().code(), "STORE_CORRUPT");
+    }
+
+    #[test]
+    fn run_file_with_invalid_workflow_snapshot_is_corrupt() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WorkflowStore::new(dir.path().to_path_buf());
+
+        store
+            .create_run(&sample_run(TASK_A, "2026-01-01T00:00:00.000Z"))
+            .unwrap();
+        let path = run_path(dir.path(), TASK_A);
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        value["workflow"]["stages"]
+            .as_array_mut()
+            .unwrap()
+            .truncate(1);
+        std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+
+        assert_eq!(store.get_run(TASK_A).unwrap_err().code(), "STORE_CORRUPT");
+        let list = store.list_runs().unwrap();
+        assert!(list.runs.is_empty());
+        assert_eq!(list.warnings.len(), 1);
+        assert!(list.warnings[0].message.starts_with("STORE_CORRUPT"));
     }
 
     #[test]
@@ -1484,7 +1650,7 @@ mod tests {
             store.get_run(TASK_A).unwrap_err(),
             StoreError::UnsupportedSchema(2)
         );
-        let (runs, warnings) = store.list_runs().unwrap();
+        let RunList { runs, warnings } = store.list_runs().unwrap();
         assert!(runs.is_empty());
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].message.starts_with("STORE_UNSUPPORTED_SCHEMA"));
