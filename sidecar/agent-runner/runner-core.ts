@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AgentProvider, Availability, RunnerInbound, RunnerOutbound, ToolRequest } from "../../src/shared/types/agent-runner";
+import type { Availability, RunnerInbound, RunnerOutbound, RunnerProvider, ToolRequest } from "../../src/shared/types/agent-runner";
 import type { AdapterSession, ProviderAdapter } from "./adapter";
 import { parseInbound } from "./protocol";
 
@@ -18,6 +18,8 @@ interface SessionEntry {
   permissions: Map<string, (allow: boolean) => void>;
   /** Set by closeSession; once true, late adapter callbacks are silenced. */
   closed: boolean;
+  /** Runtime safety guard options, when start_session enabled it. Consumed by the guard (Task 3). */
+  guard?: { workspaceRoot: string };
 }
 
 /** A session id reserved while its start_session is still pending. */
@@ -26,7 +28,7 @@ interface StartingEntry {
 }
 
 export interface RunnerCoreDeps {
-  adapters: Record<AgentProvider, ProviderAdapter>;
+  adapters: Partial<Record<RunnerProvider, ProviderAdapter>>;
   send: (message: RunnerOutbound) => void;
   newId?: () => string;
 }
@@ -62,6 +64,11 @@ export class RunnerCore {
     this.newId = deps.newId ?? randomUUID;
   }
 
+  /** Look up the adapter for a provider; undefined when the provider has no adapter wired up. */
+  private adapter(provider: RunnerProvider): ProviderAdapter | undefined {
+    return this.deps.adapters[provider];
+  }
+
   async handleLine(line: string): Promise<void> {
     let msg: RunnerInbound;
     try {
@@ -72,9 +79,14 @@ export class RunnerCore {
     }
     switch (msg.type) {
       case "probe": {
+        const adapter = this.adapter(msg.provider);
+        if (!adapter) {
+          this.deps.send({ type: "error", requestId: msg.requestId, message: "PROVIDER_UNAVAILABLE" });
+          return;
+        }
         let availability: Availability;
         try {
-          availability = await this.deps.adapters[msg.provider].probe();
+          availability = await adapter.probe();
         } catch (error) {
           availability = { kind: "error", detail: message(error) };
         }
@@ -106,7 +118,11 @@ export class RunnerCore {
         return;
       }
       case "list_sessions": {
-        const adapter = this.deps.adapters[msg.provider];
+        const adapter = this.adapter(msg.provider);
+        if (!adapter) {
+          this.deps.send({ type: "error", requestId: msg.requestId, message: "PROVIDER_UNAVAILABLE" });
+          return;
+        }
         if (!adapter.listSessions) {
           this.deps.send({ type: "error", requestId: msg.requestId, message: "LIST_UNSUPPORTED" });
           return;
@@ -143,13 +159,19 @@ export class RunnerCore {
     }
     const reservation: StartingEntry = { closed: false };
     this.starting.set(msg.sessionId, reservation);
+    const adapter = this.adapter(msg.provider);
+    if (!adapter) {
+      this.starting.delete(msg.sessionId);
+      this.deps.send({ type: "error", ...ids, message: "PROVIDER_UNAVAILABLE" });
+      return;
+    }
     const permissions = new Map<string, (allow: boolean) => void>();
     // Captured by the callbacks below (as a variable, not a snapshot): once
     // the session is created and assigned, closeSession can flip its
     // `closed` flag and have late adapter callbacks observe it immediately.
     let entry: SessionEntry | undefined;
     try {
-      const session = await this.deps.adapters[msg.provider].startSession(
+      const session = await adapter.startSession(
         {
           workingDirectory: msg.workingDirectory,
           permission: msg.permission,
@@ -182,7 +204,7 @@ export class RunnerCore {
         return;
       }
       const nativeSessionId = session.nativeSessionId();
-      entry = { session, timeoutMs: msg.timeoutMs, permissions, closed: false };
+      entry = { session, timeoutMs: msg.timeoutMs, permissions, closed: false, ...(msg.guard ? { guard: msg.guard } : {}) };
       this.sessions.set(msg.sessionId, entry);
       this.deps.send({ type: "session_started", ...ids, ...(nativeSessionId ? { nativeSessionId } : {}) });
     } catch (error) {

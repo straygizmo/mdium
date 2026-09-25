@@ -1,6 +1,12 @@
 /** Providers driven by the agent runner sidecar. opencode keeps its own server/panel. */
 export type AgentProvider = "codex" | "copilot";
 
+/** Providers the agent-runner protocol can address, including workflow-only providers. */
+export type RunnerProvider = "codex" | "copilot" | "opencode" | "claude";
+
+/** Guard rule ids that can trigger a `guard_violation`. */
+export type GuardRule = "git-remote" | "forge-cli" | "outside-workspace" | "credentials" | "network-send" | "system-config";
+
 /**
  * cli-default: do not override the CLI's own configuration (AGENT CHAT).
  * read-only: enforce read-only tools.
@@ -17,6 +23,8 @@ export interface ToolRequest {
   kind: "shell" | "write" | "read" | "network" | "other";
   /** Command line, path, or tool name shown to the user. */
   summary: string;
+  /** Provider-specific request kind or tool name, used by provider policies. */
+  rawKind?: string;
 }
 
 export type AgentEvent =
@@ -33,13 +41,13 @@ export interface AgentSessionSummary {
 
 /** mdium -> runner (one JSON object per stdin line). */
 export type RunnerInbound =
-  | { type: "probe"; requestId: string; provider: AgentProvider }
+  | { type: "probe"; requestId: string; provider: RunnerProvider }
   | {
       type: "start_session";
       requestId: string;
       /** Chosen by mdium; unique per runner process. */
       sessionId: string;
-      provider: AgentProvider;
+      provider: RunnerProvider;
       workingDirectory: string;
       permission: AgentPermission;
       model?: string;
@@ -49,17 +57,19 @@ export type RunnerInbound =
       env?: Record<string, string>;
       /** Per-turn timeout; omitted means no timeout. */
       timeoutMs?: number;
+      /** Enable the runtime safety guard; paths outside workspaceRoot are blocked. */
+      guard?: { workspaceRoot: string };
     }
   | { type: "send"; sessionId: string; text: string }
   | { type: "cancel"; sessionId: string }
   | { type: "respond_permission"; sessionId: string; permissionId: string; allow: boolean }
-  | { type: "list_sessions"; requestId: string; provider: AgentProvider; workingDirectory: string }
+  | { type: "list_sessions"; requestId: string; provider: RunnerProvider; workingDirectory: string }
   | { type: "close_session"; sessionId: string };
 
 /** runner -> mdium (one JSON object per stdout line). */
 export type RunnerOutbound =
   | { type: "ready" }
-  | { type: "availability"; requestId: string; provider: AgentProvider; availability: Availability }
+  | { type: "availability"; requestId: string; provider: RunnerProvider; availability: Availability }
   | { type: "session_started"; requestId: string; sessionId: string; nativeSessionId?: string }
   | { type: "event"; sessionId: string; event: AgentEvent }
   | { type: "permission_request"; sessionId: string; permissionId: string; request: ToolRequest }
@@ -67,4 +77,5 @@ export type RunnerOutbound =
   | { type: "turn_failed"; sessionId: string; message: string }
   | { type: "turn_cancelled"; sessionId: string }
   | { type: "session_list"; requestId: string; sessions: AgentSessionSummary[] }
+  | { type: "guard_violation"; sessionId: string; rule: GuardRule; summary: string }
   | { type: "error"; message: string; requestId?: string; sessionId?: string };

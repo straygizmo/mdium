@@ -338,6 +338,13 @@ describe("RunnerCore", () => {
     expect(sent.some((m) => m.type === "turn_failed")).toBe(false);
   });
 
+  it("reports PROVIDER_UNAVAILABLE for a provider without an adapter", async () => {
+    const sent: RunnerOutbound[] = [];
+    const core = new RunnerCore({ adapters: {}, send: (m) => sent.push(m) });
+    await core.handleLine(JSON.stringify({ type: "probe", requestId: "r1", provider: "claude" }));
+    expect(sent).toContainEqual({ type: "error", requestId: "r1", message: "PROVIDER_UNAVAILABLE" });
+  });
+
   it("denies pending permissions immediately when the turn timeout fires", async () => {
     vi.useFakeTimers();
     try {

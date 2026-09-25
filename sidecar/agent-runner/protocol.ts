@@ -1,6 +1,6 @@
-import type { AgentPermission, AgentProvider, RunnerInbound } from "../../src/shared/types/agent-runner";
+import type { AgentPermission, RunnerInbound, RunnerProvider } from "../../src/shared/types/agent-runner";
 
-const PROVIDERS: readonly AgentProvider[] = ["codex", "copilot"];
+const PROVIDERS: readonly RunnerProvider[] = ["codex", "copilot", "opencode", "claude"];
 const PERMISSIONS: readonly AgentPermission[] = ["cli-default", "read-only", "full-access"];
 
 function str(value: unknown, field: string): string {
@@ -8,9 +8,15 @@ function str(value: unknown, field: string): string {
   return value;
 }
 
-function provider(value: unknown): AgentProvider {
-  if (!PROVIDERS.includes(value as AgentProvider)) throw new Error("Invalid provider");
-  return value as AgentProvider;
+function provider(value: unknown): RunnerProvider {
+  if (!PROVIDERS.includes(value as RunnerProvider)) throw new Error("Invalid provider");
+  return value as RunnerProvider;
+}
+
+function guard(value: unknown): { workspaceRoot: string } | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object") throw new Error("Invalid guard");
+  return { workspaceRoot: str((value as { workspaceRoot?: unknown }).workspaceRoot, "guard.workspaceRoot") };
 }
 
 /** Parse and validate one inbound JSON line. Throws on any invalid shape. */
@@ -38,6 +44,7 @@ export function parseInbound(line: string): RunnerInbound {
       }
       if (m.model !== undefined && typeof m.model !== "string") throw new Error("Invalid model");
       if (m.resumeNativeId !== undefined) str(m.resumeNativeId, "resumeNativeId");
+      const parsedGuard = guard(m.guard);
       return {
         type: "start_session",
         requestId: str(m.requestId, "requestId"),
@@ -49,6 +56,7 @@ export function parseInbound(line: string): RunnerInbound {
         ...(m.resumeNativeId ? { resumeNativeId: m.resumeNativeId as string } : {}),
         ...(m.env ? { env: m.env as Record<string, string> } : {}),
         ...(m.timeoutMs ? { timeoutMs: m.timeoutMs as number } : {}),
+        ...(parsedGuard ? { guard: parsedGuard } : {}),
       };
     }
     case "send":

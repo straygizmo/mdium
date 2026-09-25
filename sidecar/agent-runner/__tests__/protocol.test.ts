@@ -24,7 +24,6 @@ describe("parseInbound", () => {
   it.each([
     ["non-JSON", "not json"],
     ["unknown type", JSON.stringify({ type: "explode" })],
-    ["bad provider", JSON.stringify({ ...start, provider: "opencode" })],
     ["bad permission", JSON.stringify({ ...start, permission: "workspace-write" })],
     ["empty workingDirectory", JSON.stringify({ ...start, workingDirectory: " " })],
     ["missing sessionId", JSON.stringify({ type: "send", text: "hi" })],
@@ -32,6 +31,22 @@ describe("parseInbound", () => {
     ["non-boolean allow", JSON.stringify({ type: "respond_permission", sessionId: "s1", permissionId: "p", allow: "yes" })],
     ["non-string env value", JSON.stringify({ ...start, env: { A: 1 } })],
     ["negative timeout", JSON.stringify({ ...start, timeoutMs: -5 })],
+  ])("rejects %s", (_name, line) => {
+    expect(() => parseInbound(line)).toThrow();
+  });
+
+  it("accepts all runner providers and the guard option", () => {
+    for (const provider of ["codex", "copilot", "opencode", "claude"]) {
+      expect(parseInbound(JSON.stringify({ type: "probe", requestId: "r", provider })).type).toBe("probe");
+    }
+    expect(parseInbound(JSON.stringify({ ...start, provider: "claude", guard: { workspaceRoot: "C:/wt" } })))
+      .toMatchObject({ provider: "claude", guard: { workspaceRoot: "C:/wt" } });
+  });
+
+  it.each([
+    ["guard without workspaceRoot", JSON.stringify({ ...start, guard: {} })],
+    ["guard with empty workspaceRoot", JSON.stringify({ ...start, guard: { workspaceRoot: " " } })],
+    ["unknown provider", JSON.stringify({ ...start, provider: "gemini" })],
   ])("rejects %s", (_name, line) => {
     expect(() => parseInbound(line)).toThrow();
   });
