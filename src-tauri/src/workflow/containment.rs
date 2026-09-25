@@ -45,9 +45,20 @@ pub fn containment_env(data_dir: &Path) -> io::Result<Vec<(String, String)>> {
 
 /// Recreate `dir` as an empty directory, discarding any previous content
 /// (e.g. credentials a CLI wrote there during an earlier run).
+///
+/// If removing an existing directory fails (on Windows, e.g. because another
+/// process holds a handle to the directory itself) but it is already empty,
+/// the directory is reused as-is. Any other failure is returned so callers
+/// never run the workflow with stale CLI credentials in place.
 fn empty_dir(dir: &Path) -> io::Result<PathBuf> {
     match std::fs::symlink_metadata(dir) {
-        Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(dir)?,
+        Ok(meta) if meta.is_dir() => {
+            if let Err(e) = std::fs::remove_dir_all(dir) {
+                if !is_empty_dir(dir) {
+                    return Err(e);
+                }
+            }
+        }
         // A file or link in the way is removed rather than followed.
         Ok(_) => remove_non_dir(dir)?,
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
@@ -62,6 +73,11 @@ fn empty_dir(dir: &Path) -> io::Result<PathBuf> {
 /// `remove_dir`, so fall back to it when `remove_file` fails.
 fn remove_non_dir(path: &Path) -> io::Result<()> {
     std::fs::remove_file(path).or_else(|e| std::fs::remove_dir(path).map_err(|_| e))
+}
+
+/// True if `dir` exists, is a directory, and has no entries.
+fn is_empty_dir(dir: &Path) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_none())
 }
 
 fn path_string(p: &Path) -> String {
@@ -122,6 +138,15 @@ mod tests {
             assert!(dir.is_dir(), "{dir:?} must exist");
             assert_eq!(fs::read_dir(dir).unwrap().count(), 0, "{dir:?} must be empty");
         }
+    }
+
+    #[test]
+    fn is_empty_dir_distinguishes_empty_nonempty_and_missing() {
+        let tmp = TempDir::new().unwrap();
+        assert!(is_empty_dir(tmp.path()));
+        fs::write(tmp.path().join("f"), "x").unwrap();
+        assert!(!is_empty_dir(tmp.path()));
+        assert!(!is_empty_dir(&tmp.path().join("missing")));
     }
 
     #[test]

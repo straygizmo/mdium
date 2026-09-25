@@ -7,7 +7,8 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{ChildStdin, Command, Stdio};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
 #[cfg(target_os = "windows")]
@@ -24,6 +25,10 @@ pub struct SidecarExit {
     pub id: u32,
     pub code: Option<i32>,
 }
+
+/// Upper bound on how long the reaper waits for stdout/stderr to reach EOF
+/// after the child exits before it delivers the exit anyway.
+const READER_DRAIN_BUDGET: Duration = Duration::from_secs(2);
 
 // The map holds an Arc<Mutex<ChildStdin>> per sidecar so that a blocking
 // write on one sidecar's stdin only holds that sidecar's per-entry lock,
@@ -121,8 +126,10 @@ pub fn spawn_with_handlers(
 /// Shared implementation of [`spawn`] and [`spawn_with_handlers`].
 ///
 /// Every callback receives the sidecar id (the child's pid). The child is
-/// always reaped by a dedicated thread, which also removes its stdin entry
-/// from the shared map before calling `on_exit`.
+/// always reaped by a dedicated thread, which waits (bounded by
+/// [`READER_DRAIN_BUDGET`]) for stdout/stderr to reach EOF so all output is
+/// delivered first, then removes its stdin entry from the shared map and
+/// calls `on_exit`.
 fn spawn_impl(
     script_path: &str,
     env: &[(String, String)],
@@ -185,11 +192,32 @@ fn spawn_impl(
     let stdin_entry = Arc::new(Mutex::new(stdin));
     stdin_map().lock().unwrap().insert(id, stdin_entry.clone());
 
-    std::thread::spawn(move || forward_lines(BufReader::new(stdout), |line| on_line(id, line)));
-    std::thread::spawn(move || forward_lines(BufReader::new(stderr), |line| on_stderr(id, line)));
+    // Each reader signals EOF so the reaper can deliver all output before
+    // the exit notification.
+    let (eof_tx, eof_rx) = mpsc::channel::<()>();
+    let eof_out = eof_tx.clone();
+    std::thread::spawn(move || {
+        forward_lines(BufReader::new(stdout), |line| on_line(id, line));
+        let _ = eof_out.send(());
+    });
+    let eof_err = eof_tx;
+    std::thread::spawn(move || {
+        forward_lines(BufReader::new(stderr), |line| on_stderr(id, line));
+        let _ = eof_err.send(());
+    });
 
     std::thread::spawn(move || {
         let code = child.wait().ok().and_then(|s| s.code());
+        // Give both readers a bounded time to drain. A grandchild that
+        // inherited the pipes can keep them open past the child's exit, so
+        // the exit is delivered anyway once the budget runs out.
+        let deadline = Instant::now() + READER_DRAIN_BUDGET;
+        for _ in 0..2 {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if eof_rx.recv_timeout(left).is_err() {
+                break;
+            }
+        }
         {
             // Only remove our own entry: once the child is reaped its pid can
             // be reused by a newer sidecar that registered under the same id.
@@ -221,6 +249,10 @@ pub fn write(id: u32, line: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// `taskkill` exit code for "process not found".
+#[cfg(target_os = "windows")]
+const TASKKILL_NOT_FOUND: i32 = 128;
+
 pub fn kill(id: u32) -> Result<(), String> {
     // Dropping stdin lets a healthy sidecar exit on rl "close".
     stdin_map().lock().unwrap().remove(&id);
@@ -231,12 +263,11 @@ pub fn kill(id: u32) -> Result<(), String> {
             .creation_flags(0x08000000)
             .output()
             .map_err(|e| format!("Failed to run taskkill: {}", e))?;
-        if !output.status.success() {
+        // taskkill exits with 128 when the process does not exist (already
+        // exited). Match the exit code, not the message, which is localized.
+        if !output.status.success() && output.status.code() != Some(TASKKILL_NOT_FOUND) {
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            // Ignore "not found" errors (process already exited)
-            if !stderr.contains("not found") {
-                return Err(format!("taskkill failed: {}", stderr));
-            }
+            return Err(format!("taskkill failed: {}", stderr));
         }
     }
     #[cfg(not(target_os = "windows"))]
@@ -260,7 +291,7 @@ mod tests {
     use super::{forward_lines, kill, spawn_with_handlers, write};
     use crate::workflow::containment::containment_env;
     use std::io::Cursor;
-    use std::sync::mpsc;
+    use std::sync::{mpsc, Arc, Mutex};
     use std::time::Duration;
     use tempfile::TempDir;
 
@@ -272,27 +303,32 @@ mod tests {
         assert_eq!(got, vec!["a".to_string(), "b".to_string()]);
     }
 
+    const TIMEOUT: Duration = Duration::from_secs(20);
+
+    fn write_script(dir: &TempDir, name: &str, body: &str) -> String {
+        let path = dir.path().join(name);
+        std::fs::write(&path, body).unwrap();
+        path.to_str().unwrap().to_string()
+    }
+
     #[test]
     fn spawn_with_handlers_applies_env_and_supports_write_and_kill() {
         let tmp = TempDir::new().unwrap();
-        let script = tmp.path().join("echo.cjs");
-        std::fs::write(
-            &script,
-            "process.stdin.on('data', d => process.stdout.write(d));
-             console.log(process.env.GIT_CONFIG_VALUE_0);
-",
-        )
-        .unwrap();
+        let script = write_script(
+            &tmp,
+            "echo.cjs",
+            "process.stdin.on('data', d => process.stdout.write(d));\n\
+             console.log(process.env.GIT_CONFIG_VALUE_0);\n",
+        );
         let env = containment_env(&tmp.path().join("data")).unwrap();
 
         let (line_tx, line_rx) = mpsc::channel::<String>();
         let (exit_tx, exit_rx) = mpsc::channel::<Option<i32>>();
-        let line_tx = std::sync::Mutex::new(line_tx);
         let id = spawn_with_handlers(
-            script.to_str().unwrap(),
+            &script,
             &env,
             Box::new(move |line| {
-                let _ = line_tx.lock().unwrap().send(line);
+                let _ = line_tx.send(line);
             }),
             Box::new(|line| eprintln!("[test stderr] {line}")),
             Box::new(move |code| {
@@ -301,17 +337,85 @@ mod tests {
         )
         .expect("spawn node");
 
-        let timeout = Duration::from_secs(20);
-        assert_eq!(line_rx.recv_timeout(timeout).unwrap(), "never");
+        assert_eq!(line_rx.recv_timeout(TIMEOUT).unwrap(), "never");
 
         write(id, "hello from rust").unwrap();
-        assert_eq!(line_rx.recv_timeout(timeout).unwrap(), "hello from rust");
+        assert_eq!(line_rx.recv_timeout(TIMEOUT).unwrap(), "hello from rust");
 
         kill(id).unwrap();
         exit_rx
-            .recv_timeout(timeout)
+            .recv_timeout(TIMEOUT)
             .expect("on_exit must fire after kill");
         // The stdin map entry is gone once the process has exited.
         assert!(write(id, "after exit").is_err());
+    }
+
+    #[test]
+    fn spawn_with_handlers_delivers_output_before_exit() {
+        let tmp = TempDir::new().unwrap();
+        let script = write_script(
+            &tmp,
+            "last-words.cjs",
+            "console.log('last words');\nconsole.error('last error');\nprocess.exit(0);\n",
+        );
+        for _ in 0..10 {
+            let events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+            let (exit_tx, exit_rx) = mpsc::channel::<()>();
+            let ev_out = events.clone();
+            let ev_err = events.clone();
+            let ev_exit = events.clone();
+            let id = spawn_with_handlers(
+                &script,
+                &[],
+                // Slow handlers widen the race window: without draining the
+                // readers, the exit would be recorded before these lines.
+                Box::new(move |line| {
+                    std::thread::sleep(Duration::from_millis(100));
+                    ev_out.lock().unwrap().push(format!("out:{line}"));
+                }),
+                Box::new(move |line| {
+                    std::thread::sleep(Duration::from_millis(100));
+                    ev_err.lock().unwrap().push(format!("err:{line}"));
+                }),
+                Box::new(move |code| {
+                    ev_exit.lock().unwrap().push(format!("exit:{code:?}"));
+                    let _ = exit_tx.send(());
+                }),
+            )
+            .expect("spawn node");
+
+            exit_rx.recv_timeout(TIMEOUT).expect("on_exit must fire");
+            let got = events.lock().unwrap().clone();
+            assert_eq!(got.len(), 3, "{got:?}");
+            assert_eq!(got[2], "exit:Some(0)", "exit must come last: {got:?}");
+            assert!(got.contains(&"out:last words".to_string()), "{got:?}");
+            assert!(got.contains(&"err:last error".to_string()), "{got:?}");
+            // The reaper removed the stdin entry on self-exit.
+            assert!(write(id, "after exit").is_err());
+        }
+    }
+
+    #[test]
+    fn reaper_removes_stdin_entry_when_process_exits_by_itself() {
+        let tmp = TempDir::new().unwrap();
+        let script = write_script(&tmp, "exit3.cjs", "process.exit(3);\n");
+        let (exit_tx, exit_rx) = mpsc::channel::<Option<i32>>();
+        let id = spawn_with_handlers(
+            &script,
+            &[],
+            Box::new(|_| {}),
+            Box::new(|_| {}),
+            Box::new(move |code| {
+                let _ = exit_tx.send(code);
+            }),
+        )
+        .expect("spawn node");
+        assert_eq!(exit_rx.recv_timeout(TIMEOUT).unwrap(), Some(3));
+        assert_eq!(
+            write(id, "after exit").unwrap_err(),
+            "sidecar not running".to_string()
+        );
+        // Killing an already-exited sidecar is not an error.
+        assert!(kill(id).is_ok());
     }
 }
