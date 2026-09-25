@@ -160,4 +160,30 @@ describe("CodexAdapter", () => {
       [{ kind: "write", summary: "C:/x/b.ts", rawKind: "file_change" }],
     ]);
   });
+
+  it("stops emitting events once a guard block aborts the turn", async () => {
+    const controller = new AbortController();
+    const script = [
+      { type: "item.started", item: { id: "c1", type: "command_execution", command: "git push", aggregated_output: "", status: "in_progress" } },
+      { type: "item.completed", item: { id: "c1", type: "command_execution", command: "git push", aggregated_output: "", status: "completed" } },
+      { type: "item.completed", item: { id: "m1", type: "agent_message", text: "Pushed." } },
+    ];
+    // A stream that ignores the abort signal, so only the adapter can stop emitting.
+    const thread = {
+      id: "thread-1",
+      runStreamed: vi.fn(async () => ({ events: (async function* () { yield* script; })() })),
+    };
+    const codex: CodexLike = { startThread: vi.fn(() => thread), resumeThread: vi.fn(() => thread) };
+    const events: AgentEvent[] = [];
+    const checkTool = vi.fn(() => {
+      controller.abort();
+      return false;
+    });
+    const session = await adapter(vi.fn(() => codex)).startSession(
+      { workingDirectory: "C:/w", permission: "full-access", guarded: true },
+      callbacks(events, checkTool),
+    );
+    await expect(session.runTurn("x", controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    expect(events).toEqual([]);
+  });
 });

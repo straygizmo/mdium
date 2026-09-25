@@ -443,4 +443,77 @@ describe("RunnerCore", () => {
     await t.line({ type: "list_sessions", requestId: "r3", provider: "opencode", workingDirectory: "C:/w" });
     expect(t.sent).toContainEqual({ type: "error", requestId: "r3", message: "PROVIDER_UNAVAILABLE" });
   });
+
+  it("disposes adapters even while a session close never resolves", async () => {
+    vi.useFakeTimers();
+    try {
+      const session: AdapterSession = {
+        nativeSessionId: () => "native-1",
+        runTurn: vi.fn(),
+        close: vi.fn(() => new Promise<void>(() => {})),
+      };
+      const dispose = vi.fn(async () => {});
+      const adapter: ProviderAdapter = {
+        probe: vi.fn(async () => ({ kind: "available" as const, version: "1.0.0" })),
+        startSession: vi.fn(async () => session),
+        dispose,
+      };
+      const core = new RunnerCore({ adapters: { codex: adapter }, send: () => {} });
+      await core.handleLine(
+        JSON.stringify({ type: "start_session", requestId: "r1", sessionId: "s1", provider: "codex", workingDirectory: "C:/w", permission: "cli-default" }),
+      );
+      const shuttingDown = core.shutdown();
+      await vi.advanceTimersByTimeAsync(0);
+      // dispose must not wait for the hung close.
+      expect(dispose).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(5000);
+      await shuttingDown;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("swallows a synchronous throw from dispose()", async () => {
+    const t = setup();
+    const dispose = vi.fn((): Promise<void> => {
+      throw new Error("sync boom");
+    });
+    const core = new RunnerCore({ adapters: { codex: { ...t.adapter, dispose } }, send: () => {} });
+    await expect(core.shutdown()).resolves.toBeUndefined();
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports GUARD_BLOCKED when the guard blocks a turn whose timeout already fired", async () => {
+    vi.useFakeTimers();
+    try {
+      const t = setup();
+      await t.line({
+        type: "start_session", requestId: "r1", sessionId: "s1", provider: "codex", workingDirectory: "C:/wt",
+        permission: "full-access", timeoutMs: 1000, guard: { workspaceRoot: "C:/wt" },
+      });
+      await t.line({ type: "send", sessionId: "s1", text: "a" });
+      // Fire the timeout synchronously; the turn's rejection has not settled yet.
+      vi.advanceTimersByTime(1000);
+      expect(t.callbacks().checkTool({ kind: "shell", summary: "git push" })).toBe(false);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.sent).toContainEqual({ type: "guard_violation", sessionId: "s1", rule: "git-remote", summary: "git push" });
+      expect(t.sent).toContainEqual({ type: "turn_failed", sessionId: "s1", message: "GUARD_BLOCKED" });
+      expect(t.sent.some((m) => m.type === "turn_failed" && m.message === "TIMEOUT")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports GUARD_BLOCKED when the guard blocks a turn the user just cancelled", async () => {
+    const t = setup();
+    await t.startGuarded();
+    await t.line({ type: "send", sessionId: "s1", text: "a" });
+    // The cancel line aborts synchronously; the turn's rejection has not settled yet.
+    void t.line({ type: "cancel", sessionId: "s1" });
+    expect(t.signal()?.aborted).toBe(true);
+    expect(t.callbacks().checkTool({ kind: "shell", summary: "git push" })).toBe(false);
+    await flush();
+    expect(t.sent).toContainEqual({ type: "turn_failed", sessionId: "s1", message: "GUARD_BLOCKED" });
+    expect(t.sent.some((m) => m.type === "turn_cancelled")).toBe(false);
+  });
 });

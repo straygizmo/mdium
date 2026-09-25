@@ -52,6 +52,10 @@ function toolTitle(item: CodexItem): string {
   return item.type;
 }
 
+function abortError(): Error {
+  return Object.assign(new Error("Turn cancelled"), { name: "AbortError" });
+}
+
 class CodexSession implements AdapterSession {
   constructor(private readonly thread: CodexThreadLike, private readonly callbacks: SessionCallbacks) {}
 
@@ -70,6 +74,8 @@ class CodexSession implements AdapterSession {
     const checkedFileChangeIds = new Set<string>();
     const emit = (e: AgentEvent) => this.callbacks.onEvent(e);
     for await (const raw of events) {
+      // Once the turn is aborted (cancel, timeout, or a guard block), emit nothing further.
+      if (signal.aborted) throw abortError();
       const event = raw as CodexEvent;
       if (event.type === "turn.failed") throw new Error((event as { error: { message: string } }).error.message);
       if (event.type === "error") throw new Error((event as { message: string }).message);
@@ -87,6 +93,8 @@ class CodexSession implements AdapterSession {
             this.callbacks.checkTool({ kind: "write", summary: change.path, rawKind: "file_change" });
           }
         }
+        // A blocked call aborts the turn synchronously; do not announce the blocked tool.
+        if (signal.aborted) throw abortError();
         if (event.type === "item.started") {
           startedToolIds.add(item.id);
           emit({ type: "tool_started", toolId: item.id, title: toolTitle(item) });

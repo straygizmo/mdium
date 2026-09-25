@@ -336,6 +336,18 @@ describe("CopilotAdapter", () => {
     expect(ask).not.toHaveBeenCalled();
   });
 
+  it("rejects an extension-env-access request under full-access without asking", async () => {
+    const session = fakeSession([]);
+    const { client, permission } = fakeClient(session);
+    const ask = vi.fn(async () => true);
+    await make(client).startSession(
+      { workingDirectory: "C:/w", permission: "full-access", guarded: true },
+      { onEvent: () => {}, requestPermission: ask, checkTool: () => true },
+    );
+    await expect(permission({ kind: "extension-env-access" })).resolves.toEqual({ kind: "reject" });
+    expect(ask).not.toHaveBeenCalled();
+  });
+
   it("probes version and auth", async () => {
     const { client } = fakeClient(fakeSession([]), { getAuthStatus: vi.fn(async () => ({ isAuthenticated: false })) });
     await expect(make(client).probe()).resolves.toMatchObject({ kind: "unauthenticated", detectedVersion: "1.0.88" });

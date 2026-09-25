@@ -24,8 +24,6 @@ interface SessionEntry {
   permissions: Map<string, (allow: boolean) => void>;
   /** Set by closeSession; once true, late adapter callbacks are silenced. */
   closed: boolean;
-  /** Runtime safety guard options, when start_session enabled it. */
-  guard?: { workspaceRoot: string };
 }
 
 /** A session id reserved while its start_session is still pending. */
@@ -151,16 +149,16 @@ export class RunnerCore {
     // resolves after shutdown has begun closes itself instead of publishing
     // session_started for a process that is already on its way out.
     for (const reservation of this.starting.values()) reservation.closed = true;
-    await Promise.all([...this.sessions.keys()].map((id) => this.closeSession(id)));
-    // The same adapter may serve several providers; dispose each one once.
+    // Dispose adapters in parallel with the session closes, so a hung close
+    // cannot keep a shared server alive. The same adapter may serve several
+    // providers; dispose each one once. A synchronous throw is swallowed too.
     const adapters = new Set(Object.values(this.deps.adapters).filter((a): a is ProviderAdapter => Boolean(a)));
-    await Promise.all(
-      [...adapters].map((adapter) =>
-        adapter.dispose
-          ? withTimeout(adapter.dispose(), CLOSE_TIMEOUT_MS, "DISPOSE_TIMEOUT").catch(() => undefined)
-          : undefined,
-      ),
-    );
+    const disposals = [...adapters]
+      .filter((adapter) => adapter.dispose)
+      .map((adapter) =>
+        withTimeout(Promise.resolve().then(() => adapter.dispose!()), CLOSE_TIMEOUT_MS, "DISPOSE_TIMEOUT").catch(() => undefined),
+      );
+    await Promise.all([...[...this.sessions.keys()].map((id) => this.closeSession(id)), ...disposals]);
   }
 
   private async startSession(msg: Extract<RunnerInbound, { type: "start_session" }>): Promise<void> {
@@ -223,7 +221,7 @@ export class RunnerCore {
         return;
       }
       const nativeSessionId = session.nativeSessionId();
-      entry = { session, timeoutMs: msg.timeoutMs, permissions, closed: false, ...(msg.guard ? { guard: msg.guard } : {}) };
+      entry = { session, timeoutMs: msg.timeoutMs, permissions, closed: false };
       this.sessions.set(msg.sessionId, entry);
       this.deps.send({ type: "session_started", ...ids, ...(nativeSessionId ? { nativeSessionId } : {}) });
     } catch (error) {
