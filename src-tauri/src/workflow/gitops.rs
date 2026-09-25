@@ -1,0 +1,641 @@
+//! Git worktree operations for workflow runs.
+//!
+//! Every function here is blocking and shells out to the user's `git` with
+//! MDium's normal environment (not the containment env), mirroring
+//! `commands/git.rs::run_git`. Callers run them off the main thread.
+
+use crate::workflow::model::WorktreeInfo;
+use sha2::{Digest, Sha256};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+/// A failed git operation: a stable machine `code` plus git's stderr (or
+/// other detail) for logs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitError {
+    pub code: String,
+    pub stderr: String,
+}
+
+/// One commit on the worktree branch since its base commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitSummary {
+    pub hash: String,
+    pub subject: String,
+}
+
+/// Error code for a git command that could not be spawned or exited non-zero.
+const GIT_FAILED: &str = "GIT_FAILED";
+
+/// Maximum slug length in a branch name.
+const MAX_SLUG_LEN: usize = 40;
+
+/// Fallback identity used only when the repo has no `user.email` configured.
+const FALLBACK_IDENTITY: [&str; 4] = ["-c", "user.name=MDium", "-c", "user.email=mdium@localhost"];
+
+impl GitError {
+    fn new(code: &str, stderr: impl Into<String>) -> Self {
+        GitError {
+            code: code.to_string(),
+            stderr: stderr.into(),
+        }
+    }
+}
+
+/// Raw result of one git invocation.
+struct GitOutput {
+    success: bool,
+    stdout: String,
+    stderr: String,
+}
+
+/// Runs `git -c core.quotePath=false <args>` in `repo` without a console
+/// window, returning the raw outcome. Only a spawn failure is an error.
+fn run_git_raw(repo: &Path, args: &[&str]) -> Result<GitOutput, GitError> {
+    let mut cmd = Command::new("git");
+    cmd.args(["-c", "core.quotePath=false"])
+        .args(args)
+        .current_dir(repo);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    let output = cmd
+        .output()
+        .map_err(|err| GitError::new(GIT_FAILED, format!("failed to run git: {err}")))?;
+    Ok(GitOutput {
+        success: output.status.success(),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    })
+}
+
+/// Runs git in `repo` and returns stdout, or `GIT_FAILED` with stderr.
+pub fn git(repo: &Path, args: &[&str]) -> Result<String, GitError> {
+    let output = run_git_raw(repo, args)?;
+    if output.success {
+        Ok(output.stdout)
+    } else {
+        Err(GitError::new(GIT_FAILED, output.stderr))
+    }
+}
+
+/// True if `path` is inside a git work tree.
+pub fn is_git_repo(path: &Path) -> bool {
+    matches!(
+        run_git_raw(path, &["rev-parse", "--is-inside-work-tree"]),
+        Ok(output) if output.success && output.stdout.trim() == "true"
+    )
+}
+
+/// The top-level directory of the work tree containing `path`.
+pub fn repo_root(path: &Path) -> Result<PathBuf, GitError> {
+    let out = git(path, &["rev-parse", "--show-toplevel"])?;
+    Ok(PathBuf::from(out.trim()))
+}
+
+/// Base directory for worktrees: the local data dir, or the temp dir when
+/// none is known.
+fn default_worktree_base() -> PathBuf {
+    dirs::data_local_dir().unwrap_or_else(std::env::temp_dir)
+}
+
+/// `<local data dir>/mdium/worktrees/<16 hex of sha256(canonical repo)>/<id>`.
+pub fn worktree_path_for(repo_root: &Path, root_task_id: &str) -> PathBuf {
+    worktree_path_in(&default_worktree_base(), repo_root, root_task_id)
+}
+
+/// [`worktree_path_for`] with an explicit base directory (tests use a
+/// temporary one so they never touch the real local data dir).
+fn worktree_path_in(base_dir: &Path, repo_root: &Path, root_task_id: &str) -> PathBuf {
+    let canonical = std::fs::canonicalize(repo_root).unwrap_or_else(|_| repo_root.to_path_buf());
+    let digest = Sha256::digest(canonical.to_string_lossy().as_bytes());
+    let hash: String = format!("{digest:x}").chars().take(16).collect();
+    base_dir
+        .join("mdium")
+        .join("worktrees")
+        .join(hash)
+        .join(root_task_id)
+}
+
+/// `mdium/<first 8 chars of id>-<slug>`. The slug keeps lowercase ASCII
+/// letters/digits, collapses every other run to `-`, is trimmed of `-`,
+/// capped at 40 chars, and falls back to `task` when empty.
+pub fn branch_name(root_task_id: &str, title: &str) -> String {
+    let mut slug = String::new();
+    for c in title.chars() {
+        let c = c.to_ascii_lowercase();
+        if c.is_ascii_lowercase() || c.is_ascii_digit() {
+            slug.push(c);
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    // The slug is pure ASCII, so byte truncation is char-safe.
+    slug.truncate(MAX_SLUG_LEN);
+    let slug = slug.trim_matches('-');
+    let slug = if slug.is_empty() { "task" } else { slug };
+    let prefix: String = root_task_id.chars().take(8).collect();
+    format!("mdium/{prefix}-{slug}")
+}
+
+/// True if `id` is 16 lowercase hex characters (the workflow id shape), so
+/// it is safe to use as a path component and branch prefix.
+fn is_valid_task_id(id: &str) -> bool {
+    id.len() == 16 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Creates the run's worktree on a new branch off the repo's current HEAD.
+/// Errors: `INVALID_ID`, `NOT_A_REPO`, `DETACHED_HEAD`, `WORKTREE_EXISTS`.
+pub fn create_worktree(
+    repo_root: &Path,
+    root_task_id: &str,
+    title: &str,
+) -> Result<WorktreeInfo, GitError> {
+    create_worktree_in(&default_worktree_base(), repo_root, root_task_id, title)
+}
+
+fn create_worktree_in(
+    base_dir: &Path,
+    repo_root: &Path,
+    root_task_id: &str,
+    title: &str,
+) -> Result<WorktreeInfo, GitError> {
+    if !is_valid_task_id(root_task_id) {
+        return Err(GitError::new("INVALID_ID", root_task_id));
+    }
+    if !is_git_repo(repo_root) {
+        return Err(GitError::new(
+            "NOT_A_REPO",
+            repo_root.to_string_lossy().into_owned(),
+        ));
+    }
+    let base_branch =
+        current_branch(repo_root)?.ok_or_else(|| GitError::new("DETACHED_HEAD", String::new()))?;
+    let base_commit = git(repo_root, &["rev-parse", "HEAD"])?.trim().to_string();
+
+    let path = worktree_path_in(base_dir, repo_root, root_task_id);
+    let branch = branch_name(root_task_id, title);
+    if path.exists() {
+        return Err(GitError::new(
+            "WORKTREE_EXISTS",
+            path.to_string_lossy().into_owned(),
+        ));
+    }
+    if branch_exists(repo_root, &branch)? {
+        return Err(GitError::new("WORKTREE_EXISTS", branch));
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|err| GitError::new(GIT_FAILED, err.to_string()))?;
+    }
+    let path_str = path.to_string_lossy().into_owned();
+    git(
+        repo_root,
+        &["worktree", "add", "-b", &branch, &path_str, "HEAD"],
+    )?;
+
+    Ok(WorktreeInfo {
+        path: path_str,
+        branch,
+        base_branch,
+        base_commit,
+    })
+}
+
+/// The checked-out branch name, or `None` on a detached HEAD.
+fn current_branch(repo: &Path) -> Result<Option<String>, GitError> {
+    let output = run_git_raw(repo, &["symbolic-ref", "--quiet", "--short", "HEAD"])?;
+    let name = output.stdout.trim();
+    Ok((output.success && !name.is_empty()).then(|| name.to_string()))
+}
+
+/// True if `refs/heads/<branch>` exists in `repo`.
+fn branch_exists(repo: &Path, branch: &str) -> Result<bool, GitError> {
+    let reference = format!("refs/heads/{branch}");
+    Ok(run_git_raw(repo, &["show-ref", "--verify", "--quiet", &reference])?.success)
+}
+
+/// Runs git with a fallback identity prepended when `user.email` is not
+/// configured for `repo`, so commits never fail on a fresh machine.
+fn git_with_identity(repo: &Path, args: &[&str]) -> Result<GitOutput, GitError> {
+    let email = run_git_raw(repo, &["config", "user.email"])?;
+    let mut full: Vec<&str> = Vec::new();
+    if !email.success || email.stdout.trim().is_empty() {
+        full.extend_from_slice(&FALLBACK_IDENTITY);
+    }
+    full.extend_from_slice(args);
+    run_git_raw(repo, &full)
+}
+
+/// The worktree's diff against its base commit (committed + uncommitted
+/// tracked changes), followed by a `# Untracked files` section listing
+/// untracked, non-ignored paths when there are any.
+pub fn diff_against_base(info: &WorktreeInfo) -> Result<String, GitError> {
+    let wt = Path::new(&info.path);
+    let mut out = git(
+        wt,
+        &["diff", "--no-color", "--no-ext-diff", &info.base_commit],
+    )?;
+    let untracked = git(wt, &["ls-files", "--others", "--exclude-standard"])?;
+    let untracked: Vec<&str> = untracked.lines().filter(|l| !l.is_empty()).collect();
+    if !untracked.is_empty() {
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str("# Untracked files\n");
+        for path in untracked {
+            out.push_str(path);
+            out.push('\n');
+        }
+    }
+    Ok(out)
+}
+
+/// Commits on the worktree branch since its base commit, oldest first.
+pub fn commits_since_base(info: &WorktreeInfo) -> Result<Vec<CommitSummary>, GitError> {
+    let range = format!("{}..HEAD", info.base_commit);
+    let out = git(
+        Path::new(&info.path),
+        &["log", "--reverse", "--format=%H%x1f%s", &range],
+    )?;
+    Ok(out
+        .lines()
+        .filter_map(|line| line.split_once('\u{1f}'))
+        .map(|(hash, subject)| CommitSummary {
+            hash: hash.to_string(),
+            subject: subject.to_string(),
+        })
+        .collect())
+}
+
+/// Stages `paths` and commits exactly those paths (other staged work is
+/// left staged). Returns the new commit hash, or `None` when the paths had
+/// no changes.
+pub fn commit_paths(
+    info: &WorktreeInfo,
+    paths: &[&str],
+    message: &str,
+) -> Result<Option<String>, GitError> {
+    if paths.is_empty() {
+        return Ok(None);
+    }
+    let wt = Path::new(&info.path);
+    let mut add = vec!["add", "--"];
+    add.extend_from_slice(paths);
+    git(wt, &add)?;
+
+    let mut staged = vec!["diff", "--cached", "--quiet", "--"];
+    staged.extend_from_slice(paths);
+    if run_git_raw(wt, &staged)?.success {
+        return Ok(None);
+    }
+
+    let mut commit = vec!["commit", "-m", message, "--"];
+    commit.extend_from_slice(paths);
+    let output = git_with_identity(wt, &commit)?;
+    if !output.success {
+        return Err(GitError::new(GIT_FAILED, output.stderr));
+    }
+    Ok(Some(git(wt, &["rev-parse", "HEAD"])?.trim().to_string()))
+}
+
+/// Merges the worktree branch into the base branch of the user's checkout
+/// with `--no-ff`, returning the merge commit hash. Refuses unless the
+/// checkout is on `base_branch` (`NOT_ON_BASE_BRANCH`) and clean
+/// (`DIRTY_WORKTREE`); a failed merge is aborted (`MERGE_CONFLICT`).
+pub fn merge_into_base(repo_root: &Path, info: &WorktreeInfo) -> Result<String, GitError> {
+    let current = current_branch(repo_root)?;
+    if current.as_deref() != Some(info.base_branch.as_str()) {
+        return Err(GitError::new(
+            "NOT_ON_BASE_BRANCH",
+            current.unwrap_or_default(),
+        ));
+    }
+    let status = git(repo_root, &["status", "--porcelain"])?;
+    if !status.trim().is_empty() {
+        return Err(GitError::new("DIRTY_WORKTREE", status));
+    }
+
+    let output = git_with_identity(repo_root, &["merge", "--no-ff", "--no-edit", &info.branch])?;
+    if !output.success {
+        // Best effort: restore the pre-merge state; the conflict is the error.
+        let _ = run_git_raw(repo_root, &["merge", "--abort"]);
+        return Err(GitError::new(
+            "MERGE_CONFLICT",
+            format!("{}{}", output.stdout, output.stderr),
+        ));
+    }
+    Ok(git(repo_root, &["rev-parse", "HEAD"])?.trim().to_string())
+}
+
+/// Removes the run's worktree (discarding its changes) and deletes its
+/// branch. A worktree or branch that is already gone is not an error.
+pub fn discard(repo_root: &Path, info: &WorktreeInfo) -> Result<(), GitError> {
+    let removed = run_git_raw(repo_root, &["worktree", "remove", "--force", &info.path])?;
+    if !removed.success {
+        if Path::new(&info.path).exists() {
+            return Err(GitError::new(GIT_FAILED, removed.stderr));
+        }
+        // Directory already gone: drop any stale registration so the
+        // branch is no longer considered checked out.
+        git(repo_root, &["worktree", "prune"])?;
+    }
+    if branch_exists(repo_root, &info.branch)? {
+        git(repo_root, &["branch", "-D", &info.branch])?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    const TASK_ID: &str = "0123456789abcdef";
+
+    /// A throwaway repo on `main` with one commit, plus a separate base dir
+    /// for worktrees so tests never touch the real local data dir.
+    struct Fixture {
+        repo: TempDir,
+        worktrees: TempDir,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let repo = TempDir::new().unwrap();
+            let worktrees = TempDir::new().unwrap();
+            let fixture = Fixture { repo, worktrees };
+            fixture.run(&["init", "-b", "main"]);
+            fixture.run(&["config", "user.name", "Test"]);
+            fixture.run(&["config", "user.email", "test@example.com"]);
+            fixture.run(&["config", "commit.gpgsign", "false"]);
+            fixture.write("a.txt", "one\n");
+            fixture.run(&["add", "."]);
+            fixture.run(&["commit", "-m", "initial"]);
+            fixture
+        }
+
+        fn root(&self) -> &Path {
+            self.repo.path()
+        }
+
+        fn run(&self, args: &[&str]) -> String {
+            git(self.root(), args).unwrap_or_else(|err| panic!("git {args:?}: {err:?}"))
+        }
+
+        fn write(&self, rel: &str, content: &str) {
+            write_file(self.root(), rel, content);
+        }
+
+        fn create(&self, title: &str) -> WorktreeInfo {
+            create_worktree_in(self.worktrees.path(), self.root(), TASK_ID, title).unwrap()
+        }
+    }
+
+    fn write_file(dir: &Path, rel: &str, content: &str) {
+        let path = dir.join(rel);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, content).unwrap();
+    }
+
+    fn wt_git(info: &WorktreeInfo, args: &[&str]) -> String {
+        git(Path::new(&info.path), args).unwrap_or_else(|err| panic!("git {args:?}: {err:?}"))
+    }
+
+    fn commit_in_worktree(info: &WorktreeInfo, rel: &str, content: &str, message: &str) {
+        write_file(Path::new(&info.path), rel, content);
+        wt_git(info, &["add", "--", rel]);
+        wt_git(info, &["commit", "-m", message]);
+    }
+
+    #[test]
+    fn branch_name_slugs_titles() {
+        assert_eq!(
+            branch_name(TASK_ID, "Fix: Login Bug!"),
+            "mdium/01234567-fix-login-bug"
+        );
+        assert_eq!(branch_name(TASK_ID, "ログイン修正"), "mdium/01234567-task");
+        assert_eq!(branch_name(TASK_ID, "  --  "), "mdium/01234567-task");
+        assert_eq!(
+            branch_name(TASK_ID, "Add API v2 (beta)"),
+            "mdium/01234567-add-api-v2-beta"
+        );
+        let long = branch_name(TASK_ID, &"word ".repeat(20));
+        let slug = long.strip_prefix("mdium/01234567-").unwrap();
+        assert!(slug.len() <= 40, "{slug}");
+        assert!(!slug.ends_with('-') && !slug.starts_with('-'), "{slug}");
+    }
+
+    #[test]
+    fn worktree_path_is_outside_repo_and_hashed() {
+        let fixture = Fixture::new();
+        let path = worktree_path_for(fixture.root(), TASK_ID);
+        assert!(!path.starts_with(fixture.root()));
+        let canonical = fs::canonicalize(fixture.root()).unwrap();
+        assert!(!path.starts_with(&canonical));
+        assert_eq!(path.file_name().unwrap(), TASK_ID);
+        let hash = path
+            .parent()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(hash.len(), 16);
+        assert!(hash.bytes().all(|b| b.is_ascii_hexdigit()));
+        let worktrees = path.parent().unwrap().parent().unwrap();
+        assert!(worktrees.ends_with(Path::new("mdium").join("worktrees")));
+        assert_eq!(path, worktree_path_for(fixture.root(), TASK_ID));
+    }
+
+    #[test]
+    fn repo_detection() {
+        let fixture = Fixture::new();
+        assert!(is_git_repo(fixture.root()));
+        let root = repo_root(&fixture.root().join(".")).unwrap();
+        assert_eq!(
+            fs::canonicalize(root).unwrap(),
+            fs::canonicalize(fixture.root()).unwrap()
+        );
+        let plain = TempDir::new().unwrap();
+        assert!(!is_git_repo(plain.path()));
+        assert!(repo_root(plain.path()).is_err());
+        let err =
+            create_worktree_in(fixture.worktrees.path(), plain.path(), TASK_ID, "t").unwrap_err();
+        assert_eq!(err.code, "NOT_A_REPO");
+    }
+
+    #[test]
+    fn create_worktree_on_named_branch() {
+        let fixture = Fixture::new();
+        let head = fixture.run(&["rev-parse", "HEAD"]).trim().to_string();
+        let info = fixture.create("Fix: Login Bug!");
+        assert_eq!(info.branch, "mdium/01234567-fix-login-bug");
+        assert_eq!(info.base_branch, "main");
+        assert_eq!(info.base_commit, head);
+        assert!(Path::new(&info.path).join("a.txt").is_file());
+        assert!(!Path::new(&info.path).starts_with(fixture.root()));
+        assert_eq!(
+            wt_git(&info, &["rev-parse", "--abbrev-ref", "HEAD"]).trim(),
+            info.branch
+        );
+        // The user's checkout stays on its branch.
+        assert_eq!(
+            fixture.run(&["rev-parse", "--abbrev-ref", "HEAD"]).trim(),
+            "main"
+        );
+    }
+
+    #[test]
+    fn create_worktree_rejects_existing_and_invalid_ids() {
+        let fixture = Fixture::new();
+        fixture.create("t");
+        let err =
+            create_worktree_in(fixture.worktrees.path(), fixture.root(), TASK_ID, "t").unwrap_err();
+        assert_eq!(err.code, "WORKTREE_EXISTS");
+        let err = create_worktree_in(fixture.worktrees.path(), fixture.root(), "../evil", "t")
+            .unwrap_err();
+        assert_eq!(err.code, "INVALID_ID");
+    }
+
+    #[test]
+    fn detached_head_is_rejected() {
+        let fixture = Fixture::new();
+        fixture.run(&["checkout", "--detach"]);
+        let err =
+            create_worktree_in(fixture.worktrees.path(), fixture.root(), TASK_ID, "t").unwrap_err();
+        assert_eq!(err.code, "DETACHED_HEAD");
+    }
+
+    #[test]
+    fn diff_shows_committed_uncommitted_and_untracked_changes() {
+        let fixture = Fixture::new();
+        let info = fixture.create("t");
+        commit_in_worktree(&info, "committed.txt", "committed-line\n", "add committed");
+        write_file(Path::new(&info.path), "a.txt", "one\nuncommitted-line\n");
+        write_file(
+            Path::new(&info.path),
+            "new/untracked.txt",
+            "untracked-content\n",
+        );
+
+        let diff = diff_against_base(&info).unwrap();
+        assert!(diff.contains("+committed-line"), "{diff}");
+        assert!(diff.contains("+uncommitted-line"), "{diff}");
+        assert!(diff.contains("new/untracked.txt"), "{diff}");
+        // Untracked files are listed, not diffed.
+        assert!(!diff.contains("untracked-content"), "{diff}");
+    }
+
+    #[test]
+    fn commits_since_base_lists_branch_commits_oldest_first() {
+        let fixture = Fixture::new();
+        let info = fixture.create("t");
+        assert!(commits_since_base(&info).unwrap().is_empty());
+        commit_in_worktree(&info, "b.txt", "b\n", "first change");
+        commit_in_worktree(&info, "c.txt", "c\n", "second change");
+        let commits = commits_since_base(&info).unwrap();
+        let subjects: Vec<_> = commits.iter().map(|c| c.subject.as_str()).collect();
+        assert_eq!(subjects, ["first change", "second change"]);
+        assert_eq!(
+            commits[1].hash,
+            wt_git(&info, &["rev-parse", "HEAD"]).trim()
+        );
+    }
+
+    #[test]
+    fn commit_paths_commits_only_given_paths() {
+        let fixture = Fixture::new();
+        let info = fixture.create("t");
+        let wt = Path::new(&info.path);
+        write_file(wt, "docs/design.md", "design\n");
+        write_file(wt, "other.txt", "other\n");
+        write_file(wt, "staged.txt", "staged\n");
+        wt_git(&info, &["add", "--", "staged.txt"]);
+
+        let hash = commit_paths(&info, &["docs/design.md"], "add design")
+            .unwrap()
+            .expect("a commit");
+        assert_eq!(hash, wt_git(&info, &["rev-parse", "HEAD"]).trim());
+        let files = wt_git(&info, &["show", "--name-only", "--format=", "HEAD"]);
+        assert_eq!(files.trim(), "docs/design.md");
+        // Nothing left to commit for that path.
+        assert_eq!(
+            commit_paths(&info, &["docs/design.md"], "again").unwrap(),
+            None
+        );
+        // Unrelated staged work stays staged, not committed.
+        let status = wt_git(&info, &["status", "--porcelain"]);
+        assert!(status.contains("A  staged.txt"), "{status}");
+        assert!(status.contains("?? other.txt"), "{status}");
+    }
+
+    #[test]
+    fn merge_into_base_creates_merge_commit() {
+        let fixture = Fixture::new();
+        let info = fixture.create("t");
+        commit_in_worktree(&info, "b.txt", "b\n", "feature");
+        let hash = merge_into_base(fixture.root(), &info).unwrap();
+        assert_eq!(hash, fixture.run(&["rev-parse", "HEAD"]).trim());
+        let parents = fixture.run(&["rev-list", "--parents", "-n", "1", "HEAD"]);
+        assert_eq!(parents.split_whitespace().count(), 3, "{parents}");
+        assert!(fixture.root().join("b.txt").is_file());
+    }
+
+    #[test]
+    fn merge_refuses_dirty_tree() {
+        let fixture = Fixture::new();
+        let info = fixture.create("t");
+        commit_in_worktree(&info, "b.txt", "b\n", "feature");
+        fixture.write("a.txt", "dirty\n");
+        let err = merge_into_base(fixture.root(), &info).unwrap_err();
+        assert_eq!(err.code, "DIRTY_WORKTREE");
+    }
+
+    #[test]
+    fn merge_refuses_other_branch() {
+        let fixture = Fixture::new();
+        let info = fixture.create("t");
+        commit_in_worktree(&info, "b.txt", "b\n", "feature");
+        fixture.run(&["checkout", "-b", "other"]);
+        let err = merge_into_base(fixture.root(), &info).unwrap_err();
+        assert_eq!(err.code, "NOT_ON_BASE_BRANCH");
+        fixture.run(&["checkout", "--detach"]);
+        let err = merge_into_base(fixture.root(), &info).unwrap_err();
+        assert_eq!(err.code, "NOT_ON_BASE_BRANCH");
+    }
+
+    #[test]
+    fn merge_conflict_is_aborted_and_leaves_repo_clean() {
+        let fixture = Fixture::new();
+        let info = fixture.create("t");
+        commit_in_worktree(&info, "a.txt", "worktree\n", "worktree change");
+        fixture.write("a.txt", "base\n");
+        fixture.run(&["commit", "-am", "base change"]);
+        let before = fixture.run(&["rev-parse", "HEAD"]);
+
+        let err = merge_into_base(fixture.root(), &info).unwrap_err();
+        assert_eq!(err.code, "MERGE_CONFLICT");
+        let git_dir = fixture.run(&["rev-parse", "--absolute-git-dir"]);
+        assert!(!Path::new(git_dir.trim()).join("MERGE_HEAD").exists());
+        assert_eq!(fixture.run(&["status", "--porcelain"]), "");
+        assert_eq!(fixture.run(&["rev-parse", "HEAD"]), before);
+    }
+
+    #[test]
+    fn discard_removes_worktree_and_branch_and_is_idempotent() {
+        let fixture = Fixture::new();
+        let info = fixture.create("t");
+        write_file(Path::new(&info.path), "scratch.txt", "x\n");
+        discard(fixture.root(), &info).unwrap();
+        assert!(!Path::new(&info.path).exists());
+        assert_eq!(fixture.run(&["branch", "--list", &info.branch]), "");
+        let list = fixture.run(&["worktree", "list", "--porcelain"]);
+        assert_eq!(list.matches("worktree ").count(), 1, "{list}");
+        discard(fixture.root(), &info).unwrap();
+    }
+}
