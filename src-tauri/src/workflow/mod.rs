@@ -9,5 +9,6 @@
 pub mod fsutil;
 pub mod integrity;
 pub mod model;
+pub mod outcome;
 pub mod state;
 pub mod store;
