@@ -43,6 +43,24 @@ describe("toolRequestFromCopilot", () => {
   });
 });
 
+describe("shell requests without command text", () => {
+  const ctx = { workspaceRoot: "C:\\w", homeDir: "C:\\Users\\me", platform: "win32" as const };
+  it("marks a Copilot shell request without fullCommandText opaque, so the guard blocks it", () => {
+    const request = toolRequestFromCopilot({ kind: "shell", intention: "List files" });
+    expect(request).toEqual({ kind: "shell", summary: "List files", rawKind: "shell", opaque: true });
+    expect(checkToolRequest(request, ctx)).toEqual({ ok: false, rule: "opaque-tool" });
+    // Unguarded sessions still ask with the summary that exists.
+    expect(copilotDecision("cli-default", request)).toBe("ask");
+    expect(checkToolRequest(toolRequestFromCopilot({ kind: "shell", fullCommandText: "npm test" }), ctx)).toEqual({ ok: true });
+  });
+  it("marks an opencode bash request without metadata.command opaque, so the guard blocks it", () => {
+    const request = toolRequestFromOpencode({ type: "bash", pattern: ["npm test *"] });
+    expect(checkToolRequest(request, ctx)).toEqual({ ok: false, rule: "opaque-tool" });
+    expect(opencodeDecision("cli-default", request)).toBe("ask");
+    expect(checkToolRequest(toolRequestFromOpencode({ type: "bash", metadata: { command: "npm test" } }), ctx)).toEqual({ ok: true });
+  });
+});
+
 describe("copilotDecision", () => {
   const read = { kind: "read" as const, summary: "a" };
   const shell = { kind: "shell" as const, summary: "rm -rf x" };
@@ -165,9 +183,9 @@ describe("claudeDisallowedTools", () => {
 describe("toolRequestFromOpencode", () => {
   it.each([
     [{ type: "bash", pattern: ["git push *"], metadata: { command: "git push origin main" } }, { kind: "shell", summary: "git push origin main", shell: "posix" }],
-    [{ type: "bash", pattern: ["git status *", "npm test *"] }, { kind: "shell", summary: "git status *\nnpm test *", shell: "posix" }],
-    [{ type: "bash", pattern: "ls", metadata: {} }, { kind: "shell", summary: "ls", shell: "posix" }],
-    [{ type: "bash", title: "Run ls" }, { kind: "shell", summary: "Run ls", shell: "posix" }],
+    [{ type: "bash", pattern: ["git status *", "npm test *"] }, { kind: "shell", summary: "git status *\nnpm test *", shell: "posix", opaque: true }],
+    [{ type: "bash", pattern: "ls", metadata: {} }, { kind: "shell", summary: "ls", shell: "posix", opaque: true }],
+    [{ type: "bash", title: "Run ls" }, { kind: "shell", summary: "Run ls", shell: "posix", opaque: true }],
     [{ type: "edit", pattern: ["src/a.ts"], metadata: { filePath: "C:/w/src/a.ts" } }, { kind: "write", summary: "C:/w/src/a.ts" }],
     [{ type: "edit", pattern: ["src/a.ts"], metadata: { filepath: "C:/w/src/a.ts" } }, { kind: "write", summary: "C:/w/src/a.ts" }],
     [{ type: "write", pattern: "src/b.ts" }, { kind: "write", summary: "src/b.ts" }],

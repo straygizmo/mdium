@@ -23,8 +23,12 @@ export function toolRequestFromCopilot(request: { kind: string; [k: string]: unk
 
 function normalizeCopilot(request: { kind: string; [k: string]: unknown }): Omit<ToolRequest, "rawKind"> {
   switch (request.kind) {
-    case "shell":
-      return { kind: "shell", summary: field(request, "fullCommandText", "intention") ?? "shell" };
+    case "shell": {
+      const command = field(request, "fullCommandText");
+      // Without the command text the guard has nothing to inspect.
+      if (!command) return { kind: "shell", summary: field(request, "intention") ?? "shell", opaque: true };
+      return { kind: "shell", summary: command };
+    }
     case "write":
       return { kind: "write", summary: field(request, "fileName") ?? "write" };
     case "read":
@@ -217,13 +221,14 @@ function normalizeOpencode(permission: OpencodePermissionLike, paths?: OpencodeP
   const fromWorktree = (p: string) => absolute(paths?.worktree, p);
   const fromDirectory = (p: string) => absolute(paths?.directory, p);
   switch (permission.type) {
-    case "bash":
+    case "bash": {
       // opencode's bash tool runs a posix shell (Git Bash on Windows).
-      return {
-        kind: "shell",
-        summary: field(metadata, "command") ?? (patterns.length ? patterns.join("\n") : undefined) ?? permission.title ?? "bash",
-        shell: "posix",
-      };
+      const command = field(metadata, "command");
+      if (command) return { kind: "shell", summary: command, shell: "posix" };
+      // Patterns and titles are not the command line, so the guard cannot inspect the request.
+      const summary = (patterns.length ? patterns.join("\n") : undefined) ?? permission.title ?? "bash";
+      return { kind: "shell", summary, shell: "posix", opaque: true };
+    }
     case "edit":
     case "write": {
       // A multi-file apply_patch joins its (worktree-relative) paths into `filepath`; use the first pattern then.
