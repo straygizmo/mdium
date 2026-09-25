@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { claudeDecision, codexSandbox, copilotDecision, toolRequestFromClaude, toolRequestFromCopilot } from "../permissions";
+import { claudeDecision, claudeDisallowedTools, claudeHookDecision, codexSandbox, copilotDecision, toolRequestFromClaude, toolRequestFromCopilot } from "../permissions";
 
 describe("codexSandbox", () => {
   it("maps modes to Codex sandbox values", () => {
@@ -53,10 +53,14 @@ describe("toolRequestFromClaude", () => {
     ["Edit", { file_path: "b.ts" }, { kind: "write", summary: "b.ts" }],
     ["NotebookEdit", { notebook_path: "n.ipynb" }, { kind: "write", summary: "n.ipynb" }],
     ["Read", { file_path: "README.md" }, { kind: "read", summary: "README.md" }],
+    ["Read", {}, { kind: "read", summary: "Read" }],
     ["Grep", { pattern: "foo", path: "src" }, { kind: "read", summary: "src" }],
-    ["Grep", { pattern: "foo" }, { kind: "read", summary: "foo" }],
-    ["Glob", { pattern: "**/*.ts" }, { kind: "read", summary: "**/*.ts" }],
-    ["Glob", {}, { kind: "read", summary: "Glob" }],
+    // The search pattern is never treated as a path (e.g. a ".env" pattern).
+    ["Grep", { pattern: ".env" }, { kind: "read", summary: "." }],
+    ["Glob", { pattern: "**/.env*" }, { kind: "read", summary: "." }],
+    ["Glob", { pattern: "*.ts", path: "C:/x" }, { kind: "read", summary: "C:/x" }],
+    ["PowerShell", { command: "Get-ChildItem" }, { kind: "shell", summary: "Get-ChildItem" }],
+    ["Monitor", { command: "npm run dev" }, { kind: "shell", summary: "npm run dev" }],
     ["WebFetch", { url: "https://x.test" }, { kind: "network", summary: "https://x.test" }],
     ["WebSearch", { query: "vitest" }, { kind: "network", summary: "vitest" }],
     ["TodoWrite", { todos: [] }, { kind: "read", summary: "TodoWrite" }],
@@ -88,5 +92,36 @@ describe("claudeDecision", () => {
     for (const tool of ["Bash", "Write", "WebFetch", "WebSearch", "Agent"]) {
       expect(claudeDecision("cli-default", req(tool))).toBe("ask");
     }
+  });
+});
+
+describe("claudeHookDecision", () => {
+  const req = (toolName: string, input: Record<string, unknown> = {}) => toolRequestFromClaude(toolName, input);
+  const opaque = ["REPL", "RemoteTrigger", "CronCreate", "CronDelete", "Workflow", "mcp__fs__write", "mcp__x__y"];
+  it.each(opaque)("denies the non-inspectable tool %s in guarded or read-only sessions", (tool) => {
+    expect(claudeHookDecision("full-access", true, req(tool))).toBe("deny");
+    expect(claudeHookDecision("cli-default", true, req(tool))).toBe("deny");
+    expect(claudeHookDecision("read-only", false, req(tool))).toBe("deny");
+  });
+  it.each(opaque)("leaves %s to canUseTool in unguarded sessions", (tool) => {
+    expect(claudeHookDecision("full-access", false, req(tool))).toBe("none");
+    expect(claudeHookDecision("cli-default", false, req(tool))).toBe("none");
+  });
+  it("denies what read-only denies and has no opinion otherwise", () => {
+    expect(claudeHookDecision("read-only", false, req("Write", { file_path: "a" }))).toBe("deny");
+    expect(claudeHookDecision("read-only", false, req("Bash", { command: "ls" }))).toBe("deny");
+    expect(claudeHookDecision("read-only", false, req("Read", { file_path: "a" }))).toBe("none");
+    expect(claudeHookDecision("full-access", true, req("Bash", { command: "ls" }))).toBe("none");
+    expect(claudeHookDecision("cli-default", true, req("Write", { file_path: "a" }))).toBe("none");
+  });
+});
+
+describe("claudeDisallowedTools", () => {
+  it("lists the non-inspectable built-in tools for guarded or read-only sessions only", () => {
+    const tools = ["REPL", "RemoteTrigger", "CronCreate", "CronDelete", "Workflow"];
+    expect(claudeDisallowedTools("full-access", true)).toEqual(tools);
+    expect(claudeDisallowedTools("read-only", false)).toEqual(tools);
+    expect(claudeDisallowedTools("cli-default", false)).toEqual([]);
+    expect(claudeDisallowedTools("full-access", false)).toEqual([]);
   });
 });

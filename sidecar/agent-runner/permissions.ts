@@ -71,15 +71,19 @@ export function toolRequestFromClaude(toolName: string, input: Record<string, un
 function normalizeClaude(toolName: string, input: Record<string, unknown>): Omit<ToolRequest, "rawKind"> {
   switch (toolName) {
     case "Bash":
+    case "PowerShell":
+    case "Monitor":
       return { kind: "shell", summary: field(input, "command") ?? toolName };
     case "Write":
     case "Edit":
     case "NotebookEdit":
       return { kind: "write", summary: field(input, "file_path", "notebook_path") ?? toolName };
     case "Read":
+      return { kind: "read", summary: field(input, "file_path") ?? toolName };
     case "Grep":
     case "Glob":
-      return { kind: "read", summary: field(input, "file_path", "path", "pattern") ?? toolName };
+      // The search pattern is not a path; an absent path means the working directory.
+      return { kind: "read", summary: field(input, "path") ?? "." };
     case "WebFetch":
       return { kind: "network", summary: field(input, "url") ?? toolName };
     case "WebSearch":
@@ -105,4 +109,28 @@ export function claudeDecision(permission: AgentPermission, request: ToolRequest
   }
   if (permission === "full-access") return "allow";
   return request.kind === "read" ? "allow" : "ask";
+}
+
+/** Built-in Claude tools that run code or schedule work the guard cannot inspect. */
+const OPAQUE_CLAUDE_TOOLS = ["REPL", "RemoteTrigger", "CronCreate", "CronDelete", "Workflow"];
+
+function isOpaqueClaudeTool(toolName: string): boolean {
+  return OPAQUE_CLAUDE_TOOLS.includes(toolName) || toolName.startsWith("mcp__");
+}
+
+/**
+ * Decision of the PreToolUse hook, which sees every tool call (including ones
+ * that settings, hooks, or the CLI pre-approve and never reach canUseTool).
+ * "deny" blocks the call; "none" leaves it to the normal permission flow.
+ * Guarded or read-only sessions deny tools whose effects cannot be inspected.
+ */
+export function claudeHookDecision(permission: AgentPermission, guarded: boolean, request: ToolRequest): "deny" | "none" {
+  if ((guarded || permission === "read-only") && isOpaqueClaudeTool(request.rawKind ?? "")) return "deny";
+  if (permission === "read-only" && claudeDecision(permission, request) === "deny") return "deny";
+  return "none";
+}
+
+/** Built-in tools removed from the model's context in guarded or read-only sessions. */
+export function claudeDisallowedTools(permission: AgentPermission, guarded: boolean): string[] {
+  return guarded || permission === "read-only" ? [...OPAQUE_CLAUDE_TOOLS] : [];
 }

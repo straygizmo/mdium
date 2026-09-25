@@ -120,7 +120,9 @@ describe("ClaudeAdapter", () => {
     await session.runTurn("x", new AbortController().signal);
     const env = fake.calls[0].options.env ?? {};
     expect(env.GH_TOKEN).toBe("x");
-    expect(Object.keys(env).length).toBeGreaterThan(1);
+    const inherited = Object.entries(process.env).find(([key, value]) => key !== "GH_TOKEN" && value !== undefined);
+    if (!inherited) throw new Error("process.env is empty");
+    expect(env[inherited[0]]).toBe(inherited[1]);
   });
 
   async function canUseToolFor(options: SessionOptions, cb: SessionCallbacks) {
@@ -157,16 +159,72 @@ describe("ClaudeAdapter", () => {
     expect(requestPermission).toHaveBeenCalledTimes(2);
   });
 
+  async function hookFor(options: SessionOptions, cb: SessionCallbacks) {
+    const fake = fakeQuery([success("x")]);
+    const session = await adapter(fake.query).startSession(options, cb);
+    await session.runTurn("x", new AbortController().signal);
+    const hook = fake.calls[0].options.hooks?.PreToolUse?.[0]?.hooks[0];
+    if (!hook) throw new Error("PreToolUse hook missing");
+    return {
+      options: fake.calls[0].options,
+      run: (tool_name: string, tool_input: Record<string, unknown>) =>
+        hook(
+          { hook_event_name: "PreToolUse", tool_name, tool_input, tool_use_id: "u1", session_id: "s-1", transcript_path: "t", cwd: "C:/work" },
+          "u1",
+          { signal: new AbortController().signal },
+        ),
+    };
+  }
+
+  it("denies and stops the turn in the PreToolUse hook when the guard blocks", async () => {
+    const checkTool = vi.fn((r: ToolRequest) => r.summary !== "git push");
+    const { run } = await hookFor({ ...baseOptions, permission: "full-access", guarded: true }, callbacks([], { checkTool }));
+    await expect(run("Bash", { command: "git push" })).resolves.toEqual({
+      continue: false,
+      stopReason: "Blocked by MDium safety guard",
+      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "Blocked by MDium safety guard" },
+    });
+    expect(checkTool).toHaveBeenCalledWith({ kind: "shell", summary: "git push", rawKind: "Bash" });
+    await expect(run("Bash", { command: "npm test" })).resolves.toEqual({});
+  });
+
+  it("denies read-only violations in the PreToolUse hook and has no opinion on allowed tools", async () => {
+    const { run } = await hookFor({ ...baseOptions, permission: "read-only" }, callbacks([]));
+    await expect(run("Write", { file_path: "a" })).resolves.toEqual({
+      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "Not permitted in this stage" },
+    });
+    await expect(run("Read", { file_path: "a" })).resolves.toEqual({});
+  });
+
+  it("denies non-inspectable tools in guarded sessions and disallows them", async () => {
+    const { run, options } = await hookFor({ ...baseOptions, permission: "full-access", guarded: true }, callbacks([]));
+    await expect(run("mcp__fs__write", {})).resolves.toMatchObject({ hookSpecificOutput: { permissionDecision: "deny" } });
+    await expect(run("REPL", { code: "1" })).resolves.toMatchObject({ hookSpecificOutput: { permissionDecision: "deny" } });
+    expect(options.disallowedTools).toEqual(["REPL", "RemoteTrigger", "CronCreate", "CronDelete", "Workflow"]);
+  });
+
+  it("does not restrict tools in unguarded cli-default sessions", async () => {
+    const { run, options } = await hookFor(baseOptions, callbacks([]));
+    await expect(run("mcp__fs__write", {})).resolves.toEqual({});
+    expect(options.disallowedTools).toBeUndefined();
+  });
+
   it("rejects with the result subtype when the turn fails", async () => {
     const fake = fakeQuery([{ type: "result", subtype: "error_max_turns", is_error: true, session_id: "s-1" }]);
     const session = await adapter(fake.query).startSession(baseOptions, callbacks([]));
-    await expect(session.runTurn("x", new AbortController().signal)).rejects.toThrow("error_max_turns");
+    await expect(session.runTurn("x", new AbortController().signal)).rejects.toThrow(/^CLAUDE_FAILED: error_max_turns$/);
   });
 
   it("rejects when a success result is flagged as an error", async () => {
     const fake = fakeQuery([{ type: "result", subtype: "success", is_error: true, result: "Invalid API key", session_id: "s-1" }]);
     const session = await adapter(fake.query).startSession(baseOptions, callbacks([]));
-    await expect(session.runTurn("x", new AbortController().signal)).rejects.toThrow("Invalid API key");
+    await expect(session.runTurn("x", new AbortController().signal)).rejects.toThrow(/^CLAUDE_FAILED: Invalid API key$/);
+  });
+
+  it("includes the reported errors of a failed result", async () => {
+    const fake = fakeQuery([{ type: "result", subtype: "error_during_execution", is_error: true, errors: ["boom"], session_id: "s-1" }]);
+    const session = await adapter(fake.query).startSession(baseOptions, callbacks([]));
+    await expect(session.runTurn("x", new AbortController().signal)).rejects.toThrow(/^CLAUDE_FAILED: error_during_execution: boom$/);
   });
 
   it("rejects when the stream ends without a result", async () => {
@@ -247,7 +305,18 @@ describe("ClaudeAdapter", () => {
       const run = vi.fn(async () => ({ status: 0, stdout: "2.3.4 (Claude Code)\n", stderr: "" }));
       const a = new ClaudeAdapter({ query: fakeQuery().query, resolve: async () => ({ executablePath: "C:/c/cli.js", executable: "node" }), run });
       await expect(a.probe()).resolves.toEqual({ kind: "available", version: "2.3.4" });
+      expect(run).toHaveBeenCalledWith("node", ["--version"]);
       expect(run).toHaveBeenCalledWith(process.execPath, ["C:/c/cli.js", "--version"]);
+    });
+
+    it("reports node missing when a JS entry cannot be run by name", async () => {
+      const run = vi.fn(async (command: string) =>
+        command === "node"
+          ? { status: null, stdout: "", stderr: "", error: Object.assign(new Error("x"), { code: "ENOENT" }) }
+          : { status: 0, stdout: "2.3.4", stderr: "" },
+      );
+      const a = new ClaudeAdapter({ query: fakeQuery().query, resolve: async () => ({ executablePath: "C:/c/cli.js", executable: "node" }), run });
+      await expect(a.probe()).resolves.toEqual({ kind: "missing", detail: "node" });
     });
 
     it("runs a native binary directly", async () => {
