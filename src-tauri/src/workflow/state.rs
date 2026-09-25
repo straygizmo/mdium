@@ -6,6 +6,11 @@
 //! [`TransitionError::Conflict`] if the task on disk says otherwise. The
 //! per-project lock makes the reload-check-write sequence atomic with
 //! respect to other transitions in this process.
+//!
+//! [`ProjectLocks`] serializes only within this process. It does not
+//! coordinate with other processes (e.g. a second MDium instance) or with a
+//! user editing a task file by hand; the `expected_from` check narrows that
+//! window but cannot close it.
 
 use crate::workflow::fsutil;
 use crate::workflow::model::{AttentionReason, HistoryEntry, Task, TaskStatus};
@@ -103,8 +108,13 @@ impl ProjectLocks {
 /// exists (falling back to the path as given), and lowercased on Windows,
 /// whose file system is case-insensitive.
 fn lock_key(project_root: &Path) -> PathBuf {
-    let canonical =
-        std::fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
+    // `canonicalize` fails for paths that do not exist (yet). Fall back to
+    // `absolute`, which needs no file system access, so a relative and an
+    // absolute spelling of the same missing root still share one key; only
+    // if that fails too is the path used exactly as given.
+    let canonical = std::fs::canonicalize(project_root)
+        .or_else(|_| std::path::absolute(project_root))
+        .unwrap_or_else(|_| project_root.to_path_buf());
     if cfg!(windows) {
         PathBuf::from(canonical.to_string_lossy().to_lowercase())
     } else {
@@ -150,14 +160,16 @@ pub fn transition(
     } else {
         None
     };
+    let at = fsutil::now();
     task.meta.history.push(HistoryEntry {
-        at: fsutil::now(),
+        at: at.clone(),
         from: Some(expected_from),
         to,
         reason,
     });
 
-    Ok(store.put_task(&task)?)
+    // Stamp updated_at with the same instant as the history entry.
+    Ok(store.put_task_at(&task, at)?)
 }
 
 #[cfg(test)]
@@ -262,6 +274,8 @@ mod tests {
         assert_eq!(entry.to, TaskStatus::Running);
         assert_eq!(entry.reason, None);
         assert!(!entry.at.is_empty());
+        // The history timestamp and the stored updated_at are one instant.
+        assert_eq!(task.meta.updated_at, task.meta.history.last().unwrap().at);
 
         // The returned task is exactly what was persisted.
         assert_eq!(store.get_task(TASK_ID).unwrap(), task);
@@ -447,6 +461,14 @@ mod tests {
         // Must not panic, and must be stable across calls.
         assert_eq!(lock_key(&missing), lock_key(&missing));
         let _guard = ProjectLocks::lock(&missing);
+    }
+
+    #[test]
+    fn lock_key_fallback_makes_relative_missing_paths_absolute() {
+        let relative = Path::new("mdium-lock-key-test-does-not-exist");
+        assert!(!relative.exists());
+        let absolute = std::env::current_dir().unwrap().join(relative);
+        assert_eq!(lock_key(relative), lock_key(&absolute));
     }
 
     #[cfg(windows)]

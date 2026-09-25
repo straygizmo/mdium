@@ -305,13 +305,20 @@ impl WorkflowStore {
     /// tasks). Rejects a `schemaVersion` this store cannot read back.
     /// Returns the task exactly as stored, including the new `updated_at`.
     pub fn put_task(&self, task: &Task) -> Result<Task, StoreError> {
+        self.put_task_at(task, fsutil::now())
+    }
+
+    /// [`Self::put_task`] with an explicit `updated_at`, so a caller that
+    /// also records the time elsewhere (e.g. a history entry in the state
+    /// machine) can use one identical timestamp for both.
+    pub(crate) fn put_task_at(&self, task: &Task, updated_at: String) -> Result<Task, StoreError> {
         let path = self.paths.task_file(&task.meta.id)?;
         check_schema_version(task.meta.schema_version)?;
         if !path.try_exists()? {
             return Err(StoreError::NotFound);
         }
         let mut task = task.clone();
-        task.meta.updated_at = fsutil::now();
+        task.meta.updated_at = updated_at;
         fsutil::atomic_write(&path, encode_task(&task)?.as_bytes())?;
         Ok(task)
     }
