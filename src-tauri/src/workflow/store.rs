@@ -23,6 +23,10 @@ pub enum StoreError {
     NotFound,
     /// The file exists but could not be parsed as its expected shape.
     Corrupt(String),
+    /// A value that passed validation could not be serialized to its
+    /// on-disk encoding (JSON/YAML). Distinct from `Corrupt`, which is
+    /// about *reading* an existing file.
+    Encode(String),
     /// The file's `schemaVersion` is not one this store understands.
     UnsupportedSchema(u32),
     /// A workflow failed `Workflow::validate()`.
@@ -38,6 +42,7 @@ impl StoreError {
             StoreError::Io(_) => "STORE_IO",
             StoreError::NotFound => "STORE_NOT_FOUND",
             StoreError::Corrupt(_) => "STORE_CORRUPT",
+            StoreError::Encode(_) => "ENCODE_ERROR",
             StoreError::UnsupportedSchema(_) => "STORE_UNSUPPORTED_SCHEMA",
             StoreError::Invalid(_) => "STORE_INVALID",
             StoreError::InvalidId(_) => "STORE_INVALID_ID",
@@ -110,7 +115,7 @@ impl WorkflowStore {
         }
 
         let bytes = serde_json::to_vec_pretty(file)
-            .map_err(|err| StoreError::Corrupt(err.to_string()))?;
+            .map_err(|err| StoreError::Encode(err.to_string()))?;
         fsutil::atomic_write(&self.paths.workflows_file(), &bytes)?;
         Ok(())
     }
