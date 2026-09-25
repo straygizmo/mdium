@@ -50,17 +50,15 @@ impl OutcomeError {
 /// Frontmatter delimiter line.
 const FRONTMATTER_DELIMITER: &str = "---";
 
-/// Markdown code fence marker.
-const CODE_FENCE: &str = "```";
-
 /// UTF-8 byte order mark that some Windows tools prepend.
 const BOM: char = '\u{feff}';
 
 /// Parses an agent's final response into a [`StageOutcome`].
 ///
 /// Tolerated: a BOM, leading whitespace/blank lines, CRLF line endings, a
-/// single ```` ``` ```` / ```` ```markdown ```` fence wrapping the whole
-/// response, and unknown frontmatter keys. The body is everything after the
+/// single bare / `markdown` / `md` code fence (backticks or tildes) wrapping
+/// the whole response, unknown frontmatter keys, and number/bool scalars for
+/// `reason` / `question` (stringified). The body is everything after the
 /// closing `---` (minus one optional blank line), verbatim.
 pub fn parse_outcome(text: &str) -> Result<StageOutcome, OutcomeError> {
     let text = text.strip_prefix(BOM).unwrap_or(text).trim_start();
@@ -68,9 +66,11 @@ pub fn parse_outcome(text: &str) -> Result<StageOutcome, OutcomeError> {
     let (yaml, body) = split_frontmatter(text).ok_or(OutcomeError::MissingFrontmatter)?;
     let raw = decode_frontmatter(&yaml)?;
 
-    let value = raw
-        .outcome
-        .ok_or_else(|| OutcomeError::InvalidOutcome(String::new()))?;
+    let value = match raw.outcome.map(scalar_to_string).transpose()?.flatten() {
+        Some(Scalar::Text(text)) => text,
+        Some(Scalar::Other(rendered)) => return Err(OutcomeError::InvalidOutcome(rendered)),
+        None => return Err(OutcomeError::InvalidOutcome(String::new())),
+    };
     let kind = match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
         "completed" => StageOutcomeKind::Completed,
         "attention" => StageOutcomeKind::Attention,
@@ -78,7 +78,7 @@ pub fn parse_outcome(text: &str) -> Result<StageOutcome, OutcomeError> {
         _ => return Err(OutcomeError::InvalidOutcome(value)),
     };
 
-    let reason = non_blank(raw.reason);
+    let reason = non_blank(raw.reason)?;
     if kind != StageOutcomeKind::Completed && reason.is_none() {
         return Err(OutcomeError::MissingReason);
     }
@@ -86,16 +86,42 @@ pub fn parse_outcome(text: &str) -> Result<StageOutcome, OutcomeError> {
     Ok(StageOutcome {
         kind,
         reason,
-        question: non_blank(raw.question),
+        question: non_blank(raw.question)?,
         body: body.to_string(),
     })
 }
 
-/// Trims a text field, mapping missing or whitespace-only values to `None`.
-fn non_blank(value: Option<String>) -> Option<String> {
-    value
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
+/// A scalar frontmatter value: a YAML string, or a number/bool rendered as
+/// text. `null` is treated as absent before reaching this type.
+enum Scalar {
+    Text(String),
+    Other(String),
+}
+
+/// Classifies a frontmatter value. Returns `None` for `null`; sequences,
+/// mappings and tagged values are [`OutcomeError::InvalidYaml`].
+fn scalar_to_string(value: serde_yaml_ng::Value) -> Result<Option<Scalar>, OutcomeError> {
+    use serde_yaml_ng::Value;
+    match value {
+        Value::Null => Ok(None),
+        Value::String(text) => Ok(Some(Scalar::Text(text))),
+        Value::Bool(flag) => Ok(Some(Scalar::Other(flag.to_string()))),
+        Value::Number(number) => Ok(Some(Scalar::Other(number.to_string()))),
+        _ => Err(OutcomeError::InvalidYaml(
+            "frontmatter field is not a scalar".to_string(),
+        )),
+    }
+}
+
+/// Converts a text field (numbers/bools stringified), trimmed, mapping
+/// missing or whitespace-only values to `None`.
+fn non_blank(value: Option<serde_yaml_ng::Value>) -> Result<Option<String>, OutcomeError> {
+    let text = match value.map(scalar_to_string).transpose()?.flatten() {
+        Some(Scalar::Text(text) | Scalar::Other(text)) => text,
+        None => return Ok(None),
+    };
+    let text = text.trim();
+    Ok((!text.is_empty()).then(|| text.to_string()))
 }
 
 /// Splits the first line off `text`, returning `(line, rest)`. The line
@@ -109,22 +135,37 @@ fn split_line(text: &str) -> (&str, &str) {
     (line.strip_suffix('\r').unwrap_or(line), rest)
 }
 
-/// If `text` opens with a bare or `markdown`/`md` code fence, removes that
-/// opening line and, when present, the matching closing fence on the last
-/// non-blank line. Any other text is returned unchanged.
+/// If `text` opens with a bare or `markdown`/`md` code fence (three or more
+/// backticks, or `~~~`), removes that opening line and, when present, the
+/// closing fence on the last non-blank line. The closer must repeat the
+/// opener's marker exactly, and is only treated as the outer closer when the
+/// remainder holds an odd number of fence lines (inner code blocks pair up;
+/// an even count means the outer closer is missing). Any other text is
+/// returned unchanged.
 fn strip_wrapping_fence(text: &str) -> &str {
     let (first, rest) = split_line(text);
-    let Some(info) = first.trim_end().strip_prefix(CODE_FENCE) else {
+    let first = first.trim_end();
+    let Some(fence_char) = first.chars().next().filter(|c| *c == '`' || *c == '~') else {
         return text;
     };
+    let marker_len = first.chars().take_while(|c| *c == fence_char).count();
+    if marker_len < 3 {
+        return text;
+    }
+    // Both fence chars are ASCII, so the char count equals the byte length.
+    let (marker, info) = first.split_at(marker_len);
     let info = info.trim().to_ascii_lowercase();
     if !matches!(info.as_str(), "" | "markdown" | "md") {
         return text;
     }
 
+    let fence_lines = rest
+        .lines()
+        .filter(|line| line.trim_start().starts_with(marker))
+        .count();
     let trimmed = rest.trim_end();
     let last_line_start = trimmed.rfind('\n').map_or(0, |pos| pos + 1);
-    if trimmed[last_line_start..].trim() == CODE_FENCE {
+    if fence_lines % 2 == 1 && trimmed[last_line_start..].trim() == marker {
         &rest[..last_line_start]
     } else {
         rest
@@ -178,11 +219,11 @@ fn decode_frontmatter(yaml: &str) -> Result<RawFrontmatter, OutcomeError> {
 #[derive(Deserialize, Default)]
 struct RawFrontmatter {
     #[serde(default)]
-    outcome: Option<String>,
+    outcome: Option<serde_yaml_ng::Value>,
     #[serde(default)]
-    reason: Option<String>,
+    reason: Option<serde_yaml_ng::Value>,
     #[serde(default)]
-    question: Option<String>,
+    question: Option<serde_yaml_ng::Value>,
 }
 
 #[cfg(test)]
@@ -356,5 +397,62 @@ mod tests {
             assert_eq!(err, OutcomeError::MissingReason, "text {text:?}");
             assert_eq!(err.code(), "OUTCOME_MISSING_REASON");
         }
+    }
+
+    #[test]
+    fn fence_without_outer_closer_keeps_body_code_block_closer() {
+        let out = ok("```markdown\n---\noutcome: completed\n---\n```rust\nfn main() {}\n```\n");
+        assert_eq!(out.body, "```rust\nfn main() {}\n```\n");
+    }
+
+    #[test]
+    fn fence_with_outer_closer_keeps_body_code_block() {
+        let out =
+            ok("```markdown\n---\noutcome: completed\n---\n```rust\nfn main() {}\n```\n```\n");
+        assert_eq!(out.body, "```rust\nfn main() {}\n```\n");
+    }
+
+    #[test]
+    fn accepts_md_label_fence() {
+        let out = ok("```md\n---\noutcome: completed\n---\nbody\n```");
+        assert_eq!(out.body, "body\n");
+    }
+
+    #[test]
+    fn accepts_long_backtick_fence_with_matching_closer() {
+        let out = ok("````markdown\n---\noutcome: completed\n---\n```sh\nls\n```\n````\n");
+        assert_eq!(out.body, "```sh\nls\n```\n");
+    }
+
+    #[test]
+    fn accepts_tilde_fence() {
+        let out = ok("~~~\n---\noutcome: completed\n---\n```sh\nls\n```\n~~~\n");
+        assert_eq!(out.body, "```sh\nls\n```\n");
+    }
+
+    #[test]
+    fn does_not_unwrap_non_markdown_fence() {
+        let err = parse_outcome("```yaml\n---\noutcome: completed\n---\nbody\n```").unwrap_err();
+        assert_eq!(err, OutcomeError::MissingFrontmatter);
+    }
+
+    #[test]
+    fn non_string_scalar_outcome_is_invalid_value() {
+        for text in ["---\noutcome: 1\n---\nb", "---\noutcome: true\n---\nb"] {
+            let err = parse_outcome(text).unwrap_err();
+            assert!(
+                matches!(err, OutcomeError::InvalidOutcome(_)),
+                "text {text:?}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn scalar_reason_and_question_are_stringified() {
+        let out = ok("---\noutcome: attention\nreason: 42\nquestion: false\n---\nb");
+        assert_eq!(out.reason.as_deref(), Some("42"));
+        assert_eq!(out.question.as_deref(), Some("false"));
+        let out = ok("---\noutcome: awaiting_user\nreason: 1.5\n---\nb");
+        assert_eq!(out.reason.as_deref(), Some("1.5"));
     }
 }
