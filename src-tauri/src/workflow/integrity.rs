@@ -910,6 +910,30 @@ mod tests {
     }
 
     #[test]
+    fn changed_paths_work_for_a_run_from_a_linked_worktree_checkout() {
+        let fixture = Fixture::new();
+        let holder = tempfile::TempDir::new().unwrap();
+        let linked = holder.path().join("linked");
+        fixture.run(&[
+            "worktree",
+            "add",
+            "-b",
+            "feature",
+            &linked.to_string_lossy(),
+        ]);
+        let info = crate::workflow::gitops::create_worktree_in(
+            fixture.base(),
+            &linked,
+            crate::workflow::gitops::test_support::TASK_ID,
+            "t",
+        )
+        .unwrap();
+        write_file(Path::new(&info.path), ".claude/settings.json", "{}\n");
+        let found =
+            changed_paths_matching_in(fixture.base(), &info, AGENT_CONFIG_PATTERNS).unwrap();
+        assert_eq!(found, [".claude/settings.json"]);
+    }
+    #[test]
     fn changed_paths_do_not_run_fsmonitor() {
         let fixture = Fixture::new();
         let info = fixture.create("t");

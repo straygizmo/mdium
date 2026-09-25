@@ -171,9 +171,10 @@ fn worktrees_dir(base_dir: &Path) -> PathBuf {
     base_dir.join("mdium").join("worktrees")
 }
 
-/// `<local data dir>/mdium/worktrees/<16 hex of sha256(canonical repo)>/<id>`.
-/// `repo_root` is normalized to the work tree's top level first, so any
-/// path inside the repo maps to the same worktree location.
+/// `<local data dir>/mdium/worktrees/<16 hex of sha256(canonical common git
+/// dir)>/<id>`. The repository is identified by its common git dir, so any
+/// path inside the repo — and any linked worktree of it — maps to the same
+/// worktree location.
 pub fn worktree_path_for(repo_root: &Path, root_task_id: &str) -> PathBuf {
     worktree_path_in(&default_worktree_base(), repo_root, root_task_id)
 }
@@ -181,11 +182,25 @@ pub fn worktree_path_for(repo_root: &Path, root_task_id: &str) -> PathBuf {
 /// [`worktree_path_for`] with an explicit base directory (tests use a
 /// temporary one so they never touch the real local data dir).
 fn worktree_path_in(base_dir: &Path, repo: &Path, root_task_id: &str) -> PathBuf {
-    let top = repo_root(repo).unwrap_or_else(|_| repo.to_path_buf());
-    let canonical = std::fs::canonicalize(&top).unwrap_or(top);
+    let identity = common_git_dir(repo).unwrap_or_else(|| repo.to_path_buf());
+    let canonical = std::fs::canonicalize(&identity).unwrap_or(identity);
     worktrees_dir(base_dir)
         .join(repo_hash(&canonical))
         .join(root_task_id)
+}
+
+/// The absolute common git dir of the repository containing `path`, or
+/// `None` outside a repository. Git prints it relative to the directory it
+/// ran in, so it is queried from the work tree's top level.
+fn common_git_dir(path: &Path) -> Option<PathBuf> {
+    let top = repo_root(path).ok()?;
+    let out = git(&top, &["rev-parse", "--git-common-dir"]).ok()?;
+    let common = PathBuf::from(out.trim_end_matches(['\r', '\n']));
+    Some(if common.is_absolute() {
+        common
+    } else {
+        top.join(common)
+    })
 }
 
 /// `mdium/<first 8 chars of id>-<slug>`. The slug keeps lowercase ASCII
@@ -332,10 +347,10 @@ fn worktree_args<'a>(args: &[&'a str]) -> Vec<&'a str> {
     full
 }
 
-/// First 16 hex chars of sha256 over a canonical repo path (the hash
-/// directory of that repo's worktrees).
-fn repo_hash(canonical_repo: &Path) -> String {
-    let digest = Sha256::digest(canonical_repo.to_string_lossy().as_bytes());
+/// First 16 hex chars of sha256 over a repository's canonical common git
+/// dir (the hash directory of that repo's worktrees).
+fn repo_hash(canonical_common_dir: &Path) -> String {
+    let digest = Sha256::digest(canonical_common_dir.to_string_lossy().as_bytes());
     format!("{digest:x}").chars().take(16).collect()
 }
 
@@ -357,14 +372,12 @@ fn read_link_file(file: &Path, prefix: &str, base: &Path) -> Option<PathBuf> {
 /// controls. Checks:
 /// - `<worktree>/.git` is a regular file (not a directory or symlink)
 ///   whose `gitdir:` resolves to `<common>/worktrees/<name>`;
-/// - `<common>` is `<repo>/.git` of the repo whose path hash names the
-///   worktree's hash directory (binding it to the user's repository);
+/// - the hash of `<common>` names the worktree's hash directory (binding
+///   the link to the user's repository, whatever its git dir layout);
 /// - the admin dir's `commondir` resolves to `<common>` and its `gitdir`
 ///   back-link resolves to `<worktree>/.git`.
 ///
 /// Returns the canonical admin dir. Error: `GIT_WORKTREE_LINK_TAMPERED`.
-/// A repository whose git dir is not `<repo>/.git` (e.g.
-/// `--separate-git-dir`) cannot be bound this way and is rejected too.
 pub(crate) fn verify_worktree_link(info: &WorktreeInfo) -> Result<PathBuf, GitError> {
     let tampered =
         |what: &str| GitError::new(GIT_WORKTREE_LINK_TAMPERED, format!("{what}: {}", info.path));
@@ -377,11 +390,9 @@ pub(crate) fn verify_worktree_link(info: &WorktreeInfo) -> Result<PathBuf, GitEr
     let admin = read_link_file(&dot_git, "gitdir: ", &wt).ok_or_else(|| tampered(".git"))?;
     let worktrees = admin.parent().ok_or_else(|| tampered("gitdir"))?;
     let common = worktrees.parent().ok_or_else(|| tampered("gitdir"))?;
-    let repo = common.parent().ok_or_else(|| tampered("gitdir"))?;
     let hash_dir = wt.parent().and_then(Path::file_name);
     if worktrees.file_name() != Some(OsStr::new("worktrees"))
-        || common.file_name() != Some(OsStr::new(".git"))
-        || hash_dir != Some(OsStr::new(&repo_hash(repo)))
+        || hash_dir != Some(OsStr::new(&repo_hash(common)))
     {
         return Err(tampered("gitdir"));
     }
@@ -1415,6 +1426,72 @@ mod tests {
         diff_against_base_in(fixture.base(), &info).unwrap();
         commits_since_base_in(fixture.base(), &info).unwrap();
         assert!(!marker.exists(), "fsmonitor hook must not run");
+    }
+
+    /// Runs a whole workflow cycle (create, commit, diff, log, merge,
+    /// discard) with `checkout` as the user's project folder.
+    fn full_cycle(base: &Path, checkout: &Path) {
+        let info = create_worktree_in(base, checkout, TASK_ID, "t").unwrap();
+        verify_worktree_link(&info).unwrap();
+        let wt = Path::new(&info.path);
+        write_file(wt, "b.txt", "b-line\n");
+        commit_paths_in(base, &info, &["b.txt"], "add b")
+            .unwrap()
+            .expect("a commit");
+        write_file(wt, "a.txt", "uncommitted\n");
+        let diff = diff_against_base_in(base, &info).unwrap();
+        assert!(diff.contains("+b-line"), "{diff}");
+        assert!(diff.contains("+uncommitted"), "{diff}");
+        let commits = commits_since_base_in(base, &info).unwrap();
+        assert_eq!(commits.len(), 1);
+        git(wt, &["checkout", "--", "a.txt"]).unwrap();
+        merge_into_base_in(base, checkout, &info).unwrap();
+        assert!(checkout.join("b.txt").is_file());
+        discard_in(base, checkout, &info).unwrap();
+        assert!(!wt.exists());
+    }
+
+    #[test]
+    fn run_from_a_linked_worktree_checkout_works() {
+        let fixture = Fixture::new();
+        let holder = TempDir::new().unwrap();
+        let linked = holder.path().join("linked");
+        let linked_str = linked.to_string_lossy().into_owned();
+        fixture.run(&["worktree", "add", "-b", "feature", &linked_str]);
+        // Both checkouts of one repository share one worktree location.
+        assert_eq!(
+            worktree_path_in(fixture.base(), &linked, TASK_ID),
+            worktree_path_in(fixture.base(), fixture.root(), TASK_ID)
+        );
+        full_cycle(fixture.base(), &linked);
+        assert_eq!(
+            git(&linked, &["rev-parse", "--abbrev-ref", "HEAD"])
+                .unwrap()
+                .trim(),
+            "feature"
+        );
+    }
+
+    #[test]
+    fn run_from_a_separate_git_dir_repo_works() {
+        let repo = TempDir::new().unwrap();
+        let git_dirs = TempDir::new().unwrap();
+        let base = TempDir::new().unwrap();
+        let git_dir = git_dirs.path().join("store");
+        let git_dir_str = git_dir.to_string_lossy().into_owned();
+        let root = repo.path();
+        for args in [
+            &["init", "-b", "main", "--separate-git-dir", &git_dir_str][..],
+            &["config", "user.name", "Test"][..],
+            &["config", "user.email", "test@example.com"][..],
+            &["config", "commit.gpgsign", "false"][..],
+        ] {
+            git(root, args).unwrap();
+        }
+        write_file(root, "a.txt", "one\n");
+        git(root, &["add", "."]).unwrap();
+        git(root, &["commit", "-m", "initial"]).unwrap();
+        full_cycle(base.path(), root);
     }
 
     #[test]
