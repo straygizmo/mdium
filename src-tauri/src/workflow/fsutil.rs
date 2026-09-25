@@ -189,11 +189,11 @@ impl std::fmt::Display for InvalidId {
 }
 
 /// True if `id` is exactly 16 lowercase hex characters.
-fn is_valid_id(id: &str) -> bool {
+pub(crate) fn is_valid_id(id: &str) -> bool {
     id.len() == 16 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-fn validate_id(id: &str) -> Result<(), InvalidId> {
+pub(crate) fn validate_id(id: &str) -> Result<(), InvalidId> {
     if is_valid_id(id) {
         Ok(())
     } else {

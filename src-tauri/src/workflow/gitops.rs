@@ -4,6 +4,7 @@
 //! MDium's normal environment (not the containment env), mirroring
 //! `commands/git.rs::run_git`. Callers run them off the main thread.
 
+use crate::workflow::fsutil::is_valid_id;
 use crate::workflow::model::WorktreeInfo;
 use sha2::{Digest, Sha256};
 #[cfg(target_os = "windows")]
@@ -32,8 +33,16 @@ const GIT_FAILED: &str = "GIT_FAILED";
 /// Maximum slug length in a branch name.
 const MAX_SLUG_LEN: usize = 40;
 
-/// Fallback identity used only when the repo has no `user.email` configured.
-const FALLBACK_IDENTITY: [&str; 4] = ["-c", "user.name=MDium", "-c", "user.email=mdium@localhost"];
+/// Branch namespace for all workflow branches.
+const BRANCH_PREFIX: &str = "mdium/";
+
+/// Number of task-id characters embedded in a branch name.
+const BRANCH_ID_LEN: usize = 8;
+
+/// Fallback identity values, used per field only when that field is not
+/// configured for the repo.
+const FALLBACK_NAME: &str = "user.name=MDium";
+const FALLBACK_EMAIL: &str = "user.email=mdium@localhost";
 
 impl GitError {
     fn new(code: &str, stderr: impl Into<String>) -> Self {
@@ -42,6 +51,15 @@ impl GitError {
             stderr: stderr.into(),
         }
     }
+}
+
+// Extra environment for git children spawned on the current test thread,
+// so tests can isolate git from the machine's global config without
+// touching the process environment shared by parallel tests.
+#[cfg(test)]
+thread_local! {
+    static TEST_GIT_ENV: std::cell::RefCell<Vec<(String, String)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Raw result of one git invocation.
@@ -60,6 +78,12 @@ fn run_git_raw(repo: &Path, args: &[&str]) -> Result<GitOutput, GitError> {
         .current_dir(repo);
     #[cfg(target_os = "windows")]
     cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    #[cfg(test)]
+    TEST_GIT_ENV.with(|env| {
+        for (key, value) in env.borrow().iter() {
+            cmd.env(key, value);
+        }
+    });
     let output = cmd
         .output()
         .map_err(|err| GitError::new(GIT_FAILED, format!("failed to run git: {err}")))?;
@@ -100,22 +124,26 @@ fn default_worktree_base() -> PathBuf {
     dirs::data_local_dir().unwrap_or_else(std::env::temp_dir)
 }
 
+/// `<base>/mdium/worktrees`, the only place MDium creates worktrees.
+fn worktrees_dir(base_dir: &Path) -> PathBuf {
+    base_dir.join("mdium").join("worktrees")
+}
+
 /// `<local data dir>/mdium/worktrees/<16 hex of sha256(canonical repo)>/<id>`.
+/// `repo_root` is normalized to the work tree's top level first, so any
+/// path inside the repo maps to the same worktree location.
 pub fn worktree_path_for(repo_root: &Path, root_task_id: &str) -> PathBuf {
     worktree_path_in(&default_worktree_base(), repo_root, root_task_id)
 }
 
 /// [`worktree_path_for`] with an explicit base directory (tests use a
 /// temporary one so they never touch the real local data dir).
-fn worktree_path_in(base_dir: &Path, repo_root: &Path, root_task_id: &str) -> PathBuf {
-    let canonical = std::fs::canonicalize(repo_root).unwrap_or_else(|_| repo_root.to_path_buf());
+fn worktree_path_in(base_dir: &Path, repo: &Path, root_task_id: &str) -> PathBuf {
+    let top = repo_root(repo).unwrap_or_else(|_| repo.to_path_buf());
+    let canonical = std::fs::canonicalize(&top).unwrap_or(top);
     let digest = Sha256::digest(canonical.to_string_lossy().as_bytes());
     let hash: String = format!("{digest:x}").chars().take(16).collect();
-    base_dir
-        .join("mdium")
-        .join("worktrees")
-        .join(hash)
-        .join(root_task_id)
+    worktrees_dir(base_dir).join(hash).join(root_task_id)
 }
 
 /// `mdium/<first 8 chars of id>-<slug>`. The slug keeps lowercase ASCII
@@ -135,14 +163,59 @@ pub fn branch_name(root_task_id: &str, title: &str) -> String {
     slug.truncate(MAX_SLUG_LEN);
     let slug = slug.trim_matches('-');
     let slug = if slug.is_empty() { "task" } else { slug };
-    let prefix: String = root_task_id.chars().take(8).collect();
-    format!("mdium/{prefix}-{slug}")
+    let prefix: String = root_task_id.chars().take(BRANCH_ID_LEN).collect();
+    format!("{BRANCH_PREFIX}{prefix}-{slug}")
 }
 
-/// True if `id` is 16 lowercase hex characters (the workflow id shape), so
-/// it is safe to use as a path component and branch prefix.
-fn is_valid_task_id(id: &str) -> bool {
-    id.len() == 16 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+/// True if `branch` has the exact shape [`branch_name`] produces for a
+/// valid task id: `mdium/<8 lowercase hex>-<1..=40 of [a-z0-9-]>`.
+fn is_valid_branch(branch: &str) -> bool {
+    let Some(rest) = branch.strip_prefix(BRANCH_PREFIX) else {
+        return false;
+    };
+    let is_hex = |b: u8| matches!(b, b'0'..=b'9' | b'a'..=b'f');
+    let bytes = rest.as_bytes();
+    if bytes.len() < BRANCH_ID_LEN + 2
+        || !bytes[..BRANCH_ID_LEN].iter().all(|b| is_hex(*b))
+        || bytes[BRANCH_ID_LEN] != b'-'
+    {
+        return false;
+    }
+    let slug = &bytes[BRANCH_ID_LEN + 1..];
+    slug.len() <= MAX_SLUG_LEN
+        && slug
+            .iter()
+            .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'-'))
+}
+
+/// Guards every operation on a stored [`WorktreeInfo`]: its values end up
+/// as git arguments and filesystem paths, so a tampered run file must never
+/// be able to inject options or point git elsewhere.
+fn validate_info(info: &WorktreeInfo) -> Result<(), GitError> {
+    let commit_ok = matches!(info.base_commit.len(), 40 | 64)
+        && info
+            .base_commit
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    if !commit_ok {
+        return Err(GitError::new(
+            "INVALID_WORKTREE_INFO",
+            format!("base_commit {:?}", info.base_commit),
+        ));
+    }
+    if !is_valid_branch(&info.branch) {
+        return Err(GitError::new(
+            "INVALID_WORKTREE_INFO",
+            format!("branch {:?}", info.branch),
+        ));
+    }
+    if !Path::new(&info.path).is_absolute() {
+        return Err(GitError::new(
+            "INVALID_WORKTREE_INFO",
+            format!("path {:?}", info.path),
+        ));
+    }
+    Ok(())
 }
 
 /// Creates the run's worktree on a new branch off the repo's current HEAD.
@@ -157,24 +230,25 @@ pub fn create_worktree(
 
 fn create_worktree_in(
     base_dir: &Path,
-    repo_root: &Path,
+    repo: &Path,
     root_task_id: &str,
     title: &str,
 ) -> Result<WorktreeInfo, GitError> {
-    if !is_valid_task_id(root_task_id) {
+    if !is_valid_id(root_task_id) {
         return Err(GitError::new("INVALID_ID", root_task_id));
     }
-    if !is_git_repo(repo_root) {
+    if !is_git_repo(repo) {
         return Err(GitError::new(
             "NOT_A_REPO",
-            repo_root.to_string_lossy().into_owned(),
+            repo.to_string_lossy().into_owned(),
         ));
     }
+    let top = repo_root(repo)?;
     let base_branch =
-        current_branch(repo_root)?.ok_or_else(|| GitError::new("DETACHED_HEAD", String::new()))?;
-    let base_commit = git(repo_root, &["rev-parse", "HEAD"])?.trim().to_string();
+        current_branch(&top)?.ok_or_else(|| GitError::new("DETACHED_HEAD", String::new()))?;
+    let base_commit = git(&top, &["rev-parse", "HEAD"])?.trim().to_string();
 
-    let path = worktree_path_in(base_dir, repo_root, root_task_id);
+    let path = worktree_path_in(base_dir, &top, root_task_id);
     let branch = branch_name(root_task_id, title);
     if path.exists() {
         return Err(GitError::new(
@@ -182,7 +256,7 @@ fn create_worktree_in(
             path.to_string_lossy().into_owned(),
         ));
     }
-    if branch_exists(repo_root, &branch)? {
+    if branch_exists(&top, &branch)? {
         return Err(GitError::new("WORKTREE_EXISTS", branch));
     }
     if let Some(parent) = path.parent() {
@@ -190,10 +264,13 @@ fn create_worktree_in(
             .map_err(|err| GitError::new(GIT_FAILED, err.to_string()))?;
     }
     let path_str = path.to_string_lossy().into_owned();
-    git(
-        repo_root,
-        &["worktree", "add", "-b", &branch, &path_str, "HEAD"],
-    )?;
+    if let Err(err) = git(&top, &["worktree", "add", "-b", &branch, &path_str, "HEAD"]) {
+        // The branch did not exist before; don't leave a half-created one.
+        if branch_exists(&top, &branch).unwrap_or(false) {
+            let _ = run_git_raw(&top, &["branch", "-D", &branch]);
+        }
+        return Err(err);
+    }
 
     Ok(WorktreeInfo {
         path: path_str,
@@ -216,13 +293,22 @@ fn branch_exists(repo: &Path, branch: &str) -> Result<bool, GitError> {
     Ok(run_git_raw(repo, &["show-ref", "--verify", "--quiet", &reference])?.success)
 }
 
-/// Runs git with a fallback identity prepended when `user.email` is not
-/// configured for `repo`, so commits never fail on a fresh machine.
+/// True if `git config <key>` yields a non-empty value in `repo`.
+fn config_is_set(repo: &Path, key: &str) -> Result<bool, GitError> {
+    let output = run_git_raw(repo, &["config", key])?;
+    Ok(output.success && !output.stdout.trim().is_empty())
+}
+
+/// Runs git with fallback `-c user.name=...` / `-c user.email=...` for
+/// whichever identity field is not configured for `repo`, so commits never
+/// fail on a fresh machine.
 fn git_with_identity(repo: &Path, args: &[&str]) -> Result<GitOutput, GitError> {
-    let email = run_git_raw(repo, &["config", "user.email"])?;
     let mut full: Vec<&str> = Vec::new();
-    if !email.success || email.stdout.trim().is_empty() {
-        full.extend_from_slice(&FALLBACK_IDENTITY);
+    if !config_is_set(repo, "user.name")? {
+        full.extend_from_slice(&["-c", FALLBACK_NAME]);
+    }
+    if !config_is_set(repo, "user.email")? {
+        full.extend_from_slice(&["-c", FALLBACK_EMAIL]);
     }
     full.extend_from_slice(args);
     run_git_raw(repo, &full)
@@ -232,10 +318,21 @@ fn git_with_identity(repo: &Path, args: &[&str]) -> Result<GitOutput, GitError> 
 /// tracked changes), followed by a `# Untracked files` section listing
 /// untracked, non-ignored paths when there are any.
 pub fn diff_against_base(info: &WorktreeInfo) -> Result<String, GitError> {
+    validate_info(info)?;
     let wt = Path::new(&info.path);
     let mut out = git(
         wt,
-        &["diff", "--no-color", "--no-ext-diff", &info.base_commit],
+        &[
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            "--end-of-options",
+            &info.base_commit,
+            "--",
+        ],
     )?;
     let untracked = git(wt, &["ls-files", "--others", "--exclude-standard"])?;
     let untracked: Vec<&str> = untracked.lines().filter(|l| !l.is_empty()).collect();
@@ -254,10 +351,18 @@ pub fn diff_against_base(info: &WorktreeInfo) -> Result<String, GitError> {
 
 /// Commits on the worktree branch since its base commit, oldest first.
 pub fn commits_since_base(info: &WorktreeInfo) -> Result<Vec<CommitSummary>, GitError> {
+    validate_info(info)?;
     let range = format!("{}..HEAD", info.base_commit);
     let out = git(
         Path::new(&info.path),
-        &["log", "--reverse", "--format=%H%x1f%s", &range],
+        &[
+            "log",
+            "--reverse",
+            "--format=%H%x1f%s",
+            "--end-of-options",
+            &range,
+            "--",
+        ],
     )?;
     Ok(out
         .lines()
@@ -269,29 +374,30 @@ pub fn commits_since_base(info: &WorktreeInfo) -> Result<Vec<CommitSummary>, Git
         .collect())
 }
 
-/// Stages `paths` and commits exactly those paths (other staged work is
-/// left staged). Returns the new commit hash, or `None` when the paths had
-/// no changes.
+/// Stages `paths` (taken literally, no glob magic) and commits exactly
+/// those paths (other staged work is left staged). Returns the new commit
+/// hash, or `None` when the paths had no changes.
 pub fn commit_paths(
     info: &WorktreeInfo,
     paths: &[&str],
     message: &str,
 ) -> Result<Option<String>, GitError> {
+    validate_info(info)?;
     if paths.is_empty() {
         return Ok(None);
     }
     let wt = Path::new(&info.path);
-    let mut add = vec!["add", "--"];
+    let mut add = vec!["--literal-pathspecs", "add", "--"];
     add.extend_from_slice(paths);
     git(wt, &add)?;
 
-    let mut staged = vec!["diff", "--cached", "--quiet", "--"];
+    let mut staged = vec!["--literal-pathspecs", "diff", "--cached", "--quiet", "--"];
     staged.extend_from_slice(paths);
     if run_git_raw(wt, &staged)?.success {
         return Ok(None);
     }
 
-    let mut commit = vec!["commit", "-m", message, "--"];
+    let mut commit = vec!["--literal-pathspecs", "commit", "-m", message, "--"];
     commit.extend_from_slice(paths);
     let output = git_with_identity(wt, &commit)?;
     if !output.success {
@@ -300,11 +406,20 @@ pub fn commit_paths(
     Ok(Some(git(wt, &["rev-parse", "HEAD"])?.trim().to_string()))
 }
 
+/// True if a merge is in progress in `repo`.
+fn merge_in_progress(repo: &Path) -> Result<bool, GitError> {
+    Ok(run_git_raw(repo, &["rev-parse", "-q", "--verify", "MERGE_HEAD"])?.success)
+}
+
 /// Merges the worktree branch into the base branch of the user's checkout
 /// with `--no-ff`, returning the merge commit hash. Refuses unless the
 /// checkout is on `base_branch` (`NOT_ON_BASE_BRANCH`) and clean
-/// (`DIRTY_WORKTREE`); a failed merge is aborted (`MERGE_CONFLICT`).
+/// (`DIRTY_WORKTREE`). A conflicted merge is aborted (`MERGE_CONFLICT`,
+/// or `MERGE_ABORT_FAILED` if the repo could not be restored); a merge that
+/// fails without starting (missing branch, hook rejection, ...) is
+/// `MERGE_FAILED`.
 pub fn merge_into_base(repo_root: &Path, info: &WorktreeInfo) -> Result<String, GitError> {
+    validate_info(info)?;
     let current = current_branch(repo_root)?;
     if current.as_deref() != Some(info.base_branch.as_str()) {
         return Err(GitError::new(
@@ -317,34 +432,95 @@ pub fn merge_into_base(repo_root: &Path, info: &WorktreeInfo) -> Result<String, 
         return Err(GitError::new("DIRTY_WORKTREE", status));
     }
 
-    let output = git_with_identity(repo_root, &["merge", "--no-ff", "--no-edit", &info.branch])?;
-    if !output.success {
-        // Best effort: restore the pre-merge state; the conflict is the error.
-        let _ = run_git_raw(repo_root, &["merge", "--abort"]);
+    let before = git(repo_root, &["rev-parse", "HEAD"])?.trim().to_string();
+    let branch_ref = format!("refs/heads/{}", info.branch);
+    let output = git_with_identity(
+        repo_root,
+        &[
+            "merge",
+            "--no-ff",
+            "--no-edit",
+            "--end-of-options",
+            &branch_ref,
+        ],
+    )?;
+    if output.success {
+        return Ok(git(repo_root, &["rev-parse", "HEAD"])?.trim().to_string());
+    }
+
+    let merge_detail = format!("{}{}", output.stdout, output.stderr);
+    if !merge_in_progress(repo_root)? {
+        return Err(GitError::new("MERGE_FAILED", merge_detail));
+    }
+    let abort = run_git_raw(repo_root, &["merge", "--abort"])?;
+    let after = run_git_raw(repo_root, &["rev-parse", "HEAD"])?;
+    let restored = abort.success
+        && !merge_in_progress(repo_root)?
+        && after.success
+        && after.stdout.trim() == before;
+    if !restored {
         return Err(GitError::new(
-            "MERGE_CONFLICT",
-            format!("{}{}", output.stdout, output.stderr),
+            "MERGE_ABORT_FAILED",
+            format!("{merge_detail}{}", abort.stderr),
         ));
     }
-    Ok(git(repo_root, &["rev-parse", "HEAD"])?.trim().to_string())
+    Err(GitError::new("MERGE_CONFLICT", merge_detail))
 }
 
 /// Removes the run's worktree (discarding its changes) and deletes its
 /// branch. A worktree or branch that is already gone is not an error.
 pub fn discard(repo_root: &Path, info: &WorktreeInfo) -> Result<(), GitError> {
-    let removed = run_git_raw(repo_root, &["worktree", "remove", "--force", &info.path])?;
-    if !removed.success {
-        if Path::new(&info.path).exists() {
+    discard_in(&default_worktree_base(), repo_root, info)
+}
+
+/// [`discard`] with an explicit worktree base directory. A leftover
+/// directory that git no longer knows as a worktree is deleted only when
+/// it lies under `<base>/mdium/worktrees` (`UNSAFE_WORKTREE_PATH`
+/// otherwise), so a tampered path can never delete arbitrary folders.
+fn discard_in(base_dir: &Path, repo_root: &Path, info: &WorktreeInfo) -> Result<(), GitError> {
+    validate_info(info)?;
+    let path = Path::new(&info.path);
+    let removed = run_git_raw(
+        repo_root,
+        &["worktree", "remove", "--force", "--force", &info.path],
+    )?;
+    if !removed.success && path.exists() {
+        if is_registered_worktree(repo_root, path)? {
             return Err(GitError::new(GIT_FAILED, removed.stderr));
         }
-        // Directory already gone: drop any stale registration so the
-        // branch is no longer considered checked out.
+        let managed = std::fs::canonicalize(worktrees_dir(base_dir)).ok();
+        let target = std::fs::canonicalize(path).ok();
+        match (managed, target) {
+            (Some(managed), Some(target)) if target.starts_with(&managed) && target != managed => {
+                std::fs::remove_dir_all(&target)
+                    .map_err(|err| GitError::new(GIT_FAILED, err.to_string()))?;
+            }
+            _ => return Err(GitError::new("UNSAFE_WORKTREE_PATH", info.path.clone())),
+        }
+    }
+    if !removed.success {
+        // Drop any stale registration so the branch is no longer considered
+        // checked out.
         git(repo_root, &["worktree", "prune"])?;
     }
     if branch_exists(repo_root, &info.branch)? {
         git(repo_root, &["branch", "-D", &info.branch])?;
     }
     Ok(())
+}
+
+/// True if `path` is one of the worktrees git has registered for
+/// `repo_root` (compared after canonicalization).
+fn is_registered_worktree(repo_root: &Path, path: &Path) -> Result<bool, GitError> {
+    let Ok(target) = std::fs::canonicalize(path) else {
+        return Ok(false);
+    };
+    let list = git(repo_root, &["worktree", "list", "--porcelain"])?;
+    Ok(list
+        .lines()
+        .filter_map(|line| line.strip_prefix("worktree "))
+        .filter_map(|listed| std::fs::canonicalize(listed).ok())
+        .any(|listed| listed == target))
 }
 
 #[cfg(test)]
@@ -637,5 +813,149 @@ mod tests {
         let list = fixture.run(&["worktree", "list", "--porcelain"]);
         assert_eq!(list.matches("worktree ").count(), 1, "{list}");
         discard(fixture.root(), &info).unwrap();
+    }
+
+    /// Sets extra env vars for git children spawned on this test thread,
+    /// restoring the previous set on drop.
+    struct TestEnv(Vec<(String, String)>);
+
+    impl TestEnv {
+        fn set(vars: &[(&str, &str)]) -> Self {
+            let new = vars
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            let prev = TEST_GIT_ENV.with(|env| std::mem::replace(&mut *env.borrow_mut(), new));
+            TestEnv(prev)
+        }
+    }
+
+    impl Drop for TestEnv {
+        fn drop(&mut self) {
+            let prev = std::mem::take(&mut self.0);
+            TEST_GIT_ENV.with(|env| *env.borrow_mut() = prev);
+        }
+    }
+
+    #[test]
+    fn merge_of_missing_branch_is_merge_failed() {
+        let fixture = Fixture::new();
+        let mut info = fixture.create("t");
+        info.branch = "mdium/01234567-missing".to_string();
+        let before = fixture.run(&["rev-parse", "HEAD"]);
+        let err = merge_into_base(fixture.root(), &info).unwrap_err();
+        assert_eq!(err.code, "MERGE_FAILED", "{err:?}");
+        assert_eq!(fixture.run(&["rev-parse", "HEAD"]), before);
+        assert_eq!(fixture.run(&["status", "--porcelain"]), "");
+    }
+
+    #[test]
+    fn invalid_worktree_info_is_rejected_by_every_op() {
+        let fixture = Fixture::new();
+        let good = fixture.create("t");
+        let mut bad_commit = good.clone();
+        bad_commit.base_commit = "--output=x".to_string();
+        let mut upper_commit = good.clone();
+        upper_commit.base_commit = good.base_commit.to_uppercase();
+        let mut bad_branch = good.clone();
+        bad_branch.branch = "main".to_string();
+        let mut relative = good.clone();
+        relative.path = "relative/wt".to_string();
+
+        for info in [&bad_commit, &upper_commit, &bad_branch, &relative] {
+            let codes = [
+                diff_against_base(info).unwrap_err().code,
+                commits_since_base(info).unwrap_err().code,
+                commit_paths(info, &["a.txt"], "m").unwrap_err().code,
+                merge_into_base(fixture.root(), info).unwrap_err().code,
+                discard(fixture.root(), info).unwrap_err().code,
+            ];
+            for code in codes {
+                assert_eq!(code, "INVALID_WORKTREE_INFO", "{info:?}");
+            }
+        }
+        assert!(!Path::new(&good.path).join("x").exists());
+        assert!(!fixture.root().join("x").exists());
+        // The good info still works and the worktree was left alone.
+        assert!(Path::new(&good.path).is_dir());
+        diff_against_base(&good).unwrap();
+    }
+
+    #[test]
+    fn commit_paths_uses_literal_pathspecs() {
+        let fixture = Fixture::new();
+        let info = fixture.create("t");
+        let wt = Path::new(&info.path);
+        write_file(wt, "[a].txt", "bracket\n");
+        write_file(wt, "a.txt", "changed\n");
+        commit_paths(&info, &["[a].txt"], "literal")
+            .unwrap()
+            .unwrap();
+        let files = wt_git(&info, &["show", "--name-only", "--format=", "HEAD"]);
+        assert_eq!(files.trim(), "[a].txt");
+    }
+
+    #[test]
+    fn commit_paths_falls_back_to_mdium_identity() {
+        let fixture = Fixture::new();
+        let global = fixture.worktrees.path().join("empty-global.gitconfig");
+        fs::write(&global, "").unwrap();
+        let _env = TestEnv::set(&[
+            ("GIT_CONFIG_GLOBAL", global.to_str().unwrap()),
+            ("GIT_CONFIG_NOSYSTEM", "1"),
+        ]);
+        fixture.run(&["config", "--unset", "user.name"]);
+        fixture.run(&["config", "--unset", "user.email"]);
+        let info = fixture.create("t");
+
+        write_file(Path::new(&info.path), "b.txt", "b\n");
+        commit_paths(&info, &["b.txt"], "no identity")
+            .unwrap()
+            .unwrap();
+        let author = wt_git(&info, &["log", "-1", "--format=%an <%ae>"]);
+        assert_eq!(author.trim(), "MDium <mdium@localhost>");
+
+        // Only the missing field is filled in.
+        fixture.run(&["config", "user.name", "Alice"]);
+        write_file(Path::new(&info.path), "c.txt", "c\n");
+        commit_paths(&info, &["c.txt"], "name only")
+            .unwrap()
+            .unwrap();
+        let author = wt_git(&info, &["log", "-1", "--format=%an <%ae>"]);
+        assert_eq!(author.trim(), "Alice <mdium@localhost>");
+    }
+
+    #[test]
+    fn discard_removes_unregistered_dir_only_under_worktree_base() {
+        let fixture = Fixture::new();
+        let registered = fixture.create("t");
+
+        // An orphan directory under the MDium worktree base is removed.
+        let orphan_path = Path::new(&registered.path).with_file_name("fedcba9876543210");
+        write_file(&orphan_path, "left.txt", "x\n");
+        let mut orphan = registered.clone();
+        orphan.path = orphan_path.to_string_lossy().into_owned();
+        orphan.branch = "mdium/fedcba98-t".to_string();
+        discard_in(fixture.worktrees.path(), fixture.root(), &orphan).unwrap();
+        assert!(!orphan_path.exists());
+
+        // An unregistered directory elsewhere is never deleted.
+        let outside = TempDir::new().unwrap();
+        write_file(outside.path(), "keep.txt", "x\n");
+        let mut foreign = registered.clone();
+        foreign.path = outside.path().to_string_lossy().into_owned();
+        let err = discard_in(fixture.worktrees.path(), fixture.root(), &foreign).unwrap_err();
+        assert_eq!(err.code, "UNSAFE_WORKTREE_PATH");
+        assert!(outside.path().join("keep.txt").is_file());
+    }
+
+    #[test]
+    fn worktree_path_normalizes_repo_root() {
+        let fixture = Fixture::new();
+        fs::create_dir_all(fixture.root().join("sub")).unwrap();
+        assert_eq!(
+            worktree_path_in(Path::new("/base"), &fixture.root().join("sub"), TASK_ID),
+            worktree_path_in(Path::new("/base"), fixture.root(), TASK_ID)
+        );
     }
 }
