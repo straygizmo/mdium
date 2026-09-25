@@ -6,5 +6,7 @@
 //! the module is allowed to have unused items in the meantime.
 #![allow(dead_code)]
 
+pub mod fsutil;
 pub mod integrity;
 pub mod model;
+pub mod store;
