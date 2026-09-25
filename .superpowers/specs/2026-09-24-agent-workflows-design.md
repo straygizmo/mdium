@@ -88,7 +88,7 @@ opencode 設定ダイアログの MCP サーバ一覧が多件数でダイアロ
 
 ### 2.1 エージェントランナー（Node サイドカー）
 
-Codex（`@openai/codex-sdk`）、Copilot（`@github/copilot-sdk`）、opencode（既存サーバ）を統一インターフェースで呼び出すサイドカー。AGENT CHAT とワークフロー／要件整理／定期 JOB の全利用箇所が共有する。
+Codex（`@openai/codex-sdk`）、Copilot（`@github/copilot-sdk`）、Claude（`@anthropic-ai/claude-agent-sdk`）、opencode（ランナー専用の `opencode serve`）を統一インターフェースで呼び出すサイドカー。AGENT CHAT はチャット用ランナー（Codex / Copilot のみ）、ワークフロー／要件整理／定期 JOB はワークフロー用ランナー（4 プロバイダー）を使う。
 
 - 起動: Tauri が `node` で起動し、stdio の JSON 行プロトコルで通信する。ビルド成果物（esbuild バンドル）は `resources/agent-runner/` に生成し、git 管理しない（`.gitignore`）。`build:sidecar` に組み込む。
 - プロバイダーアダプタのインターフェース:
@@ -115,7 +115,9 @@ interface SessionOptions {
 ```
 
 - 権限の対応付け:
-  - `read-only`: Codex は sandbox `read-only`、Copilot は権限ハンドラで `read` 以外の要求をすべて拒否、opencode は `plan` エージェントで実行し `read` 以外の権限要求を拒否。
+  - `read-only`: Codex は sandbox `read-only`、Copilot は権限ハンドラで `read` 以外の要求をすべて拒否、opencode は専用の読み取り専用エージェント（乱数付きの名前、`"*": deny` のうえで読み取り系のみ許可）で実行。
+  - opencode 専用サーバ: ランナーが 1 つ起動し、プロジェクト設定を無効化（`OPENCODE_DISABLE_PROJECT_CONFIG`）、LSP・フォーマッタを無効化し、全ツールの権限を ask にしてランナーの判定を必ず通す。エージェント名に乱数を付け、ユーザー・プロジェクト設定から上書きされないようにする。
+  - ガード付き・制限付きセッションでは、MCP など中身を検査できないツール（opaque tool）は全プロバイダーで拒否し、`guard_violation`（`opaque-tool`）として報告する。
   - `full-access`: Codex は sandbox `danger-full-access`、Copilot と opencode はすべて許可（ただしランナーのガードフックを通す。3.7）。Copilot の拡張機能・環境変数アクセス系の要求（`extension-management`、`extension-permission-access`、`extension-env-access`、`factory`、`custom-tool`、`hook`）は full-access でも拒否する。
   - Claude（Claude Agent SDK）: `read-only` は `canUseTool` で読み取り系ツール（Read / Grep / Glob / LS 等）以外を拒否、`full-access` は `permissionMode: "default"` のまま `canUseTool` で許可し、ガードフックを通す（`bypassPermissions` は使わない）。AGENT CHAT の Claude タブは既存の Claude パネルを使うため、ランナーの Claude アダプタは工程専用とする。
   - `cli-default`: Codex は sandbox を指定しない（`~/.codex/config.toml` に従う）。Copilot の権限要求は CLI と同じく利用者に都度確認する（チャット UI で承認・拒否）。

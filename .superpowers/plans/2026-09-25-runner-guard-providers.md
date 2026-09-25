@@ -15,7 +15,7 @@
 - Permission modes are exactly `"cli-default" | "read-only" | "full-access"`. The Claude adapter never uses `permissionMode: "bypassPermissions"`.
 - Under `full-access`, Copilot requests of kinds `extension-management`, `extension-permission-access`, `extension-env-access`, `factory`, `custom-tool`, `hook` are always rejected.
 - The guard is active only when `start_session` carries `guard: { workspaceRoot }`. Guard violation outcome: `guard_violation` message, then `turn_failed` with message exactly `GUARD_BLOCKED`.
-- Guard rule ids (exact strings): `git-remote`, `forge-cli`, `outside-workspace`, `credentials`, `network-send`, `system-config`.
+- Guard rule ids (exact strings): `git-remote`, `forge-cli`, `outside-workspace`, `credentials`, `network-send`, `system-config`, `agent-config` (added during review), `opaque-tool` (added during final review).
 - Never bundle provider CLIs; `resources/agent-runner/` stays git-ignored. After any bundle change, smoke-test the bundle from a folder OUTSIDE the repo.
 - Existing sidecar test style: plain vitest (node env) under `sidecar/agent-runner/__tests__/`; injectable SDK factories with fakes.
 - Commands: `npx vitest run sidecar/agent-runner`, `npx tsc --noEmit`, `npm test`, `npm run build:sidecar`.
