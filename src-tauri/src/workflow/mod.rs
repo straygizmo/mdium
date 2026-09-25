@@ -7,6 +7,7 @@
 #![allow(dead_code)]
 
 pub mod containment;
+pub mod errors;
 pub mod fsutil;
 pub mod gitops;
 pub mod integrity;

@@ -182,11 +182,21 @@ pub fn now() -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvalidId(pub String);
 
-impl std::fmt::Display for InvalidId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "invalid id: {:?}", self.0)
+impl InvalidId {
+    /// Stable machine code: the same `STORE_INVALID_ID` the store reports
+    /// for this failure.
+    pub fn code(&self) -> &'static str {
+        "STORE_INVALID_ID"
     }
 }
+
+impl std::fmt::Display for InvalidId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {:?}", self.code(), self.0)
+    }
+}
+
+crate::workflow::errors::impl_workflow_error!(InvalidId);
 
 /// True if `id` is exactly 16 lowercase hex characters.
 pub(crate) fn is_valid_id(id: &str) -> bool {

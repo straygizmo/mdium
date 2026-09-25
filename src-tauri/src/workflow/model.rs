@@ -273,19 +273,40 @@ impl ValidationError {
     /// Stable machine code for this validation failure.
     pub fn code(&self) -> &'static str {
         match self {
-            ValidationError::StageRoles => "STAGE_ROLES",
-            ValidationError::StageIdDuplicate(_) => "STAGE_ID_DUPLICATE",
-            ValidationError::ReviewReturnTo => "REVIEW_RETURN_TO",
-            ValidationError::Timeout(_) => "TIMEOUT",
-            ValidationError::MaxReentry => "MAX_REENTRY",
-            ValidationError::MaxConcurrent => "MAX_CONCURRENT",
-            ValidationError::ApprovalRole(_) => "APPROVAL_ROLE",
-            ValidationError::DesignDocPath(_) => "DESIGN_DOC_PATH",
-            ValidationError::NameEmpty => "NAME_EMPTY",
-            ValidationError::StageNameEmpty(_) => "STAGE_NAME_EMPTY",
+            ValidationError::StageRoles => "WORKFLOW_INVALID_STAGE_ROLES",
+            ValidationError::StageIdDuplicate(_) => "WORKFLOW_STAGE_ID_DUPLICATE",
+            ValidationError::ReviewReturnTo => "WORKFLOW_INVALID_REVIEW_RETURN_TO",
+            ValidationError::Timeout(_) => "WORKFLOW_INVALID_TIMEOUT",
+            ValidationError::MaxReentry => "WORKFLOW_INVALID_MAX_REENTRY",
+            ValidationError::MaxConcurrent => "WORKFLOW_INVALID_MAX_CONCURRENT",
+            ValidationError::ApprovalRole(_) => "WORKFLOW_INVALID_APPROVAL_ROLE",
+            ValidationError::DesignDocPath(_) => "WORKFLOW_INVALID_DESIGN_DOC_PATH",
+            ValidationError::NameEmpty => "WORKFLOW_NAME_EMPTY",
+            ValidationError::StageNameEmpty(_) => "WORKFLOW_STAGE_NAME_EMPTY",
         }
     }
 }
+
+impl std::fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ValidationError::StageIdDuplicate(detail)
+            | ValidationError::Timeout(detail)
+            | ValidationError::ApprovalRole(detail)
+            | ValidationError::DesignDocPath(detail)
+            | ValidationError::StageNameEmpty(detail) => {
+                write!(f, "{}: {detail}", self.code())
+            }
+            ValidationError::StageRoles
+            | ValidationError::ReviewReturnTo
+            | ValidationError::MaxReentry
+            | ValidationError::MaxConcurrent
+            | ValidationError::NameEmpty => f.write_str(self.code()),
+        }
+    }
+}
+
+crate::workflow::errors::impl_workflow_error!(ValidationError);
 
 /// True if `path` is not a safe repo-relative `designDocPath`: absolute,
 /// containing a `..` segment, or rooted under `.git`/`.mdium`.
@@ -562,7 +583,7 @@ mod tests {
 
         let errors = workflow.validate().unwrap_err();
         assert_eq!(errors, vec![ValidationError::StageRoles]);
-        assert_eq!(errors[0].code(), "STAGE_ROLES");
+        assert_eq!(errors[0].code(), "WORKFLOW_INVALID_STAGE_ROLES");
     }
 
     #[test]
@@ -575,7 +596,7 @@ mod tests {
             errors,
             vec![ValidationError::StageIdDuplicate("design".to_string())]
         );
-        assert_eq!(errors[0].code(), "STAGE_ID_DUPLICATE");
+        assert_eq!(errors[0].code(), "WORKFLOW_STAGE_ID_DUPLICATE");
     }
 
     #[test]
@@ -585,7 +606,7 @@ mod tests {
 
         let errors = workflow.validate().unwrap_err();
         assert_eq!(errors, vec![ValidationError::ReviewReturnTo]);
-        assert_eq!(errors[0].code(), "REVIEW_RETURN_TO");
+        assert_eq!(errors[0].code(), "WORKFLOW_INVALID_REVIEW_RETURN_TO");
     }
 
     #[test]
@@ -595,7 +616,7 @@ mod tests {
 
         let errors = workflow.validate().unwrap_err();
         assert_eq!(errors, vec![ValidationError::Timeout("design".to_string())]);
-        assert_eq!(errors[0].code(), "TIMEOUT");
+        assert_eq!(errors[0].code(), "WORKFLOW_INVALID_TIMEOUT");
     }
 
     #[test]
@@ -605,7 +626,7 @@ mod tests {
 
         let errors = workflow.validate().unwrap_err();
         assert_eq!(errors, vec![ValidationError::MaxReentry]);
-        assert_eq!(errors[0].code(), "MAX_REENTRY");
+        assert_eq!(errors[0].code(), "WORKFLOW_INVALID_MAX_REENTRY");
     }
 
     #[test]
@@ -615,7 +636,7 @@ mod tests {
 
         let errors = workflow.validate().unwrap_err();
         assert_eq!(errors, vec![ValidationError::MaxConcurrent]);
-        assert_eq!(errors[0].code(), "MAX_CONCURRENT");
+        assert_eq!(errors[0].code(), "WORKFLOW_INVALID_MAX_CONCURRENT");
     }
 
     #[test]
@@ -628,7 +649,7 @@ mod tests {
             errors,
             vec![ValidationError::ApprovalRole("design".to_string())]
         );
-        assert_eq!(errors[0].code(), "APPROVAL_ROLE");
+        assert_eq!(errors[0].code(), "WORKFLOW_INVALID_APPROVAL_ROLE");
     }
 
     #[test]
@@ -641,7 +662,7 @@ mod tests {
             errors,
             vec![ValidationError::DesignDocPath("../outside.md".to_string())]
         );
-        assert_eq!(errors[0].code(), "DESIGN_DOC_PATH");
+        assert_eq!(errors[0].code(), "WORKFLOW_INVALID_DESIGN_DOC_PATH");
     }
 
     #[test]
@@ -650,7 +671,7 @@ mod tests {
         workflow.design_doc_path = Some("/etc/passwd".to_string());
 
         let errors = workflow.validate().unwrap_err();
-        assert_eq!(errors[0].code(), "DESIGN_DOC_PATH");
+        assert_eq!(errors[0].code(), "WORKFLOW_INVALID_DESIGN_DOC_PATH");
     }
 
     #[test]
@@ -659,7 +680,7 @@ mod tests {
         workflow.design_doc_path = Some(".mdium/secret.md".to_string());
 
         let errors = workflow.validate().unwrap_err();
-        assert_eq!(errors[0].code(), "DESIGN_DOC_PATH");
+        assert_eq!(errors[0].code(), "WORKFLOW_INVALID_DESIGN_DOC_PATH");
     }
 
     #[test]
@@ -668,7 +689,7 @@ mod tests {
         workflow.design_doc_path = Some(".Git/config".to_string());
 
         let errors = workflow.validate().unwrap_err();
-        assert_eq!(errors[0].code(), "DESIGN_DOC_PATH");
+        assert_eq!(errors[0].code(), "WORKFLOW_INVALID_DESIGN_DOC_PATH");
     }
 
     #[test]
@@ -677,7 +698,7 @@ mod tests {
         workflow.design_doc_path = Some(".GIT\\hooks\\x".to_string());
 
         let errors = workflow.validate().unwrap_err();
-        assert_eq!(errors[0].code(), "DESIGN_DOC_PATH");
+        assert_eq!(errors[0].code(), "WORKFLOW_INVALID_DESIGN_DOC_PATH");
     }
 
     #[test]
@@ -686,7 +707,7 @@ mod tests {
         workflow.design_doc_path = Some(".Mdium/x.md".to_string());
 
         let errors = workflow.validate().unwrap_err();
-        assert_eq!(errors[0].code(), "DESIGN_DOC_PATH");
+        assert_eq!(errors[0].code(), "WORKFLOW_INVALID_DESIGN_DOC_PATH");
     }
 
     #[test]
@@ -695,7 +716,7 @@ mod tests {
         workflow.design_doc_path = Some("C:\\Users\\x\\doc.md".to_string());
 
         let errors = workflow.validate().unwrap_err();
-        assert_eq!(errors[0].code(), "DESIGN_DOC_PATH");
+        assert_eq!(errors[0].code(), "WORKFLOW_INVALID_DESIGN_DOC_PATH");
     }
 
     #[test]
@@ -704,7 +725,7 @@ mod tests {
         workflow.design_doc_path = Some("\\\\server\\share\\doc.md".to_string());
 
         let errors = workflow.validate().unwrap_err();
-        assert_eq!(errors[0].code(), "DESIGN_DOC_PATH");
+        assert_eq!(errors[0].code(), "WORKFLOW_INVALID_DESIGN_DOC_PATH");
     }
 
     #[test]
@@ -713,7 +734,7 @@ mod tests {
         workflow.design_doc_path = Some("a/../../x".to_string());
 
         let errors = workflow.validate().unwrap_err();
-        assert_eq!(errors[0].code(), "DESIGN_DOC_PATH");
+        assert_eq!(errors[0].code(), "WORKFLOW_INVALID_DESIGN_DOC_PATH");
     }
 
     #[test]
@@ -732,7 +753,7 @@ mod tests {
 
         let errors = workflow.validate().unwrap_err();
         assert_eq!(errors, vec![ValidationError::NameEmpty]);
-        assert_eq!(errors[0].code(), "NAME_EMPTY");
+        assert_eq!(errors[0].code(), "WORKFLOW_NAME_EMPTY");
     }
 
     #[test]
@@ -745,7 +766,7 @@ mod tests {
             errors,
             vec![ValidationError::StageNameEmpty("design".to_string())]
         );
-        assert_eq!(errors[0].code(), "STAGE_NAME_EMPTY");
+        assert_eq!(errors[0].code(), "WORKFLOW_STAGE_NAME_EMPTY");
     }
 
     #[test]

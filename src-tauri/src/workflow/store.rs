@@ -47,10 +47,10 @@ impl StoreError {
     /// Stable machine code for this failure, for callers/UI to key off.
     pub fn code(&self) -> &'static str {
         match self {
-            StoreError::Io(_) => "STORE_IO",
+            StoreError::Io(_) => "STORE_IO_FAILED",
             StoreError::NotFound => "STORE_NOT_FOUND",
             StoreError::Corrupt(_) => "STORE_CORRUPT",
-            StoreError::Encode(_) => "ENCODE_ERROR",
+            StoreError::Encode(_) => "STORE_ENCODE_FAILED",
             StoreError::UnsupportedSchema(_) => "STORE_UNSUPPORTED_SCHEMA",
             StoreError::Invalid(_) => "STORE_INVALID",
             StoreError::InvalidId(_) => "STORE_INVALID_ID",
@@ -58,23 +58,30 @@ impl StoreError {
             StoreError::LockMismatch => "STORE_LOCK_MISMATCH",
         }
     }
+}
 
-    /// `code()` plus any detail, for warnings and logs. Not user-facing
-    /// text: the UI localizes by code.
-    fn describe(&self) -> String {
+/// `code()` plus any detail, for warnings and logs. Not user-facing text:
+/// the UI localizes by code.
+impl std::fmt::Display for StoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             StoreError::Io(detail)
             | StoreError::Corrupt(detail)
             | StoreError::Encode(detail)
-            | StoreError::InvalidId(detail) => format!("{}: {detail}", self.code()),
-            StoreError::UnsupportedSchema(version) => format!("{}: {version}", self.code()),
-            StoreError::Invalid(errors) => format!("{}: {errors:?}", self.code()),
+            | StoreError::InvalidId(detail) => write!(f, "{}: {detail}", self.code()),
+            StoreError::UnsupportedSchema(version) => write!(f, "{}: {version}", self.code()),
+            StoreError::Invalid(errors) => {
+                let codes: Vec<String> = errors.iter().map(ToString::to_string).collect();
+                write!(f, "{}: [{}]", self.code(), codes.join(", "))
+            }
             StoreError::NotFound | StoreError::AlreadyExists | StoreError::LockMismatch => {
-                self.code().to_string()
+                f.write_str(self.code())
             }
         }
     }
 }
+
+crate::workflow::errors::impl_workflow_error!(StoreError);
 
 impl From<std::io::Error> for StoreError {
     fn from(err: std::io::Error) -> Self {
@@ -316,7 +323,7 @@ impl WorkflowStore {
                 Ok(workflow) => list.workflows.push(workflow),
                 Err(err) => list.warnings.push(StoreWarning {
                     file: path.display().to_string(),
-                    message: format!("{} (workflows[{index}])", err.describe()),
+                    message: format!("{} (workflows[{index}])", err.to_string()),
                 }),
             }
         }
@@ -608,7 +615,7 @@ fn scan_records<T>(
             Err(err) => {
                 warnings.push(StoreWarning {
                     file: dir.display().to_string(),
-                    message: StoreError::from(err).describe(),
+                    message: StoreError::from(err).to_string(),
                 });
                 continue;
             }
@@ -628,7 +635,7 @@ fn scan_records<T>(
             Ok(record) => records.push(record),
             Err(err) => warnings.push(StoreWarning {
                 file: path.display().to_string(),
-                message: err.describe(),
+                message: err.to_string(),
             }),
         }
     }

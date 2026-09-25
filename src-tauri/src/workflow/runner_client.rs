@@ -77,14 +77,19 @@ pub enum RunnerEvent {
 pub enum RunnerError {
     Timeout,
     Exited,
-    /// The runner answered with an `error` message.
+    /// The runner answered with an `error` message (the runner's own wire
+    /// code, e.g. `SESSION_EXISTS`).
     Remote(String),
     Transport(String),
+    /// The runner sent a reply that does not match the protocol.
     Protocol(String),
+    /// The request was rejected locally before being sent; carries the
+    /// specific `RUNNER_*` code (e.g. `RUNNER_GUARD_REQUIRED`).
+    InvalidRequest(&'static str),
 }
 
 impl RunnerError {
-    /// Stable machine code for this failure.
+    /// Stable machine code for this failure's category.
     pub fn code(&self) -> &'static str {
         match self {
             RunnerError::Timeout => "RUNNER_TIMEOUT",
@@ -92,9 +97,35 @@ impl RunnerError {
             RunnerError::Remote(_) => "RUNNER_REMOTE_ERROR",
             RunnerError::Transport(_) => "RUNNER_TRANSPORT_ERROR",
             RunnerError::Protocol(_) => "RUNNER_PROTOCOL_ERROR",
+            RunnerError::InvalidRequest(_) => "RUNNER_INVALID_REQUEST",
+        }
+    }
+
+    /// The specific cause within [`Self::code`]'s category, when there is
+    /// a machine-readable one: the `RUNNER_*` validation code of an
+    /// `InvalidRequest`, or the runner's wire code of a `Remote` error.
+    pub fn detail_code(&self) -> Option<&str> {
+        match self {
+            RunnerError::InvalidRequest(code) => Some(code),
+            RunnerError::Remote(code) => Some(code),
+            _ => None,
         }
     }
 }
+
+impl std::fmt::Display for RunnerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RunnerError::Timeout | RunnerError::Exited => f.write_str(self.code()),
+            RunnerError::Remote(detail)
+            | RunnerError::Transport(detail)
+            | RunnerError::Protocol(detail) => write!(f, "{}: {detail}", self.code()),
+            RunnerError::InvalidRequest(detail) => write!(f, "{}: {detail}", self.code()),
+        }
+    }
+}
+
+crate::workflow::errors::impl_workflow_error!(RunnerError);
 
 /// Tool permission mode for a workflow session (the runner's
 /// `AgentPermission` minus AGENT CHAT's `cli-default`).
@@ -123,7 +154,7 @@ pub struct StartSessionParams {
     pub resume_native_id: Option<String>,
     /// Enables the runner's safety guard rooted at this absolute path.
     /// Required: [`RunnerClient::start_session`] rejects `None` with
-    /// `GUARD_REQUIRED`.
+    /// `RUNNER_GUARD_REQUIRED`.
     pub guard_workspace_root: Option<String>,
     pub timeout_ms: Option<u64>,
 }
@@ -382,21 +413,21 @@ impl RunnerClient {
         timeout: Duration,
     ) -> Result<(Receiver<RunnerEvent>, Option<String>), RunnerError> {
         // Fail fast on requests the runner would reject anyway.
-        let invalid = |code: &str| Err(RunnerError::Protocol(code.to_string()));
+        let invalid = |code: &'static str| Err(RunnerError::InvalidRequest(code));
         if params.session_id.trim().is_empty() {
-            return invalid("INVALID_SESSION_ID");
+            return invalid("RUNNER_INVALID_SESSION_ID");
         }
         if params.working_directory.trim().is_empty() {
-            return invalid("INVALID_WORKING_DIRECTORY");
+            return invalid("RUNNER_INVALID_WORKING_DIRECTORY");
         }
         if params.timeout_ms == Some(0) {
-            return invalid("INVALID_TIMEOUT");
+            return invalid("RUNNER_INVALID_TIMEOUT");
         }
         // Every workflow session runs under the runner's safety guard,
         // whatever its permission.
         match &params.guard_workspace_root {
-            None => return invalid("GUARD_REQUIRED"),
-            Some(root) if !is_absolute_path(root) => return invalid("INVALID_GUARD_ROOT"),
+            None => return invalid("RUNNER_GUARD_REQUIRED"),
+            Some(root) if !is_absolute_path(root) => return invalid("RUNNER_INVALID_GUARD_ROOT"),
             Some(_) => {}
         }
         let session_id = params.session_id.clone();
@@ -643,6 +674,7 @@ mod tests {
         let err = h.join().unwrap().unwrap_err();
         assert_eq!(err, RunnerError::Remote("PROVIDER_UNAVAILABLE".to_string()));
         assert_eq!(err.code(), "RUNNER_REMOTE_ERROR");
+        assert_eq!(err.detail_code(), Some("PROVIDER_UNAVAILABLE"));
     }
 
     #[test]
@@ -781,42 +813,42 @@ mod tests {
                     session_id: " ".to_string(),
                     ..params("s")
                 },
-                "INVALID_SESSION_ID",
+                "RUNNER_INVALID_SESSION_ID",
             ),
             (
                 StartSessionParams {
                     working_directory: String::new(),
                     ..params("s")
                 },
-                "INVALID_WORKING_DIRECTORY",
+                "RUNNER_INVALID_WORKING_DIRECTORY",
             ),
             (
                 StartSessionParams {
                     timeout_ms: Some(0),
                     ..params("s")
                 },
-                "INVALID_TIMEOUT",
+                "RUNNER_INVALID_TIMEOUT",
             ),
             (
                 StartSessionParams {
                     guard_workspace_root: Some("relative/dir".to_string()),
                     ..params("s")
                 },
-                "INVALID_GUARD_ROOT",
+                "RUNNER_INVALID_GUARD_ROOT",
             ),
             (
                 StartSessionParams {
                     guard_workspace_root: Some("C:relative".to_string()),
                     ..params("s")
                 },
-                "INVALID_GUARD_ROOT",
+                "RUNNER_INVALID_GUARD_ROOT",
             ),
             (
                 StartSessionParams {
                     guard_workspace_root: None,
                     ..params("s")
                 },
-                "GUARD_REQUIRED",
+                "RUNNER_GUARD_REQUIRED",
             ),
             (
                 StartSessionParams {
@@ -824,14 +856,14 @@ mod tests {
                     guard_workspace_root: None,
                     ..params("s")
                 },
-                "GUARD_REQUIRED",
+                "RUNNER_GUARD_REQUIRED",
             ),
         ];
         for (p, code) in cases {
-            assert_eq!(
-                client.start_session(p, WAIT).unwrap_err(),
-                RunnerError::Protocol(code.to_string())
-            );
+            let err = client.start_session(p, WAIT).unwrap_err();
+            assert_eq!(err, RunnerError::InvalidRequest(code));
+            assert_eq!(err.code(), "RUNNER_INVALID_REQUEST");
+            assert_eq!(err.detail_code(), Some(code));
         }
         assert!(rx.try_recv().is_err(), "nothing may be written");
         // The id stays usable after a rejected start.

@@ -13,11 +13,12 @@ use std::os::windows::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
-/// A failed git operation: a stable machine `code` plus git's stderr (or
+/// A failed git operation: a stable machine code (one of the `GIT_*`
+/// constants below, read via [`GitError::code`]) plus git's stderr (or
 /// other detail) for logs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitError {
-    pub code: String,
+    code: &'static str,
     pub stderr: String,
 }
 
@@ -29,7 +30,29 @@ pub struct CommitSummary {
 }
 
 /// Error code for a git command that could not be spawned or exited non-zero.
-const GIT_FAILED: &str = "GIT_FAILED";
+pub const GIT_FAILED: &str = "GIT_FAILED";
+/// A root task id is not a valid 16-hex id.
+pub const GIT_INVALID_ID: &str = "GIT_INVALID_ID";
+/// The path is not inside a git work tree.
+pub const GIT_NOT_A_REPO: &str = "GIT_NOT_A_REPO";
+/// The repository's HEAD is detached, so there is no base branch.
+pub const GIT_DETACHED_HEAD: &str = "GIT_DETACHED_HEAD";
+/// The worktree directory or its branch already exists.
+pub const GIT_WORKTREE_EXISTS: &str = "GIT_WORKTREE_EXISTS";
+/// A stored `WorktreeInfo` failed validation.
+pub const GIT_INVALID_WORKTREE_INFO: &str = "GIT_INVALID_WORKTREE_INFO";
+/// A worktree's link to the user's repository is not the one git created.
+pub const GIT_WORKTREE_LINK_TAMPERED: &str = "GIT_WORKTREE_LINK_TAMPERED";
+/// The user's checkout is not on the run's base branch.
+pub const GIT_NOT_ON_BASE_BRANCH: &str = "GIT_NOT_ON_BASE_BRANCH";
+/// The user's checkout has uncommitted changes.
+pub const GIT_DIRTY_WORKTREE: &str = "GIT_DIRTY_WORKTREE";
+/// A merge failed without starting; the repository is untouched.
+pub const GIT_MERGE_FAILED: &str = "GIT_MERGE_FAILED";
+/// A merge (or its abort) left the repository in a changed state.
+pub const GIT_MERGE_ABORT_FAILED: &str = "GIT_MERGE_ABORT_FAILED";
+/// A merge conflicted and was aborted cleanly.
+pub const GIT_MERGE_CONFLICT: &str = "GIT_MERGE_CONFLICT";
 
 /// Maximum slug length in a branch name.
 const MAX_SLUG_LEN: usize = 40;
@@ -46,13 +69,31 @@ const FALLBACK_NAME: &str = "user.name=MDium";
 const FALLBACK_EMAIL: &str = "user.email=mdium@localhost";
 
 impl GitError {
-    pub(crate) fn new(code: &str, stderr: impl Into<String>) -> Self {
+    pub(crate) fn new(code: &'static str, stderr: impl Into<String>) -> Self {
         GitError {
-            code: code.to_string(),
+            code,
             stderr: stderr.into(),
         }
     }
+
+    /// Stable machine code for this failure (a `GIT_*` constant).
+    pub fn code(&self) -> &'static str {
+        self.code
+    }
 }
+
+impl std::fmt::Display for GitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let detail = self.stderr.trim();
+        if detail.is_empty() {
+            f.write_str(self.code)
+        } else {
+            write!(f, "{}: {detail}", self.code)
+        }
+    }
+}
+
+crate::workflow::errors::impl_workflow_error!(GitError);
 
 // Extra environment for git children spawned on the current test thread,
 // so tests can isolate git from the machine's global config without
@@ -222,7 +263,7 @@ fn is_hex16_component(name: Option<&OsStr>) -> bool {
 /// canonical paths. With `repo`, the path must also be exactly the one
 /// [`worktree_path_in`] derives for that repo and id.
 fn validate_worktree_path(base_dir: &Path, repo: Option<&Path>, raw: &str) -> Result<(), GitError> {
-    let invalid = || GitError::new("INVALID_WORKTREE_INFO", format!("path {raw:?}"));
+    let invalid = || GitError::new(GIT_INVALID_WORKTREE_INFO, format!("path {raw:?}"));
     let path = Path::new(raw);
     if !path.is_absolute() {
         return Err(invalid());
@@ -267,22 +308,18 @@ pub(crate) fn validate_info(
             .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
     if !commit_ok {
         return Err(GitError::new(
-            "INVALID_WORKTREE_INFO",
+            GIT_INVALID_WORKTREE_INFO,
             format!("base_commit {:?}", info.base_commit),
         ));
     }
     if !is_valid_branch(&info.branch) {
         return Err(GitError::new(
-            "INVALID_WORKTREE_INFO",
+            GIT_INVALID_WORKTREE_INFO,
             format!("branch {:?}", info.branch),
         ));
     }
     validate_worktree_path(base_dir, repo, &info.path)
 }
-
-/// Error code for a worktree whose link to the user's repository is not
-/// the one git created.
-const WORKTREE_LINK_TAMPERED: &str = "WORKTREE_LINK_TAMPERED";
 
 /// Global options for every git command MDium runs inside an agent
 /// worktree: never run an fsmonitor hook the agent may have configured.
@@ -325,12 +362,12 @@ fn read_link_file(file: &Path, prefix: &str, base: &Path) -> Option<PathBuf> {
 /// - the admin dir's `commondir` resolves to `<common>` and its `gitdir`
 ///   back-link resolves to `<worktree>/.git`.
 ///
-/// Returns the canonical admin dir. Error: `WORKTREE_LINK_TAMPERED`.
+/// Returns the canonical admin dir. Error: `GIT_WORKTREE_LINK_TAMPERED`.
 /// A repository whose git dir is not `<repo>/.git` (e.g.
 /// `--separate-git-dir`) cannot be bound this way and is rejected too.
 pub(crate) fn verify_worktree_link(info: &WorktreeInfo) -> Result<PathBuf, GitError> {
     let tampered =
-        |what: &str| GitError::new(WORKTREE_LINK_TAMPERED, format!("{what}: {}", info.path));
+        |what: &str| GitError::new(GIT_WORKTREE_LINK_TAMPERED, format!("{what}: {}", info.path));
     let wt = std::fs::canonicalize(&info.path).map_err(|_| tampered("worktree"))?;
     let dot_git = wt.join(".git");
     let meta = std::fs::symlink_metadata(&dot_git).map_err(|_| tampered(".git"))?;
@@ -373,7 +410,7 @@ pub(crate) fn worktree_git(wt: &Path, args: &[&str]) -> Result<String, GitError>
 }
 
 /// Creates the run's worktree on a new branch off the repo's current HEAD.
-/// Errors: `INVALID_ID`, `NOT_A_REPO`, `DETACHED_HEAD`, `WORKTREE_EXISTS`.
+/// Errors: `GIT_INVALID_ID`, `GIT_NOT_A_REPO`, `GIT_DETACHED_HEAD`, `GIT_WORKTREE_EXISTS`.
 pub fn create_worktree(
     repo_root: &Path,
     root_task_id: &str,
@@ -389,29 +426,29 @@ pub(crate) fn create_worktree_in(
     title: &str,
 ) -> Result<WorktreeInfo, GitError> {
     if !is_valid_id(root_task_id) {
-        return Err(GitError::new("INVALID_ID", root_task_id));
+        return Err(GitError::new(GIT_INVALID_ID, root_task_id));
     }
     if !is_git_repo(repo) {
         return Err(GitError::new(
-            "NOT_A_REPO",
+            GIT_NOT_A_REPO,
             repo.to_string_lossy().into_owned(),
         ));
     }
     let top = repo_root(repo)?;
     let base_branch =
-        current_branch(&top)?.ok_or_else(|| GitError::new("DETACHED_HEAD", String::new()))?;
+        current_branch(&top)?.ok_or_else(|| GitError::new(GIT_DETACHED_HEAD, String::new()))?;
     let base_commit = git(&top, &["rev-parse", "HEAD"])?.trim().to_string();
 
     let path = worktree_path_in(base_dir, &top, root_task_id);
     let branch = branch_name(root_task_id, title);
     if path.exists() {
         return Err(GitError::new(
-            "WORKTREE_EXISTS",
+            GIT_WORKTREE_EXISTS,
             path.to_string_lossy().into_owned(),
         ));
     }
     if branch_exists(&top, &branch)? {
-        return Err(GitError::new("WORKTREE_EXISTS", branch));
+        return Err(GitError::new(GIT_WORKTREE_EXISTS, branch));
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -593,11 +630,11 @@ fn merge_in_progress(repo: &Path) -> Result<bool, GitError> {
 
 /// Merges the worktree branch into the base branch of the user's checkout
 /// with `--no-ff`, returning the merge commit hash. Refuses unless the
-/// checkout is on `base_branch` (`NOT_ON_BASE_BRANCH`) and clean
-/// (`DIRTY_WORKTREE`). A conflicted merge is aborted (`MERGE_CONFLICT`,
-/// or `MERGE_ABORT_FAILED` if the repo could not be restored); a merge that
+/// checkout is on `base_branch` (`GIT_NOT_ON_BASE_BRANCH`) and clean
+/// (`GIT_DIRTY_WORKTREE`). A conflicted merge is aborted (`GIT_MERGE_CONFLICT`,
+/// or `GIT_MERGE_ABORT_FAILED` if the repo could not be restored); a merge that
 /// fails without starting (missing branch, hook rejection, ...) is
-/// `MERGE_FAILED`.
+/// `GIT_MERGE_FAILED`.
 pub fn merge_into_base(repo_root: &Path, info: &WorktreeInfo) -> Result<String, GitError> {
     merge_into_base_in(&default_worktree_base(), repo_root, info)
 }
@@ -611,13 +648,13 @@ fn merge_into_base_in(
     let current = current_branch(repo_root)?;
     if current.as_deref() != Some(info.base_branch.as_str()) {
         return Err(GitError::new(
-            "NOT_ON_BASE_BRANCH",
+            GIT_NOT_ON_BASE_BRANCH,
             current.unwrap_or_default(),
         ));
     }
     let status = git(repo_root, &["status", "--porcelain"])?;
     if !status.trim().is_empty() {
-        return Err(GitError::new("DIRTY_WORKTREE", status));
+        return Err(GitError::new(GIT_DIRTY_WORKTREE, status));
     }
 
     let before = git(repo_root, &["rev-parse", "HEAD"])?.trim().to_string();
@@ -646,9 +683,9 @@ fn merge_into_base_in(
             && status.success
             && status.stdout.trim().is_empty();
         let code = if untouched {
-            "MERGE_FAILED"
+            GIT_MERGE_FAILED
         } else {
-            "MERGE_ABORT_FAILED"
+            GIT_MERGE_ABORT_FAILED
         };
         return Err(GitError::new(code, merge_detail));
     }
@@ -660,11 +697,11 @@ fn merge_into_base_in(
         && after.stdout.trim() == before;
     if !restored {
         return Err(GitError::new(
-            "MERGE_ABORT_FAILED",
+            GIT_MERGE_ABORT_FAILED,
             format!("{merge_detail}{}", abort.stderr),
         ));
     }
-    Err(GitError::new("MERGE_CONFLICT", merge_detail))
+    Err(GitError::new(GIT_MERGE_CONFLICT, merge_detail))
 }
 
 /// Removes the run's worktree (discarding its changes) and deletes its
@@ -847,7 +884,7 @@ mod tests {
         assert!(repo_root(plain.path()).is_err());
         let err =
             create_worktree_in(fixture.worktrees.path(), plain.path(), TASK_ID, "t").unwrap_err();
-        assert_eq!(err.code, "NOT_A_REPO");
+        assert_eq!(err.code(), "GIT_NOT_A_REPO");
     }
 
     #[test]
@@ -877,10 +914,10 @@ mod tests {
         fixture.create("t");
         let err =
             create_worktree_in(fixture.worktrees.path(), fixture.root(), TASK_ID, "t").unwrap_err();
-        assert_eq!(err.code, "WORKTREE_EXISTS");
+        assert_eq!(err.code(), "GIT_WORKTREE_EXISTS");
         let err = create_worktree_in(fixture.worktrees.path(), fixture.root(), "../evil", "t")
             .unwrap_err();
-        assert_eq!(err.code, "INVALID_ID");
+        assert_eq!(err.code(), "GIT_INVALID_ID");
     }
 
     #[test]
@@ -889,7 +926,7 @@ mod tests {
         fixture.run(&["checkout", "--detach"]);
         let err =
             create_worktree_in(fixture.worktrees.path(), fixture.root(), TASK_ID, "t").unwrap_err();
-        assert_eq!(err.code, "DETACHED_HEAD");
+        assert_eq!(err.code(), "GIT_DETACHED_HEAD");
     }
 
     #[test]
@@ -976,7 +1013,7 @@ mod tests {
         commit_in_worktree(&info, "b.txt", "b\n", "feature");
         fixture.write("a.txt", "dirty\n");
         let err = merge_into_base_in(fixture.base(), fixture.root(), &info).unwrap_err();
-        assert_eq!(err.code, "DIRTY_WORKTREE");
+        assert_eq!(err.code(), "GIT_DIRTY_WORKTREE");
     }
 
     #[test]
@@ -986,10 +1023,10 @@ mod tests {
         commit_in_worktree(&info, "b.txt", "b\n", "feature");
         fixture.run(&["checkout", "-b", "other"]);
         let err = merge_into_base_in(fixture.base(), fixture.root(), &info).unwrap_err();
-        assert_eq!(err.code, "NOT_ON_BASE_BRANCH");
+        assert_eq!(err.code(), "GIT_NOT_ON_BASE_BRANCH");
         fixture.run(&["checkout", "--detach"]);
         let err = merge_into_base_in(fixture.base(), fixture.root(), &info).unwrap_err();
-        assert_eq!(err.code, "NOT_ON_BASE_BRANCH");
+        assert_eq!(err.code(), "GIT_NOT_ON_BASE_BRANCH");
     }
 
     #[test]
@@ -1002,7 +1039,7 @@ mod tests {
         let before = fixture.run(&["rev-parse", "HEAD"]);
 
         let err = merge_into_base_in(fixture.base(), fixture.root(), &info).unwrap_err();
-        assert_eq!(err.code, "MERGE_CONFLICT");
+        assert_eq!(err.code(), "GIT_MERGE_CONFLICT");
         let git_dir = fixture.run(&["rev-parse", "--absolute-git-dir"]);
         assert!(!Path::new(git_dir.trim()).join("MERGE_HEAD").exists());
         assert_eq!(fixture.run(&["status", "--porcelain"]), "");
@@ -1051,7 +1088,7 @@ mod tests {
         info.branch = "mdium/01234567-missing".to_string();
         let before = fixture.run(&["rev-parse", "HEAD"]);
         let err = merge_into_base_in(fixture.base(), fixture.root(), &info).unwrap_err();
-        assert_eq!(err.code, "MERGE_FAILED", "{err:?}");
+        assert_eq!(err.code(), "GIT_MERGE_FAILED", "{err:?}");
         assert_eq!(fixture.run(&["rev-parse", "HEAD"]), before);
         assert_eq!(fixture.run(&["status", "--porcelain"]), "");
     }
@@ -1071,22 +1108,24 @@ mod tests {
 
         for info in [&bad_commit, &upper_commit, &bad_branch, &relative] {
             let codes = [
-                diff_against_base_in(fixture.base(), info).unwrap_err().code,
+                diff_against_base_in(fixture.base(), info)
+                    .unwrap_err()
+                    .code(),
                 commits_since_base_in(fixture.base(), info)
                     .unwrap_err()
-                    .code,
+                    .code(),
                 commit_paths_in(fixture.base(), info, &["a.txt"], "m")
                     .unwrap_err()
-                    .code,
+                    .code(),
                 merge_into_base_in(fixture.base(), fixture.root(), info)
                     .unwrap_err()
-                    .code,
+                    .code(),
                 discard_in(fixture.base(), fixture.root(), info)
                     .unwrap_err()
-                    .code,
+                    .code(),
             ];
             for code in codes {
-                assert_eq!(code, "INVALID_WORKTREE_INFO", "{info:?}");
+                assert_eq!(code, "GIT_INVALID_WORKTREE_INFO", "{info:?}");
             }
         }
         assert!(!Path::new(&good.path).join("x").exists());
@@ -1160,7 +1199,7 @@ mod tests {
         let mut foreign = registered.clone();
         foreign.path = outside.path().to_string_lossy().into_owned();
         let err = discard_in(fixture.base(), fixture.root(), &foreign).unwrap_err();
-        assert_eq!(err.code, "INVALID_WORKTREE_INFO");
+        assert_eq!(err.code(), "GIT_INVALID_WORKTREE_INFO");
         assert!(outside.path().join("keep.txt").is_file());
     }
 
@@ -1218,22 +1257,22 @@ mod tests {
             let codes = [
                 commit_paths_in(fixture.base(), &info, &["a.txt"], "m")
                     .unwrap_err()
-                    .code,
+                    .code(),
                 diff_against_base_in(fixture.base(), &info)
                     .unwrap_err()
-                    .code,
+                    .code(),
                 commits_since_base_in(fixture.base(), &info)
                     .unwrap_err()
-                    .code,
+                    .code(),
                 merge_into_base_in(fixture.base(), fixture.root(), &info)
                     .unwrap_err()
-                    .code,
+                    .code(),
                 discard_in(fixture.base(), fixture.root(), &info)
                     .unwrap_err()
-                    .code,
+                    .code(),
             ];
             for code in codes {
-                assert_eq!(code, "INVALID_WORKTREE_INFO", "{info:?}");
+                assert_eq!(code, "GIT_INVALID_WORKTREE_INFO", "{info:?}");
             }
         }
 
@@ -1243,14 +1282,14 @@ mod tests {
         assert_eq!(
             merge_into_base_in(fixture.base(), fixture.root(), &foreign)
                 .unwrap_err()
-                .code,
-            "INVALID_WORKTREE_INFO"
+                .code(),
+            "GIT_INVALID_WORKTREE_INFO"
         );
         assert_eq!(
             discard_in(fixture.base(), fixture.root(), &foreign)
                 .unwrap_err()
-                .code,
-            "INVALID_WORKTREE_INFO"
+                .code(),
+            "GIT_INVALID_WORKTREE_INFO"
         );
 
         // Nothing was touched.
@@ -1263,13 +1302,13 @@ mod tests {
         vec![
             diff_against_base_in(fixture.base(), info)
                 .map(|_| String::new())
-                .unwrap_or_else(|err| err.code),
+                .unwrap_or_else(|err| err.code().to_string()),
             commits_since_base_in(fixture.base(), info)
                 .map(|_| String::new())
-                .unwrap_or_else(|err| err.code),
+                .unwrap_or_else(|err| err.code().to_string()),
             commit_paths_in(fixture.base(), info, &["a.txt"], "m")
                 .map(|_| String::new())
-                .unwrap_or_else(|err| err.code),
+                .unwrap_or_else(|err| err.code().to_string()),
         ]
     }
 
@@ -1302,11 +1341,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            verify_worktree_link(&info).unwrap_err().code,
-            "WORKTREE_LINK_TAMPERED"
+            verify_worktree_link(&info).unwrap_err().code(),
+            "GIT_WORKTREE_LINK_TAMPERED"
         );
         for code in worktree_op_codes(&fixture, &info) {
-            assert_eq!(code, "WORKTREE_LINK_TAMPERED");
+            assert_eq!(code, "GIT_WORKTREE_LINK_TAMPERED");
         }
     }
 
@@ -1317,14 +1356,14 @@ mod tests {
         let dot_git = Path::new(&info.path).join(".git");
         fs::remove_file(&dot_git).unwrap();
         assert_eq!(
-            verify_worktree_link(&info).unwrap_err().code,
-            "WORKTREE_LINK_TAMPERED"
+            verify_worktree_link(&info).unwrap_err().code(),
+            "GIT_WORKTREE_LINK_TAMPERED"
         );
         // A full repository in place of the link file.
         git(Path::new(&info.path), &["init", "-b", "main"]).unwrap();
         assert!(dot_git.is_dir());
         for code in worktree_op_codes(&fixture, &info) {
-            assert_eq!(code, "WORKTREE_LINK_TAMPERED");
+            assert_eq!(code, "GIT_WORKTREE_LINK_TAMPERED");
         }
     }
 
@@ -1343,8 +1382,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            verify_worktree_link(&info).unwrap_err().code,
-            "WORKTREE_LINK_TAMPERED"
+            verify_worktree_link(&info).unwrap_err().code(),
+            "GIT_WORKTREE_LINK_TAMPERED"
         );
         fs::write(admin.join("commondir"), commondir).unwrap();
         verify_worktree_link(&info).unwrap();
@@ -1356,8 +1395,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            verify_worktree_link(&info).unwrap_err().code,
-            "WORKTREE_LINK_TAMPERED"
+            verify_worktree_link(&info).unwrap_err().code(),
+            "GIT_WORKTREE_LINK_TAMPERED"
         );
     }
 

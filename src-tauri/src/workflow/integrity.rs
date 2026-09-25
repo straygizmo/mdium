@@ -98,8 +98,43 @@ pub const MERGE_REVIEW_PATTERNS: &[&str] = &[
     ".devcontainer/**",
 ];
 
-/// Error code for a filesystem read that failed while hashing.
-const IO_FAILED: &str = "IO_FAILED";
+/// Why an integrity snapshot or check failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IntegrityError {
+    /// A git command or worktree validation failed; `code()` is the inner
+    /// `GIT_*` code.
+    Git(GitError),
+    /// A filesystem read failed while hashing (fails closed).
+    Io(String),
+}
+
+impl IntegrityError {
+    /// Stable machine code: the inner [`GitError::code`] for `Git`, and
+    /// `INTEGRITY_IO_FAILED` for `Io`.
+    pub fn code(&self) -> &'static str {
+        match self {
+            IntegrityError::Git(err) => err.code(),
+            IntegrityError::Io(_) => "INTEGRITY_IO_FAILED",
+        }
+    }
+}
+
+impl std::fmt::Display for IntegrityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IntegrityError::Git(err) => err.fmt(f),
+            IntegrityError::Io(detail) => write!(f, "{}: {detail}", self.code()),
+        }
+    }
+}
+
+impl From<GitError> for IntegrityError {
+    fn from(err: GitError) -> Self {
+        IntegrityError::Git(err)
+    }
+}
+
+crate::workflow::errors::impl_workflow_error!(IntegrityError);
 
 /// Prefix of `head_ref` on a detached HEAD.
 const DETACHED_PREFIX: &str = "detached:";
@@ -111,7 +146,7 @@ const DETACHED_PREFIX: &str = "detached:";
 pub fn snapshot(
     repo_root: &Path,
     base_branch: Option<&str>,
-) -> Result<IntegritySnapshot, GitError> {
+) -> Result<IntegritySnapshot, IntegrityError> {
     snapshot_with_worktree(repo_root, base_branch, None)
 }
 
@@ -126,7 +161,7 @@ pub fn snapshot_with_worktree(
     repo_root: &Path,
     base_branch: Option<&str>,
     worktree: Option<&WorktreeInfo>,
-) -> Result<IntegritySnapshot, GitError> {
+) -> Result<IntegritySnapshot, IntegrityError> {
     let common = git_path(repo_root, &["rev-parse", "--git-common-dir"])?;
     let git_dir = git_path(repo_root, &["rev-parse", "--git-dir"])?;
     let effective_hooks = git_path(repo_root, &["rev-parse", "--git-path", "hooks"])?;
@@ -197,7 +232,10 @@ pub fn snapshot_with_worktree(
 /// The admin dir under `<common>/worktrees` whose `gitdir` file points at
 /// `<worktree>/.git` (compared on the canonical worktree directory, so a
 /// removed or replaced `.git` still matches). `None` if there is none.
-fn find_worktree_admin_dir(common: &Path, worktree: &Path) -> Result<Option<PathBuf>, GitError> {
+fn find_worktree_admin_dir(
+    common: &Path,
+    worktree: &Path,
+) -> Result<Option<PathBuf>, IntegrityError> {
     let Ok(target) = std::fs::canonicalize(worktree) else {
         return Ok(None);
     };
@@ -228,7 +266,7 @@ fn find_worktree_admin_dir(common: &Path, worktree: &Path) -> Result<Option<Path
 
 /// Runs a git command printing one path and makes the result absolute
 /// (git prints paths relative to the directory it ran in).
-fn git_path(dir: &Path, args: &[&str]) -> Result<PathBuf, GitError> {
+fn git_path(dir: &Path, args: &[&str]) -> Result<PathBuf, IntegrityError> {
     let out = git(dir, args)?;
     let path = PathBuf::from(out.trim_end_matches(['\r', '\n']));
     Ok(if path.is_absolute() {
@@ -248,7 +286,7 @@ fn same_path(a: &Path, b: &Path) -> bool {
 }
 
 /// The commit HEAD resolves to, or empty when HEAD is unborn.
-fn resolve_head(repo: &Path) -> Result<String, GitError> {
+fn resolve_head(repo: &Path) -> Result<String, IntegrityError> {
     let out = run_git_raw(repo, &["rev-parse", "--quiet", "--verify", "HEAD^{commit}"])?;
     Ok(if out.success {
         out.stdout.trim().to_string()
@@ -260,15 +298,15 @@ fn resolve_head(repo: &Path) -> Result<String, GitError> {
 /// Tip of the exact branch `refs/heads/<name>`, or `None` if it does not
 /// exist. `show-ref --verify` accepts no revision syntax, and the fixed
 /// `refs/heads/` prefix keeps the name from being parsed as an option.
-fn branch_commit(repo: &Path, name: &str) -> Result<Option<String>, GitError> {
+fn branch_commit(repo: &Path, name: &str) -> Result<Option<String>, IntegrityError> {
     let reference = format!("refs/heads/{name}");
     let out = run_git_raw(repo, &["show-ref", "--verify", "--hash", &reference])?;
     let hash = out.stdout.trim();
     Ok((out.success && !hash.is_empty()).then(|| hash.to_string()))
 }
 
-fn io_error(path: &Path, err: std::io::Error) -> GitError {
-    GitError::new(IO_FAILED, format!("{}: {err}", path.display()))
+fn io_error(path: &Path, err: std::io::Error) -> IntegrityError {
+    IntegrityError::Io(format!("{}: {err}", path.display()))
 }
 
 /// One hashed entry: a label (a `/`-separated relative path, as raw
@@ -293,7 +331,7 @@ fn hash_entries(mut entries: Vec<Entry>) -> String {
 }
 
 /// Adds a file's content under `label`; a missing file counts as empty.
-fn push_file(out: &mut Vec<Entry>, label: Vec<u8>, path: &Path) -> Result<(), GitError> {
+fn push_file(out: &mut Vec<Entry>, label: Vec<u8>, path: &Path) -> Result<(), IntegrityError> {
     let content = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
@@ -307,8 +345,8 @@ fn push_file(out: &mut Vec<Entry>, label: Vec<u8>, path: &Path) -> Result<(), Gi
 /// `root` itself may be a symlink and is followed. A missing `root` adds
 /// nothing; a dangling `root` symlink adds its target; a `root` that is not
 /// a directory is hashed as a single file labeled `<prefix>`. Any other
-/// error (e.g. permission denied) fails closed with `IO_FAILED`.
-fn collect_tree(root: &Path, prefix: &[u8], out: &mut Vec<Entry>) -> Result<(), GitError> {
+/// error (e.g. permission denied) fails closed with `INTEGRITY_IO_FAILED`.
+fn collect_tree(root: &Path, prefix: &[u8], out: &mut Vec<Entry>) -> Result<(), IntegrityError> {
     match std::fs::metadata(root) {
         Ok(meta) if meta.is_dir() => collect_entries(root, prefix, out),
         Ok(_) => {
@@ -336,7 +374,7 @@ fn collect_tree(root: &Path, prefix: &[u8], out: &mut Vec<Entry>) -> Result<(), 
 /// Symlinks are recorded by target and never descended into, so a symlink
 /// to a directory records only its target; a symlink that resolves to a
 /// regular file also contributes that file's content.
-fn collect_entries(dir: &Path, prefix: &[u8], out: &mut Vec<Entry>) -> Result<(), GitError> {
+fn collect_entries(dir: &Path, prefix: &[u8], out: &mut Vec<Entry>) -> Result<(), IntegrityError> {
     let reader = std::fs::read_dir(dir).map_err(|err| io_error(dir, err))?;
     for entry in reader {
         let entry = entry.map_err(|err| io_error(dir, err))?;
@@ -375,7 +413,7 @@ fn find_module_git_dirs(
     dir: &Path,
     prefix: &[u8],
     out: &mut Vec<(Vec<u8>, PathBuf)>,
-) -> Result<(), GitError> {
+) -> Result<(), IntegrityError> {
     let reader = match std::fs::read_dir(dir) {
         Ok(reader) => reader,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -419,18 +457,18 @@ pub fn compare(before: &IntegritySnapshot, after: &IntegritySnapshot) -> Vec<Int
         before.head_ref.starts_with(DETACHED_PREFIX) && after.head_ref.starts_with(DETACHED_PREFIX);
     if before.head_ref != after.head_ref && !both_detached {
         push(
-            "BRANCH_SWITCHED",
+            "INTEGRITY_BRANCH_SWITCHED",
             arrow(Some(&before.head_ref), Some(&after.head_ref)),
         );
     } else if before.head_commit != after.head_commit {
         push(
-            "HEAD_MOVED",
+            "INTEGRITY_HEAD_MOVED",
             arrow(Some(&before.head_commit), Some(&after.head_commit)),
         );
     }
     if before.base_branch_commit != after.base_branch_commit {
         push(
-            "BASE_BRANCH_MOVED",
+            "INTEGRITY_BASE_BRANCH_MOVED",
             arrow(
                 before.base_branch_commit.as_deref(),
                 after.base_branch_commit.as_deref(),
@@ -438,14 +476,14 @@ pub fn compare(before: &IntegritySnapshot, after: &IntegritySnapshot) -> Vec<Int
         );
     }
     if before.git_config_hash != after.git_config_hash {
-        push("GIT_CONFIG_CHANGED", String::new());
+        push("INTEGRITY_GIT_CONFIG_CHANGED", String::new());
     }
     if before.hooks_hash != after.hooks_hash {
-        push("HOOKS_CHANGED", String::new());
+        push("INTEGRITY_HOOKS_CHANGED", String::new());
     }
     if before.hooks_path != after.hooks_path {
         push(
-            "HOOKS_PATH_CHANGED",
+            "INTEGRITY_HOOKS_PATH_CHANGED",
             arrow(before.hooks_path.as_deref(), after.hooks_path.as_deref()),
         );
     }
@@ -460,7 +498,7 @@ pub fn compare(before: &IntegritySnapshot, after: &IntegritySnapshot) -> Vec<Int
 pub fn changed_paths_matching(
     info: &WorktreeInfo,
     patterns: &[&str],
-) -> Result<Vec<String>, GitError> {
+) -> Result<Vec<String>, IntegrityError> {
     changed_paths_matching_in(&default_worktree_base(), info, patterns)
 }
 
@@ -468,13 +506,13 @@ fn changed_paths_matching_in(
     base_dir: &Path,
     info: &WorktreeInfo,
     patterns: &[&str],
-) -> Result<Vec<String>, GitError> {
+) -> Result<Vec<String>, IntegrityError> {
     validate_worktree(base_dir, info)?;
     let wt = Path::new(&info.path);
-    let diff = |extra: &[&str]| -> Result<String, GitError> {
+    let diff = |extra: &[&str]| -> Result<String, IntegrityError> {
         let mut args = vec!["diff", "--name-only", "--no-renames", "-z"];
         args.extend_from_slice(extra);
-        worktree_git(wt, &args)
+        Ok(worktree_git(wt, &args)?)
     };
     // Untracked and ignored: agent settings such as
     // `.claude/settings.local.json` are commonly gitignored (often globally)
@@ -661,7 +699,7 @@ mod tests {
         let before = snap(&fixture);
         fixture.run(&["config", "core.pager", "x"]);
         let changes = compare(&before, &snap(&fixture));
-        assert_eq!(codes(&changes), ["GIT_CONFIG_CHANGED"]);
+        assert_eq!(codes(&changes), ["INTEGRITY_GIT_CONFIG_CHANGED"]);
     }
 
     #[test]
@@ -674,7 +712,7 @@ mod tests {
             "#!/bin/sh\nexit 0\n",
         );
         let changes = compare(&before, &snap(&fixture));
-        assert_eq!(codes(&changes), ["HOOKS_CHANGED"]);
+        assert_eq!(codes(&changes), ["INTEGRITY_HOOKS_CHANGED"]);
     }
 
     #[test]
@@ -685,7 +723,7 @@ mod tests {
         let before = snap(&fixture);
         write_file(&hooks, "lib/helper.sh", "two\n");
         let changes = compare(&before, &snap(&fixture));
-        assert_eq!(codes(&changes), ["HOOKS_CHANGED"]);
+        assert_eq!(codes(&changes), ["INTEGRITY_HOOKS_CHANGED"]);
     }
 
     #[test]
@@ -697,8 +735,8 @@ mod tests {
         assert_eq!(after.hooks_path.as_deref(), Some("my-hooks"));
         let changes = compare(&before, &after);
         let found = codes(&changes);
-        assert!(found.contains(&"HOOKS_PATH_CHANGED"), "{found:?}");
-        assert!(found.contains(&"GIT_CONFIG_CHANGED"), "{found:?}");
+        assert!(found.contains(&"INTEGRITY_HOOKS_PATH_CHANGED"), "{found:?}");
+        assert!(found.contains(&"INTEGRITY_GIT_CONFIG_CHANGED"), "{found:?}");
         assert_eq!(found.len(), 2, "{found:?}");
     }
 
@@ -708,7 +746,7 @@ mod tests {
         let before = snap(&fixture);
         fixture.run(&["checkout", "-b", "other"]);
         let changes = compare(&before, &snap(&fixture));
-        assert_eq!(codes(&changes), ["BRANCH_SWITCHED"]);
+        assert_eq!(codes(&changes), ["INTEGRITY_BRANCH_SWITCHED"]);
         assert!(
             changes[0].detail.contains("refs/heads/other"),
             "{changes:?}"
@@ -722,7 +760,10 @@ mod tests {
         fixture.run(&["checkout", "--detach"]);
         let after = snap(&fixture);
         assert!(after.head_ref.starts_with("detached:"), "{after:?}");
-        assert_eq!(codes(&compare(&before, &after)), ["BRANCH_SWITCHED"]);
+        assert_eq!(
+            codes(&compare(&before, &after)),
+            ["INTEGRITY_BRANCH_SWITCHED"]
+        );
     }
 
     #[test]
@@ -732,7 +773,7 @@ mod tests {
         let before = snap(&fixture);
         commit_file(fixture.root(), "b.txt", "b\n", "user commit");
         let changes = compare(&before, &snap(&fixture));
-        assert_eq!(codes(&changes), ["HEAD_MOVED"]);
+        assert_eq!(codes(&changes), ["INTEGRITY_HEAD_MOVED"]);
     }
 
     #[test]
@@ -752,7 +793,7 @@ mod tests {
             .to_string();
         fixture.run(&["update-ref", "refs/heads/main", &commit]);
         let changes = compare(&before, &snap(&fixture));
-        assert_eq!(codes(&changes), ["BASE_BRANCH_MOVED"]);
+        assert_eq!(codes(&changes), ["INTEGRITY_BASE_BRANCH_MOVED"]);
     }
 
     #[test]
@@ -792,7 +833,7 @@ mod tests {
         // hooks and is visible from the user's checkout.
         write_file(&git_common_dir(wt).join("hooks"), "post-checkout", "evil\n");
         let changes = compare(&main_before, &snap(&fixture));
-        assert_eq!(codes(&changes), ["HOOKS_CHANGED"]);
+        assert_eq!(codes(&changes), ["INTEGRITY_HOOKS_CHANGED"]);
     }
 
     #[test]
@@ -854,7 +895,7 @@ mod tests {
         info.base_commit = "--output=x".to_string();
         let err =
             changed_paths_matching_in(fixture.base(), &info, AGENT_CONFIG_PATTERNS).unwrap_err();
-        assert_eq!(err.code, "INVALID_WORKTREE_INFO");
+        assert_eq!(err.code(), "GIT_INVALID_WORKTREE_INFO");
     }
 
     #[test]
@@ -865,7 +906,7 @@ mod tests {
         git(Path::new(&info.path), &["init", "-b", "main"]).unwrap();
         let err =
             changed_paths_matching_in(fixture.base(), &info, AGENT_CONFIG_PATTERNS).unwrap_err();
-        assert_eq!(err.code, "WORKTREE_LINK_TAMPERED");
+        assert_eq!(err.code(), "GIT_WORKTREE_LINK_TAMPERED");
     }
 
     #[test]
@@ -903,7 +944,10 @@ mod tests {
         assert!(admin.join("config.worktree").is_file());
 
         let after = snapshot_with_worktree(fixture.root(), Some("main"), Some(&info)).unwrap();
-        assert_eq!(codes(&compare(&before, &after)), ["GIT_CONFIG_CHANGED"]);
+        assert_eq!(
+            codes(&compare(&before, &after)),
+            ["INTEGRITY_GIT_CONFIG_CHANGED"]
+        );
         // The plain snapshot of the user's checkout does not see it.
         assert!(compare(&plain_before, &snap(&fixture)).is_empty());
     }
@@ -994,7 +1038,7 @@ mod tests {
             .join("config.worktree")
             .is_file());
         let changes = compare(&before, &snap(&fixture));
-        assert_eq!(codes(&changes), ["GIT_CONFIG_CHANGED"]);
+        assert_eq!(codes(&changes), ["INTEGRITY_GIT_CONFIG_CHANGED"]);
     }
 
     #[test]
@@ -1007,7 +1051,7 @@ mod tests {
         let before = snap(&fixture);
         write_file(outside.path(), "pre-commit", "two\n");
         let changes = compare(&before, &snap(&fixture));
-        assert_eq!(codes(&changes), ["HOOKS_CHANGED"]);
+        assert_eq!(codes(&changes), ["INTEGRITY_HOOKS_CHANGED"]);
     }
 
     #[test]
@@ -1018,7 +1062,7 @@ mod tests {
         let before = snap(&fixture);
         fixture.write("hookfile", "two\n");
         let changes = compare(&before, &snap(&fixture));
-        assert_eq!(codes(&changes), ["HOOKS_CHANGED"]);
+        assert_eq!(codes(&changes), ["INTEGRITY_HOOKS_CHANGED"]);
     }
 
     #[test]
@@ -1034,7 +1078,7 @@ mod tests {
             write_file(dir.path(), "file", "x\n");
             let err = collect_tree(&dir.path().join("file").join("sub"), b"x/", &mut entries)
                 .unwrap_err();
-            assert_eq!(err.code, "IO_FAILED");
+            assert_eq!(err.code(), "INTEGRITY_IO_FAILED");
         }
     }
 
@@ -1046,7 +1090,7 @@ mod tests {
         let before = snap(&fixture);
         fixture.write(".husky/_/pre-commit", "two\n");
         let changes = compare(&before, &snap(&fixture));
-        assert_eq!(codes(&changes), ["HOOKS_CHANGED"]);
+        assert_eq!(codes(&changes), ["INTEGRITY_HOOKS_CHANGED"]);
     }
 
     #[test]
@@ -1062,13 +1106,13 @@ mod tests {
         let after_config = snap(&fixture);
         assert_eq!(
             codes(&compare(&before, &after_config)),
-            ["GIT_CONFIG_CHANGED"]
+            ["INTEGRITY_GIT_CONFIG_CHANGED"]
         );
 
         write_file(&module, "hooks/pre-commit", "two\n");
         assert_eq!(
             codes(&compare(&after_config, &snap(&fixture))),
-            ["HOOKS_CHANGED"]
+            ["INTEGRITY_HOOKS_CHANGED"]
         );
     }
 
@@ -1088,7 +1132,7 @@ mod tests {
         let before = snap(&fixture);
         write_file(outside.path(), "real-hook", "two\n");
         let changes = compare(&before, &snap(&fixture));
-        assert_eq!(codes(&changes), ["HOOKS_CHANGED"]);
+        assert_eq!(codes(&changes), ["INTEGRITY_HOOKS_CHANGED"]);
     }
 
     #[cfg(any(windows, target_os = "macos"))]

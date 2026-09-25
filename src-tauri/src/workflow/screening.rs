@@ -7,9 +7,8 @@ use std::sync::OnceLock;
 use regex::Regex;
 use serde::Serialize;
 
-/// Category of a screening finding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "camelCase")]
+/// Category of a screening finding. Serializes as its [`Self::code`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum FindingKind {
     /// A phrase that tries to override the agent's instructions.
     InjectionPhrase,
@@ -25,11 +24,17 @@ impl FindingKind {
     /// Stable machine code for this finding kind.
     pub fn code(&self) -> &'static str {
         match self {
-            FindingKind::InjectionPhrase => "INJECTION_PHRASE",
-            FindingKind::InvisibleCharacters => "INVISIBLE_CHARACTERS",
-            FindingKind::EncodedPayload => "ENCODED_PAYLOAD",
-            FindingKind::SecretRequest => "SECRET_REQUEST",
+            FindingKind::InjectionPhrase => "SCREENING_INJECTION_PHRASE",
+            FindingKind::InvisibleCharacters => "SCREENING_INVISIBLE_CHARACTERS",
+            FindingKind::EncodedPayload => "SCREENING_ENCODED_PAYLOAD",
+            FindingKind::SecretRequest => "SCREENING_SECRET_REQUEST",
         }
+    }
+}
+
+impl Serialize for FindingKind {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.code())
     }
 }
 
@@ -501,10 +506,34 @@ mod tests {
 
     #[test]
     fn codes_are_stable() {
-        assert_eq!(FindingKind::InjectionPhrase.code(), "INJECTION_PHRASE");
-        assert_eq!(FindingKind::InvisibleCharacters.code(), "INVISIBLE_CHARACTERS");
-        assert_eq!(FindingKind::EncodedPayload.code(), "ENCODED_PAYLOAD");
-        assert_eq!(FindingKind::SecretRequest.code(), "SECRET_REQUEST");
+        assert_eq!(
+            FindingKind::InjectionPhrase.code(),
+            "SCREENING_INJECTION_PHRASE"
+        );
+        assert_eq!(
+            FindingKind::InvisibleCharacters.code(),
+            "SCREENING_INVISIBLE_CHARACTERS"
+        );
+        assert_eq!(
+            FindingKind::EncodedPayload.code(),
+            "SCREENING_ENCODED_PAYLOAD"
+        );
+        assert_eq!(FindingKind::SecretRequest.code(), "SCREENING_SECRET_REQUEST");
+    }
+
+    #[test]
+    fn finding_kind_serializes_as_its_code() {
+        for kind in [
+            FindingKind::InjectionPhrase,
+            FindingKind::InvisibleCharacters,
+            FindingKind::EncodedPayload,
+            FindingKind::SecretRequest,
+        ] {
+            assert_eq!(
+                serde_json::to_value(kind).unwrap(),
+                serde_json::Value::String(kind.code().to_string())
+            );
+        }
     }
 
     // ---- negatives on ordinary engineering text ----

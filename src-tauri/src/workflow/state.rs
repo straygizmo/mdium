@@ -87,15 +87,34 @@ pub enum TransitionError {
 
 impl TransitionError {
     /// Stable machine code for this failure, for callers/UI to key off.
+    /// A wrapped store failure reports the inner `STORE_*` code, so the
+    /// specific cause is never hidden behind a generic wrapper code.
     pub fn code(&self) -> &'static str {
         match self {
             TransitionError::NotFound => "TASK_NOT_FOUND",
-            TransitionError::Conflict { .. } => "STATUS_CONFLICT",
+            TransitionError::Conflict { .. } => "TRANSITION_CONFLICT",
             TransitionError::NotAllowed { .. } => "TRANSITION_NOT_ALLOWED",
-            TransitionError::Store(_) => "STORE_ERROR",
+            TransitionError::Store(err) => err.code(),
         }
     }
 }
+
+impl std::fmt::Display for TransitionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TransitionError::NotFound => f.write_str(self.code()),
+            TransitionError::Conflict { actual } => {
+                write!(f, "{}: actual {actual:?}", self.code())
+            }
+            TransitionError::NotAllowed { from, to } => {
+                write!(f, "{}: {from:?} -> {to:?}", self.code())
+            }
+            TransitionError::Store(err) => err.fmt(f),
+        }
+    }
+}
+
+crate::workflow::errors::impl_workflow_error!(TransitionError);
 
 impl From<StoreError> for TransitionError {
     fn from(err: StoreError) -> Self {
@@ -410,7 +429,7 @@ mod tests {
                 actual: TaskStatus::Running
             }
         );
-        assert_eq!(err.code(), "STATUS_CONFLICT");
+        assert_eq!(err.code(), "TRANSITION_CONFLICT");
         assert_eq!(std::fs::read(&path).unwrap(), before);
     }
 
@@ -473,7 +492,8 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, TransitionError::Store(_)));
-        assert_eq!(err.code(), "STORE_ERROR");
+        // A wrapped store failure reports the store's own code.
+        assert_eq!(err.code(), "STORE_INVALID_ID");
     }
 
     #[test]

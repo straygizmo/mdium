@@ -47,6 +47,21 @@ impl OutcomeError {
     }
 }
 
+impl std::fmt::Display for OutcomeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OutcomeError::InvalidYaml(detail) | OutcomeError::InvalidOutcome(detail) => {
+                write!(f, "{}: {detail}", self.code())
+            }
+            OutcomeError::MissingFrontmatter | OutcomeError::MissingReason => {
+                f.write_str(self.code())
+            }
+        }
+    }
+}
+
+crate::workflow::errors::impl_workflow_error!(OutcomeError);
+
 /// Frontmatter delimiter line.
 const FRONTMATTER_DELIMITER: &str = "---";
 
