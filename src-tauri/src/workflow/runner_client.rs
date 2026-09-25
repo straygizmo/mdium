@@ -56,10 +56,16 @@ pub enum RunnerEvent {
         final_response: String,
         native_session_id: Option<String>,
     },
-    /// Also produced for a session-scoped `error` without a `requestId`
-    /// (e.g. `NO_SESSION`, `TURN_IN_PROGRESS`), so a `send` never waits on a
-    /// turn the runner refused to start.
+    /// The turn ended with an error. Also produced for a session-scoped
+    /// `error` without a `requestId` other than `TURN_IN_PROGRESS` (e.g.
+    /// `NO_SESSION`), so a `send` never waits on a turn that cannot start.
     TurnFailed {
+        message: String,
+    },
+    /// The runner refused a command without affecting the running turn:
+    /// a session-scoped `TURN_IN_PROGRESS` error in reply to a `send` while
+    /// a turn is still active. That turn's own outcome still follows.
+    Rejected {
         message: String,
     },
     TurnCancelled,
@@ -147,6 +153,16 @@ fn provider_wire(provider: Provider) -> Value {
     serde_json::to_value(provider).expect("Provider serializes to a string")
 }
 
+/// Whether `path` is absolute: a Windows drive or UNC path, or a posix
+/// absolute path (mirrors the runner's `isAbsolutePath`).
+fn is_absolute_path(path: &str) -> bool {
+    let b = path.as_bytes();
+    let is_sep = |c: u8| c == b'\\' || c == b'/';
+    let drive = b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && is_sep(b[2]);
+    let unc = b.len() >= 3 && is_sep(b[0]) && is_sep(b[1]) && !is_sep(b[2]);
+    drive || unc || path.starts_with('/')
+}
+
 fn str_field(msg: &Value, key: &str) -> Option<String> {
     msg.get(key).and_then(Value::as_str).map(str::to_string)
 }
@@ -197,10 +213,19 @@ impl RunnerClient {
         };
         let event = match kind {
             "event" => RunnerEvent::Event(msg.get("event").cloned().unwrap_or(Value::Null)),
-            "permission_request" => RunnerEvent::PermissionRequest {
-                permission_id: str_field(&msg, "permissionId").unwrap_or_default(),
-                request: msg.get("request").cloned().unwrap_or(Value::Null),
-            },
+            "permission_request" => {
+                // Without an id the request cannot be answered; drop it.
+                let Some(permission_id) =
+                    str_field(&msg, "permissionId").filter(|id| !id.is_empty())
+                else {
+                    eprintln!("[workflow-runner] permission_request without permissionId: {line}");
+                    return;
+                };
+                RunnerEvent::PermissionRequest {
+                    permission_id,
+                    request: msg.get("request").cloned().unwrap_or(Value::Null),
+                }
+            }
             "guard_violation" => RunnerEvent::GuardViolation {
                 rule: str_field(&msg, "rule").unwrap_or_default(),
                 summary: str_field(&msg, "summary").unwrap_or_default(),
@@ -209,6 +234,11 @@ impl RunnerClient {
                 final_response: str_field(&msg, "finalResponse").unwrap_or_default(),
                 native_session_id: str_field(&msg, "nativeSessionId"),
             },
+            "error" if msg.get("message").and_then(Value::as_str) == Some("TURN_IN_PROGRESS") => {
+                RunnerEvent::Rejected {
+                    message: "TURN_IN_PROGRESS".to_string(),
+                }
+            }
             "turn_failed" | "error" => RunnerEvent::TurnFailed {
                 message: str_field(&msg, "message").unwrap_or_default(),
             },
@@ -349,6 +379,22 @@ impl RunnerClient {
         params: StartSessionParams,
         timeout: Duration,
     ) -> Result<(Receiver<RunnerEvent>, Option<String>), RunnerError> {
+        // Fail fast on requests the runner would reject anyway.
+        let invalid = |code: &str| Err(RunnerError::Protocol(code.to_string()));
+        if params.session_id.trim().is_empty() {
+            return invalid("INVALID_SESSION_ID");
+        }
+        if params.working_directory.trim().is_empty() {
+            return invalid("INVALID_WORKING_DIRECTORY");
+        }
+        if params.timeout_ms == Some(0) {
+            return invalid("INVALID_TIMEOUT");
+        }
+        if let Some(root) = &params.guard_workspace_root {
+            if !is_absolute_path(root) {
+                return invalid("INVALID_GUARD_ROOT");
+            }
+        }
         let session_id = params.session_id.clone();
         let request_id = self.new_request_id();
         let mut msg = json!({
@@ -380,7 +426,8 @@ impl RunnerClient {
                 return Err(RunnerError::Exited);
             }
             if state.sessions.contains_key(&session_id) {
-                return Err(RunnerError::Protocol("SESSION_EXISTS".to_string()));
+                // Same error the runner itself sends for a duplicate id.
+                return Err(RunnerError::Remote("SESSION_EXISTS".to_string()));
             }
             state.sessions.insert(session_id.clone(), tx);
         }
@@ -691,7 +738,8 @@ mod tests {
         client.handle_line(r#"{"type":"turn_completed","sessionId":"s","finalResponse":"done","nativeSessionId":"n"}"#);
         client.handle_line(r#"{"type":"turn_completed","sessionId":"s","finalResponse":"again"}"#);
         client.handle_line(r#"{"type":"error","sessionId":"s","message":"TURN_IN_PROGRESS"}"#);
-        let got: Vec<RunnerEvent> = (0..5).map(|_| s.recv_timeout(WAIT).unwrap()).collect();
+        client.handle_line(r#"{"type":"error","sessionId":"s","message":"NO_SESSION"}"#);
+        let got: Vec<RunnerEvent> = (0..6).map(|_| s.recv_timeout(WAIT).unwrap()).collect();
         assert_eq!(
             got,
             vec![
@@ -710,11 +758,100 @@ mod tests {
                     final_response: "again".to_string(),
                     native_session_id: None
                 },
-                RunnerEvent::TurnFailed {
+                RunnerEvent::Rejected {
                     message: "TURN_IN_PROGRESS".to_string()
+                },
+                RunnerEvent::TurnFailed {
+                    message: "NO_SESSION".to_string()
                 },
             ]
         );
+    }
+
+    #[test]
+    fn start_session_rejects_invalid_params_without_writing() {
+        let (client, _t, rx) = setup();
+        let cases: Vec<(StartSessionParams, &str)> = vec![
+            (
+                StartSessionParams {
+                    session_id: " ".to_string(),
+                    ..params("s")
+                },
+                "INVALID_SESSION_ID",
+            ),
+            (
+                StartSessionParams {
+                    working_directory: String::new(),
+                    ..params("s")
+                },
+                "INVALID_WORKING_DIRECTORY",
+            ),
+            (
+                StartSessionParams {
+                    timeout_ms: Some(0),
+                    ..params("s")
+                },
+                "INVALID_TIMEOUT",
+            ),
+            (
+                StartSessionParams {
+                    guard_workspace_root: Some("relative/dir".to_string()),
+                    ..params("s")
+                },
+                "INVALID_GUARD_ROOT",
+            ),
+            (
+                StartSessionParams {
+                    guard_workspace_root: Some("C:relative".to_string()),
+                    ..params("s")
+                },
+                "INVALID_GUARD_ROOT",
+            ),
+        ];
+        for (p, code) in cases {
+            assert_eq!(
+                client.start_session(p, WAIT).unwrap_err(),
+                RunnerError::Protocol(code.to_string())
+            );
+        }
+        assert!(rx.try_recv().is_err(), "nothing may be written");
+        // The id stays usable after a rejected start.
+        let _s = start(&client, &rx, "s");
+    }
+
+    #[test]
+    fn guard_root_accepts_drive_unc_and_posix_paths() {
+        for root in [r"C:\work", "d:/work", r"\\server\share", "/home/u/work"] {
+            assert!(is_absolute_path(root), "{root}");
+        }
+        for root in ["", "work", "C:work", r"\\", "./work"] {
+            assert!(!is_absolute_path(root), "{root}");
+        }
+    }
+
+    #[test]
+    fn duplicate_local_session_is_remote_session_exists() {
+        let (client, _t, rx) = setup();
+        let _s = start(&client, &rx, "s");
+        assert_eq!(
+            client.start_session(params("s"), WAIT).unwrap_err(),
+            RunnerError::Remote("SESSION_EXISTS".to_string())
+        );
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn permission_request_without_id_is_dropped() {
+        let (client, _t, rx) = setup();
+        let s = start(&client, &rx, "s");
+        client.handle_line(
+            r#"{"type":"permission_request","sessionId":"s","request":{"kind":"shell"}}"#,
+        );
+        client.handle_line(
+            r#"{"type":"permission_request","sessionId":"s","permissionId":"","request":{}}"#,
+        );
+        client.handle_line(r#"{"type":"turn_cancelled","sessionId":"s"}"#);
+        assert_eq!(s.recv_timeout(WAIT).unwrap(), RunnerEvent::TurnCancelled);
     }
 
     #[test]
