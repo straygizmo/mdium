@@ -651,8 +651,8 @@ mod tests {
     use super::*;
     use crate::workflow::integrity::IntegritySnapshot;
     use crate::workflow::model::{
-        AttemptRecord, IssueTracking, PendingTransition, Provider, Role, RunStatus, Stage,
-        TaskStatus, Workflow, WorktreeInfo,
+        AttemptMode, AttemptRecord, IssueTracking, PendingTransition, Provider, Role, RunStatus,
+        Stage, TaskStatus, Workflow, WorktreeInfo,
     };
 
     fn sample_stage(id: &str, role: Role) -> Stage {
@@ -880,6 +880,10 @@ mod tests {
             updated_at: created_at.to_string(),
             attention: None,
             history: Vec::new(),
+            awaiting: None,
+            plan_approved: false,
+            user_input: None,
+            screening_ack: None,
         }
     }
 
@@ -1359,6 +1363,8 @@ mod tests {
                 started_at: created_at.to_string(),
                 finished_at: None,
                 outcome: None,
+                mode: AttemptMode::Single,
+                user_input: None,
             }],
             pending_transition: Some(PendingTransition {
                 from_task_id: TASK_B.to_string(),
@@ -1368,6 +1374,7 @@ mod tests {
             integrity_baseline: Some(IntegritySnapshot::default()),
             created_at: created_at.to_string(),
             updated_at: created_at.to_string(),
+            acknowledged_agent_config: Vec::new(),
         }
     }
 
