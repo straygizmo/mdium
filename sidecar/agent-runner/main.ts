@@ -5,13 +5,15 @@ import type { RunnerOutbound } from "../../src/shared/types/agent-runner";
 import { RunnerCore } from "./runner-core";
 import { CodexAdapter } from "./codex-adapter";
 import { CopilotAdapter } from "./copilot-adapter";
+import { ClaudeAdapter } from "./claude-adapter";
+import { OpencodeAdapter } from "./opencode-adapter";
 
 function send(message: RunnerOutbound): void {
   process.stdout.write(`${JSON.stringify(message)}\n`);
 }
 
 const core = new RunnerCore({
-  adapters: { codex: new CodexAdapter(), copilot: new CopilotAdapter() },
+  adapters: { codex: new CodexAdapter(), copilot: new CopilotAdapter(), claude: new ClaudeAdapter(), opencode: new OpencodeAdapter() },
   send,
 });
 
