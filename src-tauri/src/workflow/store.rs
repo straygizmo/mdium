@@ -97,6 +97,17 @@ pub struct TaskList {
     pub warnings: Vec<StoreWarning>,
 }
 
+/// Fails with [`StoreError::UnsupportedSchema`] unless `version` is
+/// [`CURRENT_SCHEMA_VERSION`]. Used on both read and write, so the store
+/// never writes a file it would refuse to read back.
+fn check_schema_version(version: u32) -> Result<(), StoreError> {
+    if version == CURRENT_SCHEMA_VERSION {
+        Ok(())
+    } else {
+        Err(StoreError::UnsupportedSchema(version))
+    }
+}
+
 /// Frontmatter delimiter line of a task document.
 const FRONTMATTER_DELIMITER: &str = "---";
 
@@ -160,9 +171,7 @@ fn decode_task(text: &str) -> Result<Task, StoreError> {
 
     let meta: TaskMeta =
         serde_yaml_ng::from_str(&yaml).map_err(|err| StoreError::Corrupt(err.to_string()))?;
-    if meta.schema_version != CURRENT_SCHEMA_VERSION {
-        return Err(StoreError::UnsupportedSchema(meta.schema_version));
-    }
+    check_schema_version(meta.schema_version)?;
 
     Ok(Task {
         meta,
@@ -230,8 +239,9 @@ impl WorkflowStore {
 
     /// Validates every workflow, then atomically writes
     /// `.mdium/workflows.json`. Nothing is written if any workflow fails
-    /// validation.
+    /// validation or the file's `schemaVersion` is not the current one.
     pub fn save_workflows(&self, file: &WorkflowsFile) -> Result<(), StoreError> {
+        check_schema_version(file.schema_version)?;
         let mut errors = Vec::new();
         for workflow in &file.workflows {
             if let Err(mut workflow_errors) = workflow.validate() {
@@ -251,9 +261,11 @@ impl WorkflowStore {
     /// Writes a new task document at `.mdium/tasks/<meta.id>.md`. Fails
     /// with [`StoreError::AlreadyExists`] if that file is already present.
     /// The existence check and the write are not one atomic step; callers
-    /// serialize task mutations per project.
+    /// serialize task mutations per project. Rejects a `schemaVersion` this
+    /// store cannot read back.
     pub fn create_task(&self, meta: TaskMeta, body: &str) -> Result<Task, StoreError> {
         let path = self.paths.task_file(&meta.id)?;
+        check_schema_version(meta.schema_version)?;
         if path.try_exists()? {
             return Err(StoreError::AlreadyExists);
         }
@@ -271,10 +283,17 @@ impl WorkflowStore {
         read_task_file(&path, id)
     }
 
-    /// Atomically overwrites the task document, stamping `updated_at` with
-    /// the current time.
+    /// Atomically overwrites an existing task document, stamping
+    /// `updated_at` with the current time. Fails with
+    /// [`StoreError::NotFound`] if the task file does not exist, so a
+    /// deleted task is never resurrected (use [`Self::create_task`] for new
+    /// tasks). Rejects a `schemaVersion` this store cannot read back.
     pub fn put_task(&self, task: &Task) -> Result<(), StoreError> {
         let path = self.paths.task_file(&task.meta.id)?;
+        check_schema_version(task.meta.schema_version)?;
+        if !path.try_exists()? {
+            return Err(StoreError::NotFound);
+        }
         let mut task = task.clone();
         task.meta.updated_at = fsutil::now();
         fsutil::atomic_write(&path, encode_task(&task)?.as_bytes())?;
@@ -321,7 +340,13 @@ impl WorkflowStore {
                 continue;
             }
 
-            match read_task_file(&path, stem) {
+            // The stem must be a valid task id; anything else is reported
+            // rather than loaded, since it could never be addressed by id.
+            let loaded = match self.paths.task_file(stem) {
+                Ok(_) => read_task_file(&path, stem),
+                Err(err) => Err(StoreError::from(err)),
+            };
+            match loaded {
                 Ok(task) => list.tasks.push(task),
                 Err(err) => list.warnings.push(StoreWarning {
                     file: path.display().to_string(),
@@ -668,7 +693,7 @@ mod tests {
         assert_eq!(list.tasks[0].meta.id, TASK_A);
         assert_eq!(list.warnings.len(), 1);
         assert!(list.warnings[0].file.ends_with(&format!("{TASK_B}.md")));
-        assert!(!list.warnings[0].message.is_empty());
+        assert!(list.warnings[0].message.starts_with("STORE_CORRUPT"));
 
         assert_eq!(store.get_task(TASK_B).unwrap_err().code(), "STORE_CORRUPT");
     }
@@ -768,6 +793,86 @@ mod tests {
         assert_eq!(loaded.meta, meta);
         assert_eq!(loaded.body, "Line one\r\nLine two\r\n");
         assert_eq!(store.list_tasks().unwrap().tasks.len(), 1);
+    }
+
+    #[test]
+    fn save_workflows_rejects_unsupported_schema_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WorkflowStore::new(dir.path().to_path_buf());
+
+        let file = WorkflowsFile {
+            schema_version: 2,
+            workflows: vec![sample_workflow()],
+        };
+        assert_eq!(
+            store.save_workflows(&file).unwrap_err(),
+            StoreError::UnsupportedSchema(2)
+        );
+        assert!(!dir.path().join(".mdium").join("workflows.json").exists());
+    }
+
+    #[test]
+    fn create_task_rejects_unsupported_schema_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WorkflowStore::new(dir.path().to_path_buf());
+
+        let mut meta = sample_task_meta(TASK_A, "2026-01-01T00:00:00.000Z");
+        meta.schema_version = 2;
+        assert_eq!(
+            store.create_task(meta, "x").unwrap_err(),
+            StoreError::UnsupportedSchema(2)
+        );
+        assert!(!task_path(dir.path(), TASK_A).exists());
+    }
+
+    #[test]
+    fn put_task_rejects_unsupported_schema_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WorkflowStore::new(dir.path().to_path_buf());
+
+        let mut task = store
+            .create_task(sample_task_meta(TASK_A, "2026-01-01T00:00:00.000Z"), "x")
+            .unwrap();
+        task.meta.schema_version = 2;
+        assert_eq!(
+            store.put_task(&task).unwrap_err(),
+            StoreError::UnsupportedSchema(2)
+        );
+        assert_eq!(store.get_task(TASK_A).unwrap().meta.schema_version, 1);
+    }
+
+    #[test]
+    fn put_task_after_delete_is_not_found_and_does_not_resurrect() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WorkflowStore::new(dir.path().to_path_buf());
+
+        let task = store
+            .create_task(sample_task_meta(TASK_A, "2026-01-01T00:00:00.000Z"), "x")
+            .unwrap();
+        store.delete_task(TASK_A).unwrap();
+
+        assert_eq!(store.put_task(&task).unwrap_err(), StoreError::NotFound);
+        assert!(!task_path(dir.path(), TASK_A).exists());
+    }
+
+    #[test]
+    fn list_tasks_reports_invalid_file_name_as_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WorkflowStore::new(dir.path().to_path_buf());
+
+        store
+            .create_task(sample_task_meta(TASK_A, "2026-01-01T00:00:00.000Z"), "ok")
+            .unwrap();
+        // A well-formed document whose file name is not a valid id.
+        let raw = std::fs::read(task_path(dir.path(), TASK_A)).unwrap();
+        write_raw_task_file(dir.path(), "notes.md", &raw);
+
+        let list = store.list_tasks().unwrap();
+        assert_eq!(list.tasks.len(), 1);
+        assert_eq!(list.tasks[0].meta.id, TASK_A);
+        assert_eq!(list.warnings.len(), 1);
+        assert!(list.warnings[0].file.ends_with("notes.md"));
+        assert!(list.warnings[0].message.starts_with("STORE_INVALID_ID"));
     }
 
     #[test]
