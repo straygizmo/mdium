@@ -8,6 +8,7 @@ use crate::workflow::fsutil::{self, InvalidId, MdiumPaths};
 use crate::workflow::model::{
     Task, TaskMeta, ValidationError, Workflow, WorkflowRun, WorkflowsFile,
 };
+use crate::workflow::state::{ProjectGuard, ProjectLocks};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
@@ -38,6 +39,8 @@ pub enum StoreError {
     InvalidId(String),
     /// A create operation found the record already present on disk.
     AlreadyExists,
+    /// A mutation was given a [`ProjectGuard`] for a different project.
+    LockMismatch,
 }
 
 impl StoreError {
@@ -52,6 +55,7 @@ impl StoreError {
             StoreError::Invalid(_) => "STORE_INVALID",
             StoreError::InvalidId(_) => "STORE_INVALID_ID",
             StoreError::AlreadyExists => "STORE_ALREADY_EXISTS",
+            StoreError::LockMismatch => "STORE_LOCK_MISMATCH",
         }
     }
 
@@ -65,7 +69,9 @@ impl StoreError {
             | StoreError::InvalidId(detail) => format!("{}: {detail}", self.code()),
             StoreError::UnsupportedSchema(version) => format!("{}: {version}", self.code()),
             StoreError::Invalid(errors) => format!("{}: {errors:?}", self.code()),
-            StoreError::NotFound | StoreError::AlreadyExists => self.code().to_string(),
+            StoreError::NotFound | StoreError::AlreadyExists | StoreError::LockMismatch => {
+                self.code().to_string()
+            }
         }
     }
 }
@@ -236,6 +242,11 @@ fn read_task_file(path: &Path, expected_id: &str) -> Result<Task, StoreError> {
 
 /// Reads and writes `.mdium/` for one project. Cheap to construct; holds no
 /// open handles or caches.
+///
+/// Every task/run mutation takes `&ProjectGuard` (see
+/// [`crate::workflow::state`] for the lock discipline) and fails with
+/// [`StoreError::LockMismatch`] if the guard is for another project. Reads
+/// need no guard.
 pub struct WorkflowStore {
     project_root: PathBuf,
     paths: MdiumPaths,
@@ -252,6 +263,22 @@ impl WorkflowStore {
     /// The project root this store reads and writes `.mdium/` under.
     pub fn project_root(&self) -> &Path {
         &self.project_root
+    }
+
+    /// Takes the per-project lock for this store's project (shorthand for
+    /// [`ProjectLocks::lock`]). Not reentrant.
+    pub fn lock(&self) -> ProjectGuard {
+        ProjectLocks::lock(&self.project_root)
+    }
+
+    /// Fails with [`StoreError::LockMismatch`] unless `guard` is the lock
+    /// for this store's project.
+    fn check_guard(&self, guard: &ProjectGuard) -> Result<(), StoreError> {
+        if guard.covers(&self.project_root) {
+            Ok(())
+        } else {
+            Err(StoreError::LockMismatch)
+        }
     }
 
     /// Loads `.mdium/workflows.json`. A missing file is not an error: it is
@@ -319,10 +346,15 @@ impl WorkflowStore {
 
     /// Writes a new task document at `.mdium/tasks/<meta.id>.md`. Fails
     /// with [`StoreError::AlreadyExists`] if that file is already present.
-    /// The existence check and the write are not one atomic step; callers
-    /// serialize task mutations per project. Rejects a `schemaVersion` this
-    /// store cannot read back.
-    pub fn create_task(&self, meta: TaskMeta, body: &str) -> Result<Task, StoreError> {
+    /// The existence check and the write are serialized by `guard`.
+    /// Rejects a `schemaVersion` this store cannot read back.
+    pub fn create_task(
+        &self,
+        guard: &ProjectGuard,
+        meta: TaskMeta,
+        body: &str,
+    ) -> Result<Task, StoreError> {
+        self.check_guard(guard)?;
         let path = self.paths.task_file(&meta.id)?;
         check_schema_version(meta.schema_version)?;
         if path.try_exists()? {
@@ -348,14 +380,20 @@ impl WorkflowStore {
     /// deleted task is never resurrected (use [`Self::create_task`] for new
     /// tasks). Rejects a `schemaVersion` this store cannot read back.
     /// Returns the task exactly as stored, including the new `updated_at`.
-    pub fn put_task(&self, task: &Task) -> Result<Task, StoreError> {
-        self.put_task_at(task, fsutil::now())
+    pub fn put_task(&self, guard: &ProjectGuard, task: &Task) -> Result<Task, StoreError> {
+        self.put_task_at(guard, task, fsutil::now())
     }
 
     /// [`Self::put_task`] with an explicit `updated_at`, so a caller that
     /// also records the time elsewhere (e.g. a history entry in the state
     /// machine) can use one identical timestamp for both.
-    pub(crate) fn put_task_at(&self, task: &Task, updated_at: String) -> Result<Task, StoreError> {
+    pub(crate) fn put_task_at(
+        &self,
+        guard: &ProjectGuard,
+        task: &Task,
+        updated_at: String,
+    ) -> Result<Task, StoreError> {
+        self.check_guard(guard)?;
         let path = self.paths.task_file(&task.meta.id)?;
         check_schema_version(task.meta.schema_version)?;
         if !path.try_exists()? {
@@ -388,7 +426,8 @@ impl WorkflowStore {
     }
 
     /// Deletes the task document for `id`.
-    pub fn delete_task(&self, id: &str) -> Result<(), StoreError> {
+    pub fn delete_task(&self, guard: &ProjectGuard, id: &str) -> Result<(), StoreError> {
+        self.check_guard(guard)?;
         let path = self.paths.task_file(id)?;
         match std::fs::remove_file(&path) {
             Ok(()) => Ok(()),
@@ -400,9 +439,10 @@ impl WorkflowStore {
     /// Writes a new `.mdium/runs/<rootTaskId>.json`. Fails with
     /// [`StoreError::AlreadyExists`] if that file is already present, and
     /// rejects a `schemaVersion` this store cannot read back. Like
-    /// [`Self::create_task`], the existence check and the write are not one
-    /// atomic step; callers serialize run mutations per project.
-    pub fn create_run(&self, run: &WorkflowRun) -> Result<(), StoreError> {
+    /// [`Self::create_task`], the existence check and the write are
+    /// serialized by `guard`.
+    pub fn create_run(&self, guard: &ProjectGuard, run: &WorkflowRun) -> Result<(), StoreError> {
+        self.check_guard(guard)?;
         let path = self.paths.run_file(&run.root_task_id)?;
         check_schema_version(run.schema_version)?;
         if path.try_exists()? {
@@ -422,7 +462,12 @@ impl WorkflowStore {
     /// file does not exist (use [`Self::create_run`] for new runs), and
     /// rejects a `schemaVersion` this store cannot read back. Returns the
     /// run exactly as stored, including the new `updated_at`.
-    pub fn put_run(&self, run: &WorkflowRun) -> Result<WorkflowRun, StoreError> {
+    pub fn put_run(
+        &self,
+        guard: &ProjectGuard,
+        run: &WorkflowRun,
+    ) -> Result<WorkflowRun, StoreError> {
+        self.check_guard(guard)?;
         let path = self.paths.run_file(&run.root_task_id)?;
         check_schema_version(run.schema_version)?;
         if !path.try_exists()? {
@@ -880,7 +925,9 @@ mod tests {
         meta.title = "ログイン画面を実装する".to_string();
         let body = "# 概要\n\nログイン画面を作る。\n\n- 項目1\n- 項目2\n";
 
-        let created = store.create_task(meta.clone(), body).unwrap();
+        let created = store
+            .create_task(&store.lock(), meta.clone(), body)
+            .unwrap();
         assert_eq!(created.meta, meta);
         assert_eq!(created.body, body);
 
@@ -900,7 +947,11 @@ mod tests {
         let store = WorkflowStore::new(dir.path().to_path_buf());
 
         store
-            .create_task(sample_task_meta(TASK_A, "2026-01-01T00:00:00.000Z"), "")
+            .create_task(
+                &store.lock(),
+                sample_task_meta(TASK_A, "2026-01-01T00:00:00.000Z"),
+                "",
+            )
             .unwrap();
         assert_eq!(store.get_task(TASK_A).unwrap().body, "");
     }
@@ -912,7 +963,9 @@ mod tests {
 
         let meta = sample_task_meta(TASK_A, "2026-01-01T00:00:00.000Z");
         let body = "---\nnot: metadata\n---\n\nStill body.\n";
-        store.create_task(meta.clone(), body).unwrap();
+        store
+            .create_task(&store.lock(), meta.clone(), body)
+            .unwrap();
 
         let loaded = store.get_task(TASK_A).unwrap();
         assert_eq!(loaded.meta, meta);
@@ -925,9 +978,13 @@ mod tests {
         let store = WorkflowStore::new(dir.path().to_path_buf());
 
         let meta = sample_task_meta(TASK_A, "2026-01-01T00:00:00.000Z");
-        store.create_task(meta.clone(), "first").unwrap();
+        store
+            .create_task(&store.lock(), meta.clone(), "first")
+            .unwrap();
 
-        let err = store.create_task(meta, "second").unwrap_err();
+        let err = store
+            .create_task(&store.lock(), meta, "second")
+            .unwrap_err();
         assert_eq!(err, StoreError::AlreadyExists);
         assert_eq!(err.code(), "STORE_ALREADY_EXISTS");
         assert_eq!(store.get_task(TASK_A).unwrap().body, "first");
@@ -939,7 +996,7 @@ mod tests {
         let store = WorkflowStore::new(dir.path().to_path_buf());
 
         let meta = sample_task_meta("../../evil", "2026-01-01T00:00:00.000Z");
-        let err = store.create_task(meta, "body").unwrap_err();
+        let err = store.create_task(&store.lock(), meta, "body").unwrap_err();
         assert_eq!(err.code(), "STORE_INVALID_ID");
     }
 
@@ -957,13 +1014,17 @@ mod tests {
         let store = WorkflowStore::new(dir.path().to_path_buf());
 
         let created = store
-            .create_task(sample_task_meta(TASK_A, "2000-01-01T00:00:00.000Z"), "old")
+            .create_task(
+                &store.lock(),
+                sample_task_meta(TASK_A, "2000-01-01T00:00:00.000Z"),
+                "old",
+            )
             .unwrap();
 
         let mut task = created.clone();
         task.meta.status = TaskStatus::Running;
         task.body = "new body\n".to_string();
-        let stored = store.put_task(&task).unwrap();
+        let stored = store.put_task(&store.lock(), &task).unwrap();
 
         let loaded = store.get_task(TASK_A).unwrap();
         assert_eq!(stored, loaded);
@@ -980,12 +1041,19 @@ mod tests {
         let store = WorkflowStore::new(dir.path().to_path_buf());
 
         store
-            .create_task(sample_task_meta(TASK_A, "2026-01-01T00:00:00.000Z"), "x")
+            .create_task(
+                &store.lock(),
+                sample_task_meta(TASK_A, "2026-01-01T00:00:00.000Z"),
+                "x",
+            )
             .unwrap();
-        store.delete_task(TASK_A).unwrap();
+        store.delete_task(&store.lock(), TASK_A).unwrap();
 
         assert_eq!(store.get_task(TASK_A).unwrap_err(), StoreError::NotFound);
-        assert_eq!(store.delete_task(TASK_A).unwrap_err(), StoreError::NotFound);
+        assert_eq!(
+            store.delete_task(&store.lock(), TASK_A).unwrap_err(),
+            StoreError::NotFound
+        );
     }
 
     #[test]
@@ -1004,13 +1072,25 @@ mod tests {
         let store = WorkflowStore::new(dir.path().to_path_buf());
 
         store
-            .create_task(sample_task_meta(TASK_C, "2026-01-01T00:00:00.000Z"), "")
+            .create_task(
+                &store.lock(),
+                sample_task_meta(TASK_C, "2026-01-01T00:00:00.000Z"),
+                "",
+            )
             .unwrap();
         store
-            .create_task(sample_task_meta(TASK_B, "2026-01-02T00:00:00.000Z"), "")
+            .create_task(
+                &store.lock(),
+                sample_task_meta(TASK_B, "2026-01-02T00:00:00.000Z"),
+                "",
+            )
             .unwrap();
         store
-            .create_task(sample_task_meta(TASK_A, "2026-01-02T00:00:00.000Z"), "")
+            .create_task(
+                &store.lock(),
+                sample_task_meta(TASK_A, "2026-01-02T00:00:00.000Z"),
+                "",
+            )
             .unwrap();
 
         let list = store.list_tasks().unwrap();
@@ -1025,7 +1105,11 @@ mod tests {
         let store = WorkflowStore::new(dir.path().to_path_buf());
 
         store
-            .create_task(sample_task_meta(TASK_A, "2026-01-01T00:00:00.000Z"), "ok")
+            .create_task(
+                &store.lock(),
+                sample_task_meta(TASK_A, "2026-01-01T00:00:00.000Z"),
+                "ok",
+            )
             .unwrap();
         write_raw_task_file(
             dir.path(),
@@ -1049,7 +1133,11 @@ mod tests {
         let store = WorkflowStore::new(dir.path().to_path_buf());
 
         store
-            .create_task(sample_task_meta(TASK_A, "2026-01-01T00:00:00.000Z"), "ok")
+            .create_task(
+                &store.lock(),
+                sample_task_meta(TASK_A, "2026-01-01T00:00:00.000Z"),
+                "ok",
+            )
             .unwrap();
         write_raw_task_file(
             dir.path(),
@@ -1071,7 +1159,11 @@ mod tests {
         let store = WorkflowStore::new(dir.path().to_path_buf());
 
         store
-            .create_task(sample_task_meta(TASK_A, "2026-01-01T00:00:00.000Z"), "ok")
+            .create_task(
+                &store.lock(),
+                sample_task_meta(TASK_A, "2026-01-01T00:00:00.000Z"),
+                "ok",
+            )
             .unwrap();
         // Leftover temp file from an interrupted atomic write.
         write_raw_task_file(dir.path(), &format!(".{TASK_B}.md.0123abcd.tmp"), b"junk");
@@ -1087,7 +1179,11 @@ mod tests {
         let store = WorkflowStore::new(dir.path().to_path_buf());
 
         store
-            .create_task(sample_task_meta(TASK_A, "2026-01-01T00:00:00.000Z"), "ok")
+            .create_task(
+                &store.lock(),
+                sample_task_meta(TASK_A, "2026-01-01T00:00:00.000Z"),
+                "ok",
+            )
             .unwrap();
         let src = task_path(dir.path(), TASK_A);
         let dst = task_path(dir.path(), TASK_B);
@@ -1105,7 +1201,11 @@ mod tests {
         let store = WorkflowStore::new(dir.path().to_path_buf());
 
         store
-            .create_task(sample_task_meta(TASK_A, "2026-01-01T00:00:00.000Z"), "ok")
+            .create_task(
+                &store.lock(),
+                sample_task_meta(TASK_A, "2026-01-01T00:00:00.000Z"),
+                "ok",
+            )
             .unwrap();
         let path = task_path(dir.path(), TASK_A);
         let raw = std::fs::read_to_string(&path).unwrap();
@@ -1126,7 +1226,7 @@ mod tests {
         let store = WorkflowStore::new(dir.path().to_path_buf());
 
         let meta = sample_task_meta(TASK_A, "2026-01-01T00:00:00.000Z");
-        store.create_task(meta.clone(), "").unwrap();
+        store.create_task(&store.lock(), meta.clone(), "").unwrap();
 
         // Simulate an editor rewriting the whole file with CRLF line endings.
         let path = task_path(dir.path(), TASK_A);
@@ -1164,7 +1264,7 @@ mod tests {
         let mut meta = sample_task_meta(TASK_A, "2026-01-01T00:00:00.000Z");
         meta.schema_version = 2;
         assert_eq!(
-            store.create_task(meta, "x").unwrap_err(),
+            store.create_task(&store.lock(), meta, "x").unwrap_err(),
             StoreError::UnsupportedSchema(2)
         );
         assert!(!task_path(dir.path(), TASK_A).exists());
@@ -1176,11 +1276,15 @@ mod tests {
         let store = WorkflowStore::new(dir.path().to_path_buf());
 
         let mut task = store
-            .create_task(sample_task_meta(TASK_A, "2026-01-01T00:00:00.000Z"), "x")
+            .create_task(
+                &store.lock(),
+                sample_task_meta(TASK_A, "2026-01-01T00:00:00.000Z"),
+                "x",
+            )
             .unwrap();
         task.meta.schema_version = 2;
         assert_eq!(
-            store.put_task(&task).unwrap_err(),
+            store.put_task(&store.lock(), &task).unwrap_err(),
             StoreError::UnsupportedSchema(2)
         );
         assert_eq!(store.get_task(TASK_A).unwrap().meta.schema_version, 1);
@@ -1192,11 +1296,18 @@ mod tests {
         let store = WorkflowStore::new(dir.path().to_path_buf());
 
         let task = store
-            .create_task(sample_task_meta(TASK_A, "2026-01-01T00:00:00.000Z"), "x")
+            .create_task(
+                &store.lock(),
+                sample_task_meta(TASK_A, "2026-01-01T00:00:00.000Z"),
+                "x",
+            )
             .unwrap();
-        store.delete_task(TASK_A).unwrap();
+        store.delete_task(&store.lock(), TASK_A).unwrap();
 
-        assert_eq!(store.put_task(&task).unwrap_err(), StoreError::NotFound);
+        assert_eq!(
+            store.put_task(&store.lock(), &task).unwrap_err(),
+            StoreError::NotFound
+        );
         assert!(!task_path(dir.path(), TASK_A).exists());
     }
 
@@ -1206,7 +1317,11 @@ mod tests {
         let store = WorkflowStore::new(dir.path().to_path_buf());
 
         store
-            .create_task(sample_task_meta(TASK_A, "2026-01-01T00:00:00.000Z"), "ok")
+            .create_task(
+                &store.lock(),
+                sample_task_meta(TASK_A, "2026-01-01T00:00:00.000Z"),
+                "ok",
+            )
             .unwrap();
         // A well-formed document whose file name is not a valid id.
         let raw = std::fs::read(task_path(dir.path(), TASK_A)).unwrap();
@@ -1226,7 +1341,9 @@ mod tests {
         let store = WorkflowStore::new(dir.path().to_path_buf());
 
         let meta = sample_task_meta(TASK_A, "2026-01-01T00:00:00.000Z");
-        store.create_task(meta.clone(), "body\n").unwrap();
+        store
+            .create_task(&store.lock(), meta.clone(), "body\n")
+            .unwrap();
 
         let path = task_path(dir.path(), TASK_A);
         let mut bytes = vec![0xEF, 0xBB, 0xBF];
@@ -1289,7 +1406,7 @@ mod tests {
         let store = WorkflowStore::new(dir.path().to_path_buf());
 
         let run = sample_run(TASK_A, "2026-01-01T00:00:00.000Z");
-        store.create_run(&run).unwrap();
+        store.create_run(&store.lock(), &run).unwrap();
 
         assert_eq!(store.get_run(TASK_A).unwrap(), run);
         let raw = std::fs::read_to_string(run_path(dir.path(), TASK_A)).unwrap();
@@ -1303,12 +1420,12 @@ mod tests {
         let store = WorkflowStore::new(dir.path().to_path_buf());
 
         let run = sample_run(TASK_A, "2026-01-01T00:00:00.000Z");
-        store.create_run(&run).unwrap();
+        store.create_run(&store.lock(), &run).unwrap();
 
         let mut second = run.clone();
         second.reentry_count = 9;
         assert_eq!(
-            store.create_run(&second).unwrap_err(),
+            store.create_run(&store.lock(), &second).unwrap_err(),
             StoreError::AlreadyExists
         );
         assert_eq!(store.get_run(TASK_A).unwrap().reentry_count, 2);
@@ -1321,14 +1438,14 @@ mod tests {
 
         let bad_id = sample_run("../escape", "2026-01-01T00:00:00.000Z");
         assert_eq!(
-            store.create_run(&bad_id).unwrap_err().code(),
+            store.create_run(&store.lock(), &bad_id).unwrap_err().code(),
             "STORE_INVALID_ID"
         );
 
         let mut bad_schema = sample_run(TASK_A, "2026-01-01T00:00:00.000Z");
         bad_schema.schema_version = 2;
         assert_eq!(
-            store.create_run(&bad_schema).unwrap_err(),
+            store.create_run(&store.lock(), &bad_schema).unwrap_err(),
             StoreError::UnsupportedSchema(2)
         );
         assert!(!run_path(dir.path(), TASK_A).exists());
@@ -1348,11 +1465,11 @@ mod tests {
         let store = WorkflowStore::new(dir.path().to_path_buf());
 
         let mut run = sample_run(TASK_A, "2000-01-01T00:00:00.000Z");
-        store.create_run(&run).unwrap();
+        store.create_run(&store.lock(), &run).unwrap();
 
         run.status = RunStatus::AwaitingMerge;
         run.pending_transition = None;
-        let stored = store.put_run(&run).unwrap();
+        let stored = store.put_run(&store.lock(), &run).unwrap();
 
         let loaded = store.get_run(TASK_A).unwrap();
         assert_eq!(stored, loaded);
@@ -1368,13 +1485,16 @@ mod tests {
         let store = WorkflowStore::new(dir.path().to_path_buf());
 
         let mut run = sample_run(TASK_A, "2026-01-01T00:00:00.000Z");
-        assert_eq!(store.put_run(&run).unwrap_err(), StoreError::NotFound);
+        assert_eq!(
+            store.put_run(&store.lock(), &run).unwrap_err(),
+            StoreError::NotFound
+        );
         assert!(!run_path(dir.path(), TASK_A).exists());
 
-        store.create_run(&run).unwrap();
+        store.create_run(&store.lock(), &run).unwrap();
         run.schema_version = 2;
         assert_eq!(
-            store.put_run(&run).unwrap_err(),
+            store.put_run(&store.lock(), &run).unwrap_err(),
             StoreError::UnsupportedSchema(2)
         );
         assert_eq!(store.get_run(TASK_A).unwrap().schema_version, 1);
@@ -1396,10 +1516,16 @@ mod tests {
         let store = WorkflowStore::new(dir.path().to_path_buf());
 
         store
-            .create_run(&sample_run(TASK_B, "2026-01-02T00:00:00.000Z"))
+            .create_run(
+                &store.lock(),
+                &sample_run(TASK_B, "2026-01-02T00:00:00.000Z"),
+            )
             .unwrap();
         store
-            .create_run(&sample_run(TASK_A, "2026-01-03T00:00:00.000Z"))
+            .create_run(
+                &store.lock(),
+                &sample_run(TASK_A, "2026-01-03T00:00:00.000Z"),
+            )
             .unwrap();
         // Attempt artifacts live in a sibling directory and must be ignored.
         store
@@ -1438,7 +1564,10 @@ mod tests {
         let store = WorkflowStore::new(dir.path().to_path_buf());
 
         store
-            .create_run(&sample_run(TASK_A, "2026-01-01T00:00:00.000Z"))
+            .create_run(
+                &store.lock(),
+                &sample_run(TASK_A, "2026-01-01T00:00:00.000Z"),
+            )
             .unwrap();
         std::fs::copy(run_path(dir.path(), TASK_A), run_path(dir.path(), TASK_B)).unwrap();
 
@@ -1451,7 +1580,10 @@ mod tests {
         let store = WorkflowStore::new(dir.path().to_path_buf());
 
         store
-            .create_run(&sample_run(TASK_A, "2026-01-01T00:00:00.000Z"))
+            .create_run(
+                &store.lock(),
+                &sample_run(TASK_A, "2026-01-01T00:00:00.000Z"),
+            )
             .unwrap();
         let path = run_path(dir.path(), TASK_A);
         let mut value: serde_json::Value =

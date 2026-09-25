@@ -1,11 +1,22 @@
-//! Task state machine: the allowed status transitions and the single
-//! [`transition`] entry point that applies one under a per-project lock.
+//! Task state machine: the allowed status transitions and the
+//! [`transition`] / [`transition_locked`] entry points that apply one under
+//! a per-project lock.
 //!
 //! Transitions are optimistic: the caller states the status it believes the
 //! task is in (`expected_from`), and the transition fails with
 //! [`TransitionError::Conflict`] if the task on disk says otherwise. The
 //! per-project lock makes the reload-check-write sequence atomic with
 //! respect to other transitions in this process.
+//!
+//! Lock discipline: every task/run mutation in the store takes a
+//! [`ProjectGuard`], which only [`ProjectLocks::lock`] can produce. A caller
+//! that must combine several mutations atomically (e.g. create a child
+//! task, transition its parent, and update the run) takes the guard once
+//! and passes it to each guarded call in the same scope. No function that
+//! accepts a guard ever locks again, so this never deadlocks; [`transition`]
+//! is only a convenience that locks and then calls [`transition_locked`],
+//! and must not be called while holding a guard for the same project (the
+//! mutex is not reentrant).
 //!
 //! [`ProjectLocks`] serializes only within this process. It does not
 //! coordinate with other processes (e.g. a second MDium instance) or with a
@@ -18,6 +29,31 @@ use crate::workflow::store::{StoreError, WorkflowStore};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
+
+/// Proof that this thread holds the per-project lock for one project root.
+/// Only [`ProjectLocks::lock`] can create one; dropping it releases the
+/// lock. Store mutations take `&ProjectGuard` and reject a guard for a
+/// different project (see [`ProjectGuard::covers`]).
+pub struct ProjectGuard {
+    _guard: MutexGuard<'static, ()>,
+    key: PathBuf,
+}
+
+impl ProjectGuard {
+    /// True if this guard is the lock for `project_root` (compared by the
+    /// same normalized key [`ProjectLocks::lock`] uses).
+    pub fn covers(&self, project_root: &Path) -> bool {
+        lock_key(project_root) == self.key
+    }
+}
+
+impl std::fmt::Debug for ProjectGuard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProjectGuard")
+            .field("key", &self.key)
+            .finish()
+    }
+}
 
 /// Whether moving a task from `from` to `to` is permitted. This is the
 /// complete transition table; every pair not listed is rejected.
@@ -82,8 +118,10 @@ pub struct ProjectLocks;
 impl ProjectLocks {
     /// Blocks until this process holds the lock for `project_root`.
     /// Different spellings of the same directory (relative vs. absolute,
-    /// and letter case on Windows) share one lock.
-    pub fn lock(project_root: &Path) -> MutexGuard<'static, ()> {
+    /// and letter case on Windows) share one lock. The lock is not
+    /// reentrant: never call this while already holding a guard for the
+    /// same project.
+    pub fn lock(project_root: &Path) -> ProjectGuard {
         static LOCKS: OnceLock<Mutex<HashMap<PathBuf, &'static Mutex<()>>>> = OnceLock::new();
 
         let key = lock_key(project_root);
@@ -93,14 +131,15 @@ impl ProjectLocks {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             *locks
-                .entry(key)
+                .entry(key.clone())
                 .or_insert_with(|| Box::leak(Box::new(Mutex::new(()))))
         };
         // The mutex guards no data, so a panic in a previous holder cannot
         // have left anything inconsistent; recover from poisoning.
-        mutex
+        let guard = mutex
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        ProjectGuard { _guard: guard, key }
     }
 }
 
@@ -123,7 +162,24 @@ fn lock_key(project_root: &Path) -> PathBuf {
 }
 
 /// Moves task `task_id` from `expected_from` to `to` and returns the task
-/// as written.
+/// as written. Takes the project lock for the duration of the call; see
+/// [`transition_locked`] for the semantics, and use that instead when the
+/// caller already holds the guard.
+pub fn transition(
+    store: &WorkflowStore,
+    task_id: &str,
+    expected_from: TaskStatus,
+    to: TaskStatus,
+    reason: Option<AttentionReason>,
+) -> Result<Task, TransitionError> {
+    let guard = ProjectLocks::lock(store.project_root());
+    transition_locked(&guard, store, task_id, expected_from, to, reason)
+}
+
+/// [`transition`] for a caller that already holds `guard` for the store's
+/// project, so it can combine this with other guarded store mutations in
+/// one critical section. A guard for another project is rejected with
+/// [`StoreError::LockMismatch`] before anything is read or written.
 ///
 /// Under the project lock this reloads the task, fails with
 /// [`TransitionError::Conflict`] if its status is not `expected_from`, and
@@ -132,14 +188,17 @@ fn lock_key(project_root: &Path) -> PathBuf {
 /// moving to `Attention` (clearing it otherwise), appends a history entry
 /// carrying `reason`, and writes the task atomically. Nothing is written
 /// on failure.
-pub fn transition(
+pub fn transition_locked(
+    guard: &ProjectGuard,
     store: &WorkflowStore,
     task_id: &str,
     expected_from: TaskStatus,
     to: TaskStatus,
     reason: Option<AttentionReason>,
 ) -> Result<Task, TransitionError> {
-    let _guard = ProjectLocks::lock(store.project_root());
+    if !guard.covers(store.project_root()) {
+        return Err(TransitionError::Store(StoreError::LockMismatch));
+    }
 
     let mut task = store.get_task(task_id)?;
     if task.meta.status != expected_from {
@@ -169,7 +228,7 @@ pub fn transition(
     });
 
     // Stamp updated_at with the same instant as the history entry.
-    Ok(store.put_task_at(&task, at)?)
+    Ok(store.put_task_at(guard, &task, at)?)
 }
 
 #[cfg(test)]
@@ -212,7 +271,7 @@ mod tests {
             attention: None,
             history: Vec::new(),
         };
-        store.create_task(meta, "body\n").unwrap();
+        store.create_task(&store.lock(), meta, "body\n").unwrap();
         (dir, store)
     }
 
@@ -452,6 +511,124 @@ mod tests {
 
         let store = WorkflowStore::new(root);
         assert_eq!(store.get_task(TASK_ID).unwrap().meta.history.len(), 1);
+    }
+
+    #[test]
+    fn one_guard_scope_creates_child_transitions_parent_and_creates_run() {
+        use crate::workflow::model::{
+            IssueTracking, Provider, Role, RunStatus, Stage, Workflow, WorkflowRun,
+        };
+
+        const CHILD_ID: &str = "00000000000000bb";
+        let (_dir, store) = new_store_with_task(TaskStatus::Inbox);
+        let stage = |id: &str, role: Role| Stage {
+            id: id.to_string(),
+            role,
+            name: id.to_string(),
+            prompt: "p".to_string(),
+            completion_criteria: "c".to_string(),
+            provider: Provider::Claude,
+            model: None,
+            requires_approval: false,
+            timeout_minutes: 60,
+        };
+        let run = WorkflowRun {
+            schema_version: 1,
+            root_task_id: TASK_ID.to_string(),
+            workflow: Workflow {
+                id: "wf-1".to_string(),
+                name: "wf".to_string(),
+                enabled: true,
+                archived: false,
+                stages: vec![
+                    stage("design", Role::Design),
+                    stage("implement", Role::Implement),
+                    stage("review", Role::Review),
+                ],
+                review_return_to: Role::Design,
+                max_reentry_count: 5,
+                max_concurrent_runs: 1,
+                design_doc_path: None,
+                issue_tracking: IssueTracking::Off,
+            },
+            status: RunStatus::Active,
+            current_task_id: CHILD_ID.to_string(),
+            reentry_count: 0,
+            worktree: None,
+            attempts: Vec::new(),
+            pending_transition: None,
+            integrity_baseline: None,
+            created_at: "2026-01-01T00:00:00.000Z".to_string(),
+            updated_at: "2026-01-01T00:00:00.000Z".to_string(),
+        };
+
+        // Run on a helper thread so a deadlock fails the test instead of
+        // hanging the suite.
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let guard = ProjectLocks::lock(store.project_root());
+            let mut child = store.get_task(TASK_ID).unwrap().meta;
+            child.id = CHILD_ID.to_string();
+            child.parent_id = Some(TASK_ID.to_string());
+            store.create_task(&guard, child, "child\n").unwrap();
+            transition_locked(
+                &guard,
+                &store,
+                TASK_ID,
+                TaskStatus::Inbox,
+                TaskStatus::Running,
+                None,
+            )
+            .unwrap();
+            store.create_run(&guard, &run).unwrap();
+            let mut run = store.get_run(TASK_ID).unwrap();
+            run.reentry_count = 1;
+            store.put_run(&guard, &run).unwrap();
+            drop(guard);
+            tx.send(store).unwrap();
+        });
+        let store = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("guarded sequence deadlocked");
+
+        assert_eq!(
+            store.get_task(TASK_ID).unwrap().meta.status,
+            TaskStatus::Running
+        );
+        assert!(store.get_task(CHILD_ID).is_ok());
+        assert_eq!(store.get_run(TASK_ID).unwrap().reentry_count, 1);
+    }
+
+    #[test]
+    fn guard_for_another_project_is_rejected() {
+        let (_dir, store) = new_store_with_task(TaskStatus::Inbox);
+        let other = tempfile::tempdir().unwrap();
+        let guard = ProjectLocks::lock(other.path());
+
+        let err = transition_locked(
+            &guard,
+            &store,
+            TASK_ID,
+            TaskStatus::Inbox,
+            TaskStatus::Running,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(err, TransitionError::Store(StoreError::LockMismatch));
+        let task = store.get_task(TASK_ID).unwrap();
+        assert_eq!(
+            store.put_task(&guard, &task).unwrap_err(),
+            StoreError::LockMismatch
+        );
+        assert_eq!(task.meta.status, TaskStatus::Inbox);
+    }
+
+    #[test]
+    fn guard_accepts_other_spelling_of_same_root() {
+        let (dir, store) = new_store_with_task(TaskStatus::Inbox);
+        let alias = dir.path().join(".").join("");
+        let guard = ProjectLocks::lock(&alias);
+        assert!(guard.covers(store.project_root()));
     }
 
     #[test]

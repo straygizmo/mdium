@@ -594,10 +594,7 @@ mod tests {
         workflow.stages[0].timeout_minutes = 0;
 
         let errors = workflow.validate().unwrap_err();
-        assert_eq!(
-            errors,
-            vec![ValidationError::Timeout("design".to_string())]
-        );
+        assert_eq!(errors, vec![ValidationError::Timeout("design".to_string())]);
         assert_eq!(errors[0].code(), "TIMEOUT");
     }
 
