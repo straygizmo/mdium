@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 /// A stage's place in the fixed design -> implement -> review pipeline.
 /// Serializes as `"design"` | `"implement"` | `"review"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "lowercase")]
 pub enum Role {
     Design,
     Implement,
@@ -231,6 +231,8 @@ pub enum ValidationError {
     DesignDocPath(String),
     /// The workflow's `name` is empty (or whitespace-only).
     NameEmpty,
+    /// A stage's `name` is empty (or whitespace-only).
+    StageNameEmpty(String),
 }
 
 impl ValidationError {
@@ -246,6 +248,7 @@ impl ValidationError {
             ValidationError::ApprovalRole(_) => "APPROVAL_ROLE",
             ValidationError::DesignDocPath(_) => "DESIGN_DOC_PATH",
             ValidationError::NameEmpty => "NAME_EMPTY",
+            ValidationError::StageNameEmpty(_) => "STAGE_NAME_EMPTY",
         }
     }
 }
@@ -275,14 +278,18 @@ fn is_invalid_design_doc_path(path: &str) -> bool {
         }
     }
 
-    matches!(first_segment, Some(".git") | Some(".mdium"))
+    // Compare case-insensitively: Windows/macOS filesystems are typically
+    // case-insensitive, so ".Git"/".GIT" resolve to the same directory as
+    // ".git" and must be rejected too.
+    matches!(first_segment, Some(seg) if seg.eq_ignore_ascii_case(".git") || seg.eq_ignore_ascii_case(".mdium"))
 }
 
 impl Workflow {
     /// Validate this workflow against the fixed shape rules (constraints.md):
     /// exactly design/implement/review stages in order, unique stage ids,
     /// sane review-return target, positive timeouts/limits, approval only on
-    /// the implement stage, a safe design doc path, and a non-empty name.
+    /// the implement stage, a safe design doc path, and non-empty
+    /// workflow/stage names.
     ///
     /// Returns every violation found, not just the first.
     pub fn validate(&self) -> Result<(), Vec<ValidationError>> {
@@ -339,6 +346,12 @@ impl Workflow {
 
         if self.name.trim().is_empty() {
             errors.push(ValidationError::NameEmpty);
+        }
+
+        for stage in &self.stages {
+            if stage.name.trim().is_empty() {
+                errors.push(ValidationError::StageNameEmpty(stage.id.clone()));
+            }
         }
 
         if errors.is_empty() {
@@ -622,6 +635,69 @@ mod tests {
     }
 
     #[test]
+    fn validate_reports_design_doc_path_git_dir_case_insensitive_slash() {
+        let mut workflow = valid_workflow();
+        workflow.design_doc_path = Some(".Git/config".to_string());
+
+        let errors = workflow.validate().unwrap_err();
+        assert_eq!(errors[0].code(), "DESIGN_DOC_PATH");
+    }
+
+    #[test]
+    fn validate_reports_design_doc_path_git_dir_case_insensitive_backslash() {
+        let mut workflow = valid_workflow();
+        workflow.design_doc_path = Some(".GIT\\hooks\\x".to_string());
+
+        let errors = workflow.validate().unwrap_err();
+        assert_eq!(errors[0].code(), "DESIGN_DOC_PATH");
+    }
+
+    #[test]
+    fn validate_reports_design_doc_path_mdium_dir_case_insensitive() {
+        let mut workflow = valid_workflow();
+        workflow.design_doc_path = Some(".Mdium/x.md".to_string());
+
+        let errors = workflow.validate().unwrap_err();
+        assert_eq!(errors[0].code(), "DESIGN_DOC_PATH");
+    }
+
+    #[test]
+    fn validate_reports_design_doc_path_windows_drive_absolute() {
+        let mut workflow = valid_workflow();
+        workflow.design_doc_path = Some("C:\\Users\\x\\doc.md".to_string());
+
+        let errors = workflow.validate().unwrap_err();
+        assert_eq!(errors[0].code(), "DESIGN_DOC_PATH");
+    }
+
+    #[test]
+    fn validate_reports_design_doc_path_unc_absolute() {
+        let mut workflow = valid_workflow();
+        workflow.design_doc_path = Some("\\\\server\\share\\doc.md".to_string());
+
+        let errors = workflow.validate().unwrap_err();
+        assert_eq!(errors[0].code(), "DESIGN_DOC_PATH");
+    }
+
+    #[test]
+    fn validate_reports_design_doc_path_escaping_repo_from_nested_segment() {
+        let mut workflow = valid_workflow();
+        workflow.design_doc_path = Some("a/../../x".to_string());
+
+        let errors = workflow.validate().unwrap_err();
+        assert_eq!(errors[0].code(), "DESIGN_DOC_PATH");
+    }
+
+    #[test]
+    fn validate_accepts_safe_nested_design_doc_path() {
+        let mut workflow = valid_workflow();
+        workflow.design_doc_path =
+            Some("docs/designs/2026-09-25-workflow-foundation-design.md".to_string());
+
+        assert_eq!(workflow.validate(), Ok(()));
+    }
+
+    #[test]
     fn validate_reports_name_empty() {
         let mut workflow = valid_workflow();
         workflow.name = "  ".to_string();
@@ -629,6 +705,19 @@ mod tests {
         let errors = workflow.validate().unwrap_err();
         assert_eq!(errors, vec![ValidationError::NameEmpty]);
         assert_eq!(errors[0].code(), "NAME_EMPTY");
+    }
+
+    #[test]
+    fn validate_reports_stage_name_empty() {
+        let mut workflow = valid_workflow();
+        workflow.stages[0].name = "  ".to_string();
+
+        let errors = workflow.validate().unwrap_err();
+        assert_eq!(
+            errors,
+            vec![ValidationError::StageNameEmpty("design".to_string())]
+        );
+        assert_eq!(errors[0].code(), "STAGE_NAME_EMPTY");
     }
 
     #[test]
