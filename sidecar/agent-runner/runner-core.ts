@@ -39,6 +39,35 @@ export interface RunnerCoreDeps {
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
+/** Longest guard_violation summary sent to mdium. */
+const MAX_VIOLATION_SUMMARY = 2048;
+const REDACTED = "[REDACTED]";
+/** Token-like substrings removed from a blocked command before it is reported. */
+const SECRET_PATTERNS: RegExp[] = [
+  /(\bauthorization\s*[:=]\s*)[^\r\n"'`]+/gi,
+  /(\bbearer\s+)[^\s"'`]+/gi,
+  /(\b[\w-]*(?:token|secret|password|passwd|api[_-]?key)\s*[=:]\s*)[^\s&"'`]+/gi,
+  /()\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_\w{16,}|sk-[\w-]{16,})/g,
+];
+/** Long runs of base64/hex-like characters. */
+const TOKEN_RUN = /[A-Za-z0-9+/=_-]{32,}/g;
+
+/** Hex runs, or base64-like runs mixing cases and digits without word or path separators. */
+function looksLikeSecret(run: string): boolean {
+  if (/^[0-9a-f]+$/i.test(run)) return true;
+  const longest = Math.max(...run.split(/[/_-]/).map((part) => part.length));
+  return longest >= 20 && /\d/.test(run) && /[a-z]/.test(run) && /[A-Z]/.test(run);
+}
+
+/** Redact token-like text and bound the length of a summary reported in guard_violation. */
+export function reportableSummary(summary: string): string {
+  // Only the reported prefix matters; bound the redaction work on oversized input.
+  let text = summary.slice(0, MAX_VIOLATION_SUMMARY * 8);
+  for (const pattern of SECRET_PATTERNS) text = text.replace(pattern, `$1${REDACTED}`);
+  text = text.replace(TOKEN_RUN, (run) => (looksLikeSecret(run) ? REDACTED : run));
+  return text.length > MAX_VIOLATION_SUMMARY ? `${text.slice(0, MAX_VIOLATION_SUMMARY - 1)}…` : text;
+}
+
 /** Bound on close(), so a hung adapter/CLI cannot block shutdown forever. */
 const CLOSE_TIMEOUT_MS = 5_000;
 
@@ -311,7 +340,7 @@ export class RunnerCore {
     if (entry && turn && !entry.closed) {
       if (!turn.violationSent) {
         turn.violationSent = true;
-        this.deps.send({ type: "guard_violation", sessionId, rule: verdict.rule, summary: request.summary });
+        this.deps.send({ type: "guard_violation", sessionId, rule: verdict.rule, summary: reportableSummary(request.summary) });
       }
       turn.guardBlocked = true;
       turn.controller.abort();

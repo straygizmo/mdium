@@ -73,8 +73,10 @@ function setup(clientFactory = fakeClient) {
   const startServer = vi.fn(async () => server);
   const createClient = vi.fn((_baseUrl: string, _directory: string) => fake.client as unknown as OpencodeClientLike);
   const run = vi.fn(async () => ({ status: 0, stdout: "1.18.32\n", stderr: "" }));
-  const adapter = new OpencodeAdapter({ startServer, createClient, run });
-  return { adapter, fake, server, startServer, createClient, run };
+  // Unhealthy by default, so a lost connection closes the server.
+  const checkHealth = vi.fn(async (_url: string) => false);
+  const adapter = new OpencodeAdapter({ startServer, createClient, run, checkHealth });
+  return { adapter, fake, server, startServer, createClient, run, checkHealth };
 }
 
 const baseOptions: SessionOptions = { workingDirectory: "C:/work", permission: "full-access", guarded: false };
@@ -496,9 +498,20 @@ describe("OpencodeAdapter hardening", () => {
     const { adapter, fake, server, startServer } = setup();
     fake.client.session.create.mockRejectedValueOnce(new TypeError("fetch failed"));
     await expect(adapter.startSession(baseOptions, callbacks([]))).rejects.toThrow("OPENCODE_FAILED: fetch failed");
-    expect(server.close).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(server.close).toHaveBeenCalledTimes(1));
     await adapter.startSession(baseOptions, callbacks([]));
     expect(startServer).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a healthy shared server when one session's request fails", async () => {
+    const { adapter, fake, server, startServer, checkHealth } = setup();
+    checkHealth.mockResolvedValue(true);
+    fake.client.session.create.mockRejectedValueOnce(new TypeError("fetch failed"));
+    await expect(adapter.startSession(baseOptions, callbacks([]))).rejects.toThrow("OPENCODE_FAILED: fetch failed");
+    await vi.waitFor(() => expect(checkHealth).toHaveBeenCalledWith("http://127.0.0.1:1"));
+    await adapter.startSession(baseOptions, callbacks([]));
+    expect(server.close).not.toHaveBeenCalled();
+    expect(startServer).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the server when session.create returns an HTTP error", async () => {
@@ -517,9 +530,23 @@ describe("OpencodeAdapter hardening", () => {
     await prompted(fake);
     fake.queue.end();
     await expect(turn).rejects.toThrow("OPENCODE_DISCONNECTED");
-    expect(server.close).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(server.close).toHaveBeenCalledTimes(1));
     await adapter.startSession(baseOptions, callbacks([]));
     expect(startServer).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a healthy shared server when one session's event stream disconnects", async () => {
+    const { adapter, fake, server, startServer, checkHealth } = setup();
+    checkHealth.mockResolvedValue(true);
+    const session = await adapter.startSession(baseOptions, callbacks([]));
+    const turn = session.runTurn("hi", new AbortController().signal);
+    await prompted(fake);
+    fake.queue.end();
+    await expect(turn).rejects.toThrow("OPENCODE_DISCONNECTED");
+    await vi.waitFor(() => expect(checkHealth).toHaveBeenCalled());
+    await adapter.startSession(baseOptions, callbacks([]));
+    expect(server.close).not.toHaveBeenCalled();
+    expect(startServer).toHaveBeenCalledTimes(1);
   });
 
   it("shares one server start between concurrent first sessions", async () => {
@@ -538,6 +565,30 @@ describe("OpencodeAdapter hardening", () => {
 });
 
 describe("startDedicatedServer", () => {
+  const config = opencodeServerConfig({ readOnly: "r", guarded: "g", open: "o" });
+
+  it("retries once on a fresh port when the server exits during start", async () => {
+    const handle = { url: "http://127.0.0.1:3", close: vi.fn() };
+    const create = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Server exited with code 1\nServer output: Failed to start server on port 5000"))
+      .mockResolvedValueOnce(handle);
+    await expect(startDedicatedServer(config, create)).resolves.toBe(handle);
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries at most once", async () => {
+    const create = vi.fn().mockRejectedValue(new Error("Server exited with code 1"));
+    await expect(startDedicatedServer(config, create)).rejects.toThrow("Server exited with code 1");
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry other start failures", async () => {
+    const create = vi.fn().mockRejectedValue(new Error("Timeout waiting for server to start after 20000ms"));
+    await expect(startDedicatedServer(config, create)).rejects.toThrow("Timeout");
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
   it("sets OPENCODE_DISABLE_PROJECT_CONFIG only for the synchronous spawn", async () => {
     const previous = process.env.OPENCODE_DISABLE_PROJECT_CONFIG;
     delete process.env.OPENCODE_DISABLE_PROJECT_CONFIG;

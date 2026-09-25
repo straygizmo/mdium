@@ -13,10 +13,18 @@ function provider(value: unknown): RunnerProvider {
   return value as RunnerProvider;
 }
 
+/** A Windows drive or UNC path, or a posix absolute path. */
+function isAbsolutePath(value: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(value) || /^[\\/]{2}[^\\/]/.test(value) || value.startsWith("/");
+}
+
 function guard(value: unknown): { workspaceRoot: string } | undefined {
   if (value === undefined) return undefined;
   if (!value || typeof value !== "object") throw new Error("Invalid guard");
-  return { workspaceRoot: str((value as { workspaceRoot?: unknown }).workspaceRoot, "guard.workspaceRoot") };
+  const workspaceRoot = str((value as { workspaceRoot?: unknown }).workspaceRoot, "guard.workspaceRoot");
+  // The guard resolves relative paths against the root, so it must not depend on the runner's cwd.
+  if (!isAbsolutePath(workspaceRoot)) throw new Error("Invalid guard.workspaceRoot");
+  return { workspaceRoot };
 }
 
 /** Parse and validate one inbound JSON line. Throws on any invalid shape. */

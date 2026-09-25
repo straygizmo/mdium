@@ -162,6 +162,31 @@ describe("CodexAdapter", () => {
     ]);
   });
 
+  it("checks paths a file_change adds in later events of the same item", async () => {
+    const fake = fakeCodex([
+      { type: "item.started", item: { id: "f1", type: "file_change", status: "in_progress", changes: [{ path: "a.ts", kind: "update" }] } },
+      {
+        type: "item.updated",
+        item: { id: "f1", type: "file_change", status: "in_progress", changes: [{ path: "a.ts", kind: "update" }, { path: ".git/hooks/pre-commit", kind: "add" }] },
+      },
+      {
+        type: "item.completed",
+        item: { id: "f1", type: "file_change", status: "completed", changes: [{ path: "a.ts", kind: "update" }, { path: ".git/hooks/pre-commit", kind: "add" }, { path: "b.ts", kind: "add" }] },
+      },
+    ]);
+    const checkTool = vi.fn(() => true);
+    const session = await adapter(fake.createCodex).startSession(
+      { workingDirectory: "C:/w", permission: "full-access", guarded: true },
+      callbacks([], checkTool),
+    );
+    await session.runTurn("x", new AbortController().signal);
+    expect(checkTool.mock.calls).toEqual([
+      [{ kind: "write", summary: "a.ts", rawKind: "file_change" }],
+      [{ kind: "write", summary: ".git/hooks/pre-commit", rawKind: "file_change" }],
+      [{ kind: "write", summary: "b.ts", rawKind: "file_change" }],
+    ]);
+  });
+
   it("reports MCP tool calls as opaque and web searches as network requests when they start", async () => {
     const fake = fakeCodex([
       { type: "item.started", item: { id: "p1", type: "mcp_tool_call", server: "fs", tool: "write", status: "in_progress" } },

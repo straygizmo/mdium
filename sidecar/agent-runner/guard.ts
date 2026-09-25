@@ -56,7 +56,7 @@
  *   source files (`.env.ts`) are allowed, and writing an env file (copy destination, output
  *   redirect, `Set-Content`) is allowed. Reading `.git/config` is allowed (git needs it).
  * - Agent configuration writes (`.claude/`, `.opencode/`, `opencode.json(c)`, `.mcp.json`, `.codex/`,
- *   `.copilot/`, `.vscode/{settings,tasks,mcp}.json`, `.git/`, `.gitmodules`) are only detected for
+ *   `.copilot/`, `.github/hooks/`, `.vscode/{settings,tasks,mcp}.json`, `.git/`, `.gitmodules`) are only detected for
  *   write requests, write verbs, redirections and static .NET writes; writes by other programs
  *   (`sed -i`, `node -e`, `git config --file`, `git checkout` of such files), 8.3 short names and
  *   symlinks/junctions pointing into those directories pass.
@@ -1220,6 +1220,8 @@ function isAgentConfigPath(absolute: string, ctx: GuardContext): boolean {
   return parts.some(
     (part, i) =>
       AGENT_CONFIG_DIRS.has(part) ||
+      // Copilot loads repository hooks from `.github/hooks/`.
+      (part === ".github" && parts[i + 1] === "hooks") ||
       (i === last && AGENT_CONFIG_FILES.has(part)) ||
       (part === ".vscode" && i === last - 1 && VSCODE_AGENT_FILES.has(parts[last])),
   );

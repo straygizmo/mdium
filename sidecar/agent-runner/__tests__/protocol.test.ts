@@ -47,7 +47,14 @@ describe("parseInbound", () => {
     ["guard without workspaceRoot", JSON.stringify({ ...start, guard: {} })],
     ["guard with empty workspaceRoot", JSON.stringify({ ...start, guard: { workspaceRoot: " " } })],
     ["unknown provider", JSON.stringify({ ...start, provider: "gemini" })],
+    ["guard with a relative workspaceRoot", JSON.stringify({ ...start, guard: { workspaceRoot: "wt/task" } })],
+    ["guard with a dot workspaceRoot", JSON.stringify({ ...start, guard: { workspaceRoot: "." } })],
+    ["guard with a drive-relative workspaceRoot", JSON.stringify({ ...start, guard: { workspaceRoot: "C:wt" } })],
   ])("rejects %s", (_name, line) => {
     expect(() => parseInbound(line)).toThrow();
+  });
+
+  it.each(["C:\\wt\\task", "c:/wt", "\\\\server\\share\\wt", "/home/me/wt"])("accepts the absolute workspaceRoot %s", (workspaceRoot) => {
+    expect(parseInbound(JSON.stringify({ ...start, guard: { workspaceRoot } }))).toMatchObject({ guard: { workspaceRoot } });
   });
 });

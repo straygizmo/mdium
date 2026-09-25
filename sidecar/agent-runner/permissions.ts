@@ -147,6 +147,7 @@ const ALLOWED_OTHER_CLAUDE_TOOLS = new Set([
   "TaskList",
   "TaskGet",
   "TaskStop",
+  "TaskOutput",
   "AskUserQuestion",
   "ExitPlanMode",
 ]);

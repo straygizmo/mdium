@@ -85,6 +85,21 @@ export interface OpencodeAdapterDeps {
   startServer?: () => Promise<OpencodeServerHandle>;
   createClient?: (baseUrl: string, directory: string) => OpencodeClientLike;
   run?: CommandRunner;
+  /** Resolves true when the server at `url` still answers; used before closing a shared server. */
+  checkHealth?: (url: string) => Promise<boolean>;
+}
+
+const HEALTH_TIMEOUT_MS = 3_000;
+
+/** GET /path of a server with a short timeout. */
+async function serverAnswers(url: string): Promise<boolean> {
+  try {
+    const response = await fetch(`${url.replace(/\/+$/, "")}/path`, { signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS) });
+    await response.body?.cancel().catch(() => undefined);
+    return response.ok;
+  } catch {
+    return false;
+  }
 }
 
 type ServerConfig = ReturnType<typeof opencodeServerConfig>;
@@ -102,11 +117,29 @@ function freePort(): Promise<number> {
   });
 }
 
-/** Start `opencode serve` with project configuration disabled (see the note at the top). */
+/** The server process exited while starting, e.g. because another process took the probed port. */
+function exitedDuringStart(error: unknown): boolean {
+  return /Server exited with code|EADDRINUSE|address already in use/i.test(errorText(error));
+}
+
+/**
+ * Start `opencode serve` with project configuration disabled (see the note at the top).
+ * The free port is probed before the server binds it, so an early exit is retried once on a
+ * fresh port.
+ */
 export async function startDedicatedServer(
   config: ServerConfig,
   create: CreateServer = createOpencodeServer as unknown as CreateServer,
 ): Promise<OpencodeServerHandle> {
+  try {
+    return await startServerOnce(config, create);
+  } catch (error) {
+    if (!exitedDuringStart(error)) throw error;
+    return startServerOnce(config, create);
+  }
+}
+
+async function startServerOnce(config: ServerConfig, create: CreateServer): Promise<OpencodeServerHandle> {
   const port = await freePort();
   // createOpencodeServer has no env option; it copies process.env synchronously when it
   // spawns, before its first await. The flag is therefore set only around that synchronous
@@ -496,6 +529,7 @@ export class OpencodeAdapter implements ProviderAdapter {
   private readonly startServer: () => Promise<OpencodeServerHandle>;
   private readonly createClient: (baseUrl: string, directory: string) => OpencodeClientLike;
   private readonly run: CommandRunner;
+  private readonly checkHealth: (url: string) => Promise<boolean>;
   private server: Promise<OpencodeServerHandle> | undefined;
 
   constructor(deps: OpencodeAdapterDeps = {}) {
@@ -506,6 +540,7 @@ export class OpencodeAdapter implements ProviderAdapter {
     this.createClient =
       deps.createClient ?? ((baseUrl, directory) => createOpencodeClient({ baseUrl, directory }) as unknown as OpencodeClientLike);
     this.run = deps.run ?? runCommand;
+    this.checkHealth = deps.checkHealth ?? serverAnswers;
   }
 
   async probe(): Promise<Availability> {
@@ -535,11 +570,18 @@ export class OpencodeAdapter implements ProviderAdapter {
     return this.server;
   }
 
-  /** Close and forget a server that lost its connection, so the next session restarts it. */
+  /**
+   * After one session lost its connection, close and forget the shared server so the next
+   * session restarts it, unless the server still answers (then only that session failed).
+   */
   private dropServer(server: Promise<OpencodeServerHandle>): void {
     if (this.server !== server) return;
-    this.server = undefined;
-    void server.then((handle) => handle.close()).catch(() => undefined);
+    void (async () => {
+      const handle = await server;
+      if (await this.checkHealth(handle.url)) return;
+      if (this.server === server) this.server = undefined;
+      handle.close();
+    })().catch(() => undefined);
   }
 
   async startSession(options: SessionOptions, callbacks: SessionCallbacks): Promise<AdapterSession> {

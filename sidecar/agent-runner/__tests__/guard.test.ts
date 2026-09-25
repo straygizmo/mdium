@@ -478,13 +478,15 @@ describe("checkToolRequest: agent-config", () => {
       ".git/hooks/pre-commit",
       "sub/.git/config",
       ".gitmodules",
+      ".github/hooks/hooks.json",
+      ".github\\hooks\\pre-tool.sh",
     ]) {
       expect(verdict(write(target)), target).toEqual({ ok: false, rule: "agent-config" });
     }
   });
 
   it("allows ordinary documentation and editor files", () => {
-    for (const target of ["CLAUDE.md", ".github/copilot-instructions.md", ".vscode/launch.json", ".gitignore", ".github/workflows/ci.yml"]) {
+    for (const target of ["CLAUDE.md", ".github/copilot-instructions.md", ".vscode/launch.json", ".gitignore", ".github/workflows/ci.yml", "docs/hooks/x.md"]) {
       expect(verdict(write(target)), target).toEqual({ ok: true });
     }
     expect(verdict(read(".claude/settings.json"))).toEqual({ ok: true });
@@ -502,6 +504,8 @@ describe("checkToolRequest: agent-config", () => {
     "cd .claude && echo {} > settings.json",
     "[IO.File]::WriteAllText(\".mcp.json\", \"{}\")",
     "Copy-Item evil.json -Destination .vscode\\tasks.json",
+    "mkdir -p .github/hooks",
+    "echo {} > .github/hooks/hooks.json",
   ])("blocks %s as agent-config", (cmd) => {
     expect(verdict(shell(cmd))).toEqual({ ok: false, rule: "agent-config" });
   });

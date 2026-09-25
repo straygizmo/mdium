@@ -70,8 +70,8 @@ class CodexSession implements AdapterSession {
     // "item.completed" for them, with no preceding "item.started". Track which
     // tool ids we already announced so we can synthesize the missing start.
     const startedToolIds = new Set<string>();
-    // file_change items are checked by the guard on their first event only.
-    const checkedFileChangeIds = new Set<string>();
+    // file_change paths already checked by the guard, per item; later events of an item may add paths.
+    const checkedFileChanges = new Map<string, Set<string>>();
     const emit = (e: AgentEvent) => this.callbacks.onEvent(e);
     for await (const raw of events) {
       // Once the turn is aborted (cancel, timeout, or a guard block), emit nothing further.
@@ -94,9 +94,12 @@ class CodexSession implements AdapterSession {
         if (item.type === "web_search" && event.type === "item.started") {
           this.callbacks.checkTool({ kind: "network", summary: item.query ?? "", rawKind: "web_search" });
         }
-        if (item.type === "file_change" && !checkedFileChangeIds.has(item.id)) {
-          checkedFileChangeIds.add(item.id);
+        if (item.type === "file_change") {
+          let checked = checkedFileChanges.get(item.id);
+          if (!checked) checkedFileChanges.set(item.id, (checked = new Set()));
           for (const change of item.changes ?? []) {
+            if (checked.has(change.path)) continue;
+            checked.add(change.path);
             this.callbacks.checkTool({ kind: "write", summary: change.path, rawKind: "file_change" });
           }
         }

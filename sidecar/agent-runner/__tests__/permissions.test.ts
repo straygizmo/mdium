@@ -154,7 +154,7 @@ describe("claudeHookDecision", () => {
     expect(claudeHookDecision("full-access", false, req(tool))).toBe("none");
     expect(claudeHookDecision("cli-default", false, req(tool))).toBe("none");
   });
-  it.each(["Agent", "Task", "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "TaskStop", "AskUserQuestion", "ExitPlanMode"])(
+  it.each(["Agent", "Task", "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "TaskStop", "AskUserQuestion", "ExitPlanMode", "TaskOutput"])(
     "allows the allowlisted tool %s in guarded sessions",
     (tool) => {
       expect(claudeHookDecision("full-access", true, req(tool))).toBe("none");
