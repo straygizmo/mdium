@@ -268,7 +268,7 @@ interface Stage<R extends "design" | "implement" | "review"> {
    - `git config` による永続設定（コマンドを保持するキー、`core.hooksPath`、`include.path`、`alias.*`、`remote.*` 等）の書き込み。worktree は元のリポジトリと `.git/config` を共有するため。
    Copilot / opencode / Claude は実行前に拒否する。Codex は実行開始イベントで検出した時点でターンを中止する。いずれも `attention`（理由: 危険操作を検出、内容を表示）とする。
 3. 環境による封じ込め: エージェントの子プロセス環境（2.1 の `env`）で、`GIT_CONFIG_COUNT` 等により全リモートの push 先を無効な URL に上書きし、`GH_TOKEN` / `GITLAB_TOKEN` を無効値にする。MDium 自身の Issue 連携は Rust から通常の環境で行うため影響を受けない。
-4. 事後検査: 工程の終了後、利用者の作業ツリー（`git status` とブランチ位置）、base ブランチ、共有される `.git/config` と hooks（`core.hooksPath` を含む）が工程開始前から変化していないことを確認し、変化していれば `attention`（理由: 作業ツリー外への変更を検出）とする。
+4. 事後検査: 工程の終了後、利用者のリポジトリのブランチ位置と HEAD、base ブランチ、共有される `.git/config` と hooks（`core.hooksPath` を含む）が工程開始前から変化していないこと、および worktree 内でエージェント設定ファイル（`.claude/` 等）が変更されていないことを確認し、変化していれば `attention`（理由: 作業ツリー外への変更を検出）とする。利用者が並行して編集しうる作業ツリーのファイル内容は検査対象にしない。取込み（ローカルマージ）の前には、`.github/`・`AGENTS.md`・`CLAUDE.md`・`.husky/`・`.githooks/`・`.devcontainer/` を含む設定系ファイルの変更一覧を示し、利用者の明示的な確認を求める。
 
 補足（ガードの限界）: Codex には実行前フックがないため、ガードはコマンド開始後に検出してターンを中止する（最初の操作自体は防げない場合がある）。Claude は SDK の PreToolUse フックで全ツール呼び出しを検査し、ガード付き・読み取り専用のセッションでは利用者・プロジェクト設定のフックと許可ルールを無視する。
 
