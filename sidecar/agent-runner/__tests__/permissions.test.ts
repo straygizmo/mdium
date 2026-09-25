@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { codexSandbox, copilotDecision, toolRequestFromCopilot } from "../permissions";
+import { claudeDecision, codexSandbox, copilotDecision, toolRequestFromClaude, toolRequestFromCopilot } from "../permissions";
 
 describe("codexSandbox", () => {
   it("maps modes to Codex sandbox values", () => {
@@ -43,5 +43,50 @@ describe("copilotDecision", () => {
   it("cli-default asks the user for everything, including reads", () => {
     expect(copilotDecision("cli-default", read)).toBe("ask");
     expect(copilotDecision("cli-default", shell)).toBe("ask");
+  });
+});
+
+describe("toolRequestFromClaude", () => {
+  it.each([
+    ["Bash", { command: "npm test" }, { kind: "shell", summary: "npm test" }],
+    ["Write", { file_path: "a.ts" }, { kind: "write", summary: "a.ts" }],
+    ["Edit", { file_path: "b.ts" }, { kind: "write", summary: "b.ts" }],
+    ["NotebookEdit", { notebook_path: "n.ipynb" }, { kind: "write", summary: "n.ipynb" }],
+    ["Read", { file_path: "README.md" }, { kind: "read", summary: "README.md" }],
+    ["Grep", { pattern: "foo", path: "src" }, { kind: "read", summary: "src" }],
+    ["Grep", { pattern: "foo" }, { kind: "read", summary: "foo" }],
+    ["Glob", { pattern: "**/*.ts" }, { kind: "read", summary: "**/*.ts" }],
+    ["Glob", {}, { kind: "read", summary: "Glob" }],
+    ["WebFetch", { url: "https://x.test" }, { kind: "network", summary: "https://x.test" }],
+    ["WebSearch", { query: "vitest" }, { kind: "network", summary: "vitest" }],
+    ["TodoWrite", { todos: [] }, { kind: "read", summary: "TodoWrite" }],
+    ["Agent", { prompt: "x" }, { kind: "other", summary: "Agent" }],
+    ["mcp__fs__list", {}, { kind: "other", summary: "mcp__fs__list" }],
+  ] as const)("maps %s", (toolName, input, expected) => {
+    expect(toolRequestFromClaude(toolName, input as Record<string, unknown>)).toEqual({ ...expected, rawKind: toolName });
+  });
+});
+
+describe("claudeDecision", () => {
+  const req = (toolName: string, input: Record<string, unknown> = {}) => toolRequestFromClaude(toolName, input);
+  it("read-only allows reads and WebSearch and denies everything else", () => {
+    expect(claudeDecision("read-only", req("Read", { file_path: "a" }))).toBe("allow");
+    expect(claudeDecision("read-only", req("TodoWrite"))).toBe("allow");
+    expect(claudeDecision("read-only", req("WebSearch", { query: "q" }))).toBe("allow");
+    expect(claudeDecision("read-only", req("WebFetch", { url: "https://x.test" }))).toBe("deny");
+    expect(claudeDecision("read-only", req("Bash", { command: "ls" }))).toBe("deny");
+    expect(claudeDecision("read-only", req("Write", { file_path: "a" }))).toBe("deny");
+    expect(claudeDecision("read-only", req("Agent"))).toBe("deny");
+  });
+  it("full-access allows everything", () => {
+    for (const tool of ["Read", "Bash", "Write", "WebFetch", "Agent"]) {
+      expect(claudeDecision("full-access", req(tool))).toBe("allow");
+    }
+  });
+  it("cli-default allows reads and asks for everything else", () => {
+    expect(claudeDecision("cli-default", req("Read", { file_path: "a" }))).toBe("allow");
+    for (const tool of ["Bash", "Write", "WebFetch", "WebSearch", "Agent"]) {
+      expect(claudeDecision("cli-default", req(tool))).toBe("ask");
+    }
   });
 });

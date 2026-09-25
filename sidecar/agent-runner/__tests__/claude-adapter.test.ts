@@ -1,0 +1,269 @@
+import { describe, expect, it, vi } from "vitest";
+import { ClaudeAdapter, type ClaudeQueryOptions, type QueryFn } from "../claude-adapter";
+import type { AgentEvent, ToolRequest } from "../../../src/shared/types/agent-runner";
+import type { SessionCallbacks, SessionOptions } from "../adapter";
+
+type Script = unknown[] | ((options: ClaudeQueryOptions) => AsyncIterable<unknown>);
+
+/** Fake SDK `query`: each call plays the next script and records its params. */
+function fakeQuery(...scripts: Script[]) {
+  const calls: Array<{ prompt: string; options: ClaudeQueryOptions }> = [];
+  const query: QueryFn = (params) => {
+    calls.push(params);
+    const script = scripts[calls.length - 1] ?? [];
+    if (typeof script === "function") return script(params.options);
+    return (async function* () {
+      yield* script;
+    })();
+  };
+  return { query, calls };
+}
+
+function adapter(query: QueryFn) {
+  return new ClaudeAdapter({ query, resolve: async () => ({ executablePath: "C:/claude/cli.js", executable: "node" }) });
+}
+
+const baseOptions: SessionOptions = { workingDirectory: "C:/work", permission: "cli-default", guarded: false };
+
+function callbacks(events: AgentEvent[], overrides: Partial<SessionCallbacks> = {}): SessionCallbacks {
+  return {
+    onEvent: (e) => events.push(e),
+    requestPermission: async () => false,
+    checkTool: () => true,
+    ...overrides,
+  };
+}
+
+const success = (result: string, session_id = "s-1") => ({ type: "result", subtype: "success", is_error: false, result, session_id });
+
+const turnScript = [
+  { type: "system", subtype: "init", session_id: "s-1" },
+  {
+    type: "stream_event",
+    parent_tool_use_id: null,
+    session_id: "s-1",
+    event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "He" } },
+  },
+  {
+    type: "assistant",
+    parent_tool_use_id: null,
+    session_id: "s-1",
+    message: {
+      content: [
+        { type: "text", text: "Hello" },
+        { type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } },
+      ],
+    },
+  },
+  {
+    type: "user",
+    parent_tool_use_id: null,
+    session_id: "s-1",
+    message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", is_error: false, content: "ok" }] },
+  },
+  success("Hello"),
+];
+
+describe("ClaudeAdapter", () => {
+  it("runs a turn, normalizes events, and records the session id", async () => {
+    const fake = fakeQuery(turnScript);
+    const events: AgentEvent[] = [];
+    const session = await adapter(fake.query).startSession({ ...baseOptions, model: "sonnet" }, callbacks(events));
+    const final = await session.runTurn("hi", new AbortController().signal);
+
+    expect(final).toBe("Hello");
+    expect(events).toEqual([
+      { type: "assistant_delta", text: "He" },
+      { type: "assistant_message", text: "Hello" },
+      { type: "tool_started", toolId: "t1", title: "Bash" },
+      { type: "tool_finished", toolId: "t1", ok: true },
+    ]);
+    expect(session.nativeSessionId()).toBe("s-1");
+
+    const { prompt, options } = fake.calls[0];
+    expect(prompt).toBe("hi");
+    expect(options).toMatchObject({
+      cwd: "C:/work",
+      permissionMode: "default",
+      settingSources: ["user", "project", "local"],
+      systemPrompt: { type: "preset", preset: "claude_code" },
+      includePartialMessages: true,
+      pathToClaudeCodeExecutable: "C:/claude/cli.js",
+      executable: "node",
+      model: "sonnet",
+    });
+    expect(options.resume).toBeUndefined();
+    expect(options.abortController).toBeInstanceOf(AbortController);
+    expect(typeof options.canUseTool).toBe("function");
+    expect(JSON.stringify(options)).not.toContain("bypassPermissions");
+  });
+
+  it("resumes the recorded session on the next turn", async () => {
+    const fake = fakeQuery(turnScript, [success("again")]);
+    const session = await adapter(fake.query).startSession(baseOptions, callbacks([]));
+    await session.runTurn("one", new AbortController().signal);
+    await expect(session.runTurn("two", new AbortController().signal)).resolves.toBe("again");
+    expect(fake.calls[1].options.resume).toBe("s-1");
+  });
+
+  it("resumes the native session given at start", async () => {
+    const fake = fakeQuery([success("x", "s-9")]);
+    const session = await adapter(fake.query).startSession({ ...baseOptions, resumeNativeId: "s-9" }, callbacks([]));
+    expect(session.nativeSessionId()).toBe("s-9");
+    await session.runTurn("x", new AbortController().signal);
+    expect(fake.calls[0].options.resume).toBe("s-9");
+  });
+
+  it("merges env over process.env when env is given", async () => {
+    const fake = fakeQuery([success("x")]);
+    const session = await adapter(fake.query).startSession({ ...baseOptions, env: { GH_TOKEN: "x" } }, callbacks([]));
+    await session.runTurn("x", new AbortController().signal);
+    const env = fake.calls[0].options.env ?? {};
+    expect(env.GH_TOKEN).toBe("x");
+    expect(Object.keys(env).length).toBeGreaterThan(1);
+  });
+
+  async function canUseToolFor(options: SessionOptions, cb: SessionCallbacks) {
+    const fake = fakeQuery([success("x")]);
+    const session = await adapter(fake.query).startSession(options, cb);
+    await session.runTurn("x", new AbortController().signal);
+    const canUseTool = fake.calls[0].options.canUseTool;
+    if (!canUseTool) throw new Error("canUseTool missing");
+    return canUseTool;
+  }
+
+  it("denies and interrupts a tool call the guard blocks", async () => {
+    const checkTool = vi.fn((_r: ToolRequest) => false);
+    const requestPermission = vi.fn(async () => true);
+    const canUseTool = await canUseToolFor({ ...baseOptions, permission: "full-access", guarded: true }, callbacks([], { checkTool, requestPermission }));
+    await expect(canUseTool("Bash", { command: "git push" })).resolves.toMatchObject({ behavior: "deny", interrupt: true });
+    expect(checkTool).toHaveBeenCalledWith({ kind: "shell", summary: "git push", rawKind: "Bash" });
+    expect(requestPermission).not.toHaveBeenCalled();
+  });
+
+  it("applies read-only decisions without asking the user", async () => {
+    const requestPermission = vi.fn(async () => true);
+    const canUseTool = await canUseToolFor({ ...baseOptions, permission: "read-only" }, callbacks([], { requestPermission }));
+    await expect(canUseTool("Write", { file_path: "a" })).resolves.toMatchObject({ behavior: "deny" });
+    await expect(canUseTool("Read", { file_path: "a" })).resolves.toEqual({ behavior: "allow", updatedInput: { file_path: "a" } });
+    expect(requestPermission).not.toHaveBeenCalled();
+  });
+
+  it("asks the user under cli-default", async () => {
+    const requestPermission = vi.fn(async (r: ToolRequest) => r.summary === "npm test");
+    const canUseTool = await canUseToolFor(baseOptions, callbacks([], { requestPermission }));
+    await expect(canUseTool("Bash", { command: "npm test" })).resolves.toMatchObject({ behavior: "allow" });
+    await expect(canUseTool("Bash", { command: "rm x" })).resolves.toMatchObject({ behavior: "deny" });
+    expect(requestPermission).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects with the result subtype when the turn fails", async () => {
+    const fake = fakeQuery([{ type: "result", subtype: "error_max_turns", is_error: true, session_id: "s-1" }]);
+    const session = await adapter(fake.query).startSession(baseOptions, callbacks([]));
+    await expect(session.runTurn("x", new AbortController().signal)).rejects.toThrow("error_max_turns");
+  });
+
+  it("rejects when a success result is flagged as an error", async () => {
+    const fake = fakeQuery([{ type: "result", subtype: "success", is_error: true, result: "Invalid API key", session_id: "s-1" }]);
+    const session = await adapter(fake.query).startSession(baseOptions, callbacks([]));
+    await expect(session.runTurn("x", new AbortController().signal)).rejects.toThrow("Invalid API key");
+  });
+
+  it("rejects when the stream ends without a result", async () => {
+    const fake = fakeQuery([{ type: "system", subtype: "init", session_id: "s-1" }]);
+    const session = await adapter(fake.query).startSession(baseOptions, callbacks([]));
+    await expect(session.runTurn("x", new AbortController().signal)).rejects.toThrow("CLAUDE_NO_RESULT");
+  });
+
+  it("rejects with AbortError and aborts the query when the signal is aborted", async () => {
+    // A stream that never ends on its own.
+    const fake = fakeQuery(() =>
+      (async function* () {
+        yield { type: "system", subtype: "init", session_id: "s-1" };
+        await new Promise(() => undefined);
+      })(),
+    );
+    const controller = new AbortController();
+    const session = await adapter(fake.query).startSession(baseOptions, callbacks([], { onEvent: () => undefined }));
+    const turn = session.runTurn("x", controller.signal);
+    await new Promise((r) => setTimeout(r, 0));
+    controller.abort();
+    await expect(turn).rejects.toMatchObject({ name: "AbortError" });
+    expect(fake.calls[0].options.abortController?.signal.aborted).toBe(true);
+  });
+
+  it("does not emit sub-agent output", async () => {
+    const fake = fakeQuery([
+      {
+        type: "stream_event",
+        parent_tool_use_id: "task-1",
+        event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "sub" } },
+      },
+      {
+        type: "assistant",
+        parent_tool_use_id: "task-1",
+        message: { content: [{ type: "text", text: "sub text" }, { type: "tool_use", id: "t9", name: "Read", input: {} }] },
+      },
+      {
+        type: "user",
+        parent_tool_use_id: "task-1",
+        message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t9", is_error: false }] },
+      },
+      { type: "assistant", parent_tool_use_id: null, message: { content: [{ type: "text", text: "main" }] } },
+      success("main"),
+    ]);
+    const events: AgentEvent[] = [];
+    const session = await adapter(fake.query).startSession(baseOptions, callbacks(events));
+    await session.runTurn("x", new AbortController().signal);
+    expect(events).toEqual([{ type: "assistant_message", text: "main" }]);
+  });
+
+  it("reports a failed tool result", async () => {
+    const fake = fakeQuery([
+      { type: "assistant", parent_tool_use_id: null, message: { content: [{ type: "tool_use", id: "t1", name: "Bash", input: {} }] } },
+      { type: "user", parent_tool_use_id: null, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", is_error: true }] } },
+      success(""),
+    ]);
+    const events: AgentEvent[] = [];
+    const session = await adapter(fake.query).startSession(baseOptions, callbacks(events));
+    await session.runTurn("x", new AbortController().signal);
+    expect(events).toContainEqual({ type: "tool_finished", toolId: "t1", ok: false });
+  });
+
+  it("refuses to start when Claude cannot be resolved", async () => {
+    const a = new ClaudeAdapter({ query: fakeQuery().query, resolve: async () => null });
+    await expect(a.startSession(baseOptions, callbacks([]))).rejects.toThrow("CLAUDE_NOT_FOUND");
+  });
+
+  describe("probe", () => {
+    it("reports missing when Claude cannot be resolved", async () => {
+      const run = vi.fn();
+      const a = new ClaudeAdapter({ query: fakeQuery().query, resolve: async () => null, run });
+      await expect(a.probe()).resolves.toEqual({ kind: "missing", detail: "claude" });
+      expect(run).not.toHaveBeenCalled();
+    });
+
+    it("runs a JS entry with node and parses the version", async () => {
+      const run = vi.fn(async () => ({ status: 0, stdout: "2.3.4 (Claude Code)\n", stderr: "" }));
+      const a = new ClaudeAdapter({ query: fakeQuery().query, resolve: async () => ({ executablePath: "C:/c/cli.js", executable: "node" }), run });
+      await expect(a.probe()).resolves.toEqual({ kind: "available", version: "2.3.4" });
+      expect(run).toHaveBeenCalledWith(process.execPath, ["C:/c/cli.js", "--version"]);
+    });
+
+    it("runs a native binary directly", async () => {
+      const run = vi.fn(async () => ({ status: 0, stdout: "2.3.4 (Claude Code)", stderr: "" }));
+      const a = new ClaudeAdapter({ query: fakeQuery().query, resolve: async () => ({ executablePath: "C:/c/claude.exe" }), run });
+      await expect(a.probe()).resolves.toEqual({ kind: "available", version: "2.3.4" });
+      expect(run).toHaveBeenCalledWith("C:/c/claude.exe", ["--version"]);
+    });
+
+    it("reports spawn and version errors", async () => {
+      const spawnFail = vi.fn(async () => ({ status: null, stdout: "", stderr: "", error: Object.assign(new Error("x"), { code: "EACCES" }) }));
+      const a = new ClaudeAdapter({ query: fakeQuery().query, resolve: async () => ({ executablePath: "C:/c/claude.exe" }), run: spawnFail });
+      await expect(a.probe()).resolves.toEqual({ kind: "error", detail: "spawn" });
+      const garbage = vi.fn(async () => ({ status: 0, stdout: "nope", stderr: "" }));
+      const b = new ClaudeAdapter({ query: fakeQuery().query, resolve: async () => ({ executablePath: "C:/c/claude.exe" }), run: garbage });
+      await expect(b.probe()).resolves.toEqual({ kind: "error", detail: "version" });
+    });
+  });
+});

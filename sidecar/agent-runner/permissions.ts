@@ -62,3 +62,47 @@ export function copilotDecision(permission: AgentPermission, request: ToolReques
   if (permission === "full-access") return request.rawKind && EXTENSION_KINDS.has(request.rawKind) ? "reject" : "approve";
   return "ask";
 }
+
+/** Normalize a Claude Agent SDK tool call (tool name + input) into a provider-neutral ToolRequest. */
+export function toolRequestFromClaude(toolName: string, input: Record<string, unknown>): ToolRequest {
+  return { ...normalizeClaude(toolName, input), rawKind: toolName };
+}
+
+function normalizeClaude(toolName: string, input: Record<string, unknown>): Omit<ToolRequest, "rawKind"> {
+  switch (toolName) {
+    case "Bash":
+      return { kind: "shell", summary: field(input, "command") ?? toolName };
+    case "Write":
+    case "Edit":
+    case "NotebookEdit":
+      return { kind: "write", summary: field(input, "file_path", "notebook_path") ?? toolName };
+    case "Read":
+    case "Grep":
+    case "Glob":
+      return { kind: "read", summary: field(input, "file_path", "path", "pattern") ?? toolName };
+    case "WebFetch":
+      return { kind: "network", summary: field(input, "url") ?? toolName };
+    case "WebSearch":
+      return { kind: "network", summary: field(input, "query") ?? toolName };
+    case "TodoWrite":
+      // Task-list bookkeeping with no side effects outside the session.
+      return { kind: "read", summary: toolName };
+    default:
+      // Sub-agent, MCP, cron, worktree, and other tools.
+      return { kind: "other", summary: toolName };
+  }
+}
+
+/**
+ * Decide a Claude tool call for a mode; "ask" routes it to the user.
+ * read-only allows reads and WebSearch only. full-access allows everything
+ * (the safety guard runs before this decision). cli-default allows reads and
+ * asks for everything else.
+ */
+export function claudeDecision(permission: AgentPermission, request: ToolRequest): "allow" | "deny" | "ask" {
+  if (permission === "read-only") {
+    return request.kind === "read" || (request.kind === "network" && request.rawKind === "WebSearch") ? "allow" : "deny";
+  }
+  if (permission === "full-access") return "allow";
+  return request.kind === "read" ? "allow" : "ask";
+}
