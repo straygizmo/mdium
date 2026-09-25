@@ -11,5 +11,6 @@ pub mod gitops;
 pub mod integrity;
 pub mod model;
 pub mod outcome;
+pub mod screening;
 pub mod state;
 pub mod store;
