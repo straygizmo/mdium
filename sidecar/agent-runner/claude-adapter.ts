@@ -22,6 +22,7 @@ export type ClaudeQueryOptions = Pick<
   | "hooks"
   | "disallowedTools"
   | "managedSettings"
+  | "strictMcpConfig"
 > & {
   canUseTool?: (toolName: string, input: Record<string, unknown>) => Promise<PermissionResult>;
 };
@@ -151,6 +152,9 @@ class ClaudeSession implements AdapterSession {
       // Settings-file hooks and permission rules (e.g. a user `permissions.allow`)
       // must not widen a guarded or read-only stage.
       ...(restricted ? { managedSettings: { allowManagedHooksOnly: true, allowManagedPermissionRulesOnly: true } } : {}),
+      // MCP servers from settings, `.mcp.json`, and plugins start processes the guard cannot
+      // inspect, so a restricted stage loads none (and passes no `mcpServers` of its own).
+      ...(restricted ? { strictMcpConfig: true } : {}),
     };
 
     const iterator = this.query({ prompt: text, options })[Symbol.asyncIterator]();

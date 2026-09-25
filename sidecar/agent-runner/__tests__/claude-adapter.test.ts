@@ -240,6 +240,21 @@ describe("ClaudeAdapter", () => {
     expect(options.managedSettings).toEqual({ allowManagedHooksOnly: true, allowManagedPermissionRulesOnly: true });
   });
 
+  it.each([
+    [{ permission: "full-access", guarded: true }],
+    [{ permission: "cli-default", guarded: true }],
+    [{ permission: "read-only", guarded: false }],
+  ] as const)("loads no MCP servers in %o sessions", async (mode) => {
+    const { options } = await hookFor({ ...baseOptions, ...mode }, callbacks([]));
+    expect(options.strictMcpConfig).toBe(true);
+    expect((options as Record<string, unknown>).mcpServers).toBeUndefined();
+  });
+
+  it("keeps the user's MCP configuration in unrestricted sessions", async () => {
+    const { options } = await hookFor({ ...baseOptions, permission: "full-access" }, callbacks([]));
+    expect(options.strictMcpConfig).toBeUndefined();
+  });
+
   it("guards the files a Grep glob reads", async () => {
     const ctx = { workspaceRoot: "C:/work", homeDir: "C:/Users/u", platform: "win32" as const };
     const checkTool = (r: ToolRequest) => checkToolRequest(r, ctx).ok;
