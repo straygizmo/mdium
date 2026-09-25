@@ -17,6 +17,10 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 /// State of the user's repository that must only change through MDium.
+///
+/// Throughout, a missing file or directory hashes the same as an empty
+/// one. Not covered: files pulled in via `include.path` / `includeIf`, and
+/// global or system git config (apart from an effective `core.hooksPath`).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IntegritySnapshot {
@@ -27,10 +31,13 @@ pub struct IntegritySnapshot {
     pub head_commit: String,
     /// Tip of the base branch, if one was given and it exists.
     pub base_branch_commit: Option<String>,
-    /// sha256 of `<common-dir>/config`.
+    /// sha256 over `<common-dir>/config`, the snapshotted checkout's
+    /// `<git-dir>/config.worktree`, and every submodule git dir's `config`
+    /// under `<common-dir>/modules`.
     pub git_config_hash: String,
-    /// sha256 over the sorted (relative path, content) pairs under
-    /// `<common-dir>/hooks`.
+    /// sha256 over the sorted (relative path, content) entries of
+    /// `<common-dir>/hooks`, the effective hooks dir (`core.hooksPath`) when
+    /// it differs, and every submodule git dir's `hooks`.
     pub hooks_hash: String,
     /// `core.hooksPath`, if configured.
     pub hooks_path: Option<String>,
@@ -93,14 +100,16 @@ const IO_FAILED: &str = "IO_FAILED";
 const DETACHED_PREFIX: &str = "detached:";
 
 /// Snapshots the repository containing `repo_root` (the user's checkout or
-/// any of its worktrees; config and hooks live in the shared common dir).
-/// `base_branch` is resolved as the exact branch `refs/heads/<name>`; a
-/// missing branch yields `None`.
+/// any of its worktrees; config and hooks live mostly in the shared common
+/// dir). `base_branch` is resolved as the exact branch `refs/heads/<name>`;
+/// a missing branch yields `None`.
 pub fn snapshot(
     repo_root: &Path,
     base_branch: Option<&str>,
 ) -> Result<IntegritySnapshot, GitError> {
-    let common = common_dir(repo_root)?;
+    let common = git_path(repo_root, &["rev-parse", "--git-common-dir"])?;
+    let git_dir = git_path(repo_root, &["rev-parse", "--git-dir"])?;
+    let effective_hooks = git_path(repo_root, &["rev-parse", "--git-path", "hooks"])?;
     let head_commit = resolve_head(repo_root)?;
     let symbolic = run_git_raw(repo_root, &["symbolic-ref", "--quiet", "HEAD"])?;
     let head_ref = if symbolic.success && !symbolic.stdout.trim().is_empty() {
@@ -118,25 +127,64 @@ pub fn snapshot(
     )?
     .trim()
     .to_string();
+
+    let mut modules = Vec::new();
+    find_module_git_dirs(&common.join("modules"), b"modules/", &mut modules)?;
+
+    let mut config = Vec::new();
+    push_file(&mut config, b"config".to_vec(), &common.join("config"))?;
+    push_file(
+        &mut config,
+        b"config.worktree".to_vec(),
+        &git_dir.join("config.worktree"),
+    )?;
+    let mut hooks = Vec::new();
+    collect_tree(&common.join("hooks"), b"common/", &mut hooks)?;
+    if !same_path(&effective_hooks, &common.join("hooks")) {
+        collect_tree(&effective_hooks, b"effective/", &mut hooks)?;
+    }
+    for (rel, dir) in &modules {
+        push_file(
+            &mut config,
+            [rel.as_slice(), b"/config"].concat(),
+            &dir.join("config"),
+        )?;
+        collect_tree(
+            &dir.join("hooks"),
+            &[rel.as_slice(), b"/hooks/"].concat(),
+            &mut hooks,
+        )?;
+    }
+
     Ok(IntegritySnapshot {
         head_ref,
         head_commit,
         base_branch_commit,
-        git_config_hash: hash_file(&common.join("config"))?,
-        hooks_hash: hash_tree(&common.join("hooks"))?,
+        git_config_hash: hash_entries(config),
+        hooks_hash: hash_entries(hooks),
         hooks_path: (!hooks_path.is_empty()).then_some(hooks_path),
     })
 }
 
-/// Absolute `<common-dir>` of the repository containing `dir`.
-fn common_dir(dir: &Path) -> Result<PathBuf, GitError> {
-    let out = git(dir, &["rev-parse", "--git-common-dir"])?;
-    let path = PathBuf::from(out.trim());
+/// Runs a git command printing one path and makes the result absolute
+/// (git prints paths relative to the directory it ran in).
+fn git_path(dir: &Path, args: &[&str]) -> Result<PathBuf, GitError> {
+    let out = git(dir, args)?;
+    let path = PathBuf::from(out.trim_end_matches(['\r', '\n']));
     Ok(if path.is_absolute() {
         path
     } else {
         dir.join(path)
     })
+}
+
+/// True if both paths name the same location (canonically when both
+/// exist).
+fn same_path(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
 }
 
 /// The commit HEAD resolves to, or empty when HEAD is unborn.
@@ -163,64 +211,108 @@ fn io_error(path: &Path, err: std::io::Error) -> GitError {
     GitError::new(IO_FAILED, format!("{}: {err}", path.display()))
 }
 
-/// Hex sha256 of a file's content; a missing file hashes as empty content.
-fn hash_file(path: &Path) -> Result<String, GitError> {
-    match std::fs::read(path) {
-        Ok(bytes) => Ok(format!("{:x}", Sha256::digest(&bytes))),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            Ok(format!("{:x}", Sha256::digest(b"")))
-        }
-        Err(err) => Err(io_error(path, err)),
-    }
-}
+/// One hashed entry: a label (a `/`-separated relative path, as raw
+/// encoded bytes), a kind (`d`ir, `f`ile, sym`l`ink, `t`arget content of a
+/// symlink to a file) and content.
+type Entry = (Vec<u8>, u8, Vec<u8>);
 
-/// One entry under a hashed directory: `/`-separated relative path, kind
-/// (`d`ir, `f`ile, sym`l`ink) and content (a symlink's target).
-type TreeEntry = (String, u8, Vec<u8>);
-
-/// Hex sha256 over every entry under `root`, sorted by relative path. Each
-/// entry contributes its kind, path and content, the latter two
-/// length-prefixed so entry boundaries are unambiguous. Symlinks are not
-/// followed. A missing `root` hashes as empty.
-fn hash_tree(root: &Path) -> Result<String, GitError> {
-    let mut entries: Vec<TreeEntry> = Vec::new();
-    collect_entries(root, "", &mut entries)?;
+/// Hex sha256 over `entries` sorted by label. Label and content are
+/// length-prefixed so entry boundaries are unambiguous.
+fn hash_entries(mut entries: Vec<Entry>) -> String {
     entries.sort();
     let mut hasher = Sha256::new();
-    for (rel, kind, content) in &entries {
+    for (label, kind, content) in &entries {
         hasher.update([*kind]);
-        hasher.update((rel.len() as u64).to_le_bytes());
-        hasher.update(rel.as_bytes());
+        hasher.update((label.len() as u64).to_le_bytes());
+        hasher.update(label);
         hasher.update((content.len() as u64).to_le_bytes());
         hasher.update(content);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    format!("{:x}", hasher.finalize())
 }
 
-fn collect_entries(dir: &Path, prefix: &str, out: &mut Vec<TreeEntry>) -> Result<(), GitError> {
-    let reader = match std::fs::read_dir(dir) {
-        Ok(reader) => reader,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound && prefix.is_empty() => {
-            return Ok(());
-        }
-        Err(err) => return Err(io_error(dir, err)),
+/// Adds a file's content under `label`; a missing file counts as empty.
+fn push_file(out: &mut Vec<Entry>, label: Vec<u8>, path: &Path) -> Result<(), GitError> {
+    let content = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(err) => return Err(io_error(path, err)),
     };
+    out.push((label, b'f', content));
+    Ok(())
+}
+
+/// Adds every entry under `root` with labels `<prefix><relative path>`. A
+/// missing `root` (or one that is not a directory) adds nothing.
+fn collect_tree(root: &Path, prefix: &[u8], out: &mut Vec<Entry>) -> Result<(), GitError> {
+    if !root.is_dir() {
+        return Ok(());
+    }
+    collect_entries(root, prefix, out)
+}
+
+/// Symlinks are recorded by target and not descended into; a symlink that
+/// resolves to a regular file also contributes that file's content.
+fn collect_entries(dir: &Path, prefix: &[u8], out: &mut Vec<Entry>) -> Result<(), GitError> {
+    let reader = std::fs::read_dir(dir).map_err(|err| io_error(dir, err))?;
     for entry in reader {
         let entry = entry.map_err(|err| io_error(dir, err))?;
         let path = entry.path();
-        let rel = format!("{prefix}{}", entry.file_name().to_string_lossy());
+        let rel = [prefix, entry.file_name().as_encoded_bytes()].concat();
         let file_type = entry.file_type().map_err(|err| io_error(&path, err))?;
         if file_type.is_symlink() {
             let target = std::fs::read_link(&path).map_err(|err| io_error(&path, err))?;
-            let target = target.to_string_lossy().into_owned().into_bytes();
-            out.push((rel, b'l', target));
+            out.push((
+                rel.clone(),
+                b'l',
+                target.as_os_str().as_encoded_bytes().to_vec(),
+            ));
+            if std::fs::metadata(&path).is_ok_and(|meta| meta.is_file()) {
+                let content = std::fs::read(&path).map_err(|err| io_error(&path, err))?;
+                out.push((rel, b't', content));
+            }
         } else if file_type.is_dir() {
-            let child_prefix = format!("{rel}/");
+            let child_prefix = [rel.as_slice(), b"/"].concat();
             out.push((rel, b'd', Vec::new()));
             collect_entries(&path, &child_prefix, out)?;
         } else {
             let content = std::fs::read(&path).map_err(|err| io_error(&path, err))?;
             out.push((rel, b'f', content));
+        }
+    }
+    Ok(())
+}
+
+/// Finds submodule git dirs (directories holding a `HEAD` file) under
+/// `dir`, i.e. `<common-dir>/modules/<name>` where a name may span several
+/// path segments, plus nested ones under `<module>/modules`. Pushes
+/// (label, path) pairs; labels are `<prefix><relative path>`. A missing
+/// `dir` adds nothing. Symlinks are not followed.
+fn find_module_git_dirs(
+    dir: &Path,
+    prefix: &[u8],
+    out: &mut Vec<(Vec<u8>, PathBuf)>,
+) -> Result<(), GitError> {
+    let reader = match std::fs::read_dir(dir) {
+        Ok(reader) => reader,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(io_error(dir, err)),
+    };
+    for entry in reader {
+        let entry = entry.map_err(|err| io_error(dir, err))?;
+        let path = entry.path();
+        let file_type = entry.file_type().map_err(|err| io_error(&path, err))?;
+        if !file_type.is_dir() {
+            continue;
+        }
+        let rel = [prefix, entry.file_name().as_encoded_bytes()].concat();
+        if path.join("HEAD").is_file() {
+            let nested = [rel.as_slice(), b"/modules/"].concat();
+            find_module_git_dirs(&path.join("modules"), &nested, out)?;
+            out.push((rel, path));
+        } else {
+            let child_prefix = [rel.as_slice(), b"/"].concat();
+            find_module_git_dirs(&path, &child_prefix, out)?;
         }
     }
     Ok(())
@@ -280,7 +372,8 @@ pub fn compare(before: &IntegritySnapshot, after: &IntegritySnapshot) -> Vec<Int
 /// Changed paths in the worktree matching `patterns`, sorted and unique:
 /// commits since the base commit, staged and unstaged changes, and
 /// untracked files, including ignored ones. Paths are repo-relative with
-/// `/`; a wholly ignored directory appears once as `dir/`.
+/// `/`; a wholly ignored directory that is not named like a pattern's
+/// first segment appears once as `dir/`.
 pub fn changed_paths_matching(
     info: &WorktreeInfo,
     patterns: &[&str],
@@ -300,6 +393,59 @@ fn changed_paths_matching_in(
         args.extend_from_slice(extra);
         git(wt, &args)
     };
+    // Untracked and ignored: agent settings such as
+    // `.claude/settings.local.json` are commonly gitignored (often globally)
+    // yet still take effect in the worktree. Wholly ignored directories are
+    // listed once as `dir/` instead of being walked (keeps `node_modules/`
+    // cheap); those named like a pattern's first segment (e.g. `.vscode/`)
+    // are listed file by file. Agent config deeper inside some other
+    // ignored directory (e.g. `build/.claude/`) is not found.
+    let mut ignored = git(
+        wt,
+        &[
+            "ls-files",
+            "-z",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+        ],
+    )?;
+    let first_segments: Vec<String> = patterns
+        .iter()
+        .filter_map(|pattern| fold_case(pattern).split('/').next().map(str::to_string))
+        .collect();
+    let collapsed: Vec<String> = ignored
+        .split('\0')
+        .filter(|entry| {
+            entry.ends_with('/')
+                && entry
+                    .trim_end_matches('/')
+                    .rsplit('/')
+                    .next()
+                    .is_some_and(|name| first_segments.contains(&fold_case(name)))
+        })
+        .map(str::to_string)
+        .collect();
+    for dir in collapsed {
+        let files = git(
+            wt,
+            &[
+                "--literal-pathspecs",
+                "ls-files",
+                "-z",
+                "--others",
+                "--ignored",
+                "--exclude-standard",
+                "--",
+                &dir,
+            ],
+        )?;
+        if !ignored.is_empty() && !ignored.ends_with('\0') {
+            ignored.push('\0');
+        }
+        ignored.push_str(&files);
+    }
     let outputs = [
         // Committed since base.
         diff(&["--end-of-options", &info.base_commit, "HEAD", "--"])?,
@@ -309,21 +455,7 @@ fn changed_paths_matching_in(
         diff(&["--end-of-options", "HEAD", "--"])?,
         // Untracked, not ignored.
         git(wt, &["ls-files", "-z", "--others", "--exclude-standard"])?,
-        // Untracked and ignored: agent settings such as
-        // `.claude/settings.local.json` are commonly gitignored (often
-        // globally) yet still take effect in the worktree. Wholly ignored
-        // directories are listed once as `dir/` instead of being walked.
-        git(
-            wt,
-            &[
-                "ls-files",
-                "-z",
-                "--others",
-                "--ignored",
-                "--exclude-standard",
-                "--directory",
-            ],
-        )?,
+        ignored,
     ];
     let paths: BTreeSet<&str> = outputs
         .iter()
@@ -345,22 +477,24 @@ fn changed_paths_matching_in(
         .collect())
 }
 
+/// Normalizes separators to `/` and, on Windows and macOS, whose default
+/// filesystems are case-insensitive, ASCII-lowercases.
+fn fold_case(s: &str) -> String {
+    let s = s.replace('\\', "/");
+    if cfg!(any(windows, target_os = "macos")) {
+        s.to_ascii_lowercase()
+    } else {
+        s
+    }
+}
+
 /// True if `path` matches `pattern` (see [`AGENT_CONFIG_PATTERNS`]). A
 /// `path` ending in `/` is a whole directory: it matches a `dir/**`
-/// pattern when it is that directory or lies inside it. Separators are
-/// normalized to `/`; on Windows, where the filesystem is case-insensitive,
-/// ASCII case is ignored too.
+/// pattern when it is that directory or lies inside it. See [`fold_case`]
+/// for separator and case handling.
 fn path_matches(path: &str, pattern: &str) -> bool {
-    let normalize = |s: &str| {
-        let s = s.replace('\\', "/");
-        if cfg!(windows) {
-            s.to_ascii_lowercase()
-        } else {
-            s
-        }
-    };
-    let path = normalize(path);
-    let pattern = normalize(pattern);
+    let path = fold_case(path);
+    let pattern = fold_case(pattern);
     let is_dir = path.ends_with('/');
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     if let Some(dir) = pattern.strip_suffix("/**") {
@@ -686,12 +820,106 @@ mod tests {
 
         let found =
             changed_paths_matching_in(fixture.base(), &info, MERGE_REVIEW_PATTERNS).unwrap();
-        assert_eq!(found, [".claude/settings.local.json", ".codex/"]);
+        assert_eq!(found, [".claude/settings.local.json", ".codex/config.toml"]);
     }
 
-    #[cfg(windows)]
     #[test]
-    fn pattern_matching_ignores_case_on_windows() {
+    fn changed_paths_list_files_in_wholly_ignored_config_dirs() {
+        let fixture = Fixture::new();
+        fixture.write(".gitignore", ".vscode/\n");
+        fixture.run(&["add", ".gitignore"]);
+        fixture.run(&["commit", "-m", "ignore"]);
+        let info = fixture.create("t");
+        let wt = Path::new(&info.path);
+        write_file(wt, ".vscode/tasks.json", "{}\n");
+        write_file(wt, ".vscode/launch.json", "{}\n");
+        let found =
+            changed_paths_matching_in(fixture.base(), &info, AGENT_CONFIG_PATTERNS).unwrap();
+        assert_eq!(found, [".vscode/tasks.json"]);
+    }
+
+    #[test]
+    fn worktree_config_change_is_detected() {
+        let fixture = Fixture::new();
+        fixture.run(&["config", "extensions.worktreeConfig", "true"]);
+        let before = snap(&fixture);
+        fixture.run(&["config", "--worktree", "core.fsmonitor", "true"]);
+        assert!(git_common_dir(fixture.root())
+            .join("config.worktree")
+            .is_file());
+        let changes = compare(&before, &snap(&fixture));
+        assert_eq!(codes(&changes), ["GIT_CONFIG_CHANGED"]);
+    }
+
+    #[test]
+    fn hooks_in_absolute_hooks_path_are_hashed() {
+        let fixture = Fixture::new();
+        let outside = tempfile::TempDir::new().unwrap();
+        write_file(outside.path(), "pre-commit", "one\n");
+        let hooks_dir = outside.path().to_string_lossy().replace('\\', "/");
+        fixture.run(&["config", "core.hooksPath", &hooks_dir]);
+        let before = snap(&fixture);
+        write_file(outside.path(), "pre-commit", "two\n");
+        let changes = compare(&before, &snap(&fixture));
+        assert_eq!(codes(&changes), ["HOOKS_CHANGED"]);
+    }
+
+    #[test]
+    fn hooks_in_relative_hooks_path_are_hashed() {
+        let fixture = Fixture::new();
+        fixture.write(".husky/_/pre-commit", "one\n");
+        fixture.run(&["config", "core.hooksPath", ".husky/_"]);
+        let before = snap(&fixture);
+        fixture.write(".husky/_/pre-commit", "two\n");
+        let changes = compare(&before, &snap(&fixture));
+        assert_eq!(codes(&changes), ["HOOKS_CHANGED"]);
+    }
+
+    #[test]
+    fn submodule_git_dirs_are_covered() {
+        let fixture = Fixture::new();
+        let module = git_common_dir(fixture.root()).join("modules").join("lib");
+        write_file(&module, "HEAD", "ref: refs/heads/main\n");
+        write_file(&module, "config", "[core]\n");
+        write_file(&module, "hooks/pre-commit", "one\n");
+        let before = snap(&fixture);
+
+        write_file(&module, "config", "[core]\n\tfsmonitor = x\n");
+        let after_config = snap(&fixture);
+        assert_eq!(
+            codes(&compare(&before, &after_config)),
+            ["GIT_CONFIG_CHANGED"]
+        );
+
+        write_file(&module, "hooks/pre-commit", "two\n");
+        assert_eq!(
+            codes(&compare(&after_config, &snap(&fixture))),
+            ["HOOKS_CHANGED"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_hook_content_is_hashed() {
+        let fixture = Fixture::new();
+        let outside = tempfile::TempDir::new().unwrap();
+        write_file(outside.path(), "real-hook", "one\n");
+        std::os::unix::fs::symlink(
+            outside.path().join("real-hook"),
+            git_common_dir(fixture.root())
+                .join("hooks")
+                .join("pre-commit"),
+        )
+        .unwrap();
+        let before = snap(&fixture);
+        write_file(outside.path(), "real-hook", "two\n");
+        let changes = compare(&before, &snap(&fixture));
+        assert_eq!(codes(&changes), ["HOOKS_CHANGED"]);
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn pattern_matching_ignores_case_on_windows_and_macos() {
         assert!(path_matches(".Claude/Settings.json", ".claude/**"));
         assert!(path_matches("agents.md", "AGENTS.md"));
     }
