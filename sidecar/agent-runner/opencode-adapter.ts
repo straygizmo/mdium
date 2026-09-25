@@ -1,10 +1,9 @@
 import { randomBytes } from "node:crypto";
-import { createServer } from "node:net";
 import { createOpencodeClient } from "@opencode-ai/sdk/client";
-import { createOpencodeServer } from "@opencode-ai/sdk/server";
 import type { AgentEvent, AgentPermission, Availability } from "../../src/shared/types/agent-runner";
 import type { AdapterSession, ProviderAdapter, SessionCallbacks, SessionOptions } from "./adapter";
 import { runCommand, type CommandRunner } from "./availability";
+import { startOpencodeServer } from "./opencode-server";
 import {
   opencodeDecision,
   opencodeServerConfig,
@@ -22,7 +21,7 @@ import {
  * - Config layers merge in this order, later wins: remote well-known, global
  *   (~/.config/opencode), OPENCODE_CONFIG, project opencode.json(c) files, `.opencode`
  *   directories (project, home, OPENCODE_CONFIG_DIR: their opencode.json(c), agents,
- *   commands, plugins), OPENCODE_CONFIG_CONTENT (what createOpencodeServer injects),
+ *   commands, plugins), OPENCODE_CONFIG_CONTENT (what startOpencodeServer injects),
  *   account/org config, the system managed config, then OPENCODE_PERMISSION (top level only).
  * - OPENCODE_DISABLE_PROJECT_CONFIG=1 skips project opencode.json(c) files and project
  *   `.opencode` directories (and with them project plugins, MCP servers, formatters,
@@ -43,6 +42,8 @@ import {
  *   still served (deprecated). Text deltas arrive as `message.part.delta`.
  * - read/edit/apply_patch paths are relative to the git worktree root, glob/grep paths to
  *   the session directory; GET /path reports both, and the worktree is "/" outside git.
+ * - OPENCODE_SERVER_PASSWORD makes the server require HTTP Basic auth (user `opencode`), so
+ *   other local processes cannot drive it; every client request carries the header.
  *
  * Remaining gaps (not closable from here): the user's global config and the system managed
  * config still load (their plugins and MCP servers run inside the server process, and their
@@ -78,23 +79,40 @@ export interface OpencodeClientLike {
 
 export interface OpencodeServerHandle {
   url: string;
+  /** Basic-auth password of the server (user name `opencode`). */
+  password: string;
   close(): void;
+}
+
+/** Options the adapter passes to the SDK client factory. */
+export interface OpencodeClientOptions {
+  baseUrl: string;
+  directory: string;
+  headers: { Authorization: string };
 }
 
 export interface OpencodeAdapterDeps {
   startServer?: () => Promise<OpencodeServerHandle>;
-  createClient?: (baseUrl: string, directory: string) => OpencodeClientLike;
+  createClient?: (options: OpencodeClientOptions) => OpencodeClientLike;
   run?: CommandRunner;
   /** Resolves true when the server at `url` still answers; used before closing a shared server. */
-  checkHealth?: (url: string) => Promise<boolean>;
+  checkHealth?: (url: string, password: string) => Promise<boolean>;
 }
 
 const HEALTH_TIMEOUT_MS = 3_000;
 
+/** Authorization header value for a server started with `password`. */
+function basicAuth(password: string): string {
+  return `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`;
+}
+
 /** GET /path of a server with a short timeout. */
-async function serverAnswers(url: string): Promise<boolean> {
+async function serverAnswers(url: string, password: string): Promise<boolean> {
   try {
-    const response = await fetch(`${url.replace(/\/+$/, "")}/path`, { signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS) });
+    const response = await fetch(`${url.replace(/\/+$/, "")}/path`, {
+      headers: { Authorization: basicAuth(password) },
+      signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
+    });
     await response.body?.cancel().catch(() => undefined);
     return response.ok;
   } catch {
@@ -103,57 +121,27 @@ async function serverAnswers(url: string): Promise<boolean> {
 }
 
 type ServerConfig = ReturnType<typeof opencodeServerConfig>;
-type CreateServer = (options: { hostname: string; port: number; timeout: number; config: ServerConfig }) => Promise<OpencodeServerHandle>;
+type StartServer = (options: { config: ServerConfig }) => Promise<OpencodeServerHandle>;
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      const port = typeof address === "object" && address ? address.port : 0;
-      server.close(() => (port ? resolve(port) : reject(new Error("OPENCODE_NO_PORT"))));
-    });
-  });
-}
-
-/** The server process exited while starting, e.g. because another process took the probed port. */
+/** The server process exited while starting (e.g. a transient bind or startup failure). */
 function exitedDuringStart(error: unknown): boolean {
   return /Server exited with code|EADDRINUSE|address already in use/i.test(errorText(error));
 }
 
 /**
  * Start `opencode serve` with project configuration disabled (see the note at the top).
- * The free port is probed before the server binds it, so an early exit is retried once on a
- * fresh port.
+ * An early exit is retried once.
  */
 export async function startDedicatedServer(
   config: ServerConfig,
-  create: CreateServer = createOpencodeServer as unknown as CreateServer,
+  start: StartServer = startOpencodeServer,
 ): Promise<OpencodeServerHandle> {
   try {
-    return await startServerOnce(config, create);
+    return await start({ config });
   } catch (error) {
     if (!exitedDuringStart(error)) throw error;
-    return startServerOnce(config, create);
+    return start({ config });
   }
-}
-
-async function startServerOnce(config: ServerConfig, create: CreateServer): Promise<OpencodeServerHandle> {
-  const port = await freePort();
-  // createOpencodeServer has no env option; it copies process.env synchronously when it
-  // spawns, before its first await. The flag is therefore set only around that synchronous
-  // call and restored before the start promise settles.
-  const previous = process.env.OPENCODE_DISABLE_PROJECT_CONFIG;
-  let starting: Promise<OpencodeServerHandle>;
-  process.env.OPENCODE_DISABLE_PROJECT_CONFIG = "1";
-  try {
-    starting = create({ hostname: "127.0.0.1", port, timeout: 20_000, config });
-  } finally {
-    if (previous === undefined) delete process.env.OPENCODE_DISABLE_PROJECT_CONFIG;
-    else process.env.OPENCODE_DISABLE_PROJECT_CONFIG = previous;
-  }
-  return starting;
 }
 
 function abortError(): Error {
@@ -527,9 +515,9 @@ function sessionPaths(directory: string, reported: { directory?: string; worktre
 export class OpencodeAdapter implements ProviderAdapter {
   private readonly agents: OpencodeAgentNames;
   private readonly startServer: () => Promise<OpencodeServerHandle>;
-  private readonly createClient: (baseUrl: string, directory: string) => OpencodeClientLike;
+  private readonly createClient: (options: OpencodeClientOptions) => OpencodeClientLike;
   private readonly run: CommandRunner;
-  private readonly checkHealth: (url: string) => Promise<boolean>;
+  private readonly checkHealth: (url: string, password: string) => Promise<boolean>;
   private server: Promise<OpencodeServerHandle> | undefined;
 
   constructor(deps: OpencodeAdapterDeps = {}) {
@@ -537,8 +525,7 @@ export class OpencodeAdapter implements ProviderAdapter {
     this.agents = { readOnly: `mdium-read-only-${suffix}`, guarded: `mdium-guarded-${suffix}`, open: `mdium-open-${suffix}` };
     const config = opencodeServerConfig(this.agents);
     this.startServer = deps.startServer ?? (() => startDedicatedServer(config));
-    this.createClient =
-      deps.createClient ?? ((baseUrl, directory) => createOpencodeClient({ baseUrl, directory }) as unknown as OpencodeClientLike);
+    this.createClient = deps.createClient ?? ((options) => createOpencodeClient(options) as unknown as OpencodeClientLike);
     this.run = deps.run ?? runCommand;
     this.checkHealth = deps.checkHealth ?? serverAnswers;
   }
@@ -578,7 +565,7 @@ export class OpencodeAdapter implements ProviderAdapter {
     if (this.server !== server) return;
     void (async () => {
       const handle = await server;
-      if (await this.checkHealth(handle.url)) return;
+      if (await this.checkHealth(handle.url, handle.password)) return;
       if (this.server === server) this.server = undefined;
       handle.close();
     })().catch(() => undefined);
@@ -586,8 +573,12 @@ export class OpencodeAdapter implements ProviderAdapter {
 
   async startSession(options: SessionOptions, callbacks: SessionCallbacks): Promise<AdapterSession> {
     const server = this.ensureServer();
-    const { url } = await server;
-    const client = this.createClient(url, options.workingDirectory);
+    const { url, password } = await server;
+    const client = this.createClient({
+      baseUrl: url,
+      directory: options.workingDirectory,
+      headers: { Authorization: basicAuth(password) },
+    });
     const query = { directory: options.workingDirectory };
     // A thrown request means the server is unreachable (e.g. it crashed); an `error`
     // result is an HTTP-level failure of a live server.

@@ -117,17 +117,17 @@ describe("toolRequestFromClaude", () => {
 
 describe("claudeDecision", () => {
   const req = (toolName: string, input: Record<string, unknown> = {}) => toolRequestFromClaude(toolName, input);
-  it("read-only allows reads and WebSearch and denies everything else", () => {
+  it("read-only allows reads and denies everything else, including WebSearch", () => {
     expect(claudeDecision("read-only", req("Read", { file_path: "a" }))).toBe("allow");
     expect(claudeDecision("read-only", req("TodoWrite"))).toBe("allow");
-    expect(claudeDecision("read-only", req("WebSearch", { query: "q" }))).toBe("allow");
+    expect(claudeDecision("read-only", req("WebSearch", { query: "q" }))).toBe("deny");
     expect(claudeDecision("read-only", req("WebFetch", { url: "https://x.test" }))).toBe("deny");
     expect(claudeDecision("read-only", req("Bash", { command: "ls" }))).toBe("deny");
     expect(claudeDecision("read-only", req("Write", { file_path: "a" }))).toBe("deny");
     expect(claudeDecision("read-only", req("Agent"))).toBe("deny");
   });
   it("full-access allows everything", () => {
-    for (const tool of ["Read", "Bash", "Write", "WebFetch", "Agent"]) {
+    for (const tool of ["Read", "Bash", "Write", "WebFetch", "WebSearch", "Agent"]) {
       expect(claudeDecision("full-access", req(tool))).toBe("allow");
     }
   });
@@ -165,6 +165,8 @@ describe("claudeHookDecision", () => {
     expect(claudeHookDecision("read-only", false, req("Write", { file_path: "a" }))).toBe("deny");
     expect(claudeHookDecision("read-only", false, req("Bash", { command: "ls" }))).toBe("deny");
     expect(claudeHookDecision("read-only", false, req("Read", { file_path: "a" }))).toBe("none");
+    expect(claudeHookDecision("read-only", false, req("WebSearch", { query: "q" }))).toBe("deny");
+    expect(claudeHookDecision("full-access", false, req("WebSearch", { query: "q" }))).toBe("none");
     expect(claudeHookDecision("full-access", true, req("Bash", { command: "ls" }))).toBe("none");
     expect(claudeHookDecision("cli-default", true, req("Write", { file_path: "a" }))).toBe("none");
   });

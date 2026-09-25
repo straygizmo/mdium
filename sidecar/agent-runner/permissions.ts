@@ -117,13 +117,13 @@ function normalizeClaude(toolName: string, input: Record<string, unknown>): Omit
 
 /**
  * Decide a Claude tool call for a mode; "ask" routes it to the user.
- * read-only allows reads and WebSearch only. full-access allows everything
+ * read-only allows reads only (no network, including WebSearch). full-access allows everything
  * (the safety guard runs before this decision). cli-default allows reads and
  * asks for everything else.
  */
 export function claudeDecision(permission: AgentPermission, request: ToolRequest): "allow" | "deny" | "ask" {
   if (permission === "read-only") {
-    return request.kind === "read" || (request.kind === "network" && request.rawKind === "WebSearch") ? "allow" : "deny";
+    return request.kind === "read" ? "allow" : "deny";
   }
   if (permission === "full-access") return "allow";
   return request.kind === "read" ? "allow" : "ask";
