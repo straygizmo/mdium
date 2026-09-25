@@ -206,6 +206,24 @@ describe("ClaudeAdapter", () => {
     expect(options.disallowedTools).toEqual(["REPL", "RemoteTrigger", "CronCreate", "CronDelete", "Workflow"]);
   });
 
+  it("reports non-inspectable tools of a guarded session to the guard, which blocks them as opaque-tool", async () => {
+    const ctx = { workspaceRoot: "C:/work", homeDir: "C:/Users/u", platform: "win32" as const };
+    const rules: string[] = [];
+    const checkTool = vi.fn((r: ToolRequest) => {
+      const verdict = checkToolRequest(r, ctx);
+      if (!verdict.ok) rules.push(verdict.rule);
+      return verdict.ok;
+    });
+    const { run } = await hookFor({ ...baseOptions, permission: "full-access", guarded: true }, callbacks([], { checkTool }));
+    await expect(run("mcp__fs__write", {})).resolves.toMatchObject({ continue: false, hookSpecificOutput: { permissionDecision: "deny" } });
+    expect(checkTool).toHaveBeenCalledWith({ kind: "other", summary: "mcp__fs__write", rawKind: "mcp__fs__write", opaque: true });
+    await expect(run("Agent", { prompt: "x" })).resolves.toEqual({});
+    expect(rules).toEqual(["opaque-tool"]);
+    const canUseTool = await canUseToolFor({ ...baseOptions, permission: "full-access", guarded: true }, callbacks([], { checkTool }));
+    await expect(canUseTool("mcp__x", {})).resolves.toMatchObject({ behavior: "deny", interrupt: true });
+    expect(rules).toEqual(["opaque-tool", "opaque-tool"]);
+  });
+
   it("does not restrict tools in unguarded cli-default sessions", async () => {
     const { run, options } = await hookFor(baseOptions, callbacks([]));
     await expect(run("mcp__fs__write", {})).resolves.toEqual({});

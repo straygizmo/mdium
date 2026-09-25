@@ -29,9 +29,17 @@ describe("toolRequestFromCopilot", () => {
     expect(toolRequestFromCopilot({ kind: "write", fileName: "src/a.ts" })).toEqual({ kind: "write", summary: "src/a.ts", rawKind: "write" });
     expect(toolRequestFromCopilot({ kind: "read", path: "README.md" })).toEqual({ kind: "read", summary: "README.md", rawKind: "read" });
     expect(toolRequestFromCopilot({ kind: "url", url: "https://x.test" })).toEqual({ kind: "network", summary: "https://x.test", rawKind: "url" });
-    expect(toolRequestFromCopilot({ kind: "mcp", serverName: "fs", toolName: "list" })).toEqual({ kind: "other", summary: "fs/list", rawKind: "mcp" });
-    expect(toolRequestFromCopilot({ kind: "mcp", serverName: "fs" })).toEqual({ kind: "other", summary: "fs", rawKind: "mcp" });
-    expect(toolRequestFromCopilot({ kind: "memory" })).toEqual({ kind: "other", summary: "memory", rawKind: "memory" });
+    expect(toolRequestFromCopilot({ kind: "mcp", serverName: "fs", toolName: "list" })).toEqual({ kind: "other", summary: "fs/list", rawKind: "mcp", opaque: true });
+    expect(toolRequestFromCopilot({ kind: "mcp", serverName: "fs" })).toEqual({ kind: "other", summary: "fs", rawKind: "mcp", opaque: true });
+    expect(toolRequestFromCopilot({ kind: "memory" })).toEqual({ kind: "other", summary: "memory", rawKind: "memory", opaque: true });
+  });
+  it("marks every other-kind request (MCP, memory, extensions, unknown kinds) opaque", () => {
+    for (const kind of ["mcp", "memory", "extension-management", "extension-permission-access", "extension-env-access", "factory", "custom-tool", "hook", "future-kind"]) {
+      expect(toolRequestFromCopilot({ kind }).opaque, kind).toBe(true);
+    }
+    for (const kind of ["shell", "write", "read", "url"]) {
+      expect(toolRequestFromCopilot({ kind, fullCommandText: "ls", fileName: "a", path: "a", url: "https://x.test" }).opaque, kind).toBeUndefined();
+    }
   });
 });
 
@@ -82,7 +90,8 @@ describe("toolRequestFromClaude", () => {
     ["WebSearch", { query: "vitest" }, { kind: "network", summary: "vitest" }],
     ["TodoWrite", { todos: [] }, { kind: "read", summary: "TodoWrite" }],
     ["Agent", { prompt: "x" }, { kind: "other", summary: "Agent" }],
-    ["mcp__fs__list", {}, { kind: "other", summary: "mcp__fs__list" }],
+    ["mcp__fs__list", {}, { kind: "other", summary: "mcp__fs__list", opaque: true }],
+    ["REPL", { code: "1" }, { kind: "other", summary: "REPL", opaque: true }],
   ] as const)("maps %s", (toolName, input, expected) => {
     expect(toolRequestFromClaude(toolName, input as Record<string, unknown>)).toEqual({ ...expected, rawKind: toolName });
   });

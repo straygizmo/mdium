@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { CodexAdapter, type CodexLike } from "../codex-adapter";
 import type { AgentEvent, ToolRequest } from "../../../src/shared/types/agent-runner";
+import { checkToolRequest } from "../guard";
 
 function fakeCodex(events: unknown[], threadId = "thread-1") {
   const startThread = vi.fn();
@@ -159,6 +160,50 @@ describe("CodexAdapter", () => {
       [{ kind: "write", summary: "a.ts", rawKind: "file_change" }],
       [{ kind: "write", summary: "C:/x/b.ts", rawKind: "file_change" }],
     ]);
+  });
+
+  it("reports MCP tool calls as opaque and web searches as network requests when they start", async () => {
+    const fake = fakeCodex([
+      { type: "item.started", item: { id: "p1", type: "mcp_tool_call", server: "fs", tool: "write", status: "in_progress" } },
+      { type: "item.completed", item: { id: "p1", type: "mcp_tool_call", server: "fs", tool: "write", status: "completed" } },
+      { type: "item.started", item: { id: "w1", type: "web_search", query: "vitest docs" } },
+      { type: "item.completed", item: { id: "w1", type: "web_search", query: "vitest docs" } },
+    ]);
+    const checkTool = vi.fn(() => true);
+    const session = await adapter(fake.createCodex).startSession(
+      { workingDirectory: "C:/w", permission: "full-access", guarded: true },
+      callbacks([], checkTool),
+    );
+    await session.runTurn("x", new AbortController().signal);
+    expect(checkTool.mock.calls).toEqual([
+      [{ kind: "other", summary: "fs/write", rawKind: "mcp_tool_call", opaque: true }],
+      [{ kind: "network", summary: "vitest docs", rawKind: "web_search" }],
+    ]);
+  });
+
+  it("aborts a guarded turn at an MCP tool call through the guard's opaque-tool rule", async () => {
+    const controller = new AbortController();
+    const fake = fakeCodex([
+      { type: "item.started", item: { id: "p1", type: "mcp_tool_call", server: "fs", tool: "write", status: "in_progress" } },
+    ]);
+    const ctx = { workspaceRoot: "C:/w", homeDir: "C:/Users/u", platform: "win32" as const };
+    const rules: string[] = [];
+    const checkTool = (r: ToolRequest) => {
+      const verdict = checkToolRequest(r, ctx);
+      if (!verdict.ok) {
+        rules.push(verdict.rule);
+        controller.abort();
+      }
+      return verdict.ok;
+    };
+    const events: AgentEvent[] = [];
+    const session = await adapter(fake.createCodex).startSession(
+      { workingDirectory: "C:/w", permission: "full-access", guarded: true },
+      callbacks(events, checkTool),
+    );
+    await expect(session.runTurn("x", controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    expect(rules).toEqual(["opaque-tool"]);
+    expect(events).toEqual([]);
   });
 
   it("stops emitting events once a guard block aborts the turn", async () => {

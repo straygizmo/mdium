@@ -570,6 +570,12 @@ describe("checkToolRequest: shell dialects", () => {
     expect(verdict(withShell("Get-Content C:\\wt\\task1\\src\\a.ts"))).toEqual({ ok: true });
   });
 
+  it("blocks opaque requests as opaque-tool whatever their kind", () => {
+    expect(verdict({ kind: "other", summary: "fs/list", rawKind: "mcp", opaque: true })).toEqual({ ok: false, rule: "opaque-tool" });
+    expect(verdict({ kind: "shell", summary: "npm test", opaque: true })).toEqual({ ok: false, rule: "opaque-tool" });
+    expect(verdict({ kind: "other", summary: "Agent", rawKind: "Agent" })).toEqual({ ok: true });
+  });
+
   it("blocks git send-pack", () => {
     expect(verdict(shell("git send-pack origin main"))).toEqual({ ok: false, rule: "git-remote" });
   });

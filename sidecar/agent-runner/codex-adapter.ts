@@ -87,6 +87,13 @@ class CodexSession implements AdapterSession {
         if (item.type === "command_execution" && event.type === "item.started") {
           this.callbacks.checkTool({ kind: "shell", summary: item.command ?? "", rawKind: "command_execution" });
         }
+        // MCP tools cannot be inspected; a web search is checked like a network request.
+        if (item.type === "mcp_tool_call" && event.type === "item.started") {
+          this.callbacks.checkTool({ kind: "other", summary: toolTitle(item), rawKind: "mcp_tool_call", opaque: true });
+        }
+        if (item.type === "web_search" && event.type === "item.started") {
+          this.callbacks.checkTool({ kind: "network", summary: item.query ?? "", rawKind: "web_search" });
+        }
         if (item.type === "file_change" && !checkedFileChangeIds.has(item.id)) {
           checkedFileChangeIds.add(item.id);
           for (const change of item.changes ?? []) {

@@ -24,7 +24,9 @@
  * `Start-Process`, `start`, `env -S`, `git submodule foreach`), of `$(...)` substitutions, and of
  * command-valued git settings (`git -c`, `GIT_*`/`PAGER`/`EDITOR` variables, `GIT_CONFIG_KEY_n`)
  * are inspected recursively. Undecodable encoded PowerShell commands are blocked (`system-config`)
- * and inputs over 64 KB or with too many segments are blocked (`outside-workspace`).
+ * and inputs over 64 KB or with too many segments are blocked (`outside-workspace`). Requests an
+ * adapter marks `opaque` (MCP and extension tools, code runners, shell requests without command
+ * text) are blocked as `opaque-tool`, since their effects cannot be inspected.
  *
  * Known gaps (by design this list cannot be exhaustive):
  * - Obfuscation: string concatenation, char-code/base64 decoding inside scripts, variables holding
@@ -1307,6 +1309,8 @@ function dialectViolation(command: string, dialect: Dialect, ctx: GuardContext):
 
 function firstViolation(request: ToolRequest, ctx: GuardContext): GuardRule | null {
   const { kind, summary } = request;
+  // The adapter could not describe what the tool does, so nothing can vouch for it.
+  if (request.opaque) return "opaque-tool";
   // Oversized input cannot be inspected within a bounded time.
   if (summary.length > MAX_COMMAND_LENGTH) return "outside-workspace";
   if (kind === "shell") return shellViolation(summary, shellDialects(request, ctx), ctx);

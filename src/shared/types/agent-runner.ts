@@ -12,7 +12,8 @@ export type GuardRule =
   | "credentials"
   | "network-send"
   | "system-config"
-  | "agent-config";
+  | "agent-config"
+  | "opaque-tool";
 
 /**
  * cli-default: do not override the CLI's own configuration (AGENT CHAT).
@@ -37,6 +38,11 @@ export interface ToolRequest {
    * Windows makes the guard inspect the command under both posix and PowerShell rules.
    */
   shell?: "posix" | "powershell" | "cmd";
+  /**
+   * The tool's effects cannot be inspected (MCP, extensions, code runners, a shell request
+   * without command text). The guard blocks such requests; unguarded sessions ignore it.
+   */
+  opaque?: true;
 }
 
 export type AgentEvent =

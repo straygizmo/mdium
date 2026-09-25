@@ -31,13 +31,15 @@ function normalizeCopilot(request: { kind: string; [k: string]: unknown }): Omit
       return { kind: "read", summary: field(request, "path") ?? "read" };
     case "url":
       return { kind: "network", summary: field(request, "url") ?? "url" };
+    // MCP, memory, extension, factory, custom-tool, hook, and unknown kinds cannot be
+    // inspected by the guard.
     case "mcp": {
       const server = field(request, "serverName");
       const tool = field(request, "toolName");
-      return { kind: "other", summary: server && tool ? `${server}/${tool}` : (tool ?? server ?? "mcp") };
+      return { kind: "other", summary: server && tool ? `${server}/${tool}` : (tool ?? server ?? "mcp"), opaque: true };
     }
     default:
-      return { kind: "other", summary: request.kind };
+      return { kind: "other", summary: request.kind, opaque: true };
   }
 }
 
@@ -66,7 +68,9 @@ export function copilotDecision(permission: AgentPermission, request: ToolReques
 
 /** Normalize a Claude Agent SDK tool call (tool name + input) into a provider-neutral ToolRequest. */
 export function toolRequestFromClaude(toolName: string, input: Record<string, unknown>): ToolRequest {
-  return { ...normalizeClaude(toolName, input), rawKind: toolName };
+  const request: ToolRequest = { ...normalizeClaude(toolName, input), rawKind: toolName };
+  // `other`-kind tools outside the allowlist (MCP, code runners, schedulers, unknown tools) are opaque.
+  return isOpaqueClaudeTool(request) ? { ...request, opaque: true } : request;
 }
 
 function normalizeClaude(toolName: string, input: Record<string, unknown>): Omit<ToolRequest, "rawKind"> {
@@ -143,6 +147,10 @@ const ALLOWED_OTHER_CLAUDE_TOOLS = new Set([
   "ExitPlanMode",
 ]);
 
+function isOpaqueClaudeTool(request: ToolRequest): boolean {
+  return request.kind === "other" && !ALLOWED_OTHER_CLAUDE_TOOLS.has(request.rawKind ?? "");
+}
+
 /**
  * Decision of the PreToolUse hook, which sees every tool call (including ones
  * that settings, hooks, or the CLI pre-approve and never reach canUseTool).
@@ -152,7 +160,7 @@ const ALLOWED_OTHER_CLAUDE_TOOLS = new Set([
  */
 export function claudeHookDecision(permission: AgentPermission, guarded: boolean, request: ToolRequest): "deny" | "none" {
   const restricted = guarded || permission === "read-only";
-  if (restricted && request.kind === "other" && !ALLOWED_OTHER_CLAUDE_TOOLS.has(request.rawKind ?? "")) return "deny";
+  if (restricted && isOpaqueClaudeTool(request)) return "deny";
   if (permission === "read-only" && claudeDecision(permission, request) === "deny") return "deny";
   return "none";
 }

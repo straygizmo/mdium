@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { CopilotAdapter, type CopilotClientLike, type CopilotSessionLike } from "../copilot-adapter";
-import type { AgentEvent } from "../../../src/shared/types/agent-runner";
+import type { AgentEvent, ToolRequest } from "../../../src/shared/types/agent-runner";
+import { checkToolRequest } from "../guard";
 
 type Handler = (event: { type: string; data?: unknown; agentId?: string }) => void;
 
@@ -334,6 +335,36 @@ describe("CopilotAdapter", () => {
     await expect(permission({ kind: "shell", fullCommandText: "git push" })).resolves.toEqual({ kind: "reject" });
     expect(checkTool).toHaveBeenCalledWith({ kind: "shell", summary: "git push", rawKind: "shell" });
     expect(ask).not.toHaveBeenCalled();
+  });
+
+  it("reports MCP, memory, and extension requests of a guarded session to the guard as opaque", async () => {
+    const session = fakeSession([]);
+    const { client, permission } = fakeClient(session);
+    const ask = vi.fn(async () => true);
+    const ctx = { workspaceRoot: "C:/w", homeDir: "C:/Users/u", platform: "win32" as const };
+    const rules: string[] = [];
+    const checkTool = vi.fn((r: ToolRequest) => {
+      const verdict = checkToolRequest(r, ctx);
+      if (!verdict.ok) rules.push(verdict.rule);
+      return verdict.ok;
+    });
+    await make(client).startSession(
+      { workingDirectory: "C:/w", permission: "full-access", guarded: true },
+      { onEvent: () => {}, requestPermission: ask, checkTool },
+    );
+    await expect(permission({ kind: "mcp", serverName: "fs", toolName: "write" })).resolves.toEqual({ kind: "reject" });
+    await expect(permission({ kind: "memory" })).resolves.toEqual({ kind: "reject" });
+    await expect(permission({ kind: "custom-tool", toolName: "x" })).resolves.toEqual({ kind: "reject" });
+    expect(rules).toEqual(["opaque-tool", "opaque-tool", "opaque-tool"]);
+    expect(checkTool).toHaveBeenCalledWith({ kind: "other", summary: "fs/write", rawKind: "mcp", opaque: true });
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it("keeps approving MCP requests in unguarded full-access sessions", async () => {
+    const session = fakeSession([]);
+    const { client, permission } = fakeClient(session);
+    await make(client).startSession({ workingDirectory: "C:/w", permission: "full-access", guarded: false }, cbs());
+    await expect(permission({ kind: "mcp", serverName: "fs", toolName: "write" })).resolves.toEqual({ kind: "approve-once" });
   });
 
   it("rejects an extension-env-access request under full-access without asking", async () => {

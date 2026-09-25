@@ -388,6 +388,23 @@ describe("RunnerCore", () => {
     expect(t.sent.some((m) => m.type === "turn_cancelled")).toBe(false);
   });
 
+  it("reports an opaque tool in a guarded session as an opaque-tool violation", async () => {
+    const t = setup();
+    await t.startGuarded();
+    await t.line({ type: "send", sessionId: "s1", text: "a" });
+    expect(t.callbacks().checkTool({ kind: "other", summary: "fs/write", rawKind: "mcp", opaque: true })).toBe(false);
+    expect(t.sent).toContainEqual({ type: "guard_violation", sessionId: "s1", rule: "opaque-tool", summary: "fs/write" });
+    await flush();
+    expect(t.sent).toContainEqual({ type: "turn_failed", sessionId: "s1", message: "GUARD_BLOCKED" });
+  });
+
+  it("allows opaque tools when no guard is configured", async () => {
+    const t = setup();
+    await t.start();
+    await t.line({ type: "send", sessionId: "s1", text: "a" });
+    expect(t.callbacks().checkTool({ kind: "other", summary: "fs/write", rawKind: "mcp", opaque: true })).toBe(true);
+  });
+
   it("sends only one guard_violation per turn", async () => {
     const t = setup();
     await t.startGuarded();
