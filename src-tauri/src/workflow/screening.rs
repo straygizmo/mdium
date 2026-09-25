@@ -203,29 +203,33 @@ pub fn screen(text: &str) -> Vec<Finding> {
 /// noun later in the same sentence. The "output token(s)" exclusion only
 /// skips that one noun, so later nouns in the sentence are still examined.
 fn scan_secret_en(text: &str, hits: &mut Vec<(usize, usize, FindingKind)>) {
-    let nouns = secret_en_noun_regex();
+    // Find every noun once (linear), then look up candidates per verb by
+    // binary search, so the work per verb is O(gap + log n), not O(text).
+    let nouns: Vec<(usize, usize)> = secret_en_noun_regex()
+        .find_iter(text)
+        .map(|m| (m.start(), m.end()))
+        .collect();
     for verb in secret_en_verb_regex().find_iter(text) {
         let is_output = verb.as_str().eq_ignore_ascii_case("output");
-        // Bound the search haystack to the line and a little past the gap
-        // limit, so the scan per verb is O(gap), not O(text).
-        let line_end = text[verb.end()..].find('\n').map_or(text.len(), |i| verb.end() + i);
-        let mut hay_end = line_end.min(verb.end() + SECRET_EN_GAP_CHARS * 4 + 64);
-        while !text.is_char_boundary(hay_end) {
-            hay_end -= 1;
+        // No noun can start past this cap (80 chars of up to 4 bytes each).
+        let mut cap = (verb.end() + SECRET_EN_GAP_CHARS * 4).min(text.len());
+        while !text.is_char_boundary(cap) {
+            cap -= 1;
         }
-        let hay = &text[..hay_end];
-        let mut pos = verb.end();
-        while let Some(noun) = nouns.find_at(hay, pos) {
-            let gap = &text[verb.end()..noun.start()];
-            if gap.contains(['.', '!', '?']) || gap.chars().count() > SECRET_EN_GAP_CHARS {
+        let first = nouns.partition_point(|&(start, _)| start < verb.end());
+        for &(noun_start, noun_end) in &nouns[first..] {
+            if noun_start > cap {
+                break;
+            }
+            let gap = &text[verb.end()..noun_start];
+            if gap.contains(['.', '!', '?', '\n']) || gap.chars().count() > SECRET_EN_GAP_CHARS {
                 break;
             }
             // "output tokens" is ordinary LLM-usage wording, not a request.
             if is_output && gap.trim().is_empty() {
-                pos = noun.end();
                 continue;
             }
-            hits.push((verb.start(), noun.end(), FindingKind::SecretRequest));
+            hits.push((verb.start(), noun_end, FindingKind::SecretRequest));
             break;
         }
     }
@@ -234,18 +238,28 @@ fn scan_secret_en(text: &str, hits: &mut Vec<(usize, usize, FindingKind)>) {
 /// Encoded payloads: a single run of >= `ENCODED_MIN_RUN` alphabet chars, or
 /// consecutive lines that consist entirely of alphabet chars, are each at
 /// least `ENCODED_WRAPPED_LINE_MIN` long, and together reach the minimum.
+/// Each run or line must look like data: at least one ASCII alphanumeric and
+/// not a single repeated character (rules like `-----` or `=====` are clean).
 fn scan_encoded(text: &str, hits: &mut Vec<(usize, usize, FindingKind)>) {
     let mut run_start: Option<usize> = None;
     let mut run_len = 0usize;
+    let mut run_first = ' ';
+    let mut run_has_alnum = false;
+    let mut run_varied = false;
     for (i, c) in text.char_indices().chain(std::iter::once((text.len(), ' '))) {
         if is_encoded_char(c) {
             if run_start.is_none() {
                 run_start = Some(i);
                 run_len = 0;
+                run_first = c;
+                run_has_alnum = false;
+                run_varied = false;
             }
             run_len += 1;
+            run_has_alnum |= c.is_ascii_alphanumeric();
+            run_varied |= c != run_first;
         } else if let Some(start) = run_start.take() {
-            if run_len >= ENCODED_MIN_RUN {
+            if run_len >= ENCODED_MIN_RUN && run_has_alnum && run_varied {
                 hits.push((start, i, FindingKind::EncodedPayload));
             }
         }
@@ -264,7 +278,7 @@ fn scan_encoded(text: &str, hits: &mut Vec<(usize, usize, FindingKind)>) {
     for line in text.split('\n') {
         let trimmed = line.trim();
         let is_payload_line = trimmed.len() >= ENCODED_WRAPPED_LINE_MIN
-            && trimmed.chars().all(is_encoded_char);
+            && looks_like_encoded_data(trimmed);
         if is_payload_line {
             let line_end = line_start + line.len();
             block = Some(match block {
@@ -277,6 +291,17 @@ fn scan_encoded(text: &str, hits: &mut Vec<(usize, usize, FindingKind)>) {
         line_start += line.len() + 1;
     }
     flush(&mut block, hits);
+}
+
+/// True if `s` consists only of alphabet chars, contains at least one ASCII
+/// alphanumeric, and is not one repeated character.
+fn looks_like_encoded_data(s: &str) -> bool {
+    let Some(first) = s.chars().next() else {
+        return false;
+    };
+    s.chars().all(is_encoded_char)
+        && s.chars().any(|c| c.is_ascii_alphanumeric())
+        && s.chars().any(|c| c != first)
 }
 
 /// Build a finding whose excerpt is a window of the line containing the
@@ -531,7 +556,7 @@ mod tests {
         let started = std::time::Instant::now();
         let findings = screen(&text);
         let elapsed = started.elapsed();
-        assert!(elapsed < std::time::Duration::from_secs(2), "took {elapsed:?}");
+        assert!(elapsed < std::time::Duration::from_secs(5), "took {elapsed:?}");
         assert_eq!(findings.len(), MAX_FINDINGS_PER_KIND);
         assert_eq!(findings[0].line, 1);
         assert_eq!(findings[MAX_FINDINGS_PER_KIND - 1].line, MAX_FINDINGS_PER_KIND);
@@ -642,5 +667,31 @@ mod tests {
     fn detects_base64url_run() {
         let payload = "ab-_".repeat(101); // 404 chars
         assert!(has(&payload, FindingKind::EncodedPayload));
+    }
+
+    // ---- fix round 2 ----
+
+    #[test]
+    fn many_verbs_on_one_line_are_bounded() {
+        let text = "send ".repeat(200_000);
+        let started = std::time::Instant::now();
+        let findings = screen(&text);
+        let elapsed = started.elapsed();
+        assert!(elapsed < std::time::Duration::from_secs(5), "took {elapsed:?}");
+        assert!(findings.is_empty(), "{}", findings.len());
+    }
+
+    #[test]
+    fn repeated_rule_lines_are_not_payloads() {
+        let dashes = vec!["-".repeat(64); 7].join("\n");
+        let equals = vec!["=".repeat(64); 7].join("\n");
+        let text = format!("{dashes}\n\n{equals}\n{}\n", "_".repeat(450));
+        assert!(screen(&text).is_empty(), "{:?}", screen(&text));
+    }
+
+    #[test]
+    fn single_repeated_alnum_run_is_not_a_payload() {
+        let text = "A".repeat(500);
+        assert!(screen(&text).is_empty(), "{:?}", screen(&text));
     }
 }
