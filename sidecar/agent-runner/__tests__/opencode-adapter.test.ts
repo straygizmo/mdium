@@ -218,7 +218,7 @@ describe("OpencodeAdapter", () => {
     expect(fake.client.postSessionIdPermissionsPermissionId).toHaveBeenCalledWith(
       expect.objectContaining({ path: { id: "ses_1", permissionID: "per_1" }, body: { response: "reject" } }),
     );
-    expect(checked).toEqual([{ kind: "shell", summary: "git push origin main", rawKind: "bash" }]);
+    expect(checked).toEqual([{ kind: "shell", summary: "git push origin main", rawKind: "bash", shell: "posix" }]);
     expect(requestPermission).not.toHaveBeenCalled();
     fake.queue.push(message("msg_a", "assistant"), idle());
     await turn;
@@ -264,7 +264,7 @@ describe("OpencodeAdapter", () => {
     await prompted(fake);
     fake.queue.push(ev("permission.asked", { id: "per_1", sessionID: "ses_1", permission: "bash", patterns: ["npm test"], metadata: { command: "npm test" }, always: [] }));
     await vi.waitFor(() => expect(fake.client.postSessionIdPermissionsPermissionId).toHaveBeenCalled());
-    expect(requestPermission).toHaveBeenCalledWith({ kind: "shell", summary: "npm test", rawKind: "bash" });
+    expect(requestPermission).toHaveBeenCalledWith({ kind: "shell", summary: "npm test", rawKind: "bash", shell: "posix" });
     expect((fake.client.postSessionIdPermissionsPermissionId.mock.calls[0][0] as { body: unknown }).body).toEqual({ response: "once" });
     fake.queue.push(message("msg_a", "assistant"), idle());
     await turn;

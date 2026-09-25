@@ -71,8 +71,11 @@ export function toolRequestFromClaude(toolName: string, input: Record<string, un
 
 function normalizeClaude(toolName: string, input: Record<string, unknown>): Omit<ToolRequest, "rawKind"> {
   switch (toolName) {
+    // Claude's Bash tool runs Git Bash on Windows, so it is always lexed as posix.
     case "Bash":
+      return { kind: "shell", summary: field(input, "command") ?? toolName, shell: "posix" };
     case "PowerShell":
+      return { kind: "shell", summary: field(input, "command") ?? toolName, shell: "powershell" };
     case "Monitor":
       return { kind: "shell", summary: field(input, "command") ?? toolName };
     case "Write":
@@ -207,7 +210,12 @@ function normalizeOpencode(permission: OpencodePermissionLike, paths?: OpencodeP
   const fromDirectory = (p: string) => absolute(paths?.directory, p);
   switch (permission.type) {
     case "bash":
-      return { kind: "shell", summary: field(metadata, "command") ?? (patterns.length ? patterns.join("\n") : undefined) ?? permission.title ?? "bash" };
+      // opencode's bash tool runs a posix shell (Git Bash on Windows).
+      return {
+        kind: "shell",
+        summary: field(metadata, "command") ?? (patterns.length ? patterns.join("\n") : undefined) ?? permission.title ?? "bash",
+        shell: "posix",
+      };
     case "edit":
     case "write": {
       // A multi-file apply_patch joins its (worktree-relative) paths into `filepath`; use the first pattern then.

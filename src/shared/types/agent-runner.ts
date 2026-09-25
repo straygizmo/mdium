@@ -32,6 +32,11 @@ export interface ToolRequest {
   summary: string;
   /** Provider-specific request kind or tool name, used by provider policies. */
   rawKind?: string;
+  /**
+   * Shell dialect a `shell` request runs in, when the provider knows it. Undefined on
+   * Windows makes the guard inspect the command under both posix and PowerShell rules.
+   */
+  shell?: "posix" | "powershell" | "cmd";
 }
 
 export type AgentEvent =

@@ -140,7 +140,7 @@ describe("ClaudeAdapter", () => {
     const requestPermission = vi.fn(async () => true);
     const canUseTool = await canUseToolFor({ ...baseOptions, permission: "full-access", guarded: true }, callbacks([], { checkTool, requestPermission }));
     await expect(canUseTool("Bash", { command: "git push" })).resolves.toMatchObject({ behavior: "deny", interrupt: true });
-    expect(checkTool).toHaveBeenCalledWith({ kind: "shell", summary: "git push", rawKind: "Bash" });
+    expect(checkTool).toHaveBeenCalledWith({ kind: "shell", summary: "git push", rawKind: "Bash", shell: "posix" });
     expect(requestPermission).not.toHaveBeenCalled();
   });
 
@@ -186,7 +186,7 @@ describe("ClaudeAdapter", () => {
       reason: "Blocked by MDium safety guard",
       hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "Blocked by MDium safety guard" },
     });
-    expect(checkTool).toHaveBeenCalledWith({ kind: "shell", summary: "git push", rawKind: "Bash" });
+    expect(checkTool).toHaveBeenCalledWith({ kind: "shell", summary: "git push", rawKind: "Bash", shell: "posix" });
     await expect(run("Bash", { command: "npm test" })).resolves.toEqual({});
   });
 

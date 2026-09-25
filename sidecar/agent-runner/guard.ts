@@ -10,8 +10,13 @@
  * complemented by environment containment and post-run checks (spec 3.7, layers 3-4).
  *
  * How shell commands are inspected: the command is lexed (quotes, newlines, `&&`/`||`/`;`/`|`/`&`,
- * parentheses/braces, redirections `>`/`<`/`<<<`; PowerShell backtick and posix backslash line
- * continuations are joined) into invocations. Heredoc bodies and PowerShell here-strings are data;
+ * parentheses/braces, redirections `>`/`<`/`<<<`) into invocations, using the escape rules of the
+ * request's shell dialect: posix backslash, PowerShell backtick, or cmd caret line continuations
+ * are joined and in-word escapes (`pu\sh`, ``p`ush``, `p^ush`) are removed. When the adapter does
+ * not know the dialect on Windows (PowerShell or Git Bash), the command is lexed with both posix
+ * and PowerShell rules and blocked when either interpretation violates a rule. Payloads of
+ * `bash -c`/`pwsh -Command`/`cmd /c` and git-run commands use their launcher's dialect. Heredoc
+ * bodies and PowerShell here-strings are data;
  * they are only inspected as commands when fed to a shell (`bash <<EOF`, `cat <<EOF | sh`), as are
  * literals piped into a shell (`echo ... | bash`, `'...' | iex`). Wrappers (`sudo`, `env X=1`,
  * `xargs`, `timeout`, `wsl`, `npx`, `npm exec`, ...) are skipped, and the payloads of launchers
@@ -221,17 +226,32 @@ function collectSubstitutions(text: string, nested: string[]): void {
 
 const SEPARATORS = "&|;(){}`\n\r\u2028\u2029\u0085";
 
+/** Shell dialect a command line is lexed with. */
+type Dialect = NonNullable<ToolRequest["shell"]>;
+
+/** Escape character of each dialect; followed by a newline it continues the line. */
+const ESCAPE_CHAR: Record<Dialect, string> = { posix: "\\", powershell: "`", cmd: "^" };
+
 /** Length of a line continuation at `i` (escape char + newline), or 0. */
-function continuationLength(command: string, i: number, platform: NodeJS.Platform): number {
-  // PowerShell continues lines with a trailing backtick, posix shells with a trailing backslash.
-  const escape = platform === "win32" ? "`" : "\\";
-  if (command[i] !== escape) return 0;
+function continuationLength(command: string, i: number, dialect: Dialect): number {
+  if (command[i] !== ESCAPE_CHAR[dialect]) return 0;
   if (command[i + 1] === "\n") return 2;
   return command[i + 1] === "\r" && command[i + 2] === "\n" ? 3 : 0;
 }
 
+/**
+ * Length of an escape sequence at `i` inside a double-quoted string, or 0: posix escapes only
+ * `$`, backtick, `"`, `\` and newlines there; PowerShell escapes any character with a backtick.
+ */
+function quotedEscapeLength(command: string, i: number, dialect: Dialect): number {
+  if (dialect === "powershell") return command[i] === "`" && i + 1 < command.length ? 2 : 0;
+  if (dialect !== "posix" || command[i] !== "\\") return 0;
+  if ("$`\"\\\n".includes(command[i + 1] ?? "")) return 2;
+  return command[i + 1] === "\r" && command[i + 2] === "\n" ? 3 : 0;
+}
+
 /** Split a command line into segments (simple commands), collecting `$(...)` payloads. */
-function lex(command: string, platform: NodeJS.Platform, depth = 0): { segments: Segment[]; nested: string[] } {
+function lex(command: string, dialect: Dialect, depth = 0): { segments: Segment[]; nested: string[] } {
   const segments: Segment[] = [];
   const nested: string[] = [];
   const newSegment = (piped: boolean): Segment => ({ tokens: [], stdin: [], piped, source: command, end: 0 });
@@ -264,10 +284,18 @@ function lex(command: string, platform: NodeJS.Platform, depth = 0): { segments:
   };
   for (let i = 0; i < command.length; i++) {
     const c = command[i];
-    const continuation = quote ? 0 : continuationLength(command, i, platform);
+    const continuation = quote ? 0 : continuationLength(command, i, dialect);
+    const quotedEscape = quote === "\"" ? quotedEscapeLength(command, i, dialect) : 0;
     if (continuation) {
       flushToken();
       i += continuation - 1;
+    } else if (!quote && c === ESCAPE_CHAR[dialect] && i + 1 < command.length) {
+      // An escaped character is literal: `pu\sh`, ``p`ush`` and `p^ush` all name `push`.
+      begin(i);
+      token += command[++i];
+    } else if (quotedEscape) {
+      token += command.slice(i + 1, i + quotedEscape).replace(/\r?\n$/, "");
+      i += quotedEscape - 1;
     } else if (c === "$" && command[i + 1] === "(" && quote !== "'") {
       const end = closingParen(command, i + 1);
       nested.push(command.slice(i + 2, end));
@@ -290,7 +318,7 @@ function lex(command: string, platform: NodeJS.Platform, depth = 0): { segments:
       nested.push(inner);
       begin(i);
       token += depth < MAX_NESTING
-        ? lex(inner, platform, depth + 1).segments.flatMap((s) => s.tokens.map((t) => t.text)).join(",")
+        ? lex(inner, dialect, depth + 1).segments.flatMap((s) => s.tokens.map((t) => t.text)).join(",")
         : inner;
       i = end;
     } else if (c === "\"" || c === "'") {
@@ -649,10 +677,18 @@ function producedText(inv: Invocation): string[] {
   return ["cat", "type", "get-content", "gc"].includes(inv.name) ? inv.stdin : [];
 }
 
+/** Dialect of the commands a launcher runs; other launchers keep the surrounding dialect. */
+function payloadDialect(inv: Invocation, inherited: Dialect): Dialect {
+  // git runs submodule foreach commands through sh.
+  if (POSIX_SHELLS.has(inv.name) || inv.name === "git" || inv.name === "env") return "posix";
+  if (["pwsh", "powershell", "iex", "invoke-expression"].includes(inv.name)) return "powershell";
+  return inv.name === "cmd" ? "cmd" : inherited;
+}
+
 /** Parse a command line into a flat list of invocations, including nested payloads. */
-function parseCommand(command: string, platform: NodeJS.Platform, state: ParseState, depth = 0): Invocation[] {
+function parseCommand(command: string, dialect: Dialect, state: ParseState, depth = 0): Invocation[] {
   if (depth > MAX_NESTING || state.overflow) return [];
-  const { segments, nested } = lex(command, platform, depth);
+  const { segments, nested } = lex(command, dialect, depth);
   const result: Invocation[] = [];
   let previous: Invocation | null = null;
   for (const segment of segments) {
@@ -667,10 +703,11 @@ function parseCommand(command: string, platform: NodeJS.Platform, state: ParseSt
       payloads.push(...inv.stdin);
       if (inv.piped && previous) payloads.push(...producedText(previous));
     }
-    for (const payload of payloads) result.push(...parseCommand(payload, platform, state, depth + 1));
+    const inner = payloadDialect(inv, dialect);
+    for (const payload of payloads) result.push(...parseCommand(payload, inner, state, depth + 1));
     previous = inv;
   }
-  for (const inner of nested) result.push(...parseCommand(inner, platform, state, depth + 1));
+  for (const inner of nested) result.push(...parseCommand(inner, dialect, state, depth + 1));
   return result;
 }
 
@@ -935,7 +972,7 @@ function writesProtectedGitConfig(rest: string[]): boolean {
 function changesGitRemote(inv: Invocation): boolean {
   if (inv.name !== "git") return false;
   const { sub, rest } = gitSubcommand(inv.args);
-  if (sub === "push" || sub.startsWith("credential")) return true;
+  if (sub === "push" || sub === "send-pack" || sub === "http-push" || sub.startsWith("credential")) return true;
   if (sub === "remote") {
     const action = rest.find((a) => !a.startsWith("-"))?.toLowerCase() ?? "";
     return ["add", "set-url", "rename", "remove", "rm"].includes(action);
@@ -1222,22 +1259,40 @@ function writesAgentConfig(command: string, invocations: Invocation[], ctx: Guar
 // ---------------------------------------------------------------------------
 
 /** Parse a shell command, expanding commands that git settings would run. */
-function inspectShell(command: string, ctx: GuardContext): { invocations: Invocation[]; settings: GitSetting[]; overflow: boolean } {
+function inspectShell(command: string, dialect: Dialect): { invocations: Invocation[]; settings: GitSetting[]; overflow: boolean } {
   const state: ParseState = { budget: MAX_SEGMENTS, overflow: false };
-  const invocations = parseCommand(command, ctx.platform, state);
+  const invocations = parseCommand(command, dialect, state);
   const settings: GitSetting[] = [];
   let frontier = invocations;
   for (let level = 0; level < MAX_NESTING && frontier.length; level++) {
     const found = transientGitSettings(frontier);
     settings.push(...found);
-    frontier = found.flatMap(gitSettingPayloads).flatMap((p) => parseCommand(p, ctx.platform, state, 1));
+    // git runs command-valued settings through sh.
+    frontier = found.flatMap(gitSettingPayloads).flatMap((p) => parseCommand(p, "posix", state, 1));
     invocations.push(...frontier);
   }
   return { invocations, settings, overflow: state.overflow };
 }
 
-function shellViolation(command: string, ctx: GuardContext): GuardRule | null {
-  const { invocations, settings, overflow } = inspectShell(command, ctx);
+/**
+ * Dialects to inspect a shell request with. On Windows an unknown shell may be PowerShell
+ * or Git Bash, so both interpretations are checked and either one can block.
+ */
+function shellDialects(request: ToolRequest, ctx: GuardContext): Dialect[] {
+  if (request.shell) return [request.shell];
+  return ctx.platform === "win32" ? ["powershell", "posix"] : ["posix"];
+}
+
+function shellViolation(command: string, dialects: Dialect[], ctx: GuardContext): GuardRule | null {
+  for (const dialect of dialects) {
+    const rule = dialectViolation(command, dialect, ctx);
+    if (rule) return rule;
+  }
+  return null;
+}
+
+function dialectViolation(command: string, dialect: Dialect, ctx: GuardContext): GuardRule | null {
+  const { invocations, settings, overflow } = inspectShell(command, dialect);
   if (overflow) return "outside-workspace";
   if (shellTouchesCredentials(command, invocations)) return "credentials";
   if (writesAgentConfig(command, invocations, ctx)) return "agent-config";
@@ -1254,7 +1309,7 @@ function firstViolation(request: ToolRequest, ctx: GuardContext): GuardRule | nu
   const { kind, summary } = request;
   // Oversized input cannot be inspected within a bounded time.
   if (summary.length > MAX_COMMAND_LENGTH) return "outside-workspace";
-  if (kind === "shell") return shellViolation(summary, ctx);
+  if (kind === "shell") return shellViolation(summary, shellDialects(request, ctx), ctx);
   // Writing an env file does not expose secrets; reading one does.
   if (isCredentialPath(summary) || (kind !== "write" && isSecretEnvFile(summary))) return "credentials";
   if (kind === "write" && isAgentConfigPath(normalizePath(summary, ctx), ctx)) return "agent-config";

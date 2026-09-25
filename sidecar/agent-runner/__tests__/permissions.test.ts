@@ -62,7 +62,7 @@ describe("copilotDecision", () => {
 
 describe("toolRequestFromClaude", () => {
   it.each([
-    ["Bash", { command: "npm test" }, { kind: "shell", summary: "npm test" }],
+    ["Bash", { command: "npm test" }, { kind: "shell", summary: "npm test", shell: "posix" }],
     ["Write", { file_path: "a.ts" }, { kind: "write", summary: "a.ts" }],
     ["Edit", { file_path: "b.ts" }, { kind: "write", summary: "b.ts" }],
     ["NotebookEdit", { notebook_path: "n.ipynb" }, { kind: "write", summary: "n.ipynb" }],
@@ -76,7 +76,7 @@ describe("toolRequestFromClaude", () => {
     ["Grep", { pattern: ".env" }, { kind: "read", summary: "." }],
     ["Glob", { pattern: "**/.env*" }, { kind: "read", summary: "." }],
     ["Glob", { pattern: "*.ts", path: "C:/x" }, { kind: "read", summary: "C:/x" }],
-    ["PowerShell", { command: "Get-ChildItem" }, { kind: "shell", summary: "Get-ChildItem" }],
+    ["PowerShell", { command: "Get-ChildItem" }, { kind: "shell", summary: "Get-ChildItem", shell: "powershell" }],
     ["Monitor", { command: "npm run dev" }, { kind: "shell", summary: "npm run dev" }],
     ["WebFetch", { url: "https://x.test" }, { kind: "network", summary: "https://x.test" }],
     ["WebSearch", { query: "vitest" }, { kind: "network", summary: "vitest" }],
@@ -155,10 +155,10 @@ describe("claudeDisallowedTools", () => {
 
 describe("toolRequestFromOpencode", () => {
   it.each([
-    [{ type: "bash", pattern: ["git push *"], metadata: { command: "git push origin main" } }, { kind: "shell", summary: "git push origin main" }],
-    [{ type: "bash", pattern: ["git status *", "npm test *"] }, { kind: "shell", summary: "git status *\nnpm test *" }],
-    [{ type: "bash", pattern: "ls", metadata: {} }, { kind: "shell", summary: "ls" }],
-    [{ type: "bash", title: "Run ls" }, { kind: "shell", summary: "Run ls" }],
+    [{ type: "bash", pattern: ["git push *"], metadata: { command: "git push origin main" } }, { kind: "shell", summary: "git push origin main", shell: "posix" }],
+    [{ type: "bash", pattern: ["git status *", "npm test *"] }, { kind: "shell", summary: "git status *\nnpm test *", shell: "posix" }],
+    [{ type: "bash", pattern: "ls", metadata: {} }, { kind: "shell", summary: "ls", shell: "posix" }],
+    [{ type: "bash", title: "Run ls" }, { kind: "shell", summary: "Run ls", shell: "posix" }],
     [{ type: "edit", pattern: ["src/a.ts"], metadata: { filePath: "C:/w/src/a.ts" } }, { kind: "write", summary: "C:/w/src/a.ts" }],
     [{ type: "edit", pattern: ["src/a.ts"], metadata: { filepath: "C:/w/src/a.ts" } }, { kind: "write", summary: "C:/w/src/a.ts" }],
     [{ type: "write", pattern: "src/b.ts" }, { kind: "write", summary: "src/b.ts" }],
