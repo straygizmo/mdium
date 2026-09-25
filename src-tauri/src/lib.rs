@@ -2,6 +2,7 @@ mod commands;
 mod file_watcher;
 mod http_bridge;
 mod markdown_parser;
+mod workflow;
 
 use commands::active_xlsm::{new_state as new_active_xlsm_state, ActiveXlsmState};
 use commands::fs_search::{new_active_folder_state, ActiveFolderState};
