@@ -46,7 +46,7 @@ const FALLBACK_NAME: &str = "user.name=MDium";
 const FALLBACK_EMAIL: &str = "user.email=mdium@localhost";
 
 impl GitError {
-    fn new(code: &str, stderr: impl Into<String>) -> Self {
+    pub(crate) fn new(code: &str, stderr: impl Into<String>) -> Self {
         GitError {
             code: code.to_string(),
             stderr: stderr.into(),
@@ -64,15 +64,15 @@ thread_local! {
 }
 
 /// Raw result of one git invocation.
-struct GitOutput {
-    success: bool,
-    stdout: String,
-    stderr: String,
+pub(crate) struct GitOutput {
+    pub success: bool,
+    pub stdout: String,
+    pub stderr: String,
 }
 
 /// Runs `git -c core.quotePath=false <args>` in `repo` without a console
 /// window, returning the raw outcome. Only a spawn failure is an error.
-fn run_git_raw(repo: &Path, args: &[&str]) -> Result<GitOutput, GitError> {
+pub(crate) fn run_git_raw(repo: &Path, args: &[&str]) -> Result<GitOutput, GitError> {
     let mut cmd = Command::new("git");
     cmd.args(["-c", "core.quotePath=false"])
         .args(args)
@@ -121,7 +121,7 @@ pub fn repo_root(path: &Path) -> Result<PathBuf, GitError> {
 
 /// Base directory for worktrees: the local data dir, or the temp dir when
 /// none is known.
-fn default_worktree_base() -> PathBuf {
+pub(crate) fn default_worktree_base() -> PathBuf {
     dirs::data_local_dir().unwrap_or_else(std::env::temp_dir)
 }
 
@@ -255,7 +255,7 @@ fn validate_worktree_path(base_dir: &Path, repo: Option<&Path>, raw: &str) -> Re
 /// be able to inject options or point git (or a deletion) anywhere but a
 /// worktree MDium manages under `<base>/mdium/worktrees` — and, when `repo`
 /// is given, the one belonging to that repo.
-fn validate_info(
+pub(crate) fn validate_info(
     base_dir: &Path,
     repo: Option<&Path>,
     info: &WorktreeInfo,
@@ -290,7 +290,7 @@ pub fn create_worktree(
     create_worktree_in(&default_worktree_base(), repo_root, root_task_id, title)
 }
 
-fn create_worktree_in(
+pub(crate) fn create_worktree_in(
     base_dir: &Path,
     repo: &Path,
     root_task_id: &str,
@@ -620,23 +620,24 @@ fn is_registered_worktree(repo_root: &Path, path: &Path) -> Result<bool, GitErro
         .any(|listed| listed == target))
 }
 
+/// Real-git test fixtures shared by the workflow modules' tests.
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_support {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
 
-    const TASK_ID: &str = "0123456789abcdef";
+    pub(crate) const TASK_ID: &str = "0123456789abcdef";
 
     /// A throwaway repo on `main` with one commit, plus a separate base dir
     /// for worktrees so tests never touch the real local data dir.
-    struct Fixture {
-        repo: TempDir,
-        worktrees: TempDir,
+    pub(crate) struct Fixture {
+        pub repo: TempDir,
+        pub worktrees: TempDir,
     }
 
     impl Fixture {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             let repo = TempDir::new().unwrap();
             let worktrees = TempDir::new().unwrap();
             let fixture = Fixture { repo, worktrees };
@@ -650,34 +651,42 @@ mod tests {
             fixture
         }
 
-        fn root(&self) -> &Path {
+        pub(crate) fn root(&self) -> &Path {
             self.repo.path()
         }
 
-        fn base(&self) -> &Path {
+        pub(crate) fn base(&self) -> &Path {
             self.worktrees.path()
         }
 
-        fn run(&self, args: &[&str]) -> String {
+        pub(crate) fn run(&self, args: &[&str]) -> String {
             git(self.root(), args).unwrap_or_else(|err| panic!("git {args:?}: {err:?}"))
         }
 
-        fn write(&self, rel: &str, content: &str) {
+        pub(crate) fn write(&self, rel: &str, content: &str) {
             write_file(self.root(), rel, content);
         }
 
-        fn create(&self, title: &str) -> WorktreeInfo {
+        pub(crate) fn create(&self, title: &str) -> WorktreeInfo {
             create_worktree_in(self.worktrees.path(), self.root(), TASK_ID, title).unwrap()
         }
     }
 
-    fn write_file(dir: &Path, rel: &str, content: &str) {
+    pub(crate) fn write_file(dir: &Path, rel: &str, content: &str) {
         let path = dir.join(rel);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).unwrap();
         }
         fs::write(path, content).unwrap();
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::{write_file, Fixture, TASK_ID};
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
 
     fn wt_git(info: &WorktreeInfo, args: &[&str]) -> String {
         git(Path::new(&info.path), args).unwrap_or_else(|err| panic!("git {args:?}: {err:?}"))
