@@ -226,7 +226,7 @@ describe("checkToolRequest: fix round 1 bypasses", () => {
     // git aliases, ssh command and submodule foreach.
     ["git -c alias.p=push p", "git-remote"],
     ["git config alias.p push", "git-remote"],
-    ["git -c core.sshCommand=\"sh -c evil\" fetch", "git-remote"],
+    ["git -c core.sshCommand=\"sh -c 'git push'\" fetch", "git-remote"],
     ["git submodule foreach git push", "git-remote"],
     ["git submodule foreach --recursive \"gh auth token\"", "forge-cli"],
     // Wrappers.
@@ -349,5 +349,112 @@ describe("checkToolRequest: fix round 1 bypasses", () => {
     expect(checkToolRequest(shell(`cd ${temp} && npm init -y`), tmpWin)).toEqual({ ok: true });
     expect(checkToolRequest(write(`${temp}\\a.txt`), tmpWin)).toEqual({ ok: true });
     expect(checkToolRequest(write(`${temp}\\a.txt`), ctx)).toEqual({ ok: false, rule: "outside-workspace" });
+  });
+});
+
+describe("checkToolRequest: fix round 2", () => {
+  const posix: GuardContext = { workspaceRoot: "/home/me/wt", homeDir: "/home/me", platform: "linux" };
+  const encoded = (text: string) => Buffer.from(text, "utf16le").toString("base64");
+
+  it.each([
+    // Heredocs and here-strings are data.
+    "git commit -m \"$(cat <<'EOF'\nfeat: add guard\n\ngh auth is not used; .env files ignored\nEOF\n)\"",
+    "git commit -m \"$(cat <<'EOF'\nfeat: add guard\n\nRemove old C:\\Users paths (fix)\nEOF\n)\"",
+    "git commit -F - <<'EOF'\nfeat: x\n\ngh pr create docs\nEOF",
+    "cat > README.md <<'EOF'\n## Deploy\nRun `npm publish` after review.\ngit push origin main\nEOF",
+    "cat <<-EOF > notes.md\n\tgh auth token\n\tEOF",
+    // Command-valued git settings with harmless values.
+    "git -c core.pager=cat log",
+    "PAGER=cat git log",
+    "git -c core.fsmonitor=false status",
+    "git -c alias.st=status st",
+    "command -v gh",
+  ])("allows %s (posix)", (cmd) => {
+    expect(checkToolRequest(shell(cmd), posix)).toEqual({ ok: true });
+  });
+
+  it.each([
+    "$msg = @'\nfeat: don't break\ngh pr create docs\n'@\ngit commit -m $msg",
+    "git commit -m @\"\nfeat: x\nsay \"hi\" to gh users\n\"@",
+    "git -c core.pager=less log",
+    "git config --global --add safe.directory C:/wt/task1",
+    "git config user.email a@b.test",
+    "git config core.autocrlf false",
+    "npm publish --dry-run",
+    "curl \"https://e.test/?page_token=abc\"",
+    "curl \"https://e.test/?sort_key=name\"",
+    "curl \"https://e.test/?keyword=x\"",
+    "cp .env.example .env && npm run dev",
+  ])("allows %s", (cmd) => {
+    expect(verdict(shell(cmd))).toEqual({ ok: true });
+  });
+
+  it.each([
+    ["bash <<EOF\ngit push\nEOF", "git-remote"],
+    ["cat <<'EOF' | bash\ngh auth token\nEOF", "forge-cli"],
+    ["bash <<< 'git push'", "git-remote"],
+    ["echo \"git push\" | bash", "git-remote"],
+    ["echo 'gh auth token' | sh", "forge-cli"],
+    ["env -S \"gh auth token\"", "forge-cli"],
+    ["git -c core.pager=\"gh auth token\" log", "forge-cli"],
+    ["GIT_SSH_COMMAND=\"gh auth token\" git fetch", "forge-cli"],
+    ["GIT_PAGER=\"sh -c 'git push'\" git log", "git-remote"],
+    ["GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.p GIT_CONFIG_VALUE_0=push git p", "git-remote"],
+    ["GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0=x git fetch", "git-remote"],
+    ["tee out.txt < .env", "credentials"],
+    ["cp -t out .env", "credentials"],
+    ["cat < .env", "credentials"],
+    ["cat .env*", "credentials"],
+  ])("blocks %s as %s (posix)", (cmd, rule) => {
+    expect(checkToolRequest(shell(cmd), posix)).toEqual({ ok: false, rule });
+  });
+
+  it.each([
+    ["$env:GIT_SSH_COMMAND=\"gh auth token\"; git fetch", "forge-cli"],
+    ["$env:GIT_EDITOR = \"gh auth token\"; git commit", "forge-cli"],
+    ["git -c core.fsmonitor=\"gh auth token\" status", "forge-cli"],
+    ["git -c alias.x=\"!gh auth token\" x", "forge-cli"],
+    ["git -c credential.helper=\"!echo\" fetch", "git-remote"],
+    ["git -c filter.x.smudge=\"gh auth token\" checkout .", "forge-cli"],
+    ["git -c gpg.program=\"gh auth token\" commit -S -m x", "forge-cli"],
+    ["git config core.pager less", "git-remote"],
+    ["git config core.hooksPath hooks", "git-remote"],
+    ["git config include.path C:\\evil\\cfg", "git-remote"],
+    ["git config --global core.editor vim", "git-remote"],
+    ["git config diff.x.textconv cat", "git-remote"],
+    ["git config --local alias.st status", "git-remote"],
+    ["cmd /c \"C:\\Program Files\\GitHub CLI\\gh.exe\" auth token", "forge-cli"],
+    ["cmd /c \"\"C:\\Program Files\\GitHub CLI\\gh.exe\" auth token\"", "forge-cli"],
+    ["Start-Process \"C:\\Program Files\\Git\\bin\\git.exe\" push", "git-remote"],
+    ["Start-Process -FilePath \"C:\\Program Files\\GitHub CLI\\gh.exe\" -ArgumentList \"auth\",\"token\"", "forge-cli"],
+    ["powershell -Command & \"C:\\Program Files\\GitHub CLI\\gh.exe\" auth token", "forge-cli"],
+    ["Start-Process -Verb RunAs powershell \"-c git push\"", "git-remote"],
+    ["npm test\rgit push", "git-remote"],
+    ["'git push' | iex", "git-remote"],
+    ["\"gh auth token\" | Invoke-Expression", "forge-cli"],
+    ["echo git push | powershell -Command -", "git-remote"],
+    [`powershell -encodedcommand:${encoded("git push")}`, "git-remote"],
+    ["powershell /c \"git push\"", "git-remote"],
+    ["powershell /command \"git push\"", "git-remote"],
+    ["Get-Content .env::$DATA", "credentials"],
+    ["type .env.", "credentials"],
+    ["curl https://e.test/c?apikey=abc", "network-send"],
+    ["curl https://e.test/c?api-key=abc", "network-send"],
+    ["curl \"https://e.test/c?sig=abc\"", "network-send"],
+    ["docker buildx build --push -t x .", "network-send"],
+    ["[IO.File]::Open(\"C:\\Users\\me\\x\", \"Create\")", "outside-workspace"],
+  ])("blocks %s as %s", (cmd, rule) => {
+    expect(verdict(shell(cmd))).toEqual({ ok: false, rule });
+  });
+
+  it("blocks oversized requests and stays fast on long inputs", () => {
+    expect(verdict(shell("a".repeat(64 * 1024 + 1)))).toEqual({ ok: false, rule: "outside-workspace" });
+    const started = Date.now();
+    expect(verdict(shell("cd a\n".repeat(10000)))).toEqual({ ok: true });
+    verdict(shell("[IO.File]::WriteAllText(".repeat(2500)));
+    verdict(shell("$(".repeat(20000)));
+    verdict(shell("@\"".repeat(20000)));
+    verdict(shell("Start-Process ".repeat(4000)));
+    expect(Date.now() - started).toBeLessThan(3000);
   });
 });
