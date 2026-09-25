@@ -6,6 +6,7 @@
 
 use crate::workflow::fsutil::{self, InvalidId, MdiumPaths};
 use crate::workflow::model::{Task, TaskMeta, ValidationError, WorkflowRun, WorkflowsFile};
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
 /// The only schema version this store currently reads or writes. A file
@@ -108,6 +109,16 @@ fn check_schema_version(version: u32) -> Result<(), StoreError> {
     }
 }
 
+/// Just the `schemaVersion` of an on-disk record. Readers decode this
+/// first so a file from a newer schema (whose shape may differ entirely)
+/// is reported as [`StoreError::UnsupportedSchema`] rather than as a
+/// confusing `Corrupt` from the full struct's decoder.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SchemaProbe {
+    schema_version: u32,
+}
+
 /// Frontmatter delimiter line of a task document.
 const FRONTMATTER_DELIMITER: &str = "---";
 
@@ -169,9 +180,11 @@ fn decode_task(text: &str) -> Result<Task, StoreError> {
         yaml.push('\n');
     };
 
+    let probe: SchemaProbe =
+        serde_yaml_ng::from_str(&yaml).map_err(|err| StoreError::Corrupt(err.to_string()))?;
+    check_schema_version(probe.schema_version)?;
     let meta: TaskMeta =
         serde_yaml_ng::from_str(&yaml).map_err(|err| StoreError::Corrupt(err.to_string()))?;
-    check_schema_version(meta.schema_version)?;
 
     Ok(Task {
         meta,
@@ -283,7 +296,8 @@ impl WorkflowStore {
     /// [`StoreError::NotFound`] if the task file does not exist, so a
     /// deleted task is never resurrected (use [`Self::create_task`] for new
     /// tasks). Rejects a `schemaVersion` this store cannot read back.
-    pub fn put_task(&self, task: &Task) -> Result<(), StoreError> {
+    /// Returns the task exactly as stored, including the new `updated_at`.
+    pub fn put_task(&self, task: &Task) -> Result<Task, StoreError> {
         let path = self.paths.task_file(&task.meta.id)?;
         check_schema_version(task.meta.schema_version)?;
         if !path.try_exists()? {
@@ -292,7 +306,7 @@ impl WorkflowStore {
         let mut task = task.clone();
         task.meta.updated_at = fsutil::now();
         fsutil::atomic_write(&path, encode_task(&task)?.as_bytes())?;
-        Ok(())
+        Ok(task)
     }
 
     /// Loads every `<id>.md` file in `.mdium/tasks/`. Files that cannot be
@@ -348,8 +362,9 @@ impl WorkflowStore {
     /// Atomically overwrites an existing run, stamping `updated_at` with
     /// the current time. Fails with [`StoreError::NotFound`] if the run
     /// file does not exist (use [`Self::create_run`] for new runs), and
-    /// rejects a `schemaVersion` this store cannot read back.
-    pub fn put_run(&self, run: &WorkflowRun) -> Result<(), StoreError> {
+    /// rejects a `schemaVersion` this store cannot read back. Returns the
+    /// run exactly as stored, including the new `updated_at`.
+    pub fn put_run(&self, run: &WorkflowRun) -> Result<WorkflowRun, StoreError> {
         let path = self.paths.run_file(&run.root_task_id)?;
         check_schema_version(run.schema_version)?;
         if !path.try_exists()? {
@@ -357,7 +372,8 @@ impl WorkflowStore {
         }
         let mut run = run.clone();
         run.updated_at = fsutil::now();
-        write_run_file(&path, &run)
+        write_run_file(&path, &run)?;
+        Ok(run)
     }
 
     /// Loads every `<rootTaskId>.json` in `.mdium/runs/`, sorted by
@@ -408,6 +424,10 @@ impl WorkflowStore {
     /// can grow cheaply while an attempt is running. The line is written
     /// with a single `write_all` call so appends do not interleave
     /// mid-line.
+    ///
+    /// One call always produces exactly one log line: any `\r` or `\n`
+    /// inside `line` is replaced by the two-character escape `\r` / `\n`
+    /// (a literal backslash followed by `r` / `n`).
     pub fn append_attempt_log(
         &self,
         root_id: &str,
@@ -425,11 +445,14 @@ impl WorkflowStore {
             .create(true)
             .append(true)
             .open(&path)?;
-        file.write_all(format!("{line}\n").as_bytes())?;
+        let escaped = line.replace('\r', "\\r").replace('\n', "\\n");
+        file.write_all(format!("{escaped}\n").as_bytes())?;
         Ok(())
     }
 
-    /// Reads an attempt's whole log.
+    /// Reads an attempt's whole log. The log is diagnostic data, so invalid
+    /// UTF-8 (e.g. a multibyte character cut short by a crash mid-append)
+    /// is decoded lossily with U+FFFD instead of failing the read.
     pub fn read_attempt_log(
         &self,
         root_id: &str,
@@ -437,19 +460,23 @@ impl WorkflowStore {
         attempt_id: &str,
     ) -> Result<String, StoreError> {
         let path = self.paths.attempt_log(root_id, task_id, attempt_id)?;
-        read_text_file(&path)
+        Ok(String::from_utf8_lossy(&read_file_bytes(&path)?).into_owned())
+    }
+}
+
+/// Reads a whole file, mapping a missing file to [`StoreError::NotFound`].
+fn read_file_bytes(path: &Path) -> Result<Vec<u8>, StoreError> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(bytes),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Err(StoreError::NotFound),
+        Err(err) => Err(StoreError::Io(err.to_string())),
     }
 }
 
 /// Reads a whole UTF-8 file, mapping a missing file to
 /// [`StoreError::NotFound`] and invalid UTF-8 to [`StoreError::Corrupt`].
 fn read_text_file(path: &Path) -> Result<String, StoreError> {
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Err(StoreError::NotFound),
-        Err(err) => return Err(StoreError::Io(err.to_string())),
-    };
-    String::from_utf8(bytes).map_err(|err| StoreError::Corrupt(err.to_string()))
+    String::from_utf8(read_file_bytes(path)?).map_err(|err| StoreError::Corrupt(err.to_string()))
 }
 
 /// Loads every visible regular file in `dir` whose name ends in `suffix`,
@@ -518,9 +545,11 @@ fn write_run_file(path: &Path, run: &WorkflowRun) -> Result<(), StoreError> {
 /// never be mistaken for a different run.
 fn read_run_file(path: &Path, expected_root_id: &str) -> Result<WorkflowRun, StoreError> {
     let text = read_text_file(path)?;
+    let probe: SchemaProbe =
+        serde_json::from_str(&text).map_err(|err| StoreError::Corrupt(err.to_string()))?;
+    check_schema_version(probe.schema_version)?;
     let run: WorkflowRun =
         serde_json::from_str(&text).map_err(|err| StoreError::Corrupt(err.to_string()))?;
-    check_schema_version(run.schema_version)?;
     if run.root_task_id != expected_root_id {
         return Err(StoreError::Corrupt(format!(
             "rootTaskId {:?} does not match file name {expected_root_id:?}",
@@ -778,9 +807,10 @@ mod tests {
         let mut task = created.clone();
         task.meta.status = TaskStatus::Running;
         task.body = "new body\n".to_string();
-        store.put_task(&task).unwrap();
+        let stored = store.put_task(&task).unwrap();
 
         let loaded = store.get_task(TASK_A).unwrap();
+        assert_eq!(stored, loaded);
         assert_eq!(loaded.meta.status, TaskStatus::Running);
         assert_eq!(loaded.body, "new body\n");
         assert_eq!(loaded.meta.created_at, "2000-01-01T00:00:00.000Z");
@@ -1166,9 +1196,10 @@ mod tests {
 
         run.status = RunStatus::AwaitingMerge;
         run.pending_transition = None;
-        store.put_run(&run).unwrap();
+        let stored = store.put_run(&run).unwrap();
 
         let loaded = store.get_run(TASK_A).unwrap();
+        assert_eq!(stored, loaded);
         assert_eq!(loaded.status, RunStatus::AwaitingMerge);
         assert_eq!(loaded.pending_transition, None);
         assert_eq!(loaded.created_at, "2000-01-01T00:00:00.000Z");
@@ -1354,5 +1385,94 @@ mod tests {
         let log = store.read_attempt_log(TASK_A, TASK_B, ATTEMPT_1).unwrap();
         let expected: String = (0..100).map(|i| format!("line {i}\n")).collect();
         assert_eq!(log, expected);
+    }
+
+    #[test]
+    fn attempt_log_append_escapes_embedded_line_breaks() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WorkflowStore::new(dir.path().to_path_buf());
+
+        store
+            .append_attempt_log(TASK_A, TASK_B, ATTEMPT_1, "a\nb\r\nc")
+            .unwrap();
+        store
+            .append_attempt_log(TASK_A, TASK_B, ATTEMPT_1, "next")
+            .unwrap();
+
+        let log = store.read_attempt_log(TASK_A, TASK_B, ATTEMPT_1).unwrap();
+        assert_eq!(log, "a\\nb\\r\\nc\nnext\n");
+        assert_eq!(log.lines().count(), 2);
+    }
+
+    #[test]
+    fn attempt_log_with_invalid_utf8_is_read_lossily() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WorkflowStore::new(dir.path().to_path_buf());
+
+        store
+            .append_attempt_log(TASK_A, TASK_B, ATTEMPT_1, "ok")
+            .unwrap();
+        // Simulate a crash mid-write: a multibyte character cut after its
+        // first two bytes ("あ" is E3 81 82).
+        let log_path = dir
+            .path()
+            .join(".mdium")
+            .join("runs")
+            .join(TASK_A)
+            .join(TASK_B)
+            .join(format!("{ATTEMPT_1}.log"));
+        let mut bytes = std::fs::read(&log_path).unwrap();
+        bytes.extend_from_slice(&[0xE3, 0x81]);
+        std::fs::write(&log_path, bytes).unwrap();
+
+        let log = store.read_attempt_log(TASK_A, TASK_B, ATTEMPT_1).unwrap();
+        assert!(log.starts_with("ok\n"));
+        assert!(log.ends_with('\u{fffd}'));
+    }
+
+    #[test]
+    fn task_file_with_future_schema_and_different_shape_is_unsupported() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WorkflowStore::new(dir.path().to_path_buf());
+
+        write_raw_task_file(
+            dir.path(),
+            &format!("{TASK_A}.md"),
+            b"---\nschemaVersion: 2\nidentity:\n  key: 1\n---\n\nbody\n",
+        );
+
+        assert_eq!(
+            store.get_task(TASK_A).unwrap_err(),
+            StoreError::UnsupportedSchema(2)
+        );
+        let list = store.list_tasks().unwrap();
+        assert!(list.tasks.is_empty());
+        assert_eq!(list.warnings.len(), 1);
+        assert!(list.warnings[0]
+            .message
+            .starts_with("STORE_UNSUPPORTED_SCHEMA"));
+    }
+
+    #[test]
+    fn run_file_with_future_schema_and_different_shape_is_unsupported() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WorkflowStore::new(dir.path().to_path_buf());
+
+        let runs_dir = dir.path().join(".mdium").join("runs");
+        std::fs::create_dir_all(&runs_dir).unwrap();
+        std::fs::write(
+            runs_dir.join(format!("{TASK_A}.json")),
+            br#"{ "schemaVersion": 2, "root": { "id": 1 } }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            store.get_run(TASK_A).unwrap_err(),
+            StoreError::UnsupportedSchema(2)
+        );
+        let (runs, warnings) = store.list_runs().unwrap();
+        assert!(runs.is_empty());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.starts_with("STORE_UNSUPPORTED_SCHEMA"));
     }
 }
