@@ -12,6 +12,7 @@ pub mod gitops;
 pub mod integrity;
 pub mod model;
 pub mod outcome;
+pub mod runner_client;
 pub mod screening;
 pub mod state;
 pub mod store;
