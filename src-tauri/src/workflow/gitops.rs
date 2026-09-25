@@ -7,9 +7,10 @@
 use crate::workflow::fsutil::is_valid_id;
 use crate::workflow::model::WorktreeInfo;
 use sha2::{Digest, Sha256};
+use std::ffi::{OsStr, OsString};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 /// A failed git operation: a stable machine `code` plus git's stderr (or
@@ -188,10 +189,77 @@ fn is_valid_branch(branch: &str) -> bool {
             .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'-'))
 }
 
+/// Resolves `path` to a canonical absolute path even when its tail does not
+/// exist (yet or anymore): the deepest existing ancestor is canonicalized
+/// and the remaining components are appended. `None` if the path contains
+/// `..` or no ancestor resolves.
+fn canonicalize_lenient(path: &Path) -> Option<PathBuf> {
+    if path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return None;
+    }
+    let mut tail = Vec::new();
+    let mut current = path;
+    loop {
+        if let Ok(canonical) = std::fs::canonicalize(current) {
+            return Some(
+                tail.iter()
+                    .rev()
+                    .fold(canonical, |acc: PathBuf, part: &OsString| acc.join(part)),
+            );
+        }
+        tail.push(current.file_name()?.to_os_string());
+        current = current.parent()?;
+    }
+}
+
+/// True if `name` is a 16-lowercase-hex path component.
+fn is_hex16_component(name: Option<&OsStr>) -> bool {
+    name.and_then(OsStr::to_str).is_some_and(is_valid_id)
+}
+
+/// Confines a worktree path to the managed layout
+/// `<base>/mdium/worktrees/<16 hex repo hash>/<16 hex id>`, compared on
+/// canonical paths. With `repo`, the path must also be exactly the one
+/// [`worktree_path_in`] derives for that repo and id.
+fn validate_worktree_path(base_dir: &Path, repo: Option<&Path>, raw: &str) -> Result<(), GitError> {
+    let invalid = || GitError::new("INVALID_WORKTREE_INFO", format!("path {raw:?}"));
+    let path = Path::new(raw);
+    if !path.is_absolute() {
+        return Err(invalid());
+    }
+    let target = canonicalize_lenient(path).ok_or_else(invalid)?;
+    let managed = canonicalize_lenient(&worktrees_dir(base_dir)).ok_or_else(invalid)?;
+    let hash_dir = target.parent().ok_or_else(invalid)?;
+    if hash_dir.parent() != Some(managed.as_path())
+        || !is_hex16_component(hash_dir.file_name())
+        || !is_hex16_component(target.file_name())
+    {
+        return Err(invalid());
+    }
+    if let Some(repo) = repo {
+        let id = target
+            .file_name()
+            .and_then(OsStr::to_str)
+            .ok_or_else(invalid)?;
+        let expected =
+            canonicalize_lenient(&worktree_path_in(base_dir, repo, id)).ok_or_else(invalid)?;
+        if expected != target {
+            return Err(invalid());
+        }
+    }
+    Ok(())
+}
+
 /// Guards every operation on a stored [`WorktreeInfo`]: its values end up
 /// as git arguments and filesystem paths, so a tampered run file must never
-/// be able to inject options or point git elsewhere.
-fn validate_info(info: &WorktreeInfo) -> Result<(), GitError> {
+/// be able to inject options or point git (or a deletion) anywhere but a
+/// worktree MDium manages under `<base>/mdium/worktrees` — and, when `repo`
+/// is given, the one belonging to that repo.
+fn validate_info(
+    base_dir: &Path,
+    repo: Option<&Path>,
+    info: &WorktreeInfo,
+) -> Result<(), GitError> {
     let commit_ok = matches!(info.base_commit.len(), 40 | 64)
         && info
             .base_commit
@@ -209,13 +277,7 @@ fn validate_info(info: &WorktreeInfo) -> Result<(), GitError> {
             format!("branch {:?}", info.branch),
         ));
     }
-    if !Path::new(&info.path).is_absolute() {
-        return Err(GitError::new(
-            "INVALID_WORKTREE_INFO",
-            format!("path {:?}", info.path),
-        ));
-    }
-    Ok(())
+    validate_worktree_path(base_dir, repo, &info.path)
 }
 
 /// Creates the run's worktree on a new branch off the repo's current HEAD.
@@ -317,8 +379,15 @@ fn git_with_identity(repo: &Path, args: &[&str]) -> Result<GitOutput, GitError> 
 /// The worktree's diff against its base commit (committed + uncommitted
 /// tracked changes), followed by a `# Untracked files` section listing
 /// untracked, non-ignored paths when there are any.
+///
+/// Note: `--end-of-options` (used here and below to keep stored revisions
+/// from being parsed as options) requires git >= 2.24.
 pub fn diff_against_base(info: &WorktreeInfo) -> Result<String, GitError> {
-    validate_info(info)?;
+    diff_against_base_in(&default_worktree_base(), info)
+}
+
+fn diff_against_base_in(base_dir: &Path, info: &WorktreeInfo) -> Result<String, GitError> {
+    validate_info(base_dir, None, info)?;
     let wt = Path::new(&info.path);
     let mut out = git(
         wt,
@@ -351,7 +420,14 @@ pub fn diff_against_base(info: &WorktreeInfo) -> Result<String, GitError> {
 
 /// Commits on the worktree branch since its base commit, oldest first.
 pub fn commits_since_base(info: &WorktreeInfo) -> Result<Vec<CommitSummary>, GitError> {
-    validate_info(info)?;
+    commits_since_base_in(&default_worktree_base(), info)
+}
+
+fn commits_since_base_in(
+    base_dir: &Path,
+    info: &WorktreeInfo,
+) -> Result<Vec<CommitSummary>, GitError> {
+    validate_info(base_dir, None, info)?;
     let range = format!("{}..HEAD", info.base_commit);
     let out = git(
         Path::new(&info.path),
@@ -382,7 +458,16 @@ pub fn commit_paths(
     paths: &[&str],
     message: &str,
 ) -> Result<Option<String>, GitError> {
-    validate_info(info)?;
+    commit_paths_in(&default_worktree_base(), info, paths, message)
+}
+
+fn commit_paths_in(
+    base_dir: &Path,
+    info: &WorktreeInfo,
+    paths: &[&str],
+    message: &str,
+) -> Result<Option<String>, GitError> {
+    validate_info(base_dir, None, info)?;
     if paths.is_empty() {
         return Ok(None);
     }
@@ -419,7 +504,15 @@ fn merge_in_progress(repo: &Path) -> Result<bool, GitError> {
 /// fails without starting (missing branch, hook rejection, ...) is
 /// `MERGE_FAILED`.
 pub fn merge_into_base(repo_root: &Path, info: &WorktreeInfo) -> Result<String, GitError> {
-    validate_info(info)?;
+    merge_into_base_in(&default_worktree_base(), repo_root, info)
+}
+
+fn merge_into_base_in(
+    base_dir: &Path,
+    repo_root: &Path,
+    info: &WorktreeInfo,
+) -> Result<String, GitError> {
+    validate_info(base_dir, Some(repo_root), info)?;
     let current = current_branch(repo_root)?;
     if current.as_deref() != Some(info.base_branch.as_str()) {
         return Err(GitError::new(
@@ -450,7 +543,19 @@ pub fn merge_into_base(repo_root: &Path, info: &WorktreeInfo) -> Result<String, 
 
     let merge_detail = format!("{}{}", output.stdout, output.stderr);
     if !merge_in_progress(repo_root)? {
-        return Err(GitError::new("MERGE_FAILED", merge_detail));
+        // The merge never started; make sure it left nothing behind.
+        let after = run_git_raw(repo_root, &["rev-parse", "HEAD"])?;
+        let status = run_git_raw(repo_root, &["status", "--porcelain"])?;
+        let untouched = after.success
+            && after.stdout.trim() == before
+            && status.success
+            && status.stdout.trim().is_empty();
+        let code = if untouched {
+            "MERGE_FAILED"
+        } else {
+            "MERGE_ABORT_FAILED"
+        };
+        return Err(GitError::new(code, merge_detail));
     }
     let abort = run_git_raw(repo_root, &["merge", "--abort"])?;
     let after = run_git_raw(repo_root, &["rev-parse", "HEAD"])?;
@@ -473,12 +578,12 @@ pub fn discard(repo_root: &Path, info: &WorktreeInfo) -> Result<(), GitError> {
     discard_in(&default_worktree_base(), repo_root, info)
 }
 
-/// [`discard`] with an explicit worktree base directory. A leftover
-/// directory that git no longer knows as a worktree is deleted only when
-/// it lies under `<base>/mdium/worktrees` (`UNSAFE_WORKTREE_PATH`
-/// otherwise), so a tampered path can never delete arbitrary folders.
+/// [`discard`] with an explicit worktree base directory. The path is
+/// confined by [`validate_info`] to this repo's managed worktree location,
+/// so a leftover directory git no longer knows as a worktree can be deleted
+/// without ever touching an arbitrary folder.
 fn discard_in(base_dir: &Path, repo_root: &Path, info: &WorktreeInfo) -> Result<(), GitError> {
-    validate_info(info)?;
+    validate_info(base_dir, Some(repo_root), info)?;
     let path = Path::new(&info.path);
     let removed = run_git_raw(
         repo_root,
@@ -488,15 +593,7 @@ fn discard_in(base_dir: &Path, repo_root: &Path, info: &WorktreeInfo) -> Result<
         if is_registered_worktree(repo_root, path)? {
             return Err(GitError::new(GIT_FAILED, removed.stderr));
         }
-        let managed = std::fs::canonicalize(worktrees_dir(base_dir)).ok();
-        let target = std::fs::canonicalize(path).ok();
-        match (managed, target) {
-            (Some(managed), Some(target)) if target.starts_with(&managed) && target != managed => {
-                std::fs::remove_dir_all(&target)
-                    .map_err(|err| GitError::new(GIT_FAILED, err.to_string()))?;
-            }
-            _ => return Err(GitError::new("UNSAFE_WORKTREE_PATH", info.path.clone())),
-        }
+        std::fs::remove_dir_all(path).map_err(|err| GitError::new(GIT_FAILED, err.to_string()))?;
     }
     if !removed.success {
         // Drop any stale registration so the branch is no longer considered
@@ -555,6 +652,10 @@ mod tests {
 
         fn root(&self) -> &Path {
             self.repo.path()
+        }
+
+        fn base(&self) -> &Path {
+            self.worktrees.path()
         }
 
         fn run(&self, args: &[&str]) -> String {
@@ -699,7 +800,7 @@ mod tests {
             "untracked-content\n",
         );
 
-        let diff = diff_against_base(&info).unwrap();
+        let diff = diff_against_base_in(fixture.base(), &info).unwrap();
         assert!(diff.contains("+committed-line"), "{diff}");
         assert!(diff.contains("+uncommitted-line"), "{diff}");
         assert!(diff.contains("new/untracked.txt"), "{diff}");
@@ -711,10 +812,12 @@ mod tests {
     fn commits_since_base_lists_branch_commits_oldest_first() {
         let fixture = Fixture::new();
         let info = fixture.create("t");
-        assert!(commits_since_base(&info).unwrap().is_empty());
+        assert!(commits_since_base_in(fixture.base(), &info)
+            .unwrap()
+            .is_empty());
         commit_in_worktree(&info, "b.txt", "b\n", "first change");
         commit_in_worktree(&info, "c.txt", "c\n", "second change");
-        let commits = commits_since_base(&info).unwrap();
+        let commits = commits_since_base_in(fixture.base(), &info).unwrap();
         let subjects: Vec<_> = commits.iter().map(|c| c.subject.as_str()).collect();
         assert_eq!(subjects, ["first change", "second change"]);
         assert_eq!(
@@ -733,7 +836,7 @@ mod tests {
         write_file(wt, "staged.txt", "staged\n");
         wt_git(&info, &["add", "--", "staged.txt"]);
 
-        let hash = commit_paths(&info, &["docs/design.md"], "add design")
+        let hash = commit_paths_in(fixture.base(), &info, &["docs/design.md"], "add design")
             .unwrap()
             .expect("a commit");
         assert_eq!(hash, wt_git(&info, &["rev-parse", "HEAD"]).trim());
@@ -741,7 +844,7 @@ mod tests {
         assert_eq!(files.trim(), "docs/design.md");
         // Nothing left to commit for that path.
         assert_eq!(
-            commit_paths(&info, &["docs/design.md"], "again").unwrap(),
+            commit_paths_in(fixture.base(), &info, &["docs/design.md"], "again").unwrap(),
             None
         );
         // Unrelated staged work stays staged, not committed.
@@ -755,7 +858,7 @@ mod tests {
         let fixture = Fixture::new();
         let info = fixture.create("t");
         commit_in_worktree(&info, "b.txt", "b\n", "feature");
-        let hash = merge_into_base(fixture.root(), &info).unwrap();
+        let hash = merge_into_base_in(fixture.base(), fixture.root(), &info).unwrap();
         assert_eq!(hash, fixture.run(&["rev-parse", "HEAD"]).trim());
         let parents = fixture.run(&["rev-list", "--parents", "-n", "1", "HEAD"]);
         assert_eq!(parents.split_whitespace().count(), 3, "{parents}");
@@ -768,7 +871,7 @@ mod tests {
         let info = fixture.create("t");
         commit_in_worktree(&info, "b.txt", "b\n", "feature");
         fixture.write("a.txt", "dirty\n");
-        let err = merge_into_base(fixture.root(), &info).unwrap_err();
+        let err = merge_into_base_in(fixture.base(), fixture.root(), &info).unwrap_err();
         assert_eq!(err.code, "DIRTY_WORKTREE");
     }
 
@@ -778,10 +881,10 @@ mod tests {
         let info = fixture.create("t");
         commit_in_worktree(&info, "b.txt", "b\n", "feature");
         fixture.run(&["checkout", "-b", "other"]);
-        let err = merge_into_base(fixture.root(), &info).unwrap_err();
+        let err = merge_into_base_in(fixture.base(), fixture.root(), &info).unwrap_err();
         assert_eq!(err.code, "NOT_ON_BASE_BRANCH");
         fixture.run(&["checkout", "--detach"]);
-        let err = merge_into_base(fixture.root(), &info).unwrap_err();
+        let err = merge_into_base_in(fixture.base(), fixture.root(), &info).unwrap_err();
         assert_eq!(err.code, "NOT_ON_BASE_BRANCH");
     }
 
@@ -794,7 +897,7 @@ mod tests {
         fixture.run(&["commit", "-am", "base change"]);
         let before = fixture.run(&["rev-parse", "HEAD"]);
 
-        let err = merge_into_base(fixture.root(), &info).unwrap_err();
+        let err = merge_into_base_in(fixture.base(), fixture.root(), &info).unwrap_err();
         assert_eq!(err.code, "MERGE_CONFLICT");
         let git_dir = fixture.run(&["rev-parse", "--absolute-git-dir"]);
         assert!(!Path::new(git_dir.trim()).join("MERGE_HEAD").exists());
@@ -807,12 +910,12 @@ mod tests {
         let fixture = Fixture::new();
         let info = fixture.create("t");
         write_file(Path::new(&info.path), "scratch.txt", "x\n");
-        discard(fixture.root(), &info).unwrap();
+        discard_in(fixture.base(), fixture.root(), &info).unwrap();
         assert!(!Path::new(&info.path).exists());
         assert_eq!(fixture.run(&["branch", "--list", &info.branch]), "");
         let list = fixture.run(&["worktree", "list", "--porcelain"]);
         assert_eq!(list.matches("worktree ").count(), 1, "{list}");
-        discard(fixture.root(), &info).unwrap();
+        discard_in(fixture.base(), fixture.root(), &info).unwrap();
     }
 
     /// Sets extra env vars for git children spawned on this test thread,
@@ -843,7 +946,7 @@ mod tests {
         let mut info = fixture.create("t");
         info.branch = "mdium/01234567-missing".to_string();
         let before = fixture.run(&["rev-parse", "HEAD"]);
-        let err = merge_into_base(fixture.root(), &info).unwrap_err();
+        let err = merge_into_base_in(fixture.base(), fixture.root(), &info).unwrap_err();
         assert_eq!(err.code, "MERGE_FAILED", "{err:?}");
         assert_eq!(fixture.run(&["rev-parse", "HEAD"]), before);
         assert_eq!(fixture.run(&["status", "--porcelain"]), "");
@@ -864,11 +967,19 @@ mod tests {
 
         for info in [&bad_commit, &upper_commit, &bad_branch, &relative] {
             let codes = [
-                diff_against_base(info).unwrap_err().code,
-                commits_since_base(info).unwrap_err().code,
-                commit_paths(info, &["a.txt"], "m").unwrap_err().code,
-                merge_into_base(fixture.root(), info).unwrap_err().code,
-                discard(fixture.root(), info).unwrap_err().code,
+                diff_against_base_in(fixture.base(), info).unwrap_err().code,
+                commits_since_base_in(fixture.base(), info)
+                    .unwrap_err()
+                    .code,
+                commit_paths_in(fixture.base(), info, &["a.txt"], "m")
+                    .unwrap_err()
+                    .code,
+                merge_into_base_in(fixture.base(), fixture.root(), info)
+                    .unwrap_err()
+                    .code,
+                discard_in(fixture.base(), fixture.root(), info)
+                    .unwrap_err()
+                    .code,
             ];
             for code in codes {
                 assert_eq!(code, "INVALID_WORKTREE_INFO", "{info:?}");
@@ -878,7 +989,7 @@ mod tests {
         assert!(!fixture.root().join("x").exists());
         // The good info still works and the worktree was left alone.
         assert!(Path::new(&good.path).is_dir());
-        diff_against_base(&good).unwrap();
+        diff_against_base_in(fixture.base(), &good).unwrap();
     }
 
     #[test]
@@ -888,7 +999,7 @@ mod tests {
         let wt = Path::new(&info.path);
         write_file(wt, "[a].txt", "bracket\n");
         write_file(wt, "a.txt", "changed\n");
-        commit_paths(&info, &["[a].txt"], "literal")
+        commit_paths_in(fixture.base(), &info, &["[a].txt"], "literal")
             .unwrap()
             .unwrap();
         let files = wt_git(&info, &["show", "--name-only", "--format=", "HEAD"]);
@@ -909,7 +1020,7 @@ mod tests {
         let info = fixture.create("t");
 
         write_file(Path::new(&info.path), "b.txt", "b\n");
-        commit_paths(&info, &["b.txt"], "no identity")
+        commit_paths_in(fixture.base(), &info, &["b.txt"], "no identity")
             .unwrap()
             .unwrap();
         let author = wt_git(&info, &["log", "-1", "--format=%an <%ae>"]);
@@ -918,7 +1029,7 @@ mod tests {
         // Only the missing field is filled in.
         fixture.run(&["config", "user.name", "Alice"]);
         write_file(Path::new(&info.path), "c.txt", "c\n");
-        commit_paths(&info, &["c.txt"], "name only")
+        commit_paths_in(fixture.base(), &info, &["c.txt"], "name only")
             .unwrap()
             .unwrap();
         let author = wt_git(&info, &["log", "-1", "--format=%an <%ae>"]);
@@ -936,7 +1047,7 @@ mod tests {
         let mut orphan = registered.clone();
         orphan.path = orphan_path.to_string_lossy().into_owned();
         orphan.branch = "mdium/fedcba98-t".to_string();
-        discard_in(fixture.worktrees.path(), fixture.root(), &orphan).unwrap();
+        discard_in(fixture.base(), fixture.root(), &orphan).unwrap();
         assert!(!orphan_path.exists());
 
         // An unregistered directory elsewhere is never deleted.
@@ -944,8 +1055,8 @@ mod tests {
         write_file(outside.path(), "keep.txt", "x\n");
         let mut foreign = registered.clone();
         foreign.path = outside.path().to_string_lossy().into_owned();
-        let err = discard_in(fixture.worktrees.path(), fixture.root(), &foreign).unwrap_err();
-        assert_eq!(err.code, "UNSAFE_WORKTREE_PATH");
+        let err = discard_in(fixture.base(), fixture.root(), &foreign).unwrap_err();
+        assert_eq!(err.code, "INVALID_WORKTREE_INFO");
         assert!(outside.path().join("keep.txt").is_file());
     }
 
@@ -957,5 +1068,99 @@ mod tests {
             worktree_path_in(Path::new("/base"), &fixture.root().join("sub"), TASK_ID),
             worktree_path_in(Path::new("/base"), fixture.root(), TASK_ID)
         );
+    }
+
+    #[test]
+    fn worktree_paths_outside_the_managed_location_are_rejected() {
+        let fixture = Fixture::new();
+        let good = fixture.create("t");
+        let outside = TempDir::new().unwrap();
+        let other_repo = Fixture::new();
+        let other_wt = worktree_path_in(fixture.base(), other_repo.root(), TASK_ID);
+
+        let candidates = [
+            // The user's own repository.
+            fixture.root().to_string_lossy().into_owned(),
+            // Some other directory outside the base.
+            outside.path().to_string_lossy().into_owned(),
+            // The managed worktrees dir itself, and a hash dir.
+            fixture
+                .base()
+                .join("mdium")
+                .join("worktrees")
+                .to_string_lossy()
+                .into_owned(),
+            Path::new(&good.path)
+                .parent()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            // Right depth, but not 16-hex names.
+            Path::new(&good.path)
+                .with_file_name("not-an-id")
+                .to_string_lossy()
+                .into_owned(),
+            // `..` escaping back out of the base.
+            Path::new(&good.path)
+                .join("..")
+                .join("..")
+                .join("..")
+                .to_string_lossy()
+                .into_owned(),
+        ];
+        for path in candidates {
+            let mut info = good.clone();
+            info.path = path;
+            let codes = [
+                commit_paths_in(fixture.base(), &info, &["a.txt"], "m")
+                    .unwrap_err()
+                    .code,
+                diff_against_base_in(fixture.base(), &info)
+                    .unwrap_err()
+                    .code,
+                commits_since_base_in(fixture.base(), &info)
+                    .unwrap_err()
+                    .code,
+                merge_into_base_in(fixture.base(), fixture.root(), &info)
+                    .unwrap_err()
+                    .code,
+                discard_in(fixture.base(), fixture.root(), &info)
+                    .unwrap_err()
+                    .code,
+            ];
+            for code in codes {
+                assert_eq!(code, "INVALID_WORKTREE_INFO", "{info:?}");
+            }
+        }
+
+        // A managed path of a different repo is rejected by repo-bound ops.
+        let mut foreign = good.clone();
+        foreign.path = other_wt.to_string_lossy().into_owned();
+        assert_eq!(
+            merge_into_base_in(fixture.base(), fixture.root(), &foreign)
+                .unwrap_err()
+                .code,
+            "INVALID_WORKTREE_INFO"
+        );
+        assert_eq!(
+            discard_in(fixture.base(), fixture.root(), &foreign)
+                .unwrap_err()
+                .code,
+            "INVALID_WORKTREE_INFO"
+        );
+
+        // Nothing was touched.
+        assert!(fixture.root().join("a.txt").is_file());
+        assert!(Path::new(&good.path).join("a.txt").is_file());
+    }
+
+    #[test]
+    fn discard_accepts_an_already_removed_worktree_path() {
+        let fixture = Fixture::new();
+        let info = fixture.create("t");
+        discard_in(fixture.base(), fixture.root(), &info).unwrap();
+        // Remove the hash dir too, so no part of the managed path exists.
+        fs::remove_dir_all(Path::new(&info.path).parent().unwrap()).unwrap();
+        discard_in(fixture.base(), fixture.root(), &info).unwrap();
     }
 }
