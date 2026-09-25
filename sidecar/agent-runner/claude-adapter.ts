@@ -21,6 +21,7 @@ export type ClaudeQueryOptions = Pick<
   | "env"
   | "hooks"
   | "disallowedTools"
+  | "managedSettings"
 > & {
   canUseTool?: (toolName: string, input: Record<string, unknown>) => Promise<PermissionResult>;
 };
@@ -51,7 +52,7 @@ const GUARD_BLOCKED_MESSAGE = "Blocked by MDium safety guard";
 const NOT_PERMITTED_MESSAGE = "Not permitted in this stage";
 
 function hookDeny(reason: string): SyncHookJSONOutput {
-  return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } };
+  return { reason, hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } };
 }
 
 function abortError(): Error {
@@ -131,6 +132,7 @@ class ClaudeSession implements AdapterSession {
       ? { ...(Object.fromEntries(Object.entries(process.env).filter(([, v]) => v !== undefined)) as Record<string, string>), ...this.options.env }
       : undefined;
     const disallowedTools = claudeDisallowedTools(this.options.permission, this.options.guarded);
+    const restricted = this.options.guarded || this.options.permission === "read-only";
     const options: ClaudeQueryOptions = {
       cwd: this.options.workingDirectory,
       permissionMode: "default",
@@ -146,6 +148,9 @@ class ClaudeSession implements AdapterSession {
       canUseTool: this.canUseTool,
       hooks: { PreToolUse: [{ hooks: [this.preToolUse] }] },
       ...(disallowedTools.length > 0 ? { disallowedTools } : {}),
+      // Settings-file hooks and permission rules (e.g. a user `permissions.allow`)
+      // must not widen a guarded or read-only stage.
+      ...(restricted ? { managedSettings: { allowManagedHooksOnly: true, allowManagedPermissionRulesOnly: true } } : {}),
     };
 
     const iterator = this.query({ prompt: text, options })[Symbol.asyncIterator]();
@@ -237,15 +242,14 @@ export class ClaudeAdapter implements ProviderAdapter {
   async probe(): Promise<Availability> {
     const resolved = await this.resolve();
     if (!resolved) return { kind: "missing", detail: "claude" };
-    if (resolved.executable === "node") {
-      // The SDK spawns a JS entry through `node` by name, so it must be on PATH.
-      const node = await this.run("node", ["--version"]);
-      if (node.error) return node.error.code === "ENOENT" ? { kind: "missing", detail: "node" } : { kind: "error", detail: "spawn" };
-    }
-    const result = resolved.executable === "node"
-      ? await this.run(process.execPath, [resolved.executablePath, "--version"])
+    // The SDK spawns a JS entry through `node` by name, so probe with the same binary.
+    const isJs = resolved.executable === "node";
+    const result = isJs
+      ? await this.run("node", [resolved.executablePath, "--version"])
       : await this.run(resolved.executablePath, ["--version"]);
-    if (result.error) return { kind: "error", detail: "spawn" };
+    if (result.error) {
+      return isJs && result.error.code === "ENOENT" ? { kind: "missing", detail: "node" } : { kind: "error", detail: "spawn" };
+    }
     const version = parseVersion(`${result.stdout}\n${result.stderr}`);
     if (result.status !== 0 || !version) return { kind: "error", detail: "version" };
     // No auth probe: the CLI reports auth failures at turn time.

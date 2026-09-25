@@ -55,6 +55,9 @@ describe("toolRequestFromClaude", () => {
     ["Read", { file_path: "README.md" }, { kind: "read", summary: "README.md" }],
     ["Read", {}, { kind: "read", summary: "Read" }],
     ["Grep", { pattern: "foo", path: "src" }, { kind: "read", summary: "src" }],
+    // A glob filter names the files Grep reads, so it joins the summary.
+    ["Grep", { pattern: "x", path: ".", glob: ".env*" }, { kind: "read", summary: "./.env*" }],
+    ["Grep", { pattern: "x", glob: "*.ts" }, { kind: "read", summary: "./*.ts" }],
     // The search pattern is never treated as a path (e.g. a ".env" pattern).
     ["Grep", { pattern: ".env" }, { kind: "read", summary: "." }],
     ["Glob", { pattern: "**/.env*" }, { kind: "read", summary: "." }],
@@ -97,7 +100,10 @@ describe("claudeDecision", () => {
 
 describe("claudeHookDecision", () => {
   const req = (toolName: string, input: Record<string, unknown> = {}) => toolRequestFromClaude(toolName, input);
-  const opaque = ["REPL", "RemoteTrigger", "CronCreate", "CronDelete", "Workflow", "mcp__fs__write", "mcp__x__y"];
+  const opaque = [
+    "REPL", "RemoteTrigger", "CronCreate", "CronDelete", "Workflow", "mcp__fs__write", "mcp__x__y",
+    "Artifact", "PushNotification", "ScheduleWakeup", "ClaudeDesign", "Projects", "EnterWorktree", "ExitWorktree", "SomeFutureTool",
+  ];
   it.each(opaque)("denies the non-inspectable tool %s in guarded or read-only sessions", (tool) => {
     expect(claudeHookDecision("full-access", true, req(tool))).toBe("deny");
     expect(claudeHookDecision("cli-default", true, req(tool))).toBe("deny");
@@ -107,6 +113,13 @@ describe("claudeHookDecision", () => {
     expect(claudeHookDecision("full-access", false, req(tool))).toBe("none");
     expect(claudeHookDecision("cli-default", false, req(tool))).toBe("none");
   });
+  it.each(["Agent", "Task", "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "TaskStop", "AskUserQuestion", "ExitPlanMode"])(
+    "allows the allowlisted tool %s in guarded sessions",
+    (tool) => {
+      expect(claudeHookDecision("full-access", true, req(tool))).toBe("none");
+      expect(claudeHookDecision("cli-default", true, req(tool))).toBe("none");
+    },
+  );
   it("denies what read-only denies and has no opinion otherwise", () => {
     expect(claudeHookDecision("read-only", false, req("Write", { file_path: "a" }))).toBe("deny");
     expect(claudeHookDecision("read-only", false, req("Bash", { command: "ls" }))).toBe("deny");

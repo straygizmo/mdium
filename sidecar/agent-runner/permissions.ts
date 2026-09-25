@@ -80,9 +80,15 @@ function normalizeClaude(toolName: string, input: Record<string, unknown>): Omit
       return { kind: "write", summary: field(input, "file_path", "notebook_path") ?? toolName };
     case "Read":
       return { kind: "read", summary: field(input, "file_path") ?? toolName };
-    case "Grep":
-    case "Glob":
+    case "Grep": {
       // The search pattern is not a path; an absent path means the working directory.
+      // A glob filter names the files Grep reads, so the guard must see it.
+      const dir = field(input, "path") ?? ".";
+      const glob = field(input, "glob");
+      return { kind: "read", summary: glob ? `${dir.replace(/[\\/]+$/, "")}/${glob}` : dir };
+    }
+    case "Glob":
+      // Glob only lists file names; its pattern is not a path.
       return { kind: "read", summary: field(input, "path") ?? "." };
     case "WebFetch":
       return { kind: "network", summary: field(input, "url") ?? toolName };
@@ -114,18 +120,35 @@ export function claudeDecision(permission: AgentPermission, request: ToolRequest
 /** Built-in Claude tools that run code or schedule work the guard cannot inspect. */
 const OPAQUE_CLAUDE_TOOLS = ["REPL", "RemoteTrigger", "CronCreate", "CronDelete", "Workflow"];
 
-function isOpaqueClaudeTool(toolName: string): boolean {
-  return OPAQUE_CLAUDE_TOOLS.includes(toolName) || toolName.startsWith("mcp__");
-}
+/**
+ * `other`-kind Claude tools allowed in guarded or read-only sessions: sub-agents
+ * (whose own tool calls pass the PreToolUse hook) and session bookkeeping.
+ * Every other `other`-kind tool (MCP, artifacts, notifications, worktrees,
+ * schedulers, unknown future tools) is denied there.
+ */
+const ALLOWED_OTHER_CLAUDE_TOOLS = new Set([
+  "Agent",
+  "Task",
+  "TodoWrite",
+  "TaskCreate",
+  "TaskUpdate",
+  "TaskList",
+  "TaskGet",
+  "TaskStop",
+  "AskUserQuestion",
+  "ExitPlanMode",
+]);
 
 /**
  * Decision of the PreToolUse hook, which sees every tool call (including ones
  * that settings, hooks, or the CLI pre-approve and never reach canUseTool).
  * "deny" blocks the call; "none" leaves it to the normal permission flow.
- * Guarded or read-only sessions deny tools whose effects cannot be inspected.
+ * Guarded or read-only sessions deny `other`-kind tools outside an allowlist,
+ * since the guard cannot inspect their effects.
  */
 export function claudeHookDecision(permission: AgentPermission, guarded: boolean, request: ToolRequest): "deny" | "none" {
-  if ((guarded || permission === "read-only") && isOpaqueClaudeTool(request.rawKind ?? "")) return "deny";
+  const restricted = guarded || permission === "read-only";
+  if (restricted && request.kind === "other" && !ALLOWED_OTHER_CLAUDE_TOOLS.has(request.rawKind ?? "")) return "deny";
   if (permission === "read-only" && claudeDecision(permission, request) === "deny") return "deny";
   return "none";
 }

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ClaudeAdapter, type ClaudeQueryOptions, type QueryFn } from "../claude-adapter";
 import type { AgentEvent, ToolRequest } from "../../../src/shared/types/agent-runner";
 import type { SessionCallbacks, SessionOptions } from "../adapter";
+import { checkToolRequest } from "../guard";
 
 type Script = unknown[] | ((options: ClaudeQueryOptions) => AsyncIterable<unknown>);
 
@@ -182,6 +183,7 @@ describe("ClaudeAdapter", () => {
     await expect(run("Bash", { command: "git push" })).resolves.toEqual({
       continue: false,
       stopReason: "Blocked by MDium safety guard",
+      reason: "Blocked by MDium safety guard",
       hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "Blocked by MDium safety guard" },
     });
     expect(checkTool).toHaveBeenCalledWith({ kind: "shell", summary: "git push", rawKind: "Bash" });
@@ -191,6 +193,7 @@ describe("ClaudeAdapter", () => {
   it("denies read-only violations in the PreToolUse hook and has no opinion on allowed tools", async () => {
     const { run } = await hookFor({ ...baseOptions, permission: "read-only" }, callbacks([]));
     await expect(run("Write", { file_path: "a" })).resolves.toEqual({
+      reason: "Not permitted in this stage",
       hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "Not permitted in this stage" },
     });
     await expect(run("Read", { file_path: "a" })).resolves.toEqual({});
@@ -207,6 +210,29 @@ describe("ClaudeAdapter", () => {
     const { run, options } = await hookFor(baseOptions, callbacks([]));
     await expect(run("mcp__fs__write", {})).resolves.toEqual({});
     expect(options.disallowedTools).toBeUndefined();
+    expect(options.managedSettings).toBeUndefined();
+  });
+
+  it.each([
+    [{ permission: "full-access", guarded: true }],
+    [{ permission: "cli-default", guarded: true }],
+    [{ permission: "read-only", guarded: false }],
+  ] as const)("ignores settings hooks and permission rules in %o sessions", async (mode) => {
+    const { options } = await hookFor({ ...baseOptions, ...mode }, callbacks([]));
+    expect(options.managedSettings).toEqual({ allowManagedHooksOnly: true, allowManagedPermissionRulesOnly: true });
+  });
+
+  it("guards the files a Grep glob reads", async () => {
+    const ctx = { workspaceRoot: "C:/work", homeDir: "C:/Users/u", platform: "win32" as const };
+    const checkTool = (r: ToolRequest) => checkToolRequest(r, ctx).ok;
+    const { run } = await hookFor({ ...baseOptions, permission: "full-access", guarded: true }, callbacks([], { checkTool }));
+    await expect(run("Grep", { pattern: "KEY", path: ".", glob: ".env*" })).resolves.toMatchObject({ continue: false });
+    await expect(run("Grep", { pattern: "KEY", path: ".", glob: "*.ts" })).resolves.toEqual({});
+  });
+
+  it("denies an MCP tool in the canUseTool fallback of a guarded session", async () => {
+    const canUseTool = await canUseToolFor({ ...baseOptions, permission: "full-access", guarded: true }, callbacks([]));
+    await expect(canUseTool("mcp__x", {})).resolves.toMatchObject({ behavior: "deny" });
   });
 
   it("rejects with the result subtype when the turn fails", async () => {
@@ -305,8 +331,8 @@ describe("ClaudeAdapter", () => {
       const run = vi.fn(async () => ({ status: 0, stdout: "2.3.4 (Claude Code)\n", stderr: "" }));
       const a = new ClaudeAdapter({ query: fakeQuery().query, resolve: async () => ({ executablePath: "C:/c/cli.js", executable: "node" }), run });
       await expect(a.probe()).resolves.toEqual({ kind: "available", version: "2.3.4" });
-      expect(run).toHaveBeenCalledWith("node", ["--version"]);
-      expect(run).toHaveBeenCalledWith(process.execPath, ["C:/c/cli.js", "--version"]);
+      expect(run).toHaveBeenCalledWith("node", ["C:/c/cli.js", "--version"]);
+      expect(run).toHaveBeenCalledTimes(1);
     });
 
     it("reports node missing when a JS entry cannot be run by name", async () => {
