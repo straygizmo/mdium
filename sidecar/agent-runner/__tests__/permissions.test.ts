@@ -1,4 +1,6 @@
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import { checkToolRequest } from "../guard";
 import {
   claudeDecision,
   claudeDisallowedTools,
@@ -6,6 +8,7 @@ import {
   codexSandbox,
   copilotDecision,
   opencodeDecision,
+  opencodeServerConfig,
   toolRequestFromClaude,
   toolRequestFromCopilot,
   toolRequestFromOpencode,
@@ -217,5 +220,56 @@ describe("opencodeDecision", () => {
     expect(opencodeDecision("cli-default", read)).toBe("once");
     expect(opencodeDecision("cli-default", toolRequestFromOpencode({ type: "read", pattern: [".env.example"] }))).toBe("once");
     for (const request of [envRead, edit, bash, fetch, skill]) expect(opencodeDecision("cli-default", request)).toBe("ask");
+  });
+});
+
+describe("opencode worktree-relative paths", () => {
+  const paths = { directory: "C:/repo/docs", worktree: "C:/repo" };
+  const win = (...parts: string[]) => path.win32.resolve(...parts);
+  const guardCtx = { workspaceRoot: "C:/repo/docs", homeDir: "C:/Users/u", platform: "win32" as const };
+
+  it("resolves read and edit paths against the worktree and search paths against the directory", () => {
+    expect(toolRequestFromOpencode({ type: "read", pattern: ["src/a.ts"], metadata: {} }, paths).summary).toBe(win("C:/repo", "src/a.ts"));
+    expect(toolRequestFromOpencode({ type: "edit", pattern: ["src/a.ts"], metadata: { filepath: "src/a.ts" } }, paths).summary).toBe(win("C:/repo", "src/a.ts"));
+    expect(toolRequestFromOpencode({ type: "glob", metadata: { pattern: "*", path: "sub" } }, paths).summary).toBe(win("C:/repo/docs", "sub"));
+    expect(toolRequestFromOpencode({ type: "grep", metadata: { pattern: "x" } }, paths).summary).toBe(win("C:/repo/docs"));
+  });
+
+  it("keeps absolute paths", () => {
+    expect(toolRequestFromOpencode({ type: "edit", pattern: ["docs/a.md"], metadata: { filepath: "C:\\repo\\docs\\a.md" } }, paths).summary).toBe("C:\\repo\\docs\\a.md");
+    expect(toolRequestFromOpencode({ type: "external_directory", pattern: ["D:/x/**"], metadata: { filepath: "D:/x/a" } }, paths).summary).toBe("D:/x/a");
+  });
+
+  it("makes every path of a multi-file patch absolute", () => {
+    const patch = { type: "edit", pattern: ["src/a.ts", "docs/b.md"], metadata: { filepath: "src/a.ts, docs/b.md" } };
+    expect(toolRequestsFromOpencode(patch, paths).map((r) => r.summary)).toEqual([win("C:/repo", "src/a.ts"), win("C:/repo", "docs/b.md")]);
+    expect(toolRequestFromOpencode(patch, paths).summary).toBe(win("C:/repo", "src/a.ts"));
+  });
+
+  it("lets the guard block a patch outside a workspace that is a repo subfolder", () => {
+    const patch = { type: "edit", pattern: ["src/a.ts"], metadata: { filepath: "src/a.ts" } };
+    const [request] = toolRequestsFromOpencode(patch, paths);
+    expect(checkToolRequest(request, guardCtx)).toEqual({ ok: false, rule: "outside-workspace" });
+    const inside = toolRequestsFromOpencode({ type: "edit", pattern: ["docs/b.md"], metadata: { filepath: "docs/b.md" } }, paths);
+    expect(checkToolRequest(inside[0], guardCtx)).toEqual({ ok: true });
+  });
+});
+
+describe("opencode Windows separators", () => {
+  it("recognizes env files behind backslashes", () => {
+    expect(opencodeDecision("cli-default", toolRequestFromOpencode({ type: "read", pattern: ["config\\.env.local"] }))).toBe("ask");
+    expect(opencodeDecision("cli-default", toolRequestFromOpencode({ type: "read", pattern: ["config\\.env.example"] }))).toBe("once");
+    expect(opencodeDecision("cli-default", toolRequestFromOpencode({ type: "read", pattern: ["config\\settings.ts"] }))).toBe("once");
+  });
+  it("trims a trailing backslash before joining a grep include", () => {
+    expect(toolRequestFromOpencode({ type: "grep", metadata: { pattern: "x", path: "src\\", include: "*.ts" } }).summary).toBe("src/*.ts");
+  });
+});
+
+describe("opencodeServerConfig", () => {
+  const config = opencodeServerConfig({ readOnly: "mdium-read-only-x", guarded: "mdium-guarded-x", open: "mdium-open-x" });
+  it("turns off formatters and language servers server-wide", () => {
+    expect(config.formatter).toBe(false);
+    expect(config.lsp).toBe(false);
   });
 });

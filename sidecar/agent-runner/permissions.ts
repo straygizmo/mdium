@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import type { AgentPermission, ToolRequest } from "../../src/shared/types/agent-runner";
 
 /** Codex sandbox for a permission mode; undefined leaves the user's CLI config in charge. */
@@ -166,41 +167,71 @@ export interface OpencodePermissionLike {
   metadata?: Record<string, unknown>;
 }
 
+/**
+ * Where an opencode session runs. opencode reports read/edit/apply_patch paths
+ * relative to the git worktree root and glob/grep paths relative to the
+ * session directory, while the guard resolves relative paths against the
+ * workspace root; requests are therefore made absolute first.
+ */
+export interface OpencodePaths {
+  directory: string;
+  worktree: string;
+}
+
 function opencodePatterns(permission: OpencodePermissionLike): string[] {
   const { pattern } = permission;
   if (typeof pattern === "string") return pattern ? [pattern] : [];
   return Array.isArray(pattern) ? pattern.filter((p): p is string => typeof p === "string" && p !== "") : [];
 }
 
-/** Normalize an opencode permission request into a provider-neutral ToolRequest. */
-export function toolRequestFromOpencode(permission: OpencodePermissionLike): ToolRequest {
-  return { ...normalizeOpencode(permission), rawKind: permission.type };
+function isWindowsPath(p: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(p) || /^[\\/]{2}[^\\/]/.test(p);
 }
 
-function normalizeOpencode(permission: OpencodePermissionLike): Omit<ToolRequest, "rawKind"> {
+/** Resolve `p` against `base` with the path flavor of `base`; absolute paths are kept. */
+function absolute(base: string | undefined, p: string): string {
+  if (!base || isWindowsPath(p) || path.posix.isAbsolute(p)) return p;
+  return isWindowsPath(base) ? path.win32.resolve(base, p) : path.posix.resolve(base, p);
+}
+
+/** Normalize an opencode permission request into a provider-neutral ToolRequest. */
+export function toolRequestFromOpencode(permission: OpencodePermissionLike, paths?: OpencodePaths): ToolRequest {
+  return { ...normalizeOpencode(permission, paths), rawKind: permission.type };
+}
+
+function normalizeOpencode(permission: OpencodePermissionLike, paths?: OpencodePaths): Omit<ToolRequest, "rawKind"> {
   const metadata = permission.metadata ?? {};
   const patterns = opencodePatterns(permission);
   const first = patterns[0];
+  const fromWorktree = (p: string) => absolute(paths?.worktree, p);
+  const fromDirectory = (p: string) => absolute(paths?.directory, p);
   switch (permission.type) {
     case "bash":
       return { kind: "shell", summary: field(metadata, "command") ?? (patterns.length ? patterns.join("\n") : undefined) ?? permission.title ?? "bash" };
     case "edit":
-    case "write":
-      return { kind: "write", summary: field(metadata, "filePath", "filepath") ?? first ?? permission.type };
-    case "external_directory":
+    case "write": {
+      // A multi-file apply_patch joins its (worktree-relative) paths into `filepath`; use the first pattern then.
+      const file = patterns.length > 1 ? first : (field(metadata, "filePath", "filepath") ?? first);
+      return { kind: "write", summary: file ? fromWorktree(file) : permission.type };
+    }
+    case "external_directory": {
       // Treated as a write so the guard's outside-workspace rule applies.
-      return { kind: "write", summary: field(metadata, "filepath", "filePath", "path") ?? first ?? permission.type };
+      const dir = field(metadata, "filepath", "filePath", "path") ?? first;
+      return { kind: "write", summary: dir ? fromDirectory(dir) : permission.type };
+    }
     case "read":
-    case "list":
-      return { kind: "read", summary: field(metadata, "filePath", "filepath", "path") ?? first ?? permission.type };
+    case "list": {
+      const file = field(metadata, "filePath", "filepath", "path") ?? first;
+      return { kind: "read", summary: file ? fromWorktree(file) : permission.type };
+    }
     case "glob":
       // The glob pattern is not a path; the searched directory is.
-      return { kind: "read", summary: field(metadata, "path") ?? "." };
+      return { kind: "read", summary: fromDirectory(field(metadata, "path") ?? ".") };
     case "grep": {
       // The search pattern is not a path; an include glob names the files grep reads.
-      const dir = field(metadata, "path") ?? ".";
+      const dir = fromDirectory(field(metadata, "path") ?? ".");
       const include = field(metadata, "include");
-      return { kind: "read", summary: include ? `${dir.replace(/[\/]+$/, "")}/${include}` : dir };
+      return { kind: "read", summary: include ? `${dir.replace(/[\\/]+$/, "")}/${include}` : dir };
     }
     case "todowrite":
       // Task-list bookkeeping with no side effects outside the session.
@@ -219,18 +250,19 @@ function normalizeOpencode(permission: OpencodePermissionLike): Omit<ToolRequest
  * path for multi-path writes (a patch touching several files, a shell
  * command reaching several outside directories), else the single request.
  */
-export function toolRequestsFromOpencode(permission: OpencodePermissionLike): ToolRequest[] {
-  const request = toolRequestFromOpencode(permission);
+export function toolRequestsFromOpencode(permission: OpencodePermissionLike, paths?: OpencodePaths): ToolRequest[] {
+  const request = toolRequestFromOpencode(permission, paths);
   const patterns = opencodePatterns(permission);
   if (request.kind === "write" && patterns.length > 1) {
-    return patterns.map((summary) => ({ kind: "write", summary, rawKind: permission.type }));
+    const base = permission.type === "external_directory" ? paths?.directory : paths?.worktree;
+    return patterns.map((p) => ({ kind: "write", summary: absolute(base, p), rawKind: permission.type }));
   }
   return [request];
 }
 
 /** Env files that opencode itself asks about before reading; templates are exempt. */
 function isEnvFile(summary: string): boolean {
-  const name = summary.split(/[\/]/).pop() ?? "";
+  const name = summary.split(/[\\/]/).pop() ?? "";
   return /^\.env(\..+)?$/i.test(name) && !/^\.env\.(example|sample|template)$/i.test(name);
 }
 
@@ -245,4 +277,55 @@ export function opencodeDecision(permission: AgentPermission, request: ToolReque
   if (permission === "read-only") return "reject";
   if (permission === "full-access") return "once";
   return "ask";
+}
+
+export interface OpencodeAgentNames {
+  readOnly: string;
+  guarded: string;
+  open: string;
+}
+
+/** Rules of the read-only and guarded agents. `"*"` must stay first: opencode applies the last matching rule. */
+function opencodeRestrictedRules(readOnly: boolean): Record<string, string> {
+  const write = readOnly ? "deny" : "ask";
+  return {
+    "*": "deny",
+    invalid: "allow",
+    todowrite: "allow",
+    skill: "allow",
+    read: "ask",
+    glob: "ask",
+    grep: "ask",
+    list: "ask",
+    lsp: "ask",
+    doom_loop: "ask",
+    edit: write,
+    bash: write,
+    webfetch: write,
+    websearch: write,
+    external_directory: write,
+  };
+}
+
+/** The OPENCODE_CONFIG_CONTENT of the dedicated server (see opencode-adapter.ts for the rationale). */
+export function opencodeServerConfig(agents: OpencodeAgentNames) {
+  return {
+    // Workflow sessions are never uploaded, whatever the user's share setting is.
+    share: "disabled",
+    // Formatters and language servers run project-controlled programs outside the
+    // permission flow; one server serves every session, so they are off server-wide.
+    formatter: false,
+    lsp: false,
+    permission: { edit: "ask", bash: "ask", webfetch: "ask", external_directory: "ask" },
+    agent: {
+      [agents.readOnly]: { mode: "primary", description: "MDium read-only workflow stage", permission: opencodeRestrictedRules(true) },
+      [agents.guarded]: { mode: "primary", description: "MDium guarded workflow stage", permission: opencodeRestrictedRules(false) },
+      // Unguarded stages: every tool that asks is routed to the adapter; sub-agents are allowed.
+      [agents.open]: {
+        mode: "primary",
+        description: "MDium workflow stage",
+        permission: { "*": "ask", invalid: "allow", todowrite: "allow", question: "deny", plan_enter: "deny", plan_exit: "deny" },
+      },
+    },
+  };
 }

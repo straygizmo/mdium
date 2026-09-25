@@ -5,7 +5,15 @@ import { createOpencodeServer } from "@opencode-ai/sdk/server";
 import type { AgentEvent, AgentPermission, Availability } from "../../src/shared/types/agent-runner";
 import type { AdapterSession, ProviderAdapter, SessionCallbacks, SessionOptions } from "./adapter";
 import { runCommand, type CommandRunner } from "./availability";
-import { opencodeDecision, toolRequestFromOpencode, toolRequestsFromOpencode, type OpencodePermissionLike } from "./permissions";
+import {
+  opencodeDecision,
+  opencodeServerConfig,
+  toolRequestFromOpencode,
+  toolRequestsFromOpencode,
+  type OpencodeAgentNames,
+  type OpencodePaths,
+  type OpencodePermissionLike,
+} from "./permissions";
 
 /*
  * Configuration hardening of the dedicated opencode server.
@@ -28,9 +36,13 @@ import { opencodeDecision, toolRequestFromOpencode, toolRequestsFromOpencode, ty
  *   `"*": "deny"` first removes MCP, plugin, and custom tools (which never ask) and
  *   `task`/`question`; the built-ins that follow all ask before running (read, glob, grep,
  *   list, edit/write/apply_patch, bash, webfetch, websearch, external_directory, lsp).
+ * - Formatters and language servers (which run project-installed programs outside the
+ *   permission flow) are disabled server-wide with `formatter: false` / `lsp: false`.
  * - The server emits `permission.asked` (1.18) rather than the SDK v1 `permission.updated`;
  *   both are handled. The v1 reply route POST /session/{id}/permissions/{permissionID} is
  *   still served (deprecated). Text deltas arrive as `message.part.delta`.
+ * - read/edit/apply_patch paths are relative to the git worktree root, glob/grep paths to
+ *   the session directory; GET /path reports both, and the worktree is "/" outside git.
  *
  * Remaining gaps (not closable from here): the user's global config and the system managed
  * config still load (their plugins and MCP servers run inside the server process, and their
@@ -43,6 +55,9 @@ type DirectoryQuery = { query?: { directory?: string } };
 
 /** Structural subset of the SDK v1 client used by the adapter. */
 export interface OpencodeClientLike {
+  path: {
+    get(options: DirectoryQuery): Promise<OpencodeResult<{ directory: string; worktree: string }>>;
+  };
   session: {
     create(options: { body: { title: string } } & DirectoryQuery): Promise<OpencodeResult<{ id: string }>>;
     promptAsync(
@@ -72,54 +87,8 @@ export interface OpencodeAdapterDeps {
   run?: CommandRunner;
 }
 
-export interface OpencodeAgentNames {
-  readOnly: string;
-  guarded: string;
-  open: string;
-}
-
-type PermissionRules = Record<string, string>;
-
-/** Built-ins that ask before running, so the guard sees them first. `"*"` must stay first. */
-function restrictedRules(readOnly: boolean): PermissionRules {
-  const write = readOnly ? "deny" : "ask";
-  return {
-    "*": "deny",
-    invalid: "allow",
-    todowrite: "allow",
-    skill: "allow",
-    read: "ask",
-    glob: "ask",
-    grep: "ask",
-    list: "ask",
-    lsp: "ask",
-    doom_loop: "ask",
-    edit: write,
-    bash: write,
-    webfetch: write,
-    websearch: write,
-    external_directory: write,
-  };
-}
-
-/** The OPENCODE_CONFIG_CONTENT of the dedicated server. */
-export function opencodeServerConfig(agents: OpencodeAgentNames) {
-  return {
-    // Workflow sessions are never uploaded, whatever the user's share setting is.
-    share: "disabled",
-    permission: { edit: "ask", bash: "ask", webfetch: "ask", external_directory: "ask" },
-    agent: {
-      [agents.readOnly]: { mode: "primary", description: "MDium read-only workflow stage", permission: restrictedRules(true) },
-      [agents.guarded]: { mode: "primary", description: "MDium guarded workflow stage", permission: restrictedRules(false) },
-      // Unguarded stages: every tool that asks is routed to the adapter; sub-agents are allowed.
-      [agents.open]: {
-        mode: "primary",
-        description: "MDium workflow stage",
-        permission: { "*": "ask", invalid: "allow", todowrite: "allow", question: "deny", plan_enter: "deny", plan_exit: "deny" },
-      },
-    },
-  };
-}
+type ServerConfig = ReturnType<typeof opencodeServerConfig>;
+type CreateServer = (options: { hostname: string; port: number; timeout: number; config: ServerConfig }) => Promise<OpencodeServerHandle>;
 
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -134,23 +103,24 @@ function freePort(): Promise<number> {
 }
 
 /** Start `opencode serve` with project configuration disabled (see the note at the top). */
-async function startDedicatedServer(config: ReturnType<typeof opencodeServerConfig>): Promise<OpencodeServerHandle> {
+export async function startDedicatedServer(
+  config: ServerConfig,
+  create: CreateServer = createOpencodeServer as unknown as CreateServer,
+): Promise<OpencodeServerHandle> {
   const port = await freePort();
-  // createOpencodeServer copies process.env synchronously when it spawns (before its first
-  // await) and has no env option, so the flag is set only around that synchronous call.
+  // createOpencodeServer has no env option; it copies process.env synchronously when it
+  // spawns, before its first await. The flag is therefore set only around that synchronous
+  // call and restored before the start promise settles.
   const previous = process.env.OPENCODE_DISABLE_PROJECT_CONFIG;
+  let starting: Promise<OpencodeServerHandle>;
   process.env.OPENCODE_DISABLE_PROJECT_CONFIG = "1";
   try {
-    return await createOpencodeServer({
-      hostname: "127.0.0.1",
-      port,
-      timeout: 20_000,
-      config: config as unknown as NonNullable<Parameters<typeof createOpencodeServer>[0]>["config"],
-    });
+    starting = create({ hostname: "127.0.0.1", port, timeout: 20_000, config });
   } finally {
     if (previous === undefined) delete process.env.OPENCODE_DISABLE_PROJECT_CONFIG;
     else process.env.OPENCODE_DISABLE_PROJECT_CONFIG = previous;
   }
+  return starting;
 }
 
 function abortError(): Error {
@@ -203,53 +173,160 @@ type RawPermission = {
   metadata?: Record<string, unknown>;
 };
 
+function normalizePermission(permission: RawPermission): OpencodePermissionLike {
+  return {
+    type: permission.permission ?? permission.type ?? "unknown",
+    ...(permission.patterns ?? permission.pattern ? { pattern: permission.patterns ?? permission.pattern } : {}),
+    ...(permission.title ? { title: permission.title } : {}),
+    ...(permission.metadata ? { metadata: permission.metadata } : {}),
+  };
+}
+
 const CONNECT_TIMEOUT_MS = 15_000;
 
-/** Per-turn event state: text per part, message roles, and announced tool calls. */
-class TurnState {
-  /** Set once the root session showed activity for this turn, so a stale idle is ignored. */
-  active = false;
-  private readonly roles = new Map<string, string>();
+/** What a turn needs from its session. */
+interface TurnContext {
+  client: OpencodeClientLike;
+  sessionId: string;
+  paths: OpencodePaths;
+  permission: AgentPermission;
+  callbacks: SessionCallbacks;
+  query: { directory: string };
+}
+
+/**
+ * One turn: event state (fresh messages, text per part, tool calls) and the
+ * handling of each server event. Events of messages created before this
+ * turn's prompt (e.g. an aborted previous turn) are ignored.
+ */
+class OpencodeTurn {
+  /** Set once a message of this turn appeared, so a stale idle is ignored. */
+  private active = false;
+  private settled = false;
+  private promptTime: number | undefined;
+  /** The root session and its sub-agent sessions; only root output belongs to the turn. */
+  private readonly sessions: Set<string>;
+  /** Messages created after the prompt, with their role. */
+  private readonly fresh = new Map<string, string>();
   private readonly partTypes = new Map<string, string>();
   /** Text parts per assistant message, in order of appearance. */
   private readonly texts = new Map<string, Map<string, string>>();
-  readonly startedTools = new Set<string>();
-  readonly finishedTools = new Set<string>();
+  private readonly startedTools = new Set<string>();
+  private readonly finishedTools = new Set<string>();
 
-  setRole(messageID: string, role: string): void {
-    this.roles.set(messageID, role);
+  constructor(
+    private readonly ctx: TurnContext,
+    private readonly settle: (outcome: { text: string } | { error: Error }) => void,
+  ) {
+    this.sessions = new Set([ctx.sessionId]);
   }
 
-  /** Record a text part; returns false for parts that are not assistant output. */
-  setText(part: RawPart): boolean {
-    if (!part.id || !part.messageID) return false;
-    this.partTypes.set(part.id, "text");
-    if (this.roles.get(part.messageID) === "user" || part.synthetic) return false;
-    this.textsOf(part.messageID).set(part.id, part.text ?? "");
-    return true;
+  get isSettled(): boolean {
+    return this.settled;
   }
 
-  setPartType(part: RawPart): void {
-    if (part.id && part.type) this.partTypes.set(part.id, part.type);
+  get prompted(): boolean {
+    return this.promptTime !== undefined;
   }
 
-  /** Append a streamed text delta; returns false when the part is not assistant text. */
-  appendText(messageID: string, partID: string, delta: string): boolean {
-    if (this.partTypes.get(partID) !== "text" || this.roles.get(messageID) === "user") return false;
-    const parts = this.texts.get(messageID);
-    if (!parts?.has(partID)) return false;
-    parts.set(partID, parts.get(partID)! + delta);
-    return true;
+  markPrompted(): void {
+    this.promptTime = Date.now();
   }
 
-  /** The text of the last assistant message that produced any. */
-  finalText(): string {
+  resolve(text: string): void {
+    if (this.settled) return;
+    this.settled = true;
+    this.settle({ text });
+  }
+
+  fail(error: Error): void {
+    if (this.settled) return;
+    this.settled = true;
+    this.settle({ error });
+  }
+
+  private emit(event: AgentEvent): void {
+    if (!this.settled) this.ctx.callbacks.onEvent(event);
+  }
+
+  private complete(): void {
     let final = "";
     for (const parts of this.texts.values()) {
       const text = [...parts.values()].join("");
       if (text) final = text;
     }
-    return final;
+    if (final) this.emit({ type: "assistant_message", text: final });
+    this.resolve(final);
+  }
+
+  /** Assistant message of this turn in the root session (known role, created after the prompt). */
+  private isFreshAssistant(messageID: string | undefined): boolean {
+    return messageID !== undefined && this.fresh.get(messageID) === "assistant";
+  }
+
+  handle(event: RawEvent): void {
+    const p = event.properties ?? {};
+    const root = this.ctx.sessionId;
+    switch (event.type) {
+      case "session.created":
+      case "session.updated": {
+        const info = p.info as { id?: string; parentID?: string } | undefined;
+        if (info?.id && info.parentID && this.sessions.has(info.parentID)) this.sessions.add(info.id);
+        break;
+      }
+      case "session.status":
+        if (p.sessionID === root && (p.status as { type?: string } | undefined)?.type === "idle" && this.active) this.complete();
+        break;
+      case "session.idle":
+        if (p.sessionID === root && this.active) this.complete();
+        break;
+      case "message.updated": {
+        const info = p.info as { id?: string; role?: string; sessionID?: string; time?: { created?: number } } | undefined;
+        if (!info?.id || info.sessionID !== root) break;
+        const created = info.time?.created;
+        const stale = typeof created === "number" && this.promptTime !== undefined && created < this.promptTime;
+        if (stale && !this.fresh.has(info.id)) break;
+        this.fresh.set(info.id, info.role ?? "assistant");
+        this.active = true;
+        break;
+      }
+      case "message.part.updated": {
+        const part = (p.part ?? {}) as RawPart;
+        if (part.sessionID !== root || !this.isFreshAssistant(part.messageID) || !part.id) break;
+        this.partTypes.set(part.id, part.type ?? "");
+        if (part.type === "text") {
+          if (part.synthetic) break;
+          this.textsOf(part.messageID!).set(part.id, part.text ?? "");
+          if (typeof p.delta === "string" && p.delta) this.emit({ type: "assistant_delta", text: p.delta });
+        } else if (part.type === "tool" && part.callID) {
+          this.toolEvent(part);
+        }
+        break;
+      }
+      case "message.part.delta": {
+        if (p.sessionID !== root || p.field !== "text" || typeof p.delta !== "string" || !p.delta) break;
+        const messageID = String(p.messageID);
+        const partID = String(p.partID);
+        const parts = this.texts.get(messageID);
+        if (!this.isFreshAssistant(messageID) || this.partTypes.get(partID) !== "text" || !parts?.has(partID)) break;
+        parts.set(partID, parts.get(partID)! + p.delta);
+        this.emit({ type: "assistant_delta", text: p.delta });
+        break;
+      }
+      case "permission.updated":
+      case "permission.asked": {
+        const permission = p as RawPermission;
+        if (!permission.id || !permission.sessionID || !this.sessions.has(permission.sessionID)) break;
+        void this.answerPermission(permission.id, permission.sessionID, normalizePermission(permission)).catch((error: unknown) => {
+          void this.ctx.client.session.abort({ path: { id: root }, query: this.ctx.query }).catch(() => undefined);
+          this.fail(new Error(`OPENCODE_PERMISSION_REPLY_FAILED: ${errorText(error)}`));
+        });
+        break;
+      }
+      case "session.error":
+        if (p.sessionID === root) this.fail(new Error(`OPENCODE_FAILED: ${errorText(p.error ?? "unknown")}`));
+        break;
+    }
   }
 
   private textsOf(messageID: string): Map<string, string> {
@@ -260,6 +337,43 @@ class TurnState {
     }
     return parts;
   }
+
+  private toolEvent(part: RawPart): void {
+    const callID = part.callID!;
+    const status = part.state?.status;
+    const start = () => {
+      if (this.startedTools.has(callID)) return;
+      this.startedTools.add(callID);
+      this.emit({ type: "tool_started", toolId: callID, title: part.tool ?? callID });
+    };
+    if (status === "running") start();
+    if ((status === "completed" || status === "error") && !this.finishedTools.has(callID)) {
+      start();
+      this.finishedTools.add(callID);
+      this.emit({ type: "tool_finished", toolId: callID, ok: status === "completed" });
+    }
+  }
+
+  /** Guard check, mode decision, and reply for one permission request. */
+  private async answerPermission(permissionID: string, sessionID: string, permission: OpencodePermissionLike): Promise<void> {
+    const { callbacks, paths } = this.ctx;
+    const request = toolRequestFromOpencode(permission, paths);
+    // The safety guard wins over every permission mode; a block also aborts the turn.
+    const allowedByGuard = toolRequestsFromOpencode(permission, paths).every((r) => callbacks.checkTool(r));
+    let response: "once" | "reject" = "reject";
+    if (allowedByGuard) {
+      const decision = opencodeDecision(this.ctx.permission, request);
+      response = decision === "ask" ? ((await callbacks.requestPermission(request)) ? "once" : "reject") : decision;
+    }
+    // A settled turn already aborted the session, which rejects its pending permissions.
+    if (this.settled && response === "once") return;
+    const result = await this.ctx.client.postSessionIdPermissionsPermissionId({
+      path: { id: sessionID, permissionID },
+      body: { response },
+      query: this.ctx.query,
+    });
+    if (result?.error && !this.settled) throw new Error(errorText(result.error));
+  }
 }
 
 class OpencodeSession implements AdapterSession {
@@ -269,8 +383,10 @@ class OpencodeSession implements AdapterSession {
     private readonly client: OpencodeClientLike,
     private readonly id: string,
     private readonly agent: string,
+    private readonly paths: OpencodePaths,
     private readonly options: SessionOptions,
     private readonly callbacks: SessionCallbacks,
+    private readonly onDisconnect: () => void,
   ) {}
 
   nativeSessionId(): string | undefined {
@@ -288,37 +404,42 @@ class OpencodeSession implements AdapterSession {
       if (this.options.model && !model) return reject(new Error("OPENCODE_BAD_MODEL"));
 
       const subscription = new AbortController();
-      const state = new TurnState();
-      // The root session and its sub-agent sessions; only root output belongs to the turn.
-      const sessions = new Set([this.id]);
-      let settled = false;
-      let prompted = false;
-      const finish = (fn: () => void) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(connectTimer);
-        subscription.abort();
-        signal.removeEventListener("abort", onAbort);
-        if (this.cancelTurn === onAbort) this.cancelTurn = undefined;
-        fn();
-      };
-      const fail = (error: Error) => finish(() => reject(error));
       const onAbort = () => {
-        if (settled) return;
+        if (turn.isSettled) return;
         void this.client.session.abort({ path: { id: this.id }, query: this.query }).catch(() => undefined);
-        fail(abortError());
+        turn.fail(abortError());
+      };
+      const turn = new OpencodeTurn(
+        {
+          client: this.client,
+          sessionId: this.id,
+          paths: this.paths,
+          permission: this.options.permission,
+          callbacks: this.callbacks,
+          query: this.query,
+        },
+        (outcome) => {
+          clearTimeout(connectTimer);
+          subscription.abort();
+          signal.removeEventListener("abort", onAbort);
+          if (this.cancelTurn === onAbort) this.cancelTurn = undefined;
+          if ("error" in outcome) reject(outcome.error);
+          else resolve(outcome.text);
+        },
+      );
+      const disconnected = (detail?: string) => {
+        if (turn.isSettled) return;
+        this.onDisconnect();
+        turn.fail(new Error(detail ? `OPENCODE_DISCONNECTED: ${detail}` : "OPENCODE_DISCONNECTED"));
       };
       this.cancelTurn = onAbort;
       signal.addEventListener("abort", onAbort);
       const connectTimer = setTimeout(() => {
-        if (!prompted) fail(new Error("OPENCODE_DISCONNECTED"));
+        if (!turn.prompted) disconnected();
       }, CONNECT_TIMEOUT_MS);
 
-      const emit = (event: AgentEvent) => {
-        if (!settled) this.callbacks.onEvent(event);
-      };
       const sendPrompt = () => {
-        prompted = true;
+        turn.markPrompted();
         this.client.session
           .promptAsync({
             path: { id: this.id },
@@ -326,90 +447,19 @@ class OpencodeSession implements AdapterSession {
             body: { agent: this.agent, ...(model ? { model } : {}), parts: [{ type: "text", text }] },
           })
           .then((result) => {
-            if (result?.error) fail(new Error(`OPENCODE_FAILED: ${errorText(result.error)}`));
+            if (result?.error) turn.fail(new Error(`OPENCODE_FAILED: ${errorText(result.error)}`));
           })
-          .catch((error: unknown) => fail(new Error(`OPENCODE_FAILED: ${errorText(error)}`)));
-      };
-      const complete = () => {
-        const final = state.finalText();
-        if (final) emit({ type: "assistant_message", text: final });
-        finish(() => resolve(final));
-      };
-
-      const handle = (event: RawEvent) => {
-        const p = event.properties ?? {};
-        switch (event.type) {
-          case "session.created":
-          case "session.updated": {
-            const info = p.info as { id?: string; parentID?: string } | undefined;
-            if (info?.id && info.parentID && sessions.has(info.parentID)) sessions.add(info.id);
-            break;
-          }
-          case "session.status": {
-            if (p.sessionID !== this.id) break;
-            const status = (p.status as { type?: string } | undefined)?.type;
-            if (status === "idle") {
-              if (state.active) complete();
-            } else if (status) {
-              state.active = true;
-            }
-            break;
-          }
-          case "message.updated": {
-            const info = p.info as { id?: string; role?: string; sessionID?: string } | undefined;
-            if (!info?.id || info.sessionID !== this.id) break;
-            state.active = true;
-            if (info.role) state.setRole(info.id, info.role);
-            break;
-          }
-          case "message.part.updated": {
-            const part = (p.part ?? {}) as RawPart;
-            if (part.sessionID !== this.id) break;
-            state.active = true;
-            if (part.type === "text") {
-              if (state.setText(part) && typeof p.delta === "string" && p.delta) emit({ type: "assistant_delta", text: p.delta });
-            } else {
-              state.setPartType(part);
-              if (part.type === "tool" && part.callID) this.toolEvent(part, state, emit);
-            }
-            break;
-          }
-          case "message.part.delta": {
-            if (p.sessionID !== this.id || p.field !== "text" || typeof p.delta !== "string") break;
-            if (state.appendText(String(p.messageID), String(p.partID), p.delta) && p.delta) emit({ type: "assistant_delta", text: p.delta });
-            break;
-          }
-          case "permission.updated":
-          case "permission.asked": {
-            const permission = p as RawPermission;
-            if (!permission.id || !permission.sessionID || !sessions.has(permission.sessionID)) break;
-            void this.answerPermission(permission.id, permission.sessionID, normalizePermission(permission), () => settled).catch(
-              (error: unknown) => {
-                void this.client.session.abort({ path: { id: this.id }, query: this.query }).catch(() => undefined);
-                fail(new Error(`OPENCODE_PERMISSION_REPLY_FAILED: ${errorText(error)}`));
-              },
-            );
-            break;
-          }
-          case "session.error": {
-            if (p.sessionID !== this.id) break;
-            fail(new Error(`OPENCODE_FAILED: ${errorText(p.error ?? "unknown")}`));
-            break;
-          }
-          case "session.idle":
-            if (p.sessionID === this.id && state.active) complete();
-            break;
-        }
+          .catch((error: unknown) => turn.fail(new Error(`OPENCODE_FAILED: ${errorText(error)}`)));
       };
 
       void this.consume(subscription.signal, (event) => {
         // The stream connects lazily; prompt only once it delivers its first event
         // (server.connected), so no event of this turn can be missed.
-        if (!prompted) sendPrompt();
-        handle(event);
+        if (!turn.prompted) sendPrompt();
+        turn.handle(event);
       })
-        .then(() => fail(new Error("OPENCODE_DISCONNECTED")))
-        .catch((error: unknown) => fail(new Error(`OPENCODE_DISCONNECTED: ${errorText(error)}`)));
+        .then(() => disconnected())
+        .catch((error: unknown) => disconnected(errorText(error)));
     });
   }
 
@@ -423,59 +473,21 @@ class OpencodeSession implements AdapterSession {
     }
   }
 
-  private toolEvent(part: RawPart, state: TurnState, emit: (event: AgentEvent) => void): void {
-    const callID = part.callID!;
-    const status = part.state?.status;
-    const start = () => {
-      if (state.startedTools.has(callID)) return;
-      state.startedTools.add(callID);
-      emit({ type: "tool_started", toolId: callID, title: part.tool ?? callID });
-    };
-    if (status === "running") start();
-    if ((status === "completed" || status === "error") && !state.finishedTools.has(callID)) {
-      start();
-      state.finishedTools.add(callID);
-      emit({ type: "tool_finished", toolId: callID, ok: status === "completed" });
-    }
-  }
-
-  /** Guard check, mode decision, and reply for one permission request. */
-  private async answerPermission(permissionID: string, sessionID: string, permission: OpencodePermissionLike, settled: () => boolean): Promise<void> {
-    const request = toolRequestFromOpencode(permission);
-    // The safety guard wins over every permission mode; a block also aborts the turn.
-    const allowedByGuard = toolRequestsFromOpencode(permission).every((r) => this.callbacks.checkTool(r));
-    let response: "once" | "reject" = "reject";
-    if (allowedByGuard) {
-      const decision = opencodeDecision(this.options.permission, request);
-      response = decision === "ask" ? ((await this.callbacks.requestPermission(request)) ? "once" : "reject") : decision;
-    }
-    // A settled turn already aborted the session, which rejects its pending permissions.
-    if (settled() && response === "once") return;
-    const result = await this.client.postSessionIdPermissionsPermissionId({
-      path: { id: sessionID, permissionID },
-      body: { response },
-      query: this.query,
-    });
-    if (result?.error && !settled()) throw new Error(errorText(result.error));
-  }
-
   async close(): Promise<void> {
     this.cancelTurn?.();
   }
 }
 
-function normalizePermission(permission: RawPermission): OpencodePermissionLike {
-  return {
-    type: permission.permission ?? permission.type ?? "unknown",
-    ...(permission.patterns ?? permission.pattern ? { pattern: permission.patterns ?? permission.pattern } : {}),
-    ...(permission.title ? { title: permission.title } : {}),
-    ...(permission.metadata ? { metadata: permission.metadata } : {}),
-  };
-}
-
 function agentFor(agents: OpencodeAgentNames, permission: AgentPermission, guarded: boolean): string {
   if (permission === "read-only") return agents.readOnly;
   return guarded ? agents.guarded : agents.open;
+}
+
+/** Session paths; outside a git repository opencode reports the worktree as "/". */
+function sessionPaths(directory: string, reported: { directory?: string; worktree?: string } | undefined): OpencodePaths {
+  const dir = reported?.directory || directory;
+  const worktree = reported?.worktree && reported.worktree !== "/" ? reported.worktree : dir;
+  return { directory: dir, worktree };
 }
 
 /** opencode adapter for workflow stages: one dedicated `opencode serve` per adapter. */
@@ -523,16 +535,41 @@ export class OpencodeAdapter implements ProviderAdapter {
     return this.server;
   }
 
+  /** Close and forget a server that lost its connection, so the next session restarts it. */
+  private dropServer(server: Promise<OpencodeServerHandle>): void {
+    if (this.server !== server) return;
+    this.server = undefined;
+    void server.then((handle) => handle.close()).catch(() => undefined);
+  }
+
   async startSession(options: SessionOptions, callbacks: SessionCallbacks): Promise<AdapterSession> {
-    const server = await this.ensureServer();
-    const client = this.createClient(server.url, options.workingDirectory);
+    const server = this.ensureServer();
+    const { url } = await server;
+    const client = this.createClient(url, options.workingDirectory);
+    const query = { directory: options.workingDirectory };
+    // A thrown request means the server is unreachable (e.g. it crashed); an `error`
+    // result is an HTTP-level failure of a live server.
+    const request = async <T>(call: () => Promise<OpencodeResult<T>>): Promise<T | undefined> => {
+      let result: OpencodeResult<T>;
+      try {
+        result = await call();
+      } catch (error) {
+        this.dropServer(server);
+        throw new Error(`OPENCODE_FAILED: ${errorText(error)}`);
+      }
+      if (result.error) throw new Error(`OPENCODE_FAILED: ${errorText(result.error)}`);
+      return result.data;
+    };
+    const paths = sessionPaths(options.workingDirectory, await request(() => client.path.get({ query })));
     let id = options.resumeNativeId;
     if (!id) {
-      const created = await client.session.create({ body: { title: "MDium workflow" }, query: { directory: options.workingDirectory } });
-      if (created.error || !created.data?.id) throw new Error(`OPENCODE_FAILED: ${errorText(created.error ?? "no session")}`);
-      id = created.data.id;
+      const created = await request(() => client.session.create({ body: { title: "MDium workflow" }, query }));
+      if (!created?.id) throw new Error("OPENCODE_FAILED: no session");
+      id = created.id;
     }
-    return new OpencodeSession(client, id, agentFor(this.agents, options.permission, options.guarded), options, callbacks);
+    return new OpencodeSession(client, id, agentFor(this.agents, options.permission, options.guarded), paths, options, callbacks, () =>
+      this.dropServer(server),
+    );
   }
 
   async dispose(): Promise<void> {
