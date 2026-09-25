@@ -210,14 +210,21 @@ fn read_task_file(path: &Path, expected_id: &str) -> Result<Task, StoreError> {
 /// Reads and writes `.mdium/` for one project. Cheap to construct; holds no
 /// open handles or caches.
 pub struct WorkflowStore {
+    project_root: PathBuf,
     paths: MdiumPaths,
 }
 
 impl WorkflowStore {
     pub fn new(project_root: PathBuf) -> Self {
         Self {
-            paths: MdiumPaths::new(project_root),
+            paths: MdiumPaths::new(project_root.clone()),
+            project_root,
         }
+    }
+
+    /// The project root this store reads and writes `.mdium/` under.
+    pub fn project_root(&self) -> &Path {
+        &self.project_root
     }
 
     /// Loads `.mdium/workflows.json`. A missing file is not an error: it is
