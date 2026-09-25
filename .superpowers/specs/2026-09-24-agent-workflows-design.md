@@ -262,9 +262,13 @@ interface Stage<R extends "design" | "implement" | "review"> {
    - 資格情報の読み取り（`~/.ssh`、`~/.aws`、`~/.config/gh`、`.git-credentials`、`.env` 系、ブラウザのプロファイル等）
    - 外部への送信系コマンド（`curl` / `wget` / `Invoke-WebRequest` / `Invoke-RestMethod` 等でのアップロード・POST）
    - システム設定の変更（レジストリ、サービス、スケジュールタスク、環境変数の永続変更）
+   - エージェント・ツール設定の書き込み（`.claude/`、`.opencode/`、`opencode.json(c)`、`.mcp.json`、`.codex/`、`.copilot/`、`.vscode/` の設定類、`.git/` 内部、`.gitmodules`）。次のターンの CLI が読み込んで実行したり、取込み後に利用者のリポジトリへ持ち込まれたりするのを防ぐ。
+   - `git config` による永続設定（コマンドを保持するキー、`core.hooksPath`、`include.path`、`alias.*`、`remote.*` 等）の書き込み。worktree は元のリポジトリと `.git/config` を共有するため。
    Copilot / opencode / Claude は実行前に拒否する。Codex は実行開始イベントで検出した時点でターンを中止する。いずれも `attention`（理由: 危険操作を検出、内容を表示）とする。
 3. 環境による封じ込め: エージェントの子プロセス環境（2.1 の `env`）で、`GIT_CONFIG_COUNT` 等により全リモートの push 先を無効な URL に上書きし、`GH_TOKEN` / `GITLAB_TOKEN` を無効値にする。MDium 自身の Issue 連携は Rust から通常の環境で行うため影響を受けない。
-4. 事後検査: 工程の終了後、利用者の作業ツリー（`git status` とブランチ位置）と base ブランチが工程開始前から変化していないことを確認し、変化していれば `attention`（理由: 作業ツリー外への変更を検出）とする。
+4. 事後検査: 工程の終了後、利用者の作業ツリー（`git status` とブランチ位置）、base ブランチ、共有される `.git/config` と hooks（`core.hooksPath` を含む）が工程開始前から変化していないことを確認し、変化していれば `attention`（理由: 作業ツリー外への変更を検出）とする。
+
+補足（ガードの限界）: Codex には実行前フックがないため、ガードはコマンド開始後に検出してターンを中止する（最初の操作自体は防げない場合がある）。Claude は SDK の PreToolUse フックで全ツール呼び出しを検査し、ガード付き・読み取り専用のセッションでは利用者・プロジェクト設定のフックと許可ルールを無視する。
 
 ### 3.8 工程の入出力
 
