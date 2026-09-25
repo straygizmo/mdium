@@ -35,8 +35,8 @@ function fakeClient(session: CopilotSessionLike, overrides: Partial<CopilotClien
 const make = (client: CopilotClientLike, path: string | null = "C:/copilot/npm-loader.js") =>
   new CopilotAdapter({ createClient: vi.fn(() => client), resolvePath: async () => path });
 
-const opts = { workingDirectory: "C:/w", permission: "cli-default" as const };
-const cbs = (onEvent: (e: AgentEvent) => void = () => {}) => ({ onEvent, requestPermission: async () => true });
+const opts = { workingDirectory: "C:/w", permission: "cli-default" as const, guarded: false };
+const cbs = (onEvent: (e: AgentEvent) => void = () => {}) => ({ onEvent, requestPermission: async () => true, checkTool: () => true });
 
 describe("CopilotAdapter", () => {
   it("streams a turn and resolves with the final message on idle", async () => {
@@ -306,19 +306,33 @@ describe("CopilotAdapter", () => {
     const session = fakeSession([]);
     const { client, permission } = fakeClient(session);
     const ask = vi.fn(async () => false);
-    await make(client).startSession(opts, { onEvent: () => {}, requestPermission: ask });
+    await make(client).startSession(opts, { onEvent: () => {}, requestPermission: ask, checkTool: () => true });
     await expect(permission({ kind: "read", path: "a" })).resolves.toEqual({ kind: "reject" });
-    expect(ask).toHaveBeenCalledWith({ kind: "read", summary: "a" });
+    expect(ask).toHaveBeenCalledWith({ kind: "read", summary: "a", rawKind: "read" });
     await expect(permission({ kind: "shell", fullCommandText: "ls" })).resolves.toEqual({ kind: "reject" });
-    expect(ask).toHaveBeenCalledWith({ kind: "shell", summary: "ls" });
+    expect(ask).toHaveBeenCalledWith({ kind: "shell", summary: "ls", rawKind: "shell" });
   });
 
   it("rejects writes without asking in read-only mode", async () => {
     const session = fakeSession([]);
     const { client, permission } = fakeClient(session);
     const ask = vi.fn(async () => true);
-    await make(client).startSession({ workingDirectory: "C:/w", permission: "read-only" }, { onEvent: () => {}, requestPermission: ask });
+    await make(client).startSession({ workingDirectory: "C:/w", permission: "read-only", guarded: false }, { onEvent: () => {}, requestPermission: ask, checkTool: () => true });
     await expect(permission({ kind: "write", fileName: "a" })).resolves.toEqual({ kind: "reject" });
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it("rejects a guard-blocked request without consulting the mode, even under full-access", async () => {
+    const session = fakeSession([]);
+    const { client, permission } = fakeClient(session);
+    const ask = vi.fn(async () => true);
+    const checkTool = vi.fn(() => false);
+    await make(client).startSession(
+      { workingDirectory: "C:/w", permission: "full-access", guarded: true },
+      { onEvent: () => {}, requestPermission: ask, checkTool },
+    );
+    await expect(permission({ kind: "shell", fullCommandText: "git push" })).resolves.toEqual({ kind: "reject" });
+    expect(checkTool).toHaveBeenCalledWith({ kind: "shell", summary: "git push", rawKind: "shell" });
     expect(ask).not.toHaveBeenCalled();
   });
 

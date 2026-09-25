@@ -33,8 +33,10 @@ function setup() {
   const core = new RunnerCore({ adapters: { codex: adapter, copilot: adapter }, send: (m) => sent.push(m), newId: () => `p${++n}` });
   const line = (m: object) => core.handleLine(JSON.stringify(m));
   const start = () => line({ type: "start_session", requestId: "r1", sessionId: "s1", provider: "codex", workingDirectory: "C:/w", permission: "cli-default" });
+  const startGuarded = () =>
+    line({ type: "start_session", requestId: "r1", sessionId: "s1", provider: "codex", workingDirectory: "C:/wt", permission: "full-access", guard: { workspaceRoot: "C:/wt" } });
   return {
-    core, sent, session, adapter, line, start,
+    core, sent, session, adapter, line, start, startGuarded,
     callbacks: () => callbacks,
     signal: () => lastSignal,
     finishTurn: (v: string) => turn.resolve(v),
@@ -358,5 +360,87 @@ describe("RunnerCore", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("passes guarded to the adapter and allows every tool when no guard is configured", async () => {
+    const t = setup();
+    await t.start();
+    expect(t.adapter.startSession).toHaveBeenCalledWith(expect.objectContaining({ guarded: false }), expect.anything());
+    await t.line({ type: "send", sessionId: "s1", text: "a" });
+    const before = t.sent.length;
+    expect(t.callbacks().checkTool({ kind: "shell", summary: "git push" })).toBe(true);
+    expect(t.sent.length).toBe(before);
+  });
+
+  it("blocks a guard violation, aborts the turn, and reports GUARD_BLOCKED instead of turn_cancelled", async () => {
+    const t = setup();
+    await t.startGuarded();
+    expect(t.adapter.startSession).toHaveBeenCalledWith(expect.objectContaining({ guarded: true }), expect.anything());
+    await t.line({ type: "send", sessionId: "s1", text: "a" });
+    const pending = t.callbacks().requestPermission({ kind: "shell", summary: "ls" });
+    expect(t.callbacks().checkTool({ kind: "shell", summary: "npm test" })).toBe(true);
+    expect(t.callbacks().checkTool({ kind: "shell", summary: "git push" })).toBe(false);
+    expect(t.sent).toContainEqual({ type: "guard_violation", sessionId: "s1", rule: "git-remote", summary: "git push" });
+    expect(t.signal()?.aborted).toBe(true);
+    await expect(pending).resolves.toBe(false);
+    await flush();
+    expect(t.sent).toContainEqual({ type: "turn_failed", sessionId: "s1", message: "GUARD_BLOCKED" });
+    expect(t.sent.some((m) => m.type === "turn_cancelled")).toBe(false);
+  });
+
+  it("sends only one guard_violation per turn", async () => {
+    const t = setup();
+    await t.startGuarded();
+    await t.line({ type: "send", sessionId: "s1", text: "a" });
+    expect(t.callbacks().checkTool({ kind: "shell", summary: "git push" })).toBe(false);
+    expect(t.callbacks().checkTool({ kind: "shell", summary: "gh pr create" })).toBe(false);
+    await flush();
+    expect(t.sent.filter((m) => m.type === "guard_violation")).toHaveLength(1);
+    expect(t.sent.filter((m) => m.type === "turn_failed")).toHaveLength(1);
+  });
+
+  it("reports GUARD_BLOCKED even when the adapter resolves the blocked turn", async () => {
+    const t = setup();
+    await t.startGuarded();
+    await t.line({ type: "send", sessionId: "s1", text: "a" });
+    // Detach the abort-driven rejection so the fake turn resolves instead.
+    t.finishTurn("done anyway");
+    t.callbacks().checkTool({ kind: "shell", summary: "git push" });
+    await flush();
+    expect(t.sent).toContainEqual({ type: "turn_failed", sessionId: "s1", message: "GUARD_BLOCKED" });
+    expect(t.sent.some((m) => m.type === "turn_completed")).toBe(false);
+  });
+
+  it("emits nothing for a guard violation on a closed session", async () => {
+    const t = setup();
+    await t.startGuarded();
+    await t.line({ type: "send", sessionId: "s1", text: "a" });
+    await t.line({ type: "close_session", sessionId: "s1" });
+    expect(t.callbacks().checkTool({ kind: "shell", summary: "git push" })).toBe(false);
+    await flush();
+    expect(t.sent.some((m) => m.type === "guard_violation" || m.type === "turn_failed" || m.type === "turn_cancelled")).toBe(false);
+  });
+
+  it("disposes adapters that define dispose() on shutdown", async () => {
+    const t = setup();
+    const dispose = vi.fn(async () => {});
+    const disposable: ProviderAdapter = { ...t.adapter, dispose };
+    const core = new RunnerCore({ adapters: { codex: disposable, copilot: t.adapter, claude: disposable }, send: () => {} });
+    await core.shutdown();
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("replies PROVIDER_UNAVAILABLE to start_session without an adapter and releases the reservation", async () => {
+    const t = setup();
+    await t.line({ type: "start_session", requestId: "r1", sessionId: "s1", provider: "claude", workingDirectory: "C:/w", permission: "cli-default" });
+    expect(t.sent).toContainEqual({ type: "error", requestId: "r1", sessionId: "s1", message: "PROVIDER_UNAVAILABLE" });
+    await t.start();
+    expect(t.sent).toContainEqual({ type: "session_started", requestId: "r1", sessionId: "s1", nativeSessionId: "native-1" });
+  });
+
+  it("replies PROVIDER_UNAVAILABLE to list_sessions without an adapter", async () => {
+    const t = setup();
+    await t.line({ type: "list_sessions", requestId: "r3", provider: "opencode", workingDirectory: "C:/w" });
+    expect(t.sent).toContainEqual({ type: "error", requestId: "r3", message: "PROVIDER_UNAVAILABLE" });
   });
 });

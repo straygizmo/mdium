@@ -234,6 +234,8 @@ export class CopilotAdapter implements ProviderAdapter {
     await client.start();
     const onPermissionRequest = async (request: { kind: string; [k: string]: unknown }): Promise<PermissionResult> => {
       const normalized: ToolRequest = toolRequestFromCopilot(request);
+      // The safety guard wins over every permission mode.
+      if (!callbacks.checkTool(normalized)) return { kind: "reject" };
       const decision = copilotDecision(options.permission, normalized);
       const allow = decision === "approve" || (decision === "ask" && (await callbacks.requestPermission(normalized)));
       return allow ? { kind: "approve-once" } : { kind: "reject" };

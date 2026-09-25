@@ -5,7 +5,17 @@ import { codexSandbox } from "./permissions";
 import { resolveCodexPath } from "./resolve-cli";
 import { probeCodex } from "./availability";
 
-type CodexItem = { id: string; type: string; text?: string; command?: string; status?: string; server?: string; tool?: string; query?: string };
+type CodexItem = {
+  id: string;
+  type: string;
+  text?: string;
+  command?: string;
+  status?: string;
+  server?: string;
+  tool?: string;
+  query?: string;
+  changes?: Array<{ path: string; kind?: string }>;
+};
 type CodexEvent =
   | { type: "item.started" | "item.updated" | "item.completed"; item: CodexItem }
   | { type: "turn.failed"; error: { message: string } }
@@ -56,6 +66,8 @@ class CodexSession implements AdapterSession {
     // "item.completed" for them, with no preceding "item.started". Track which
     // tool ids we already announced so we can synthesize the missing start.
     const startedToolIds = new Set<string>();
+    // file_change items are checked by the guard on their first event only.
+    const checkedFileChangeIds = new Set<string>();
     const emit = (e: AgentEvent) => this.callbacks.onEvent(e);
     for await (const raw of events) {
       const event = raw as CodexEvent;
@@ -64,6 +76,17 @@ class CodexSession implements AdapterSession {
       if (!("item" in event)) continue;
       const { item } = event as { item: CodexItem };
       if (TOOL_ITEMS.has(item.type)) {
+        // Report tool calls to the safety guard; a blocked call makes the core
+        // abort this turn, so the result needs no handling here.
+        if (item.type === "command_execution" && event.type === "item.started") {
+          this.callbacks.checkTool({ kind: "shell", summary: item.command ?? "", rawKind: "command_execution" });
+        }
+        if (item.type === "file_change" && !checkedFileChangeIds.has(item.id)) {
+          checkedFileChangeIds.add(item.id);
+          for (const change of item.changes ?? []) {
+            this.callbacks.checkTool({ kind: "write", summary: change.path, rawKind: "file_change" });
+          }
+        }
         if (event.type === "item.started") {
           startedToolIds.add(item.id);
           emit({ type: "tool_started", toolId: item.id, title: toolTitle(item) });

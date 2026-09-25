@@ -12,11 +12,18 @@ export interface SessionOptions {
   model?: string;
   resumeNativeId?: string;
   env?: Record<string, string>;
+  /** True when start_session enabled the runtime safety guard; the verdict itself comes from checkTool. */
+  guarded: boolean;
 }
 export interface SessionCallbacks {
   onEvent(event: AgentEvent): void;
   /** Ask the user (via mdium) to approve a tool request. Resolves true to allow. */
   requestPermission(request: ToolRequest): Promise<boolean>;
+  /**
+   * Check a tool call against the runtime safety guard. Returns true when it is allowed
+   * (always, when no guard is configured). A blocked call aborts the running turn.
+   */
+  checkTool(request: ToolRequest): boolean;
 }
 export interface AdapterSession {
   /** Provider-native id, known after the first turn for Codex. */
@@ -29,4 +36,6 @@ export interface ProviderAdapter {
   probe(): Promise<Availability>;
   startSession(options: SessionOptions, callbacks: SessionCallbacks): Promise<AdapterSession>;
   listSessions?(workingDirectory: string): Promise<AgentSessionSummary[]>;
+  /** Release adapter-wide resources (e.g. shared servers) when the runner shuts down. */
+  dispose?(): Promise<void>;
 }

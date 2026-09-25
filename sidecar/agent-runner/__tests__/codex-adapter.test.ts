@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { CodexAdapter, type CodexLike } from "../codex-adapter";
-import type { AgentEvent } from "../../../src/shared/types/agent-runner";
+import type { AgentEvent, ToolRequest } from "../../../src/shared/types/agent-runner";
 
 function fakeCodex(events: unknown[], threadId = "thread-1") {
   const startThread = vi.fn();
@@ -29,7 +29,11 @@ function adapter(createCodex: ReturnType<typeof fakeCodex>["createCodex"]) {
   });
 }
 
-const callbacks = (events: AgentEvent[]) => ({ onEvent: (e: AgentEvent) => events.push(e), requestPermission: async () => false });
+const callbacks = (events: AgentEvent[], checkTool: (request: ToolRequest) => boolean = () => true) => ({
+  onEvent: (e: AgentEvent) => events.push(e),
+  requestPermission: async () => false,
+  checkTool,
+});
 
 describe("CodexAdapter", () => {
   it("starts a thread with the mapped sandbox and normalizes events", async () => {
@@ -42,7 +46,7 @@ describe("CodexAdapter", () => {
     ]);
     const events: AgentEvent[] = [];
     const session = await adapter(fake.createCodex).startSession(
-      { workingDirectory: "C:/work", permission: "read-only", model: "gpt-x" },
+      { workingDirectory: "C:/work", permission: "read-only", guarded: false, model: "gpt-x" },
       callbacks(events),
     );
     const final = await session.runTurn("hello", new AbortController().signal);
@@ -61,7 +65,7 @@ describe("CodexAdapter", () => {
   it("omits sandboxMode for cli-default and resumes by id", async () => {
     const fake = fakeCodex([{ type: "turn.completed", usage: {} }]);
     await adapter(fake.createCodex).startSession(
-      { workingDirectory: "C:/work", permission: "cli-default", resumeNativeId: "t-9" },
+      { workingDirectory: "C:/work", permission: "cli-default", guarded: false, resumeNativeId: "t-9" },
       callbacks([]),
     );
     expect(fake.resumeThread).toHaveBeenCalledWith("t-9", { workingDirectory: "C:/work", skipGitRepoCheck: true });
@@ -70,7 +74,7 @@ describe("CodexAdapter", () => {
   it("merges env over process.env when env is given", async () => {
     const fake = fakeCodex([]);
     await adapter(fake.createCodex).startSession(
-      { workingDirectory: "C:/work", permission: "full-access", env: { GH_TOKEN: "x" } },
+      { workingDirectory: "C:/work", permission: "full-access", guarded: false, env: { GH_TOKEN: "x" } },
       callbacks([]),
     );
     const arg = fake.createCodex.mock.calls[0][0] as { env?: Record<string, string> };
@@ -80,13 +84,13 @@ describe("CodexAdapter", () => {
 
   it("rejects when the turn fails", async () => {
     const fake = fakeCodex([{ type: "turn.failed", error: { message: "quota" } }]);
-    const session = await adapter(fake.createCodex).startSession({ workingDirectory: "C:/w", permission: "cli-default" }, callbacks([]));
+    const session = await adapter(fake.createCodex).startSession({ workingDirectory: "C:/w", permission: "cli-default", guarded: false }, callbacks([]));
     await expect(session.runTurn("x", new AbortController().signal)).rejects.toThrow("quota");
   });
 
   it("refuses to start when Codex cannot be resolved", async () => {
     const a = new CodexAdapter({ createCodex: vi.fn(), resolvePath: async () => null, probe: async () => ({ kind: "missing", detail: "codex" }) });
-    await expect(a.startSession({ workingDirectory: "C:/w", permission: "cli-default" }, callbacks([]))).rejects.toThrow("CODEX_NOT_FOUND");
+    await expect(a.startSession({ workingDirectory: "C:/w", permission: "cli-default", guarded: false }, callbacks([]))).rejects.toThrow("CODEX_NOT_FOUND");
     await expect(a.probe()).resolves.toMatchObject({ kind: "missing" });
   });
 
@@ -97,8 +101,8 @@ describe("CodexAdapter", () => {
       { type: "item.completed", item: { id: "c1", type: "command_execution", command: "npm test", aggregated_output: "", status: "completed" } },
     ]);
     const session = await adapter(fake.createCodex).startSession(
-      { workingDirectory: "C:/w", permission: "cli-default" },
-      { onEvent: () => controller.abort(), requestPermission: async () => false },
+      { workingDirectory: "C:/w", permission: "cli-default", guarded: false },
+      { onEvent: () => controller.abort(), requestPermission: async () => false, checkTool: () => true },
     );
     await expect(session.runTurn("x", controller.signal)).rejects.toMatchObject({ name: "AbortError" });
   });
@@ -112,7 +116,7 @@ describe("CodexAdapter", () => {
     ]);
     const events: AgentEvent[] = [];
     const session = await adapter(fake.createCodex).startSession(
-      { workingDirectory: "C:/w", permission: "cli-default" },
+      { workingDirectory: "C:/w", permission: "cli-default", guarded: false },
       callbacks(events),
     );
     await session.runTurn("x", new AbortController().signal);
@@ -120,6 +124,40 @@ describe("CodexAdapter", () => {
     expect(events).toEqual([
       { type: "tool_started", toolId: "f1", title: "file_change" },
       { type: "tool_finished", toolId: "f1", ok: true },
+    ]);
+  });
+
+  it("checks a command_execution with the guard when it starts", async () => {
+    const fake = fakeCodex([
+      { type: "item.started", item: { id: "c1", type: "command_execution", command: "npm test", aggregated_output: "", status: "in_progress" } },
+      { type: "item.completed", item: { id: "c1", type: "command_execution", command: "npm test", aggregated_output: "", status: "completed" } },
+    ]);
+    const checkTool = vi.fn(() => true);
+    const session = await adapter(fake.createCodex).startSession(
+      { workingDirectory: "C:/w", permission: "full-access", guarded: true },
+      callbacks([], checkTool),
+    );
+    await session.runTurn("x", new AbortController().signal);
+    expect(checkTool).toHaveBeenCalledTimes(1);
+    expect(checkTool).toHaveBeenCalledWith({ kind: "shell", summary: "npm test", rawKind: "command_execution" });
+  });
+
+  it("checks every path of a single-shot file_change with the guard", async () => {
+    const fake = fakeCodex([
+      {
+        type: "item.completed",
+        item: { id: "f1", type: "file_change", status: "completed", changes: [{ path: "a.ts", kind: "update" }, { path: "C:/x/b.ts", kind: "add" }] },
+      },
+    ]);
+    const checkTool = vi.fn(() => true);
+    const session = await adapter(fake.createCodex).startSession(
+      { workingDirectory: "C:/w", permission: "full-access", guarded: true },
+      callbacks([], checkTool),
+    );
+    await session.runTurn("x", new AbortController().signal);
+    expect(checkTool.mock.calls).toEqual([
+      [{ kind: "write", summary: "a.ts", rawKind: "file_change" }],
+      [{ kind: "write", summary: "C:/x/b.ts", rawKind: "file_change" }],
     ]);
   });
 });

@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
+import * as os from "node:os";
 import type { Availability, RunnerInbound, RunnerOutbound, RunnerProvider, ToolRequest } from "../../src/shared/types/agent-runner";
 import type { AdapterSession, ProviderAdapter } from "./adapter";
+import { checkToolRequest } from "./guard";
 import { parseInbound } from "./protocol";
 
 interface ActiveTurn {
@@ -8,6 +10,10 @@ interface ActiveTurn {
   timedOut: boolean;
   /** Set when the abort was caused by close_session, so its rejection does not emit turn_cancelled. */
   suppressCancelEvent: boolean;
+  /** Set when the safety guard blocked a tool call; the turn then fails with GUARD_BLOCKED. */
+  guardBlocked: boolean;
+  /** A guard_violation was already sent for this turn. */
+  violationSent: boolean;
   timer?: ReturnType<typeof setTimeout>;
 }
 
@@ -18,7 +24,7 @@ interface SessionEntry {
   permissions: Map<string, (allow: boolean) => void>;
   /** Set by closeSession; once true, late adapter callbacks are silenced. */
   closed: boolean;
-  /** Runtime safety guard options, when start_session enabled it. Consumed by the guard (Task 3). */
+  /** Runtime safety guard options, when start_session enabled it. */
   guard?: { workspaceRoot: string };
 }
 
@@ -146,6 +152,15 @@ export class RunnerCore {
     // session_started for a process that is already on its way out.
     for (const reservation of this.starting.values()) reservation.closed = true;
     await Promise.all([...this.sessions.keys()].map((id) => this.closeSession(id)));
+    // The same adapter may serve several providers; dispose each one once.
+    const adapters = new Set(Object.values(this.deps.adapters).filter((a): a is ProviderAdapter => Boolean(a)));
+    await Promise.all(
+      [...adapters].map((adapter) =>
+        adapter.dispose
+          ? withTimeout(adapter.dispose(), CLOSE_TIMEOUT_MS, "DISPOSE_TIMEOUT").catch(() => undefined)
+          : undefined,
+      ),
+    );
   }
 
   private async startSession(msg: Extract<RunnerInbound, { type: "start_session" }>): Promise<void> {
@@ -178,6 +193,7 @@ export class RunnerCore {
           ...(msg.model ? { model: msg.model } : {}),
           ...(msg.resumeNativeId ? { resumeNativeId: msg.resumeNativeId } : {}),
           ...(msg.env ? { env: msg.env } : {}),
+          guarded: Boolean(msg.guard),
         },
         {
           onEvent: (event) => {
@@ -194,6 +210,9 @@ export class RunnerCore {
               permissions.set(permissionId, resolve);
               this.deps.send({ type: "permission_request", sessionId: msg.sessionId, permissionId, request });
             }),
+          // Before the session is registered there is no turn to abort; still
+          // report a guarded session's blocked calls as denied.
+          checkTool: (request: ToolRequest) => this.checkTool(msg.sessionId, entry, msg.guard, request),
         },
       );
       this.starting.delete(msg.sessionId);
@@ -223,7 +242,13 @@ export class RunnerCore {
       this.deps.send({ type: "error", sessionId, message: "TURN_IN_PROGRESS" });
       return;
     }
-    const turn: ActiveTurn = { controller: new AbortController(), timedOut: false, suppressCancelEvent: false };
+    const turn: ActiveTurn = {
+      controller: new AbortController(),
+      timedOut: false,
+      suppressCancelEvent: false,
+      guardBlocked: false,
+      violationSent: false,
+    };
     if (entry.timeoutMs) {
       turn.timer = setTimeout(() => {
         turn.timedOut = true;
@@ -242,11 +267,20 @@ export class RunnerCore {
         // observe the abort signal. Its outcome no longer matters to a gone
         // session.
         if (entry.closed) return;
+        // A guard-blocked turn fails even if the adapter still resolved it.
+        if (turn.guardBlocked) {
+          this.deps.send({ type: "turn_failed", sessionId, message: "GUARD_BLOCKED" });
+          return;
+        }
         const nativeSessionId = entry.session.nativeSessionId();
         this.deps.send({ type: "turn_completed", sessionId, finalResponse, ...(nativeSessionId ? { nativeSessionId } : {}) });
       })
       .catch((error: unknown) => {
-        if (turn.timedOut) this.deps.send({ type: "turn_failed", sessionId, message: "TIMEOUT" });
+        // A guard block also aborts the turn; its outcome takes precedence
+        // over cancelled/timeout. A closed session reports nothing.
+        if (turn.guardBlocked) {
+          if (!entry.closed) this.deps.send({ type: "turn_failed", sessionId, message: "GUARD_BLOCKED" });
+        } else if (turn.timedOut) this.deps.send({ type: "turn_failed", sessionId, message: "TIMEOUT" });
         else if (turn.controller.signal.aborted) {
           // A close_session-triggered abort already reported its own outcome;
           // do not also emit turn_cancelled for a session that is now gone.
@@ -258,6 +292,35 @@ export class RunnerCore {
         entry.turn = undefined;
         this.denyPending(entry);
       });
+  }
+
+  /** Run the safety guard for a session's tool call; true means allowed. */
+  private checkTool(
+    sessionId: string,
+    entry: SessionEntry | undefined,
+    guard: { workspaceRoot: string } | undefined,
+    request: ToolRequest,
+  ): boolean {
+    if (!guard) return true;
+    const verdict = checkToolRequest(request, {
+      workspaceRoot: guard.workspaceRoot,
+      homeDir: os.homedir(),
+      platform: process.platform,
+      extraWritableRoots: [os.tmpdir()],
+    });
+    if (verdict.ok) return true;
+    const turn = entry?.turn;
+    if (entry && turn && !entry.closed) {
+      if (!turn.violationSent) {
+        turn.violationSent = true;
+        this.deps.send({ type: "guard_violation", sessionId, rule: verdict.rule, summary: request.summary });
+      }
+      turn.guardBlocked = true;
+      turn.controller.abort();
+      // Deny immediately; do not wait for the turn's rejection to propagate.
+      this.denyPending(entry);
+    }
+    return false;
   }
 
   private denyPending(entry: SessionEntry): void {

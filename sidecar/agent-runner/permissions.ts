@@ -17,6 +17,10 @@ function field(request: Record<string, unknown>, ...names: string[]): string | u
 
 /** Normalize a Copilot SDK permission request into a provider-neutral ToolRequest. */
 export function toolRequestFromCopilot(request: { kind: string; [k: string]: unknown }): ToolRequest {
+  return { ...normalizeCopilot(request), rawKind: request.kind };
+}
+
+function normalizeCopilot(request: { kind: string; [k: string]: unknown }): Omit<ToolRequest, "rawKind"> {
   switch (request.kind) {
     case "shell":
       return { kind: "shell", summary: field(request, "fullCommandText", "intention") ?? "shell" };
@@ -36,14 +40,25 @@ export function toolRequestFromCopilot(request: { kind: string; [k: string]: unk
   }
 }
 
+/** Copilot request kinds that change the agent's own tooling or environment; never auto-approved. */
+const EXTENSION_KINDS = new Set([
+  "extension-management",
+  "extension-permission-access",
+  "extension-env-access",
+  "factory",
+  "custom-tool",
+  "hook",
+]);
+
 /**
  * Decide a Copilot permission request for a mode; "ask" routes it to the
  * user. Reads are auto-approved only under `read-only` and `full-access`;
  * under `cli-default` every request, including reads, is confirmed by the
- * user each time (spec 2.1).
+ * user each time (spec 2.1). Under `full-access`, extension, factory,
+ * custom-tool, and hook requests are always rejected.
  */
 export function copilotDecision(permission: AgentPermission, request: ToolRequest): "approve" | "reject" | "ask" {
   if (permission === "read-only") return request.kind === "read" ? "approve" : "reject";
-  if (permission === "full-access") return "approve";
+  if (permission === "full-access") return request.rawKind && EXTENSION_KINDS.has(request.rawKind) ? "reject" : "approve";
   return "ask";
 }
