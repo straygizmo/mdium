@@ -1,7 +1,7 @@
 // src-tauri/src/commands/node_sidecar.rs
-// Shared plumbing for Node sidecars (Claude sidecar, agent runner): spawn a
-// bundled script with `node`, forward stdout/stderr lines as Tauri events, and
-// write JSON lines to stdin.
+// Shared plumbing for Node sidecars (Claude sidecar, agent runner, workflow
+// runner): spawn a bundled script with `node`, forward stdout/stderr lines as
+// Tauri events (or to in-process callbacks), and write JSON lines to stdin.
 use serde::Serialize;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -77,6 +77,60 @@ pub fn resolve_script(app: &AppHandle, dir: &str, file: &str) -> Result<String, 
 }
 
 pub fn spawn(app: AppHandle, script_path: &str, event_prefix: &'static str) -> Result<u32, String> {
+    let line_event = format!("{}://line", event_prefix);
+    let app_out = app.clone();
+    let on_line = Box::new(move |id: u32, line: String| {
+        let _ = app_out.emit(&line_event, SidecarLine { id, line });
+    });
+
+    let stderr_event = format!("{}://stderr", event_prefix);
+    let app_err = app.clone();
+    let on_stderr = Box::new(move |id: u32, line: String| {
+        let _ = app_err.emit(&stderr_event, SidecarLine { id, line });
+    });
+
+    let exit_event = format!("{}://exit", event_prefix);
+    let on_exit = Box::new(move |id: u32, code: Option<i32>| {
+        let _ = app.emit(&exit_event, SidecarExit { id, code });
+    });
+
+    spawn_impl(script_path, &[], event_prefix, on_line, on_stderr, on_exit)
+}
+
+/// Like [`spawn`], but delivers stdout/stderr lines and the exit code to the
+/// given callbacks instead of emitting Tauri events, and applies `env` on top
+/// of the inherited environment. `write`/`kill` work on the returned id.
+#[allow(dead_code)] // Used by the workflow runner once it is wired in.
+pub fn spawn_with_handlers(
+    script_path: &str,
+    env: &[(String, String)],
+    on_line: Box<dyn Fn(String) + Send>,
+    on_stderr: Box<dyn Fn(String) + Send>,
+    on_exit: Box<dyn FnOnce(Option<i32>) + Send>,
+) -> Result<u32, String> {
+    spawn_impl(
+        script_path,
+        env,
+        "sidecar",
+        Box::new(move |_, line| on_line(line)),
+        Box::new(move |_, line| on_stderr(line)),
+        Box::new(move |_, code| on_exit(code)),
+    )
+}
+
+/// Shared implementation of [`spawn`] and [`spawn_with_handlers`].
+///
+/// Every callback receives the sidecar id (the child's pid). The child is
+/// always reaped by a dedicated thread, which also removes its stdin entry
+/// from the shared map before calling `on_exit`.
+fn spawn_impl(
+    script_path: &str,
+    env: &[(String, String)],
+    label: &str,
+    on_line: Box<dyn Fn(u32, String) + Send>,
+    on_stderr: Box<dyn Fn(u32, String) + Send>,
+    on_exit: Box<dyn FnOnce(u32, Option<i32>) + Send>,
+) -> Result<u32, String> {
     // Mirror pty.rs: go through cmd on Windows so PATH lookup of node matches
     // the rest of the app; stdio pipes pass through cmd to node unchanged.
     #[cfg(target_os = "windows")]
@@ -105,42 +159,47 @@ pub fn spawn(app: AppHandle, script_path: &str, event_prefix: &'static str) -> R
     if let Some(parent) = PathBuf::from(script_path).parent() {
         cmd.current_dir(parent);
     }
+    cmd.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("Failed to spawn {}: {}", event_prefix, e))?;
+        .map_err(|e| format!("Failed to spawn {}: {}", label, e))?;
     let id = child.id();
 
-    let stdin = child.stdin.take().ok_or("sidecar stdin unavailable")?;
-    stdin_map().lock().unwrap().insert(id, Arc::new(Mutex::new(stdin)));
+    // Take every pipe before registering anything, so a failure here never
+    // leaves a stdin entry or an unreaped child behind.
+    let pipes = (child.stdin.take(), child.stdout.take(), child.stderr.take());
+    let (stdin, stdout, stderr) = match pipes {
+        (Some(i), Some(o), Some(e)) => (i, o, e),
+        (i, _, _) => {
+            let missing = if i.is_none() { "stdin" } else { "stdout/stderr" };
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("sidecar {} unavailable", missing));
+        }
+    };
 
-    let line_event = format!("{}://line", event_prefix);
-    let stdout = child.stdout.take().ok_or("sidecar stdout unavailable")?;
-    let app_out = app.clone();
-    std::thread::spawn(move || {
-        forward_lines(BufReader::new(stdout), |line| {
-            let _ = app_out.emit(&line_event, SidecarLine { id, line });
-        });
-    });
+    let stdin_entry = Arc::new(Mutex::new(stdin));
+    stdin_map().lock().unwrap().insert(id, stdin_entry.clone());
 
-    let stderr_event = format!("{}://stderr", event_prefix);
-    let stderr = child.stderr.take().ok_or("sidecar stderr unavailable")?;
-    let app_err = app.clone();
-    std::thread::spawn(move || {
-        forward_lines(BufReader::new(stderr), |line| {
-            let _ = app_err.emit(&stderr_event, SidecarLine { id, line });
-        });
-    });
+    std::thread::spawn(move || forward_lines(BufReader::new(stdout), |line| on_line(id, line)));
+    std::thread::spawn(move || forward_lines(BufReader::new(stderr), |line| on_stderr(id, line)));
 
-    let exit_event = format!("{}://exit", event_prefix);
-    let app_exit = app.clone();
     std::thread::spawn(move || {
         let code = child.wait().ok().and_then(|s| s.code());
-        stdin_map().lock().unwrap().remove(&id);
-        let _ = app_exit.emit(&exit_event, SidecarExit { id, code });
+        {
+            // Only remove our own entry: once the child is reaped its pid can
+            // be reused by a newer sidecar that registered under the same id.
+            let mut map = stdin_map().lock().unwrap();
+            if map.get(&id).is_some_and(|e| Arc::ptr_eq(e, &stdin_entry)) {
+                map.remove(&id);
+            }
+        }
+        drop(stdin_entry);
+        on_exit(id, code);
     });
 
     Ok(id)
@@ -198,8 +257,12 @@ pub fn kill(id: u32) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::forward_lines;
+    use super::{forward_lines, kill, spawn_with_handlers, write};
+    use crate::workflow::containment::containment_env;
     use std::io::Cursor;
+    use std::sync::mpsc;
+    use std::time::Duration;
+    use tempfile::TempDir;
 
     #[test]
     fn forward_lines_skips_blank_lines() {
@@ -207,5 +270,48 @@ mod tests {
         let mut got: Vec<String> = vec![];
         forward_lines(input, |l| got.push(l));
         assert_eq!(got, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn spawn_with_handlers_applies_env_and_supports_write_and_kill() {
+        let tmp = TempDir::new().unwrap();
+        let script = tmp.path().join("echo.cjs");
+        std::fs::write(
+            &script,
+            "process.stdin.on('data', d => process.stdout.write(d));
+             console.log(process.env.GIT_CONFIG_VALUE_0);
+",
+        )
+        .unwrap();
+        let env = containment_env(&tmp.path().join("data")).unwrap();
+
+        let (line_tx, line_rx) = mpsc::channel::<String>();
+        let (exit_tx, exit_rx) = mpsc::channel::<Option<i32>>();
+        let line_tx = std::sync::Mutex::new(line_tx);
+        let id = spawn_with_handlers(
+            script.to_str().unwrap(),
+            &env,
+            Box::new(move |line| {
+                let _ = line_tx.lock().unwrap().send(line);
+            }),
+            Box::new(|line| eprintln!("[test stderr] {line}")),
+            Box::new(move |code| {
+                let _ = exit_tx.send(code);
+            }),
+        )
+        .expect("spawn node");
+
+        let timeout = Duration::from_secs(20);
+        assert_eq!(line_rx.recv_timeout(timeout).unwrap(), "never");
+
+        write(id, "hello from rust").unwrap();
+        assert_eq!(line_rx.recv_timeout(timeout).unwrap(), "hello from rust");
+
+        kill(id).unwrap();
+        exit_rx
+            .recv_timeout(timeout)
+            .expect("on_exit must fire after kill");
+        // The stdin map entry is gone once the process has exited.
+        assert!(write(id, "after exit").is_err());
     }
 }
