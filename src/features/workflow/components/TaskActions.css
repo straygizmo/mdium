@@ -1,0 +1,62 @@
+.workflow-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.workflow-actions__input {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.workflow-actions__input textarea {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text);
+  font: inherit;
+  resize: vertical;
+}
+
+.workflow-actions__input textarea:focus {
+  border-color: var(--primary);
+  outline: none;
+}
+
+.workflow-actions__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.workflow-actions__btn {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.workflow-actions__btn:hover:not(:disabled) {
+  border-color: var(--border-hover);
+}
+
+.workflow-actions__btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.workflow-actions__btn--danger {
+  color: var(--accent-red);
+}

@@ -14,6 +14,7 @@ const targetStylesheets: string[] = [
   "src/features/video/components/VideoPanel.css",
   "src/features/preview/components/PreviewPanel.css",
   "src/features/workflow/components/WorkflowPanel.css",
+  "src/features/workflow/components/RetryDialog.css",
 ];
 
 // Components that render span-based switches. Extended as features adopt data-switch.
@@ -36,6 +37,7 @@ const checkboxSwitchComponents: string[] = [
   "src/features/opencode-config/components/shared/ScopeToggle.tsx",
   "src/features/claude-config/components/PluginsTab.tsx",
   "src/features/workflow/components/WorkflowPanel.tsx",
+  "src/features/workflow/components/RetryDialog.tsx",
 ];
 
 function cssRules(css: string): Array<[selector: string, body: string]> {

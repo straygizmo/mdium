@@ -4,6 +4,7 @@ import type { Task, TaskStatus, WorkflowRun } from "@/shared/types/workflow";
 import { type TaskProgress, useWorkflowStore } from "../workflow-store";
 import { KanbanBoard } from "./KanbanBoard";
 import { MatrixView } from "./MatrixView";
+import { TaskDetailModal } from "./TaskDetailModal";
 import "./Workspace.css";
 
 /** Board columns in display order; `cancelled` is appended when shown. */
@@ -125,6 +126,7 @@ export function Workspace() {
         </div>
       </header>
       {content}
+      <TaskDetailModal />
     </div>
   );
 }

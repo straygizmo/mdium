@@ -1,0 +1,119 @@
+.workflow-retry-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-overlay);
+  z-index: 950;
+}
+
+.workflow-retry {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(480px, 90vw);
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-base);
+  color: var(--text);
+  font-size: 13px;
+  box-shadow: 0 8px 32px var(--shadow-strong);
+}
+
+.workflow-retry:focus {
+  outline: none;
+}
+
+.workflow-retry__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.workflow-retry__reason,
+.workflow-retry__text,
+.workflow-retry__help {
+  margin: 0;
+}
+
+.workflow-retry__reason,
+.workflow-retry__notice {
+  color: var(--accent-red);
+}
+
+.workflow-retry__notice {
+  margin: 0;
+  font-weight: 600;
+}
+
+.workflow-retry__option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.workflow-retry__help {
+  padding-left: 32px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.workflow-retry__toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.workflow-retry__toggle input[data-switch] {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex-shrink: 0;
+  width: 26px;
+  height: 14px;
+  margin: 0;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.workflow-retry__toggle input[data-switch]::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  margin-top: -5px;
+  left: 1px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  transition: transform 0.2s, background 0.2s;
+}
+
+.workflow-retry__toggle input[data-switch]:checked::after {
+  transform: translateX(12px);
+}
+
+.workflow-retry__buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.workflow-retry__buttons button {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.workflow-retry__buttons .workflow-retry__confirm {
+  border-color: var(--primary);
+}
