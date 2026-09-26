@@ -1,10 +1,10 @@
-import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type KeyboardEvent, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { AttemptRecord, HistoryEntry, Task, TaskDetail, WorkflowRun } from "@/shared/types/workflow";
-import { trapTab, useDialogFocus } from "../lib/dialog-focus";
 import { formatAttention, formatCommandError } from "../lib/format";
 import { workflowApi } from "../lib/workflow-api";
 import { useWorkflowStore } from "../workflow-store";
+import { DialogShell } from "./DialogShell";
 import { MergeSection } from "./MergeSection";
 import { SafeMarkdown } from "./SafeMarkdown";
 import { TaskActions } from "./TaskActions";
@@ -69,7 +69,6 @@ export function TaskDetailModal() {
     s.activeRoot && s.selectedTaskId ? s.projects[s.activeRoot]?.progress[s.selectedTaskId] : undefined,
   );
   const [loaded, setLoaded] = useState<Loaded | null>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
 
   const tasks = project?.tasks;
   const storeTask = taskId ? tasks?.find((task) => task.meta.id === taskId) : undefined;
@@ -97,8 +96,6 @@ export function TaskDetailModal() {
     };
   }, [taskId, activeRoot, version]);
 
-  useDialogFocus(dialogRef, taskId !== null);
-
   const hasDetail = loaded?.taskId === taskId && loaded !== null && "detail" in loaded;
   const storeLoaded = project?.loaded ?? false;
   useEffect(() => {
@@ -114,19 +111,14 @@ export function TaskDetailModal() {
   if (!taskId) return null;
 
   const close = () => openTask(null);
-  const onKeyDown = (e: KeyboardEvent) => {
-    if (e.key === "Escape") {
-      e.stopPropagation();
-      const target = e.target;
-      if (target instanceof HTMLTextAreaElement && target.value !== "") {
-        // Keep typed text: the first Escape only leaves the text field.
-        dialogRef.current?.focus();
-        return;
-      }
-      close();
-    } else {
-      trapTab(e, dialogRef.current);
+  const onEscape = (e: KeyboardEvent, dialog: HTMLElement | null) => {
+    const target = e.target;
+    if (target instanceof HTMLTextAreaElement && target.value !== "") {
+      // Keep typed text: the first Escape only leaves the text field.
+      dialog?.focus();
+      return;
     }
+    close();
   };
   const formatDate = (iso: string | null) => (iso ? (time(iso) ? dateFormat.format(time(iso)) : iso) : "");
 
@@ -150,46 +142,37 @@ export function TaskDetailModal() {
   }
 
   return (
-    <div
-      className="workflow-detail-overlay"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) close();
-      }}
+    <DialogShell
+      overlayClassName="workflow-detail-overlay"
+      className="workflow-detail"
+      labelledBy="workflow-detail-title"
+      onClose={close}
+      onEscape={onEscape}
     >
-      <div
-        ref={dialogRef}
-        className="workflow-detail"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="workflow-detail-title"
-        tabIndex={-1}
-        onKeyDown={onKeyDown}
-      >
-        <header className="workflow-detail__header">
-          <h2 id="workflow-detail-title" className="workflow-detail__title">
-            {task?.meta.title ?? ""}
-          </h2>
-          {task && (
-            <span className="workflow-detail__status" style={{ background: statusBackground(task.meta.status) }}>
-              {t(`status.${task.meta.status}`)}
-            </span>
-          )}
-          <button type="button" className="workflow-detail__close" aria-label={t("detail.close")} title={t("detail.close")} onClick={close}>
-            ×
-          </button>
-        </header>
-        {progress && (storeTask ?? task)?.meta.status === "running" && (
-          <p className="workflow-detail__progress" data-section="progress" aria-live="polite">
-            <span className="workflow-detail__progress-label">{t("detail.progress")}</span>
-            <span className="workflow-detail__progress-text" title={progress.text}>
-              {progress.text}
-            </span>
-          </p>
+      <header className="workflow-detail__header">
+        <h2 id="workflow-detail-title" className="workflow-detail__title">
+          {task?.meta.title ?? ""}
+        </h2>
+        {task && (
+          <span className="workflow-detail__status" style={{ background: statusBackground(task.meta.status) }}>
+            {t(`status.${task.meta.status}`)}
+          </span>
         )}
-        <div className="workflow-detail__content">{content}</div>
-        {detail && <TaskActions key={detail.task.meta.id} task={detail.task} />}
-      </div>
-    </div>
+        <button type="button" className="workflow-detail__close" aria-label={t("detail.close")} title={t("detail.close")} onClick={close}>
+          ×
+        </button>
+      </header>
+      {progress && (storeTask ?? task)?.meta.status === "running" && (
+        <p className="workflow-detail__progress" data-section="progress" aria-live="polite">
+          <span className="workflow-detail__progress-label">{t("detail.progress")}</span>
+          <span className="workflow-detail__progress-text" title={progress.text}>
+            {progress.text}
+          </span>
+        </p>
+      )}
+      <div className="workflow-detail__content">{content}</div>
+      {detail && <TaskActions key={detail.task.meta.id} task={detail.task} />}
+    </DialogShell>
   );
 }
 

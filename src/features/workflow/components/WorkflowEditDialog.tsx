@@ -1,4 +1,4 @@
-import { type KeyboardEvent, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {
   CommandError,
@@ -10,12 +10,12 @@ import type {
   Workflow,
   WorkflowInput,
 } from "@/shared/types/workflow";
-import { trapTab, useDialogFocus } from "../lib/dialog-focus";
 import { isCommandError, isRecord } from "../lib/errors";
 import { formatCode, formatCommandError } from "../lib/format";
 import { workflowApi } from "../lib/workflow-api";
 import { showConfirm } from "@/stores/dialog-store";
 import { useWorkflowStore } from "../workflow-store";
+import { DialogShell } from "./DialogShell";
 import "./WorkflowEditDialog.css";
 
 const PROVIDERS: readonly Provider[] = ["codex", "copilot", "opencode", "claude"];
@@ -111,8 +111,6 @@ export function WorkflowEditDialog({ workflow, confirmEnable, onClose }: Workflo
   /** Whether `confirmEnable` accepted enabling in this dialog. */
   const enableConfirmedRef = useRef(false);
   const closingRef = useRef(false);
-  /** Whether the current pointer press started on the overlay. */
-  const pressOnOverlayRef = useRef(false);
   const stored = useWorkflowStore((st) =>
     st.activeRoot ? st.projects[st.activeRoot]?.workflows.find((w) => w.id === workflow.id) : undefined,
   );
@@ -126,9 +124,6 @@ export function WorkflowEditDialog({ workflow, confirmEnable, onClose }: Workflo
   const [errors, setErrors] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const confirmingRef = useRef(false);
-  const dialogRef = useRef<HTMLDivElement>(null);
-
-  useDialogFocus(dialogRef, true);
 
   useEffect(() => {
     let cancelled = false;
@@ -259,13 +254,6 @@ export function WorkflowEditDialog({ workflow, confirmEnable, onClose }: Workflo
     }
   };
 
-  const onKeyDown = (e: KeyboardEvent) => {
-    if (e.key === "Escape") {
-      e.stopPropagation();
-      void requestClose();
-    } else trapTab(e, dialogRef.current);
-  };
-
   const providerLabel = (provider: Provider) => {
     const name = t(`provider.${provider}`);
     const reason = availability[provider];
@@ -275,239 +263,223 @@ export function WorkflowEditDialog({ workflow, confirmEnable, onClose }: Workflo
   const stages = ROLES.flatMap((role) => draft.stages.filter((s) => s.role === role));
 
   return (
-    <div
-      className="workflow-edit-overlay"
-      onMouseDown={(e) => {
-        pressOnOverlayRef.current = e.target === e.currentTarget;
-      }}
-      onClick={(e) => {
-        // A press that started inside the dialog (e.g. a text selection) must not close it.
-        const pressed = pressOnOverlayRef.current;
-        pressOnOverlayRef.current = false;
-        if (pressed && e.target === e.currentTarget) void requestClose();
-      }}
+    <DialogShell
+      overlayClassName="workflow-edit-overlay"
+      className="workflow-edit"
+      labelledBy="workflow-edit-title"
+      onClose={() => void requestClose()}
     >
-      <div
-        ref={dialogRef}
-        className="workflow-edit"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="workflow-edit-title"
-        tabIndex={-1}
-        onKeyDown={onKeyDown}
-      >
-        <h3 id="workflow-edit-title" className="workflow-edit__title">
-          {t("edit.title")}
-        </h3>
-        <div className="workflow-edit__body">
-          <label className="workflow-edit__field">
-            <span>{t("edit.name")}</span>
-            <input type="text" name="name" value={draft.name} onChange={(e) => patch({ name: e.target.value })} />
-          </label>
-          <label className="workflow-edit__toggle">
-            <input
-              type="checkbox"
-              data-switch
-              name="enabled"
-              checked={enabled}
-              onChange={(e) => void toggleEnabled(e.target.checked)}
-            />
-            <span>{t("edit.enabled")}</span>
-          </label>
+      <h3 id="workflow-edit-title" className="workflow-edit__title">
+        {t("edit.title")}
+      </h3>
+      <div className="workflow-edit__body">
+        <label className="workflow-edit__field">
+          <span>{t("edit.name")}</span>
+          <input type="text" name="name" value={draft.name} onChange={(e) => patch({ name: e.target.value })} />
+        </label>
+        <label className="workflow-edit__toggle">
+          <input
+            type="checkbox"
+            data-switch
+            name="enabled"
+            checked={enabled}
+            onChange={(e) => void toggleEnabled(e.target.checked)}
+          />
+          <span>{t("edit.enabled")}</span>
+        </label>
 
-          <h4 className="workflow-edit__heading">{t("edit.stages")}</h4>
-          {stages.map((s) => (
-            <fieldset key={s.role} className="workflow-edit__stage" data-stage-role={s.role}>
-              <legend className="workflow-edit__legend">{t(`role.${s.role}`)}</legend>
-              <label className="workflow-edit__field">
-                <span>{t("edit.stageName")}</span>
-                <input
-                  type="text"
-                  name={`${s.role}.name`}
-                  value={s.name}
-                  onChange={(e) => patchStage(s.role, { name: e.target.value })}
-                />
-              </label>
-              <div className="workflow-edit__row">
-                <label className="workflow-edit__field">
-                  <span>{t("edit.provider")}</span>
-                  <select
-                    name={`${s.role}.provider`}
-                    value={s.provider}
-                    onChange={(e) => patchStage(s.role, { provider: e.target.value as Provider })}
-                  >
-                    {PROVIDERS.map((p) => (
-                      <option key={p} value={p}>
-                        {providerLabel(p)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="workflow-edit__field">
-                  <span>{t("edit.model")}</span>
-                  <input
-                    type="text"
-                    name={`${s.role}.model`}
-                    value={s.model ?? ""}
-                    placeholder={t("edit.modelPlaceholder")}
-                    onChange={(e) => patchStage(s.role, { model: e.target.value })}
-                  />
-                </label>
-                <label className="workflow-edit__field workflow-edit__field--narrow">
-                  <span>{t("edit.timeoutMinutes")}</span>
-                  <input
-                    type="number"
-                    min={1}
-                    name={`${s.role}.timeoutMinutes`}
-                    value={numbers.timeouts[s.role]}
-                    onChange={(e) => {
-                      const value = e.target.value;
-                      setNumbers((n) => ({ ...n, timeouts: { ...n.timeouts, [s.role]: value } }));
-                    }}
-                  />
-                </label>
-              </div>
-              {availability[s.provider] && (
-                <p className="workflow-edit__warning">{providerLabel(s.provider)}</p>
-              )}
-              <label className="workflow-edit__field">
-                <span>{t("edit.prompt")}</span>
-                <textarea
-                  name={`${s.role}.prompt`}
-                  rows={4}
-                  value={s.prompt}
-                  onChange={(e) => patchStage(s.role, { prompt: e.target.value })}
-                />
-              </label>
-              <label className="workflow-edit__field">
-                <span>{t("edit.completionCriteria")}</span>
-                <textarea
-                  name={`${s.role}.completionCriteria`}
-                  rows={2}
-                  value={s.completionCriteria}
-                  onChange={(e) => patchStage(s.role, { completionCriteria: e.target.value })}
-                />
-              </label>
-              {s.role === "implement" && (
-                <label className="workflow-edit__toggle">
-                  <input
-                    type="checkbox"
-                    data-switch
-                    name={`${s.role}.requiresApproval`}
-                    checked={s.requiresApproval}
-                    onChange={(e) => patchStage(s.role, { requiresApproval: e.target.checked })}
-                  />
-                  <span>{t("edit.requiresApproval")}</span>
-                </label>
-              )}
-            </fieldset>
-          ))}
-
-          <h4 className="workflow-edit__heading">{t("edit.settings")}</h4>
-          <div className="workflow-edit__row">
+        <h4 className="workflow-edit__heading">{t("edit.stages")}</h4>
+        {stages.map((s) => (
+          <fieldset key={s.role} className="workflow-edit__stage" data-stage-role={s.role}>
+            <legend className="workflow-edit__legend">{t(`role.${s.role}`)}</legend>
             <label className="workflow-edit__field">
-              <span>{t("edit.reviewReturnTo")}</span>
-              <select
-                name="reviewReturnTo"
-                value={draft.reviewReturnTo}
-                onChange={(e) => patch({ reviewReturnTo: e.target.value as Role })}
-              >
-                {RETURN_TARGETS.map((role) => (
-                  <option key={role} value={role}>
-                    {t(`role.${role}`)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="workflow-edit__field workflow-edit__field--narrow">
-              <span>{t("edit.maxReentryCount")}</span>
-              <input
-                type="number"
-                min={1}
-                name="maxReentryCount"
-                value={numbers.maxReentryCount}
-                onChange={(e) => {
-                  const value = e.target.value;
-                  setNumbers((n) => ({ ...n, maxReentryCount: value }));
-                }}
-              />
-            </label>
-            <label className="workflow-edit__field workflow-edit__field--narrow">
-              <span>{t("edit.maxConcurrentRuns")}</span>
-              <input
-                type="number"
-                min={1}
-                name="maxConcurrentRuns"
-                value={numbers.maxConcurrentRuns}
-                onChange={(e) => {
-                  const value = e.target.value;
-                  setNumbers((n) => ({ ...n, maxConcurrentRuns: value }));
-                }}
-              />
-            </label>
-          </div>
-          <label className="workflow-edit__toggle">
-            <input
-              type="checkbox"
-              data-switch
-              name="saveDesignDoc"
-              checked={draft.designDocPath !== null}
-              onChange={(e) => patch({ designDocPath: e.target.checked ? DEFAULT_DESIGN_DOC_PATH : null })}
-            />
-            <span>{t("edit.saveDesignDoc")}</span>
-          </label>
-          {draft.designDocPath !== null && (
-            <label className="workflow-edit__field">
-              <span>{t("edit.designDocPath")}</span>
+              <span>{t("edit.stageName")}</span>
               <input
                 type="text"
-                name="designDocPath"
-                value={draft.designDocPath}
-                onChange={(e) => patch({ designDocPath: e.target.value })}
+                name={`${s.role}.name`}
+                value={s.name}
+                onChange={(e) => patchStage(s.role, { name: e.target.value })}
               />
-              <span className="workflow-edit__help">{t("edit.designDocPathHelp")}</span>
             </label>
-          )}
+            <div className="workflow-edit__row">
+              <label className="workflow-edit__field">
+                <span>{t("edit.provider")}</span>
+                <select
+                  name={`${s.role}.provider`}
+                  value={s.provider}
+                  onChange={(e) => patchStage(s.role, { provider: e.target.value as Provider })}
+                >
+                  {PROVIDERS.map((p) => (
+                    <option key={p} value={p}>
+                      {providerLabel(p)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="workflow-edit__field">
+                <span>{t("edit.model")}</span>
+                <input
+                  type="text"
+                  name={`${s.role}.model`}
+                  value={s.model ?? ""}
+                  placeholder={t("edit.modelPlaceholder")}
+                  onChange={(e) => patchStage(s.role, { model: e.target.value })}
+                />
+              </label>
+              <label className="workflow-edit__field workflow-edit__field--narrow">
+                <span>{t("edit.timeoutMinutes")}</span>
+                <input
+                  type="number"
+                  min={1}
+                  name={`${s.role}.timeoutMinutes`}
+                  value={numbers.timeouts[s.role]}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setNumbers((n) => ({ ...n, timeouts: { ...n.timeouts, [s.role]: value } }));
+                  }}
+                />
+              </label>
+            </div>
+            {availability[s.provider] && (
+              <p className="workflow-edit__warning">{providerLabel(s.provider)}</p>
+            )}
+            <label className="workflow-edit__field">
+              <span>{t("edit.prompt")}</span>
+              <textarea
+                name={`${s.role}.prompt`}
+                rows={4}
+                value={s.prompt}
+                onChange={(e) => patchStage(s.role, { prompt: e.target.value })}
+              />
+            </label>
+            <label className="workflow-edit__field">
+              <span>{t("edit.completionCriteria")}</span>
+              <textarea
+                name={`${s.role}.completionCriteria`}
+                rows={2}
+                value={s.completionCriteria}
+                onChange={(e) => patchStage(s.role, { completionCriteria: e.target.value })}
+              />
+            </label>
+            {s.role === "implement" && (
+              <label className="workflow-edit__toggle">
+                <input
+                  type="checkbox"
+                  data-switch
+                  name={`${s.role}.requiresApproval`}
+                  checked={s.requiresApproval}
+                  onChange={(e) => patchStage(s.role, { requiresApproval: e.target.checked })}
+                />
+                <span>{t("edit.requiresApproval")}</span>
+              </label>
+            )}
+          </fieldset>
+        ))}
+
+        <h4 className="workflow-edit__heading">{t("edit.settings")}</h4>
+        <div className="workflow-edit__row">
           <label className="workflow-edit__field">
-            <span>{t("edit.issueTracking")}</span>
+            <span>{t("edit.reviewReturnTo")}</span>
             <select
-              name="issueTracking"
-              value={draft.issueTracking}
-              onChange={(e) => patch({ issueTracking: e.target.value as IssueTracking })}
+              name="reviewReturnTo"
+              value={draft.reviewReturnTo}
+              onChange={(e) => patch({ reviewReturnTo: e.target.value as Role })}
             >
-              {ISSUE_TRACKING.map((value) => (
-                <option key={value} value={value}>
-                  {t(`edit.issueTrackingOption.${value}`)}
+              {RETURN_TARGETS.map((role) => (
+                <option key={role} value={role}>
+                  {t(`role.${role}`)}
                 </option>
               ))}
             </select>
           </label>
+          <label className="workflow-edit__field workflow-edit__field--narrow">
+            <span>{t("edit.maxReentryCount")}</span>
+            <input
+              type="number"
+              min={1}
+              name="maxReentryCount"
+              value={numbers.maxReentryCount}
+              onChange={(e) => {
+                const value = e.target.value;
+                setNumbers((n) => ({ ...n, maxReentryCount: value }));
+              }}
+            />
+          </label>
+          <label className="workflow-edit__field workflow-edit__field--narrow">
+            <span>{t("edit.maxConcurrentRuns")}</span>
+            <input
+              type="number"
+              min={1}
+              name="maxConcurrentRuns"
+              value={numbers.maxConcurrentRuns}
+              onChange={(e) => {
+                const value = e.target.value;
+                setNumbers((n) => ({ ...n, maxConcurrentRuns: value }));
+              }}
+            />
+          </label>
         </div>
-
-        {errors.length > 0 && (
-          <div className="workflow-edit__errors" role="alert">
-            <p className="workflow-edit__errors-title">{t("edit.errors")}</p>
-            <ul>
-              {errors.map((text, i) => (
-                <li key={i}>{text}</li>
-              ))}
-            </ul>
-          </div>
+        <label className="workflow-edit__toggle">
+          <input
+            type="checkbox"
+            data-switch
+            name="saveDesignDoc"
+            checked={draft.designDocPath !== null}
+            onChange={(e) => patch({ designDocPath: e.target.checked ? DEFAULT_DESIGN_DOC_PATH : null })}
+          />
+          <span>{t("edit.saveDesignDoc")}</span>
+        </label>
+        {draft.designDocPath !== null && (
+          <label className="workflow-edit__field">
+            <span>{t("edit.designDocPath")}</span>
+            <input
+              type="text"
+              name="designDocPath"
+              value={draft.designDocPath}
+              onChange={(e) => patch({ designDocPath: e.target.value })}
+            />
+            <span className="workflow-edit__help">{t("edit.designDocPathHelp")}</span>
+          </label>
         )}
-        <div className="workflow-edit__buttons">
-          <button
-            type="button"
-            className="workflow-edit__cancel"
-            disabled={saving}
-            onClick={() => void requestClose()}
+        <label className="workflow-edit__field">
+          <span>{t("edit.issueTracking")}</span>
+          <select
+            name="issueTracking"
+            value={draft.issueTracking}
+            onChange={(e) => patch({ issueTracking: e.target.value as IssueTracking })}
           >
-            {t("edit.cancel")}
-          </button>
-          <button type="button" className="workflow-edit__save" disabled={saving} onClick={() => void save()}>
-            {t("edit.save")}
-          </button>
-        </div>
+            {ISSUE_TRACKING.map((value) => (
+              <option key={value} value={value}>
+                {t(`edit.issueTrackingOption.${value}`)}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
-    </div>
+
+      {errors.length > 0 && (
+        <div className="workflow-edit__errors" role="alert">
+          <p className="workflow-edit__errors-title">{t("edit.errors")}</p>
+          <ul>
+            {errors.map((text, i) => (
+              <li key={i}>{text}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <div className="workflow-edit__buttons">
+        <button
+          type="button"
+          className="workflow-edit__cancel"
+          disabled={saving}
+          onClick={() => void requestClose()}
+        >
+          {t("edit.cancel")}
+        </button>
+        <button type="button" className="workflow-edit__save" disabled={saving} onClick={() => void save()}>
+          {t("edit.save")}
+        </button>
+      </div>
+    </DialogShell>
   );
 }

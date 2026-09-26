@@ -14,6 +14,8 @@ const dialogs = vi.hoisted(() => ({
   showMessage: vi.fn(),
   showConfirm: vi.fn(),
   showPrompt: vi.fn(),
+  // Dialog shells watch the app dialogs to restore their focus.
+  useDialogStore: { subscribe: () => () => undefined },
 }));
 vi.mock("../../lib/workflow-api", () => ({ workflowApi: api, subscribeWorkflowEvents: vi.fn() }));
 vi.mock("@/stores/dialog-store", () => dialogs);

@@ -1,6 +1,6 @@
-import { type KeyboardEvent, type ReactElement, useCallback, useEffect, useRef, useState } from "react";
+import { type ReactElement, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { trapTab, useDialogFocus } from "../lib/dialog-focus";
+import { DialogShell } from "./DialogShell";
 import "./SafetyNoticeDialog.css";
 
 /** localStorage key set to "1" once the user accepted the safety notice. */
@@ -40,58 +40,38 @@ interface SafetyNoticeDialogProps {
 /** Explains what enabling a workflow allows and where the guards stop. */
 export function SafetyNoticeDialog({ onAccept, onCancel }: SafetyNoticeDialogProps) {
   const { t } = useTranslation("workflow");
-  const dialogRef = useRef<HTMLDivElement>(null);
-
-  useDialogFocus(dialogRef, true);
-
-  const onKeyDown = (e: KeyboardEvent) => {
-    // Keep Escape and Tab from reaching the edit dialog underneath.
-    e.stopPropagation();
-    if (e.key === "Escape") onCancel();
-    else trapTab(e, dialogRef.current);
-  };
-
+  // Nested: keys and clicks never reach the edit dialog underneath.
   return (
-    <div
-      className="workflow-safety-overlay"
-      onClick={(e) => {
-        e.stopPropagation();
-        if (e.target === e.currentTarget) onCancel();
-      }}
+    <DialogShell
+      overlayClassName="workflow-safety-overlay"
+      className="workflow-safety"
+      labelledBy="workflow-safety-title"
+      onClose={onCancel}
+      nested
     >
-      <div
-        ref={dialogRef}
-        className="workflow-safety"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="workflow-safety-title"
-        tabIndex={-1}
-        onKeyDown={onKeyDown}
-      >
-        <h3 id="workflow-safety-title" className="workflow-safety__title">
-          {t("safety.title")}
-        </h3>
-        <div className="workflow-safety__body">
-          <p className="workflow-safety__text">{t("safety.isolation")}</p>
-          <p className="workflow-safety__text">{t("safety.guardsIntro")}</p>
-          <ul className="workflow-safety__guards">
-            {GUARD_KEYS.map((key) => (
-              <li key={key}>{t(`safety.${key}`)}</li>
-            ))}
-          </ul>
-          <p className="workflow-safety__text workflow-safety__text--warning">{t("safety.limits")}</p>
-          <p className="workflow-safety__text">{t("safety.noPush")}</p>
-        </div>
-        <div className="workflow-safety__buttons">
-          <button type="button" className="workflow-safety__cancel" onClick={onCancel}>
-            {t("safety.cancel")}
-          </button>
-          <button type="button" className="workflow-safety__accept" onClick={onAccept}>
-            {t("safety.accept")}
-          </button>
-        </div>
+      <h3 id="workflow-safety-title" className="workflow-safety__title">
+        {t("safety.title")}
+      </h3>
+      <div className="workflow-safety__body">
+        <p className="workflow-safety__text">{t("safety.isolation")}</p>
+        <p className="workflow-safety__text">{t("safety.guardsIntro")}</p>
+        <ul className="workflow-safety__guards">
+          {GUARD_KEYS.map((key) => (
+            <li key={key}>{t(`safety.${key}`)}</li>
+          ))}
+        </ul>
+        <p className="workflow-safety__text workflow-safety__text--warning">{t("safety.limits")}</p>
+        <p className="workflow-safety__text">{t("safety.noPush")}</p>
       </div>
-    </div>
+      <div className="workflow-safety__buttons">
+        <button type="button" className="workflow-safety__cancel" onClick={onCancel}>
+          {t("safety.cancel")}
+        </button>
+        <button type="button" className="workflow-safety__accept" onClick={onAccept}>
+          {t("safety.accept")}
+        </button>
+      </div>
+    </DialogShell>
   );
 }
 

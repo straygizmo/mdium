@@ -22,7 +22,13 @@ vi.mock("../../lib/workflow-api", () => ({
   },
   subscribeWorkflowEvents: vi.fn(),
 }));
-vi.mock("@/stores/dialog-store", () => ({ showMessage: vi.fn(), showConfirm: vi.fn(), showPrompt: vi.fn() }));
+vi.mock("@/stores/dialog-store", () => ({
+  showMessage: vi.fn(),
+  showConfirm: vi.fn(),
+  showPrompt: vi.fn(),
+  // Dialog shells watch the app dialogs to restore their focus.
+  useDialogStore: { subscribe: () => () => undefined },
+}));
 
 import i18n from "@/shared/i18n";
 import { showConfirm, showMessage } from "@/stores/dialog-store";

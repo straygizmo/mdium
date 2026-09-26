@@ -13,7 +13,13 @@ vi.mock("../../lib/workflow-api", () => ({
   },
   subscribeWorkflowEvents: vi.fn(),
 }));
-vi.mock("@/stores/dialog-store", () => ({ showMessage: vi.fn(), showConfirm: vi.fn(), showPrompt: vi.fn() }));
+vi.mock("@/stores/dialog-store", () => ({
+  showMessage: vi.fn(),
+  showConfirm: vi.fn(),
+  showPrompt: vi.fn(),
+  // Dialog shells watch the app dialogs to restore their focus.
+  useDialogStore: { subscribe: () => () => undefined },
+}));
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
@@ -346,12 +352,27 @@ describe("TaskDetailModal", () => {
     // A click inside the dialog keeps it open.
     await act(async () => dialog.ownerDocument.querySelector<HTMLElement>('[role="dialog"]')!.click());
     expect(useWorkflowStore.getState().selectedTaskId).toBe("t2");
-    await act(async () => container.querySelector<HTMLElement>(".workflow-detail-overlay")!.click());
+    const overlay = container.querySelector<HTMLElement>(".workflow-detail-overlay")!;
+    await act(async () => {
+      overlay.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      overlay.click();
+    });
     expect(useWorkflowStore.getState().selectedTaskId).toBeNull();
 
     await act(async () => useWorkflowStore.setState({ selectedTaskId: "t2" }));
     await act(async () => container.querySelector<HTMLButtonElement>(".workflow-detail__close")!.click());
     expect(useWorkflowStore.getState().selectedTaskId).toBeNull();
+  });
+
+  it("stays open when a text selection is dragged from the body onto the overlay", async () => {
+    await render();
+    const overlay = container.querySelector<HTMLElement>(".workflow-detail-overlay")!;
+    await act(async () => {
+      section("body")!.querySelector("h1")!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      overlay.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(useWorkflowStore.getState().selectedTaskId).toBe("t2");
+    expect(container.querySelector('[role="dialog"]')).not.toBeNull();
   });
 
   it("reloads when the task or its run changes", async () => {
