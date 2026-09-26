@@ -637,6 +637,52 @@ pub async fn workflow_discard_run(
     .await
 }
 
+/// Run-data directories under `.mdium/` that should not be committed.
+const GITIGNORE_PATHS: [&str; 4] = [
+    ".mdium/tasks/",
+    ".mdium/runs/",
+    ".mdium/task-attachments/",
+    ".mdium/intakes/",
+];
+
+/// Which run-data directories `.gitignore` does not cover yet.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitignoreStatus {
+    pub missing: Vec<String>,
+}
+
+/// The entries of [`GITIGNORE_PATHS`] git does not ignore in `project_root`
+/// (every entry when the project is not a git repository or git fails).
+/// A file inside each directory is checked, so directory rules match.
+fn gitignore_missing(project_root: &Path) -> Vec<String> {
+    GITIGNORE_PATHS
+        .iter()
+        .filter(|dir| {
+            let probe = format!("{dir}x");
+            !matches!(
+                gitops::run_git_raw(project_root, &["check-ignore", "-q", "--", &probe]),
+                Ok(output) if output.success
+            )
+        })
+        .map(|dir| dir.to_string())
+        .collect()
+}
+
+/// Reports which run-data directories should be added to `.gitignore`.
+#[tauri::command]
+pub async fn workflow_gitignore_status(
+    state: tauri::State<'_, WorkflowState>,
+    project_root: String,
+) -> Result<GitignoreStatus, CommandError> {
+    with_project(state, project_root, |_orch, root| {
+        Ok(GitignoreStatus {
+            missing: gitignore_missing(root),
+        })
+    })
+    .await
+}
+
 /// Probes every provider through the runner (not project-scoped).
 #[tauri::command]
 pub async fn workflow_probe_providers(
@@ -780,5 +826,46 @@ mod tests {
             err,
             crate::workflow::runner_client::RunnerError::Unavailable(AGENT_RUNNER_MISSING)
         );
+    }
+
+    #[test]
+    fn gitignore_status_shape() {
+        let status = GitignoreStatus {
+            missing: vec![".mdium/runs/".into()],
+        };
+        assert_eq!(
+            serde_json::to_value(&status).unwrap(),
+            json!({ "missing": [".mdium/runs/"] })
+        );
+    }
+
+    #[test]
+    fn gitignore_status_is_empty_when_mdium_is_ignored() {
+        let fixture = gitops::test_support::Fixture::new();
+        fixture.write(".gitignore", ".mdium/\n");
+        assert!(gitignore_missing(fixture.root()).is_empty());
+    }
+
+    #[test]
+    fn gitignore_status_lists_every_path_without_rules() {
+        let fixture = gitops::test_support::Fixture::new();
+        fixture.write(".gitignore", "");
+        assert_eq!(gitignore_missing(fixture.root()), GITIGNORE_PATHS);
+    }
+
+    #[test]
+    fn gitignore_status_lists_only_uncovered_paths() {
+        let fixture = gitops::test_support::Fixture::new();
+        fixture.write(".gitignore", ".mdium/tasks/\n.mdium/runs/\n");
+        assert_eq!(
+            gitignore_missing(fixture.root()),
+            vec![".mdium/task-attachments/", ".mdium/intakes/"]
+        );
+    }
+
+    #[test]
+    fn gitignore_status_lists_every_path_outside_git() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(gitignore_missing(dir.path()), GITIGNORE_PATHS);
     }
 }

@@ -361,6 +361,7 @@ pub fn run() {
             commands::workflow::workflow_acknowledge_integrity,
             commands::workflow::workflow_discard_run,
             commands::workflow::workflow_probe_providers,
+            commands::workflow::workflow_gitignore_status,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

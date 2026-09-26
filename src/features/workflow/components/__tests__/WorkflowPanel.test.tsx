@@ -14,6 +14,7 @@ const api = vi.hoisted(() => ({
   activeRunCount: vi.fn(),
   probeProviders: vi.fn(),
   createTask: vi.fn(),
+  gitignoreStatus: vi.fn(),
 }));
 const dialogs = vi.hoisted(() => ({
   showMessage: vi.fn(),
@@ -81,6 +82,8 @@ describe("WorkflowPanel", () => {
     api.saveWorkflows.mockResolvedValue(undefined);
     api.activeRunCount.mockResolvedValue(0);
     api.probeProviders.mockResolvedValue([]);
+    api.gitignoreStatus.mockResolvedValue({ missing: [] });
+    localStorage.clear();
     useTabStore.setState({ activeFolderPath: "C:/proj" });
     container = document.createElement("div");
     root = createRoot(container);
@@ -89,6 +92,8 @@ describe("WorkflowPanel", () => {
   afterEach(async () => {
     await act(async () => root.unmount());
     useTabStore.setState({ activeFolderPath: null });
+    vi.restoreAllMocks();
+    localStorage.clear();
   });
 
   async function render(props: Parameters<typeof WorkflowPanel>[0] = {}) {
@@ -352,5 +357,122 @@ describe("WorkflowPanel", () => {
     await act(async () => button(row("wf1")!, i18n.t("workflow:panel.edit"))!.click());
     expect(onEditWorkflow).toHaveBeenCalledWith(expect.objectContaining({ id: "wf1" }));
     expect(container.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  function safetyDialog() {
+    return container.querySelector<HTMLElement>(".workflow-safety");
+  }
+
+  function toggle(id: string) {
+    return row(id)!.querySelector<HTMLInputElement>("input[data-switch]")!;
+  }
+
+  it("shows the safety notice on the first enable and enables after acceptance", async () => {
+    await render();
+    await act(async () => toggle("wf1").click());
+    expect(safetyDialog()?.textContent).toContain(i18n.t("workflow:safety.limits"));
+    expect(api.saveWorkflows).not.toHaveBeenCalled();
+    await act(async () => button(safetyDialog()!, i18n.t("workflow:safety.accept"))!.click());
+    expect(safetyDialog()).toBeNull();
+    expect(localStorage.getItem("mdium-workflow-safety-ack")).toBe("1");
+    expect(api.saveWorkflows.mock.calls[0][1].workflows[0].enabled).toBe(true);
+  });
+
+  it("enables without the safety notice once it was accepted", async () => {
+    localStorage.setItem("mdium-workflow-safety-ack", "1");
+    await render();
+    await act(async () => toggle("wf1").click());
+    expect(safetyDialog()).toBeNull();
+    expect(api.saveWorkflows.mock.calls[0][1].workflows[0].enabled).toBe(true);
+  });
+
+  it("keeps the workflow disabled when the safety notice is cancelled", async () => {
+    await render();
+    await act(async () => toggle("wf1").click());
+    await act(async () => button(safetyDialog()!, i18n.t("workflow:safety.cancel"))!.click());
+    expect(safetyDialog()).toBeNull();
+    expect(api.saveWorkflows).not.toHaveBeenCalled();
+    expect(toggle("wf1").checked).toBe(false);
+    expect(localStorage.getItem("mdium-workflow-safety-ack")).toBeNull();
+  });
+
+  it("shows the safety notice and still enables when storage is unavailable", async () => {
+    await render();
+    vi.spyOn(window, "localStorage", "get").mockImplementation(() => {
+      throw new Error("denied");
+    });
+    await act(async () => toggle("wf1").click());
+    expect(safetyDialog()).not.toBeNull();
+    await act(async () => button(safetyDialog()!, i18n.t("workflow:safety.accept"))!.click());
+    expect(api.saveWorkflows.mock.calls[0][1].workflows[0].enabled).toBe(true);
+  });
+
+  it("cancels a pending safety notice when the folder changes", async () => {
+    await render();
+    await act(async () => toggle("wf1").click());
+    expect(safetyDialog()).not.toBeNull();
+    api.attach.mockImplementation(async () => "C:\\other");
+    await act(async () => useTabStore.setState({ activeFolderPath: "C:/other" }));
+    expect(safetyDialog()).toBeNull();
+    expect(api.saveWorkflows).not.toHaveBeenCalled();
+  });
+
+  it("asks for the safety notice when enabling from the edit dialog", async () => {
+    await render();
+    await act(async () => button(row("wf1")!, i18n.t("workflow:panel.edit"))!.click());
+    const enabled = container.querySelector<HTMLInputElement>('.workflow-edit [name="enabled"]')!;
+    await act(async () => enabled.click());
+    expect(safetyDialog()).not.toBeNull();
+    expect(enabled.checked).toBe(false);
+    await act(async () => button(safetyDialog()!, i18n.t("workflow:safety.accept"))!.click());
+    expect(enabled.checked).toBe(true);
+  });
+
+  it("does not check the ignore rules while no workflow is enabled", async () => {
+    workflows = [workflow("wf1")];
+    await render();
+    expect(api.gitignoreStatus).not.toHaveBeenCalled();
+  });
+
+  it("lists the missing ignore rules and copies them", async () => {
+    const writeText = vi.fn(async () => undefined);
+    vi.spyOn(navigator, "clipboard", "get").mockReturnValue({ writeText } as unknown as Clipboard);
+    api.gitignoreStatus.mockResolvedValue({ missing: [".mdium/tasks/", ".mdium/runs/"] });
+    await render();
+    expect(api.gitignoreStatus).toHaveBeenCalledWith(ROOT);
+    const notice = container.querySelector<HTMLElement>(".workflow-panel__gitignore")!;
+    expect(notice.textContent).toContain(i18n.t("workflow:gitignore.description"));
+    expect(notice.querySelector("pre")?.textContent).toBe(".mdium/tasks/\n.mdium/runs/");
+    await act(async () => button(notice, i18n.t("workflow:gitignore.copy"))!.click());
+    expect(writeText).toHaveBeenCalledWith(".mdium/tasks/\n.mdium/runs/\n");
+    expect(button(notice, i18n.t("workflow:gitignore.copied"))).toBeDefined();
+    await act(async () => button(notice, i18n.t("workflow:gitignore.dismiss"))!.click());
+    expect(container.querySelector(".workflow-panel__gitignore")).toBeNull();
+  });
+
+  it("reports a failed copy", async () => {
+    const writeText = vi.fn(async () => {
+      throw new Error("denied");
+    });
+    vi.spyOn(navigator, "clipboard", "get").mockReturnValue({ writeText } as unknown as Clipboard);
+    api.gitignoreStatus.mockResolvedValue({ missing: [".mdium/intakes/"] });
+    await render();
+    const notice = container.querySelector<HTMLElement>(".workflow-panel__gitignore")!;
+    await act(async () => button(notice, i18n.t("workflow:gitignore.copy"))!.click());
+    expect(dialogs.showMessage).toHaveBeenCalledWith(i18n.t("workflow:gitignore.copyFailed"), { kind: "error" });
+  });
+
+  it("checks the ignore rules after a workflow is enabled", async () => {
+    workflows = [workflow("wf1")];
+    localStorage.setItem("mdium-workflow-safety-ack", "1");
+    api.gitignoreStatus.mockResolvedValue({ missing: [".mdium/runs/"] });
+    api.saveWorkflows.mockImplementation(async (_root: string, file: { workflows: Workflow[] }) => {
+      workflows = file.workflows;
+    });
+    await render();
+    expect(api.gitignoreStatus).not.toHaveBeenCalled();
+    await act(async () => toggle("wf1").click());
+    expect(api.gitignoreStatus).toHaveBeenCalledWith(ROOT);
+    expect(container.querySelector(".workflow-panel__gitignore pre")?.textContent).toBe(".mdium/runs/");
   });
 });

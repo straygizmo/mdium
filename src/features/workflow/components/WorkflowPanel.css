@@ -239,3 +239,32 @@
   background: var(--bg-overlay);
   color: var(--text);
 }
+
+.workflow-panel__gitignore {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid var(--primary);
+  border-radius: 4px;
+  background: var(--bg-surface);
+}
+
+.workflow-panel__gitignore-lines {
+  margin: 0;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-base);
+  font-family: monospace;
+  font-size: 11px;
+  white-space: pre;
+  overflow-x: auto;
+  user-select: text;
+}
+
+.workflow-panel__gitignore-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}

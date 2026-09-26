@@ -1,0 +1,84 @@
+.workflow-safety-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-overlay);
+  /* Above the workflow edit and task dialogs (900/950), below AppDialog (1100). */
+  z-index: 1000;
+}
+
+.workflow-safety {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(560px, 92vw);
+  max-height: 90vh;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-base);
+  color: var(--text);
+  font-size: 13px;
+  box-shadow: 0 8px 32px var(--shadow-strong);
+}
+
+.workflow-safety:focus {
+  outline: none;
+}
+
+.workflow-safety__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.workflow-safety__body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+  line-height: 1.5;
+}
+
+.workflow-safety__text {
+  margin: 0;
+}
+
+.workflow-safety__text--warning {
+  color: var(--accent-red);
+  font-weight: 600;
+}
+
+.workflow-safety__guards {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding-left: 20px;
+  color: var(--text-secondary);
+}
+
+.workflow-safety__buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.workflow-safety__buttons button {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.workflow-safety__buttons .workflow-safety__accept {
+  border-color: var(--primary);
+}

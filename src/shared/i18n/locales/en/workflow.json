@@ -195,6 +195,27 @@
     "viewKanban": "Kanban",
     "viewMatrix": "Matrix"
   },
+  "safety": {
+    "title": "Before enabling a workflow",
+    "isolation": "In the implementation stage, the AI agent runs with full access and without asking for your approval. It works in a separate git worktree, not in your working tree.",
+    "guardsIntro": "To limit the risk, MDium applies several layers of guards:",
+    "guardScreening": "Input screening: before a stage starts, task text, issues and text attachments are checked for suspicious instructions, invisible characters and long encoded payloads.",
+    "guardRuntime": "Runtime guard: git push, writes outside the worktree, reading credentials, sending data out, and changing system, agent or git settings are blocked. Codex has no pre-execution hook, so its commands are stopped only after they have started.",
+    "guardContainment": "Containment: the agent's git cannot reach remote repositories, and GitHub/GitLab tokens are disabled.",
+    "guardPostCheck": "Post-run check: changes to your branches, shared git config, hooks and agent settings are detected and need your confirmation.",
+    "limits": "These guards cannot catch every dangerous operation. Obfuscated commands and data sent over the network in other ways may go undetected.",
+    "noPush": "Nothing is pushed. The results stay on a local branch until you review and merge them yourself.",
+    "cancel": "Cancel",
+    "accept": "I understand, enable"
+  },
+  "gitignore": {
+    "title": "Keep workflow data out of git",
+    "description": "Tasks and run data are saved under .mdium/. Add these lines to .gitignore so they are not committed:",
+    "copy": "Copy",
+    "copied": "Copied",
+    "copyFailed": "The lines could not be copied to the clipboard.",
+    "dismiss": "Dismiss"
+  },
   "status": {
     "inbox": "Inbox",
     "running": "Running",

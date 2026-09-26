@@ -7,6 +7,7 @@ import { formatCode, formatCommandError } from "../lib/format";
 import { workflowApi } from "../lib/workflow-api";
 import { useWorkflowStore } from "../workflow-store";
 import { CreateTaskDialog } from "./CreateTaskDialog";
+import { useSafetyConfirm } from "./SafetyNoticeDialog";
 import { WorkflowEditDialog } from "./WorkflowEditDialog";
 import "./WorkflowPanel.css";
 
@@ -20,11 +21,18 @@ interface WorkflowPanelProps {
   onCreateTask?: () => void;
   /** Replaces the built-in workflow edit dialog. */
   onEditWorkflow?: (workflow: Workflow) => void;
-  /** Asked before a workflow is enabled; resolves false to keep it disabled. */
+  /**
+   * Asked before a workflow is enabled; resolves false to keep it disabled.
+   * Defaults to the safety notice shown until the user accepts it once.
+   */
   confirmEnable?: (workflow: Workflow) => Promise<boolean>;
 }
 
-const allowEnable = async () => true;
+/** Missing `.gitignore` lines reported for one project root. */
+interface GitignoreNotice {
+  root: string;
+  missing: string[];
+}
 
 /** Localizes a store warning (`STORE_*` code plus an optional `: detail`). */
 function formatWarning(warning: StoreWarning): string {
@@ -35,7 +43,7 @@ function formatWarning(warning: StoreWarning): string {
 }
 
 /** Left panel of the workflows view: workflow list, warnings and board filters. */
-export function WorkflowPanel({ onCreateTask, onEditWorkflow, confirmEnable = allowEnable }: WorkflowPanelProps) {
+export function WorkflowPanel({ onCreateTask, onEditWorkflow, confirmEnable: confirmEnableProp }: WorkflowPanelProps) {
   const { t } = useTranslation("workflow");
   const activeFolderPath = useTabStore((s) => s.activeFolderPath);
   const activeRoot = useWorkflowStore((s) => s.activeRoot);
@@ -51,18 +59,50 @@ export function WorkflowPanel({ onCreateTask, onEditWorkflow, confirmEnable = al
   const [creating, setCreating] = useState(false);
   /** Synchronous guard: only one workflow operation runs at a time. */
   const busyRef = useRef(false);
+  const safety = useSafetyConfirm();
+  const confirmEnable = confirmEnableProp ?? safety.confirmEnable;
+  /** Ignore rules to suggest; cleared when dismissed. */
+  const [gitignore, setGitignore] = useState<GitignoreNotice | null>(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     void useWorkflowStore.getState().activate(activeFolderPath);
   }, [activeFolderPath]);
 
   // Dialogs belong to the project they were opened for.
+  const cancelSafety = safety.cancel;
   useEffect(() => {
     setEditing(null);
     setCreating(false);
-  }, [activeRoot]);
+    cancelSafety();
+  }, [activeRoot, cancelSafety]);
 
   const workflows = project?.workflows ?? [];
+  /** Ids of the enabled workflows; the ignore rules are checked whenever this set changes. */
+  const enabledKey = workflows
+    .filter((w) => w.enabled && !w.archived)
+    .map((w) => w.id)
+    .sort()
+    .join("\n");
+
+  // Suggest ignore rules for the run data while any workflow is enabled.
+  useEffect(() => {
+    setGitignore(null);
+    setCopied(false);
+    if (!activeRoot || !enabledKey) return;
+    let cancelled = false;
+    workflowApi
+      .gitignoreStatus(activeRoot)
+      .then(({ missing }) => {
+        if (!cancelled && missing.length > 0) setGitignore({ root: activeRoot, missing });
+      })
+      // The suggestion is advisory: without a status nothing is shown.
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [activeRoot, enabledKey]);
+
   /** Workflows listed in the panel and in the workflow filter. */
   const visibleWorkflows = workflows.filter((w) => filters.showArchived || !w.archived);
   const filterMissing =
@@ -160,6 +200,15 @@ export function WorkflowPanel({ onCreateTask, onEditWorkflow, confirmEnable = al
         .run(t("panel.addFailed"), (root) => workflowApi.addStandard(root, name.trim(), provider));
     });
 
+  const copyGitignore = async (missing: string[]) => {
+    try {
+      await navigator.clipboard.writeText(`${missing.join("\n")}\n`);
+      setCopied(true);
+    } catch {
+      void showMessage(t("gitignore.copyFailed"), { kind: "error" });
+    }
+  };
+
   const openCreate = onCreateTask ?? (() => setCreating(true));
   const openEdit = onEditWorkflow ?? setEditing;
 
@@ -168,6 +217,7 @@ export function WorkflowPanel({ onCreateTask, onEditWorkflow, confirmEnable = al
       {editing && (
         <WorkflowEditDialog workflow={editing} confirmEnable={confirmEnable} onClose={() => setEditing(null)} />
       )}
+      {safety.dialog}
       {creating && (
         <CreateTaskDialog
           onClose={() => setCreating(false)}
@@ -192,6 +242,24 @@ export function WorkflowPanel({ onCreateTask, onEditWorkflow, confirmEnable = al
           <button type="button" className="workflow-panel__btn workflow-panel__btn--primary" onClick={openCreate}>
             {t("panel.newTask")}
           </button>
+
+          {gitignore?.root === activeRoot && (
+            <section className="workflow-panel__gitignore" aria-labelledby="workflow-panel-gitignore-title">
+              <h3 id="workflow-panel-gitignore-title" className="workflow-panel__heading">
+                {t("gitignore.title")}
+              </h3>
+              <p className="workflow-panel__message">{t("gitignore.description")}</p>
+              <pre className="workflow-panel__gitignore-lines">{gitignore.missing.join("\n")}</pre>
+              <div className="workflow-panel__gitignore-actions">
+                <button type="button" className="workflow-panel__btn" onClick={() => void copyGitignore(gitignore.missing)}>
+                  {t(copied ? "gitignore.copied" : "gitignore.copy")}
+                </button>
+                <button type="button" className="workflow-panel__btn" onClick={() => setGitignore(null)}>
+                  {t("gitignore.dismiss")}
+                </button>
+              </div>
+            </section>
+          )}
 
           <section className="workflow-panel__section">
             <h3 className="workflow-panel__heading">{t("panel.workflows")}</h3>
