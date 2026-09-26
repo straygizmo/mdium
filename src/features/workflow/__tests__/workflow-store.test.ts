@@ -26,13 +26,13 @@ import { startWorkflowEventBridge, useWorkflowStore } from "../workflow-store";
 const ROOT_A = "C:\\projA";
 const ROOT_B = "C:\\projB";
 
-function task(id: string): Task {
+function task(id: string, status: Task["meta"]["status"] = "inbox"): Task {
   return {
     meta: {
       schemaVersion: 1,
       id,
       title: id,
-      status: "inbox",
+      status,
       rootId: id,
       parentId: null,
       workflowId: "wf1",
@@ -67,8 +67,15 @@ function deferred<T>() {
 }
 
 const initialState = useWorkflowStore.getState();
-let stopBridge: (() => void) | null = null;
+let releases: (() => void)[] = [];
 let handlers: WorkflowEventHandlers;
+const unsubscribe = vi.hoisted(() => vi.fn());
+
+async function startBridge() {
+  const release = await startWorkflowEventBridge();
+  releases.push(release);
+  return release;
+}
 
 describe("workflow store", () => {
   beforeAll(async () => {
@@ -85,13 +92,13 @@ describe("workflow store", () => {
     api.listRuns.mockResolvedValue({ runs: [], warnings: [] });
     subscribe.mockImplementation(async (h: WorkflowEventHandlers) => {
       handlers = h;
-      return () => {};
+      return unsubscribe;
     });
   });
 
   afterEach(() => {
-    stopBridge?.();
-    stopBridge = null;
+    for (const release of releases) release();
+    releases = [];
     vi.useRealTimers();
   });
 
@@ -154,7 +161,7 @@ describe("workflow store", () => {
   it("ignores task and run events for another root", async () => {
     vi.useFakeTimers();
     await useWorkflowStore.getState().activate(ROOT_A);
-    stopBridge = await startWorkflowEventBridge();
+    await startBridge();
     api.listTasks.mockClear();
     handlers.onTaskChanged?.({ projectRoot: ROOT_B, taskId: "b1", rootId: "b1", status: "running" } as TaskChangedEvent);
     handlers.onRunChanged?.({ projectRoot: ROOT_B, rootTaskId: "b1", status: "active" } as RunChangedEvent);
@@ -166,7 +173,7 @@ describe("workflow store", () => {
   it("debounces task events within 150 ms into one refresh", async () => {
     vi.useFakeTimers();
     await useWorkflowStore.getState().activate(ROOT_A);
-    stopBridge = await startWorkflowEventBridge();
+    await startBridge();
     api.listTasks.mockClear();
     handlers.onTaskChanged?.({ projectRoot: ROOT_A, taskId: "a1", rootId: "a1", status: "running" });
     await vi.advanceTimersByTimeAsync(100);
@@ -180,7 +187,7 @@ describe("workflow store", () => {
 
   it("updates progress only for known projects", async () => {
     await useWorkflowStore.getState().activate(ROOT_A);
-    stopBridge = await startWorkflowEventBridge();
+    await startBridge();
     const base = { attemptId: "at1", kind: "tool" as const };
     handlers.onProgress?.({ ...base, projectRoot: ROOT_A, taskId: "a1", text: "editing" } as ProgressEvent);
     handlers.onProgress?.({ ...base, projectRoot: ROOT_B, taskId: "b1", text: "other" } as ProgressEvent);
@@ -193,11 +200,11 @@ describe("workflow store", () => {
     await useWorkflowStore.getState().activate(ROOT_A);
     const result = await useWorkflowStore
       .getState()
-      .run("hold", () => Promise.reject({ code: "WORKFLOW_PROJECT_INVALID", message: "detail" }));
+      .run("Hold failed", () => Promise.reject({ code: "WORKFLOW_PROJECT_INVALID", message: "detail" }));
     expect(result).toBeUndefined();
     expect(showMessage).toHaveBeenCalledTimes(1);
     expect(showMessage.mock.calls[0][0]).toContain("detail");
-    expect(showMessage.mock.calls[0][1]).toMatchObject({ kind: "error" });
+    expect(showMessage.mock.calls[0][1]).toEqual({ title: "Hold failed", kind: "error" });
   });
 
   it("run refreshes silently on TRANSITION_CONFLICT", async () => {
@@ -227,6 +234,109 @@ describe("workflow store", () => {
     const p = useWorkflowStore.getState().projects[ROOT_A];
     expect(p.loading).toBe(false);
     expect(p.error).toContain("gone");
+  });
+
+  it("keeps activeRoot on A for A -> B -> A when the first A attach resolves last", async () => {
+    const firstA = deferred<string>();
+    api.attach.mockImplementationOnce(() => firstA.promise);
+    const first = useWorkflowStore.getState().activate(ROOT_A);
+    await useWorkflowStore.getState().activate(ROOT_B);
+    await useWorkflowStore.getState().activate(ROOT_A);
+    expect(useWorkflowStore.getState().activeRoot).toBe(ROOT_A);
+    firstA.resolve(ROOT_A);
+    await first;
+    const s = useWorkflowStore.getState();
+    expect(s.activeRoot).toBe(ROOT_A);
+    expect(s.projects[ROOT_A].tasks.map((t) => t.meta.id)).toEqual(["a1"]);
+  });
+
+  it("drops out-of-order refresh results", async () => {
+    await useWorkflowStore.getState().activate(ROOT_A);
+    const slow = deferred<{ tasks: Task[]; warnings: [] }>();
+    api.listTasks.mockImplementationOnce(() => slow.promise);
+    const older = useWorkflowStore.getState().refresh(ROOT_A);
+    tasksByRoot[ROOT_A] = [task("new")];
+    await useWorkflowStore.getState().refresh(ROOT_A);
+    slow.resolve({ tasks: [task("old")], warnings: [] });
+    await older;
+    expect(useWorkflowStore.getState().projects[ROOT_A].tasks.map((t) => t.meta.id)).toEqual(["new"]);
+  });
+
+  it("sets loading only for the first load and refreshing for later loads", async () => {
+    const slow = deferred<{ tasks: Task[]; warnings: [] }>();
+    api.listTasks.mockImplementationOnce(() => slow.promise);
+    const first = useWorkflowStore.getState().activate(ROOT_A);
+    await vi.waitFor(() => expect(useWorkflowStore.getState().projects[ROOT_A]?.loading).toBe(true));
+    slow.resolve({ tasks: [task("a1")], warnings: [] });
+    await first;
+    const later = deferred<{ tasks: Task[]; warnings: [] }>();
+    api.listTasks.mockImplementationOnce(() => later.promise);
+    const second = useWorkflowStore.getState().refresh(ROOT_A);
+    let p = useWorkflowStore.getState().projects[ROOT_A];
+    expect(p.loading).toBe(false);
+    expect(p.refreshing).toBe(true);
+    later.resolve({ tasks: [task("a1")], warnings: [] });
+    await second;
+    p = useWorkflowStore.getState().projects[ROOT_A];
+    expect(p.loading).toBe(false);
+    expect(p.refreshing).toBe(false);
+  });
+
+  it("stores an attach failure as attachError and clears it on success", async () => {
+    api.attach.mockRejectedValueOnce({ code: "WORKFLOW_PROJECT_INVALID", message: "bad path" });
+    await useWorkflowStore.getState().activate(ROOT_A);
+    let s = useWorkflowStore.getState();
+    expect(s.activeRoot).toBeNull();
+    expect(s.attachError).toContain("bad path");
+    expect(showMessage).not.toHaveBeenCalled();
+    await useWorkflowStore.getState().activate(ROOT_B);
+    s = useWorkflowStore.getState();
+    expect(s.activeRoot).toBe(ROOT_B);
+    expect(s.attachError).toBeNull();
+  });
+
+  it("prunes progress of tasks that are gone or no longer running on refresh", async () => {
+    tasksByRoot[ROOT_A] = [task("run", "running"), task("done", "running"), task("gone", "running")];
+    await useWorkflowStore.getState().activate(ROOT_A);
+    await startBridge();
+    for (const taskId of ["run", "done", "gone"]) {
+      handlers.onProgress?.({ projectRoot: ROOT_A, taskId, attemptId: "x", kind: "message", text: taskId });
+    }
+    tasksByRoot[ROOT_A] = [task("run", "running"), task("done", "completed")];
+    await useWorkflowStore.getState().refresh(ROOT_A);
+    expect(Object.keys(useWorkflowStore.getState().projects[ROOT_A].progress)).toEqual(["run"]);
+  });
+
+  it("keeps the bridge until every caller released it", async () => {
+    vi.useFakeTimers();
+    await useWorkflowStore.getState().activate(ROOT_A);
+    const releaseFirst = await startBridge();
+    const releaseSecond = await startBridge();
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    releaseFirst();
+    releaseFirst();
+    api.listTasks.mockClear();
+    handlers.onTaskChanged?.({ projectRoot: ROOT_A, taskId: "a1", rootId: "a1", status: "running" });
+    await vi.advanceTimersByTimeAsync(150);
+    expect(api.listTasks).toHaveBeenCalledTimes(1);
+    expect(unsubscribe).not.toHaveBeenCalled();
+    // A refresh scheduled before the last release is cancelled.
+    handlers.onTaskChanged?.({ projectRoot: ROOT_A, taskId: "a1", rootId: "a1", status: "completed" });
+    releaseSecond();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(api.listTasks).toHaveBeenCalledTimes(1);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares one subscription between concurrent starts", async () => {
+    const [a, b] = await Promise.all([startWorkflowEventBridge(), startWorkflowEventBridge()]);
+    releases.push(a, b);
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    a();
+    expect(unsubscribe).not.toHaveBeenCalled();
+    b();
+    await Promise.resolve();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 
   it("openTask and setFilters update the selection and filters", () => {
