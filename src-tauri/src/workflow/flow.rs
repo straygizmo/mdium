@@ -764,6 +764,32 @@ pub fn finish_attempt(
     Ok(summary)
 }
 
+/// Best effort after [`finish_attempt`] failed with `code`: moves the
+/// attempt's task, if it is still running, to attention
+/// (`ATTENTION_ATTEMPT_FAILED`), so it does not stay running with nothing
+/// behind it. Returns the task as stored when it was moved.
+pub fn park_unfinished(
+    guard: &ProjectGuard,
+    store: &WorkflowStore,
+    task_id: &str,
+    code: &str,
+) -> Option<Task> {
+    let reason = to_attention(
+        "ATTENTION_ATTEMPT_FAILED",
+        [("code", code), ("message", "")],
+    );
+    move_task(
+        guard,
+        store,
+        task_id,
+        TaskStatus::Running,
+        TaskStatus::Attention,
+        Some(reason),
+        None,
+    )
+    .ok()
+}
+
 /// Makes the post-attempt snapshot the run's integrity baseline, but only
 /// when every check passed: a flagged (or failed) check keeps the earlier
 /// baseline, so the flagged change is not absorbed and later comparisons

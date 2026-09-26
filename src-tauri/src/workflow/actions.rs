@@ -75,8 +75,8 @@ pub const WORKFLOW_NOT_FOUND: &str = "WORKFLOW_NOT_FOUND";
 pub const WORKFLOW_AWAITING_KIND_MISMATCH: &str = "WORKFLOW_AWAITING_KIND_MISMATCH";
 /// Only completed or cancelled tasks can be archived or deleted.
 pub const WORKFLOW_TASK_NOT_FINISHED: &str = "WORKFLOW_TASK_NOT_FINISHED";
-/// The task is the current task of an Active run.
-pub const WORKFLOW_TASK_IS_CURRENT: &str = "WORKFLOW_TASK_IS_CURRENT";
+/// The task's run is still Active or awaiting its merge.
+pub const WORKFLOW_RUN_IN_PROGRESS: &str = "WORKFLOW_RUN_IN_PROGRESS";
 /// The task is not its run's current task.
 pub const WORKFLOW_TASK_NOT_CURRENT: &str = "WORKFLOW_TASK_NOT_CURRENT";
 /// The run is not Active.
@@ -752,8 +752,10 @@ pub fn archive_task(
     Ok(task)
 }
 
-/// Deletes a completed or cancelled task that is not the current task of
-/// an Active run.
+/// Deletes a completed or cancelled task whose run (if it has one) is no
+/// longer in progress (neither Active nor awaiting its merge): the run's
+/// later steps may still read any of its tasks (designs, outputs, the
+/// root's title).
 pub fn delete_task(
     orch: &Arc<Orchestrator>,
     project_root: &Path,
@@ -767,8 +769,8 @@ pub fn delete_task(
             return Err(ActionError::InvalidState(WORKFLOW_TASK_NOT_FINISHED));
         }
         if let Some(run) = run_of(&store, &task)? {
-            if run.status == RunStatus::Active && run.current_task_id == task_id {
-                return Err(ActionError::InvalidState(WORKFLOW_TASK_IS_CURRENT));
+            if matches!(run.status, RunStatus::Active | RunStatus::AwaitingMerge) {
+                return Err(ActionError::InvalidState(WORKFLOW_RUN_IN_PROGRESS));
             }
         }
         store.delete_task(&guard, task_id)?;
@@ -1968,9 +1970,37 @@ mod tests {
 
         assert_eq!(
             code(delete_task(&env.orch, env.root(), &id)),
-            WORKFLOW_TASK_IS_CURRENT
+            WORKFLOW_RUN_IN_PROGRESS
         );
         assert!(env.store.get_task(&id).is_ok());
+    }
+
+    #[test]
+    fn delete_refuses_every_task_of_a_run_in_progress() {
+        let env = Env::new();
+        let (root, _info) = env.awaiting_merge();
+        let id = root.meta.id.clone();
+        // A completed, non-current task of an AwaitingMerge run.
+        assert_eq!(
+            code(delete_task(&env.orch, env.root(), &id)),
+            WORKFLOW_RUN_IN_PROGRESS
+        );
+        // The same run while Active (the root is not its current task).
+        let mut run = env.run(&id);
+        run.status = RunStatus::Active;
+        env.store.put_run(&env.store.lock(), &run).unwrap();
+        assert_eq!(
+            code(delete_task(&env.orch, env.root(), &id)),
+            WORKFLOW_RUN_IN_PROGRESS
+        );
+        assert!(env.store.get_task(&id).is_ok());
+
+        // Once the run is merged, its finished tasks can be deleted.
+        run.status = RunStatus::Merged;
+        env.store.put_run(&env.store.lock(), &run).unwrap();
+        delete_task(&env.orch, env.root(), &id).unwrap();
+        assert_eq!(env.store.get_task(&id).unwrap_err(), StoreError::NotFound);
+        env.wait_idle();
     }
 
     #[test]

@@ -75,7 +75,8 @@ pub enum AttemptEnd {
         final_response: String,
     },
     /// Runner/start errors (`code` is the error's detail code or its
-    /// category code), a failed turn, or a rejected command.
+    /// category code), a failed turn, a rejected command, or a turn the
+    /// runner cancelled on its own (`RUNNER_TURN_CANCELLED`).
     Failed {
         code: String,
         message: String,
@@ -104,6 +105,18 @@ const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const START_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long to wait for `TurnCancelled` after cancelling the session.
 const CANCEL_GRACE: Duration = Duration::from_secs(10);
+/// Added to the stage timeout for the runner's own turn timeout, so this
+/// side's deadline normally ends the turn first (as `TimedOut`).
+const RUNNER_TIMEOUT_MARGIN: Duration = Duration::from_secs(60);
+/// The runner's turn-failure message when its own turn timeout fired.
+const RUNNER_TIMEOUT_MESSAGE: &str = "TIMEOUT";
+/// The runner's turn-failure message when the safety guard blocked a tool
+/// call.
+const RUNNER_GUARD_BLOCKED_MESSAGE: &str = "GUARD_BLOCKED";
+/// Rule reported for a guard block whose violation event was not seen.
+const UNKNOWN_GUARD_RULE: &str = "unknown";
+/// Code of a turn the runner cancelled without being asked to.
+const RUNNER_TURN_CANCELLED: &str = "RUNNER_TURN_CANCELLED";
 /// Minimum spacing between progress updates (at most 4 per second).
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
 /// Maximum progress text length, in characters.
@@ -215,7 +228,12 @@ fn drive(
         model: req.model.clone(),
         resume_native_id: None,
         guard_workspace_root: Some(worktree.to_string()),
-        timeout_ms: Some(u64::try_from(req.timeout.as_millis()).unwrap_or(u64::MAX)),
+        timeout_ms: Some(
+            req.timeout
+                .checked_add(RUNNER_TIMEOUT_MARGIN)
+                .and_then(|timeout| u64::try_from(timeout.as_millis()).ok())
+                .unwrap_or(u64::MAX),
+        ),
     };
     if let Some(reason) = cancel.reason() {
         return AttemptEnd::Cancelled(reason);
@@ -344,6 +362,11 @@ fn drive(
                 log(json!({ "type": "turn_failed", "message": message }).to_string());
                 match violation {
                     Some((rule, summary)) => AttemptEnd::GuardBlocked { rule, summary },
+                    None if message == RUNNER_TIMEOUT_MESSAGE => AttemptEnd::TimedOut,
+                    None if message == RUNNER_GUARD_BLOCKED_MESSAGE => AttemptEnd::GuardBlocked {
+                        rule: UNKNOWN_GUARD_RULE.to_string(),
+                        summary: String::new(),
+                    },
                     None => AttemptEnd::Failed {
                         code: "RUNNER_TURN_FAILED".to_string(),
                         message,
@@ -363,9 +386,15 @@ fn drive(
             RunnerEvent::TurnCancelled if deadline.is_some_and(|d| Instant::now() >= d) => {
                 AttemptEnd::TimedOut
             }
-            RunnerEvent::TurnCancelled => {
-                AttemptEnd::Cancelled(cancel.reason().unwrap_or(CancelReason::User))
-            }
+            // Nobody asked for this cancel (a request would have set the
+            // token): the turn did not do its work.
+            RunnerEvent::TurnCancelled => match cancel.reason() {
+                Some(reason) => AttemptEnd::Cancelled(reason),
+                None => AttemptEnd::Failed {
+                    code: RUNNER_TURN_CANCELLED.to_string(),
+                    message: String::new(),
+                },
+            },
             _ => AttemptEnd::RunnerExited,
         };
     }
@@ -704,7 +733,8 @@ mod tests {
                 model: Some("gpt-5".to_string()),
                 resume_native_id: None,
                 guard_workspace_root: Some(worktree),
-                timeout_ms: Some(30_000),
+                // The stage timeout plus the runner margin.
+                timeout_ms: Some(90_000),
             }
         );
     }
@@ -827,7 +857,7 @@ mod tests {
     }
 
     #[test]
-    fn runner_side_cancel_without_a_request_is_a_user_cancel() {
+    fn runner_side_cancel_without_a_request_is_a_failure() {
         let dir = tempfile::tempdir().unwrap();
         let store = WorkflowStore::new(dir.path().to_path_buf());
         let (runner, tx) = FakeRunner::new();
@@ -835,8 +865,50 @@ mod tests {
 
         let (end, _) = run(&runner, &store, &request(&dir), &CancelToken::default());
 
-        assert_eq!(end, AttemptEnd::Cancelled(CancelReason::User));
+        assert_eq!(
+            end,
+            AttemptEnd::Failed {
+                code: "RUNNER_TURN_CANCELLED".to_string(),
+                message: String::new(),
+            }
+        );
         assert!(!runner.calls().contains(&"cancel".to_string()));
+    }
+
+    #[test]
+    fn runner_side_timeout_is_timed_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WorkflowStore::new(dir.path().to_path_buf());
+        let (runner, tx) = FakeRunner::new();
+        tx.send(RunnerEvent::TurnFailed {
+            message: "TIMEOUT".to_string(),
+        })
+        .unwrap();
+
+        let (end, _) = run(&runner, &store, &request(&dir), &CancelToken::default());
+
+        assert_eq!(end, AttemptEnd::TimedOut);
+    }
+
+    #[test]
+    fn guard_blocked_without_a_violation_event_is_guard_blocked() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WorkflowStore::new(dir.path().to_path_buf());
+        let (runner, tx) = FakeRunner::new();
+        tx.send(RunnerEvent::TurnFailed {
+            message: "GUARD_BLOCKED".to_string(),
+        })
+        .unwrap();
+
+        let (end, _) = run(&runner, &store, &request(&dir), &CancelToken::default());
+
+        assert_eq!(
+            end,
+            AttemptEnd::GuardBlocked {
+                rule: "unknown".to_string(),
+                summary: String::new(),
+            }
+        );
     }
 
     #[test]

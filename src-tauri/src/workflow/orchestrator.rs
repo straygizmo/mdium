@@ -15,7 +15,8 @@ use crate::workflow::attempt::{
 use crate::workflow::checks::{self, CheckResult};
 use crate::workflow::errors::to_attention;
 use crate::workflow::flow::{
-    begin_attempt, finish_attempt, recover, BeginResult, FinishInput, PlannedAttempt,
+    begin_attempt, finish_attempt, park_unfinished, recover, BeginResult, FinishInput,
+    PlannedAttempt,
 };
 use crate::workflow::model::{RunStatus, Task, TaskStatus, Workflow, WorkflowRun};
 use crate::workflow::runner_host::RunnerApi;
@@ -597,10 +598,17 @@ impl Orchestrator {
                     self.sink.run_changed(store.project_root(), run);
                 }
             }
-            Err(err) => eprintln!(
-                "[workflow] finishing attempt {} failed: {err}",
-                planned.request.attempt_id
-            ),
+            Err(err) => {
+                eprintln!(
+                    "[workflow] finishing attempt {} failed: {err}",
+                    planned.request.attempt_id
+                );
+                if let Some(task) =
+                    park_unfinished(&guard, store, &planned.request.task_id, err.code())
+                {
+                    self.emit_changes(store, &[task]);
+                }
+            }
         }
     }
 
@@ -1619,5 +1627,39 @@ mod tests {
         env.kick();
         env.wait_idle();
         assert_eq!(env.run(&id).attempts.len(), 2);
+    }
+
+    #[test]
+    fn a_failed_finish_moves_the_running_task_to_attention() {
+        let env = Env::new();
+        let root = env.root_task("Feature", "Build it.");
+        let id = root.meta.id.clone();
+        let run_file = env
+            .fx
+            .root()
+            .join(".mdium")
+            .join("runs")
+            .join(format!("{id}.json"));
+        // The run becomes unreadable mid-turn, so the finish cannot load it.
+        env.runner.script(Script::complete_after(
+            move |_| std::fs::write(&run_file, "not json").unwrap(),
+            &completed("# Design"),
+        ));
+
+        env.kick();
+        env.wait_idle();
+
+        let task = env.task(&id);
+        assert_eq!(task.meta.status, TaskStatus::Attention);
+        assert_eq!(attention_code(&task), "ATTENTION_ATTEMPT_FAILED");
+        assert_eq!(
+            task.meta.attention.as_ref().unwrap().params["code"],
+            "STORE_CORRUPT"
+        );
+        assert!(env
+            .sink
+            .task_events()
+            .contains(&(id.clone(), TaskStatus::Attention)));
+        assert!(!env.orch.is_active(&id));
     }
 }
