@@ -415,8 +415,14 @@ pub fn retry_task(
             return Err(ActionError::InvalidState(WORKFLOW_INTEGRITY_ACK_REQUIRED));
         }
         let mut run = None;
-        if opts.accept_integrity {
-            let mut accepted = store.get_run(&current.meta.root_id)?;
+        // A task without a run has no baseline to accept; the flag is
+        // ignored there.
+        let run_to_accept = if opts.accept_integrity {
+            run_of(&store, &current)?
+        } else {
+            None
+        };
+        if let Some(mut accepted) = run_to_accept {
             let info = accepted
                 .worktree
                 .clone()
@@ -485,7 +491,7 @@ pub fn retry_task(
 }
 
 /// True when `task` needs attention because its attempt changed the user's
-/// git config or hooks ([`ACK_REQUIRED_CHANGES`]); an unreadable item list
+/// git config or hooks ([`checks::CONFIG_CHANGE_CODES`]); an unreadable item list
 /// counts as such a change (fails closed). Branch or HEAD movement alone
 /// needs no acknowledgement: the next attempt takes a fresh snapshot.
 fn integrity_ack_required(task: &Task) -> bool {
@@ -499,7 +505,7 @@ fn integrity_ack_required(task: &Task) -> bool {
     match serde_json::from_str::<Vec<IntegrityChange>>(items) {
         Ok(items) => items
             .iter()
-            .any(|item| ACK_REQUIRED_CHANGES.contains(&item.code.as_str())),
+            .any(|item| checks::CONFIG_CHANGE_CODES.contains(&item.code.as_str())),
         Err(_) => true,
     }
 }
@@ -529,6 +535,18 @@ pub fn mark_complete(
         }
         if run.current_task_id != task_id {
             return Err(ActionError::InvalidState(WORKFLOW_TASK_NOT_CURRENT));
+        }
+        // Completing a stage by hand must not carry an unacknowledged git
+        // config or hooks change past the stage, whatever its role.
+        if let Some(info) = &run.worktree {
+            let now = integrity::snapshot_with_worktree(
+                store.project_root(),
+                Some(&info.base_branch),
+                Some(info),
+            )?;
+            if !checks::config_changes(&run, &now).is_empty() {
+                return Err(ActionError::InvalidState(WORKFLOW_INTEGRITY_CHANGED));
+            }
         }
         let next = match task.meta.role.unwrap_or(Role::Design) {
             Role::Design => Some(Role::Implement),
@@ -2216,6 +2234,48 @@ mod tests {
     }
 
     #[test]
+    fn mark_complete_of_an_implement_task_refuses_after_a_hooks_change() {
+        let env = Env::new();
+        let root = env.root_task();
+        let id = root.meta.id.clone();
+        env.stage(
+            &id,
+            AttemptEnd::Completed {
+                final_response: completed("# Design"),
+            },
+        );
+        let implement = env.run(&id).current_task_id;
+        env.stage(&implement, failed());
+        write_file(
+            env.root(),
+            ".git/hooks/pre-commit",
+            "#!/bin/sh
+",
+        );
+
+        let before = env.raw(&implement);
+        assert_eq!(
+            code(mark_complete(&env.orch, env.root(), &implement)),
+            WORKFLOW_INTEGRITY_CHANGED
+        );
+        assert_eq!(env.raw(&implement), before);
+        assert_eq!(env.tasks().len(), 2);
+    }
+
+    #[test]
+    fn retry_accepting_integrity_ignores_a_task_without_a_run() {
+        let env = Env::new();
+        let task = env.plain(TaskStatus::Attention, None);
+        let opts = RetryOptions {
+            accept_integrity: true,
+            ..RetryOptions::default()
+        };
+        let retried = retry_task(&env.orch, env.root(), &task.meta.id, opts).unwrap();
+        assert_eq!(retried.meta.status, TaskStatus::Inbox);
+        env.wait_idle();
+    }
+
+    #[test]
     fn add_standard_workflow_refuses_to_drop_invalid_entries() {
         let env = Env::new();
         let path = MdiumPaths::new(env.store.project_root()).workflows_file();
@@ -2362,6 +2422,9 @@ mod tests {
             active_run_count(&env.orch, env.root(), &first.id).unwrap(),
             0
         );
+        // The saves above kicked the dispatcher; let that pass finish so it
+        // cannot start the new task before `stage` does.
+        env.wait_idle();
         let root = env.root_task();
         env.stage(&root.meta.id, failed());
         assert_eq!(

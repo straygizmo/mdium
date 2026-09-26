@@ -492,10 +492,11 @@ pub(crate) fn create_worktree_in(
 /// The run worktree of `root_task_id` left behind by an earlier
 /// [`create_worktree_in`] whose run was never recorded: `Some` only when
 /// the expected path is a worktree git has registered for `repo`, checked
-/// out on the expected branch (from `title`), whose link is intact. Its
-/// base branch is the checkout's current branch and its base commit the
-/// merge base of that branch and the worktree branch (the commit it was
-/// created from, unless the user rewrote their branch since).
+/// out on the expected branch (from `title`), whose link is intact, and
+/// whose branch has no commits beyond its merge base with the checkout's
+/// current branch. Its base branch is that current branch and its base
+/// commit the merge base, which is then the branch tip: the commit the
+/// worktree was created from.
 pub(crate) fn orphan_worktree_in(
     base_dir: &Path,
     repo: &Path,
@@ -518,6 +519,15 @@ pub(crate) fn orphan_worktree_in(
     let base_commit = git(&top, &["merge-base", "HEAD", &branch_ref])?
         .trim()
         .to_string();
+    // The base is only unambiguous while the branch has no commits of its
+    // own beyond the merge base (a worktree created from this branch's
+    // history and never worked in). Anything else is left for the user to
+    // discard.
+    let range = format!("{base_commit}..{branch_ref}");
+    let ahead = git(&top, &["rev-list", "--count", &range])?;
+    if ahead.trim() != "0" {
+        return Ok(None);
+    }
     let info = WorktreeInfo {
         path: path.to_string_lossy().into_owned(),
         branch,

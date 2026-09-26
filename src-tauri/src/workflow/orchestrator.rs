@@ -529,8 +529,16 @@ impl Orchestrator {
     fn attempt_thread(&self, root: &Path, planned: &PlannedAttempt, cancel: &CancelToken) {
         let store = WorkflowStore::new(root.to_path_buf());
         let req = &planned.request;
+        // A snapshot whose git config or hooks differ from the run's
+        // acknowledged baseline counts as a failed baseline: no session
+        // starts until the change is accepted (retry with accept_integrity).
         let baseline = catch_unwind(AssertUnwindSafe(|| {
-            checks::baseline(&planned.repo_root, &planned.run)
+            checks::baseline(&planned.repo_root, &planned.run).and_then(|before| {
+                match checks::unacknowledged_config_change(&planned.run, &before) {
+                    Some(reason) => Err(reason),
+                    None => Ok(before),
+                }
+            })
         }));
         let input = match baseline {
             // No session was started; the missing baseline fails closed.
@@ -538,7 +546,8 @@ impl Orchestrator {
                 end: panicked(payload),
                 check: panicked_check(),
             },
-            // No session is started without a baseline.
+            // No session is started without a baseline (or with an
+            // unacknowledged git config or hooks change).
             Ok(Err(reason)) => FinishInput {
                 end: AttemptEnd::Failed {
                     code: reason.code.clone(),
@@ -1666,6 +1675,63 @@ mod tests {
             .task_events()
             .contains(&(id.clone(), TaskStatus::Attention)));
         assert!(!env.orch.is_active(&id));
+    }
+
+    #[test]
+    fn an_unacknowledged_config_change_stops_the_next_attempt_until_accepted() {
+        let env = Env::new();
+        let root = env.root_task("Feature", "Build it.");
+        let implement = env.design_done_by_flow(&root);
+        // The acknowledged baseline, then a git config change nobody
+        // acknowledged (as when the attempt that saw it was put on hold
+        // and its attention reason was dropped).
+        {
+            let mut run = env.run(&root.meta.id);
+            run.integrity_baseline = Some(checks::baseline(env.fx.root(), &run).unwrap());
+            env.store.put_run(&env.store.lock(), &run).unwrap();
+        }
+        env.fx.run(&["config", "core.fsmonitor", "false"]);
+
+        env.kick();
+        env.wait_idle();
+
+        assert!(env.runner.starts().is_empty(), "no session may start");
+        let task = env.task(&implement.meta.id);
+        assert_eq!(task.meta.status, TaskStatus::Attention);
+        assert_eq!(attention_code(&task), "ATTENTION_INTEGRITY_CHANGED");
+        let items = &task.meta.attention.as_ref().unwrap().params["items"];
+        assert!(items.contains("INTEGRITY_GIT_CONFIG_CHANGED"), "{items}");
+
+        // A plain retry is refused; accepting the change lets it run.
+        assert_eq!(
+            crate::workflow::actions::retry_task(
+                &env.orch,
+                env.fx.root(),
+                &implement.meta.id,
+                crate::workflow::actions::RetryOptions::default(),
+            )
+            .unwrap_err()
+            .code(),
+            "WORKFLOW_INTEGRITY_ACK_REQUIRED"
+        );
+        env.runner
+            .script(Script::complete(&completed("Implemented.")));
+        crate::workflow::actions::retry_task(
+            &env.orch,
+            env.fx.root(),
+            &implement.meta.id,
+            crate::workflow::actions::RetryOptions {
+                accept_integrity: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        env.wait_idle();
+        assert!(!env.runner.starts().is_empty());
+        assert_eq!(
+            env.task(&implement.meta.id).meta.status,
+            TaskStatus::Completed
+        );
     }
 
     #[test]

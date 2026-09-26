@@ -1672,6 +1672,26 @@ mod tests {
     }
 
     #[test]
+    fn a_leftover_worktree_with_its_own_commits_is_not_reused() {
+        let env = Env::new();
+        let root = env.root_task("A", "a");
+        let left =
+            gitops::create_worktree_in(env.fx.base(), env.fx.root(), &root.meta.id, "A").unwrap();
+        let wt = Path::new(&left.path);
+        gitops::test_support::write_file(
+            wt, "x.txt", "x
+",
+        );
+        gitops::git(wt, &["add", "x.txt"]).unwrap();
+        gitops::git(wt, &["commit", "-m", "x"]).unwrap();
+        assert!(matches!(env.begin(&root.meta.id), BeginResult::Parked));
+        let task = env.task(&root.meta.id);
+        assert_eq!(attention_code(&task), "ATTENTION_WORKTREE_FAILED");
+        assert_eq!(param(&task, "code"), gitops::GIT_WORKTREE_EXISTS);
+        assert_eq!(env.store.get_run(&root.meta.id), Err(StoreError::NotFound));
+    }
+
+    #[test]
     fn a_run_that_cannot_be_recorded_discards_its_new_worktree() {
         let env = Env::new();
         let root = env.root_task("A", "a");

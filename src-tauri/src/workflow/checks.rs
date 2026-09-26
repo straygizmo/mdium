@@ -33,6 +33,52 @@ const FINGERPRINT_BYTES_MAX: u64 = 64 * 1024 * 1024;
 /// [`FINGERPRINT_BYTES_MAX`].
 const INTEGRITY_FILE_TOO_LARGE: &str = "INTEGRITY_FILE_TOO_LARGE";
 
+/// Integrity change codes of the user's shared git config and hooks. Such
+/// a change is only accepted by an explicit acknowledgement (which makes
+/// the current state the run's baseline), never by a later attempt.
+pub const CONFIG_CHANGE_CODES: &[&str] = &[
+    "INTEGRITY_GIT_CONFIG_CHANGED",
+    "INTEGRITY_HOOKS_CHANGED",
+    "INTEGRITY_HOOKS_PATH_CHANGED",
+];
+
+/// The git config and hooks changes of `now` against the run's
+/// acknowledged integrity baseline (none when the run has no baseline yet).
+pub fn config_changes(run: &WorkflowRun, now: &IntegritySnapshot) -> Vec<IntegrityChange> {
+    let Some(baseline) = &run.integrity_baseline else {
+        return Vec::new();
+    };
+    compare(baseline, now)
+        .into_iter()
+        .filter(|change| CONFIG_CHANGE_CODES.contains(&change.code.as_str()))
+        .collect()
+}
+
+/// `ATTENTION_INTEGRITY_CHANGED` for the [`config_changes`] of `now`, if
+/// there are any. Checked before a session starts, so a change nobody
+/// acknowledged (for example one reported while the task was put on hold,
+/// whose reason was then dropped) is never absorbed by the next attempt's
+/// fresh snapshot.
+pub fn unacknowledged_config_change(
+    run: &WorkflowRun,
+    now: &IntegritySnapshot,
+) -> Option<AttentionReason> {
+    let changes = config_changes(run, now);
+    (!changes.is_empty()).then(|| {
+        let items: Vec<IntegrityChange> = changes
+            .into_iter()
+            .map(|change| IntegrityChange {
+                code: change.code,
+                detail: excerpt(&change.detail),
+            })
+            .collect();
+        to_attention(
+            "ATTENTION_INTEGRITY_CHANGED",
+            [("items", items_json(&items))],
+        )
+    })
+}
+
 /// Outcome of the post-attempt checks.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CheckResult {
