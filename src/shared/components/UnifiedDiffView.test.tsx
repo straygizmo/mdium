@@ -107,4 +107,9 @@ describe("UnifiedDiffView", () => {
     expect(note?.textContent).toBe(i18n.t("common:truncatedLines", { count: 7 }));
     expect(note?.textContent).toContain("7");
   });
+
+  it("uses the singular note for one hidden line", async () => {
+    await render("+a\n+b", 1);
+    expect(container.querySelector(".unified-diff__truncated")?.textContent).toBe("1 more line not shown");
+  });
 });

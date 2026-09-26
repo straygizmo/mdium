@@ -10,7 +10,13 @@
     "noRole": "役割なし",
     "updatedAt": "更新 {{time}}",
     "slot": "枠",
-    "holdsSlot": "同時実行枠を占有しています"
+    "holdsSlot": "同時実行枠を占有しています",
+    "stale": "タスク一覧を更新できませんでした。表示が古い可能性があります。"
+  },
+  "format": {
+    "finding": "{{kind}}（{{line}} 行目）: {{excerpt}}",
+    "moreItems_one": "…ほか {{count}} 件",
+    "moreItems_other": "…ほか {{count}} 件"
   },
   "awaiting": {
     "plan_approval": "計画の承認",

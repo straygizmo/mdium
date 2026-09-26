@@ -10,7 +10,13 @@
     "noRole": "No role",
     "updatedAt": "Updated {{time}}",
     "slot": "Slot",
-    "holdsSlot": "Holds a concurrency slot"
+    "holdsSlot": "Holds a concurrency slot",
+    "stale": "The task list could not be refreshed; it may be out of date."
+  },
+  "format": {
+    "finding": "{{kind}} (L{{line}}): {{excerpt}}",
+    "moreItems_one": "…and {{count}} more",
+    "moreItems_other": "…and {{count}} more"
   },
   "awaiting": {
     "plan_approval": "Plan approval",

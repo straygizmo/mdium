@@ -243,6 +243,17 @@ describe("Workspace", () => {
     expect(container.textContent).not.toContain(i18n.t("workflow:loading"));
   });
 
+  it("keeps the board and notes a failed refresh after a successful load", async () => {
+    setProject(project([task("t1", { status: "inbox" })], { loaded: true, error: "Refresh failed: detail" }));
+    await render();
+    const note = container.querySelector<HTMLElement>(".workflow-workspace__stale")!;
+    expect(note.getAttribute("role")).toBe("status");
+    expect(note.textContent).toContain(i18n.t("workflow:workspace.stale"));
+    expect(note.textContent).toContain("Refresh failed: detail");
+    expect(container.querySelector(".workflow-card")).not.toBeNull();
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
   it("labels columns and pluralizes the count tooltip", async () => {
     setProject(project([task("a")]));
     await render();

@@ -43,6 +43,23 @@
   white-space: pre-wrap;
 }
 
+.workflow-workspace__stale {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin: 0;
+  padding: 4px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.workflow-workspace__stale-detail {
+  color: var(--text-muted);
+  white-space: pre-wrap;
+}
+
 .workflow-workspace__view {
   display: flex;
   flex-shrink: 0;

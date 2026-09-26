@@ -38,7 +38,11 @@ function formatItem(item: unknown): string {
     // Screening finding: { kind, line, excerpt }.
     if (typeof item.kind === "string") {
       const excerpt = typeof item.excerpt === "string" ? item.excerpt : "";
-      return `${formatCode(item.kind)} (L${String(item.line ?? "?")}): ${excerpt}`;
+      return i18n.t("workflow:format.finding", {
+        kind: formatCode(item.kind),
+        line: String(item.line ?? "?"),
+        excerpt,
+      });
     }
     // Integrity change: { code, detail }.
     if (typeof item.code === "string") {
@@ -49,7 +53,10 @@ function formatItem(item: unknown): string {
   return JSON.stringify(item) ?? String(item);
 }
 
-/** Parses the `items` param (a JSON array string) into display lines. */
+/**
+ * Parses the `items` param (a JSON array string) into display lines: at most
+ * `MAX_ITEMS`, followed by a localized "and N more" line when some are cut off.
+ */
 function parseItems(raw: string | undefined): string[] {
   if (!raw) return [];
   let parsed: unknown;
@@ -59,11 +66,15 @@ function parseItems(raw: string | undefined): string[] {
     return [];
   }
   if (!Array.isArray(parsed)) return [];
-  return parsed.slice(0, MAX_ITEMS).map(formatItem);
+  const lines = parsed.slice(0, MAX_ITEMS).map(formatItem);
+  const rest = parsed.length - MAX_ITEMS;
+  if (rest > 0) lines.push(i18n.t("workflow:format.moreItems", { count: rest }));
+  return lines;
 }
 
 /**
- * Localizes an attention reason; list params become `items` (max 20).
+ * Localizes an attention reason; list params become `items` (max 20, plus
+ * an "and N more" line).
  * Code-bearing params are localized too: `codeText` from `params.code` and
  * `ruleText` from `params.rule` (guard rules).
  */

@@ -125,6 +125,12 @@ export function Workspace() {
           ))}
         </div>
       </header>
+      {!attachError && project?.loaded && project.error && (
+        <p className="workflow-workspace__stale" role="status">
+          <span>{t("workspace.stale")}</span>
+          <span className="workflow-workspace__stale-detail">{project.error}</span>
+        </p>
+      )}
       {content}
       <TaskDetailModal />
     </div>

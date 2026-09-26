@@ -77,13 +77,36 @@ describe("workflow format", () => {
       ]);
     });
 
-    it("renders plain string items and caps the list at 20", () => {
+    it("renders plain string items and caps the list at 20 with a note on the rest", () => {
       const paths = Array.from({ length: 25 }, (_, i) => `.claude/file${i}.json`);
       const result = formatAttention({
         code: "ATTENTION_AGENT_CONFIG_CHANGED",
         params: { items: JSON.stringify(paths) },
       });
-      expect(result.items).toEqual(paths.slice(0, 20));
+      expect(result.items).toEqual([...paths.slice(0, 20), i18n.t("workflow:format.moreItems", { count: 5 })]);
+      expect(result.items[20]).toBe("…and 5 more");
+      const exact = formatAttention({
+        code: "ATTENTION_AGENT_CONFIG_CHANGED",
+        params: { items: JSON.stringify(paths.slice(0, 20)) },
+      });
+      expect(exact.items).toEqual(paths.slice(0, 20));
+    });
+
+    it("pluralizes the note on the rest of the list", () => {
+      const paths = Array.from({ length: 21 }, (_, i) => `f${i}`);
+      const result = formatAttention({ code: "ATTENTION_AGENT_CONFIG_CHANGED", params: { items: JSON.stringify(paths) } });
+      expect(result.items[20]).toBe("…and 1 more");
+    });
+
+    it("localizes the finding line format", async () => {
+      const items = JSON.stringify([{ kind: "SCREENING_INJECTION_PHRASE", line: 4, excerpt: "x" }]);
+      await i18n.changeLanguage("ja");
+      try {
+        const [item] = formatAttention({ code: "ATTENTION_SCREENING_FLAGGED", params: { items } }).items;
+        expect(item).toBe(`${formatCode("SCREENING_INJECTION_PHRASE")}（4 行目）: x`);
+      } finally {
+        await i18n.changeLanguage("en");
+      }
     });
 
     it("returns no items for invalid or non-array JSON", () => {
