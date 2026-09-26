@@ -2,6 +2,19 @@
   "title": "WORKFLOWS",
   "noFolder": "ワークフローを使うにはフォルダーを開いてください。",
   "loading": "読み込み中…",
+  "emptyBoard": "表示するタスクはありません。",
+  "workspace": {
+    "count": "{{count}} 件のタスク",
+    "roleHeader": "役割",
+    "noRole": "役割なし",
+    "updatedAt": "更新 {{time}}",
+    "slot": "枠",
+    "holdsSlot": "同時実行枠を占有しています"
+  },
+  "awaiting": {
+    "plan_approval": "計画の承認",
+    "question": "質問"
+  },
   "template": {
     "standardName": "標準ワークフロー"
   },

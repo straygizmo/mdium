@@ -1,0 +1,64 @@
+.workflow-workspace {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  background: var(--bg-base);
+  color: var(--text);
+}
+
+.workflow-workspace__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.workflow-workspace__title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.workflow-workspace__message {
+  margin: 0;
+  padding: 16px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.workflow-workspace__view {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.workflow-workspace__view-btn {
+  background: none;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  padding: 3px 8px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.workflow-workspace__view-btn:first-child {
+  border-radius: 4px 0 0 4px;
+}
+
+.workflow-workspace__view-btn:last-child {
+  border-radius: 0 4px 4px 0;
+  border-left: none;
+}
+
+.workflow-workspace__view-btn--active {
+  background: var(--bg-overlay);
+  color: var(--text);
+}

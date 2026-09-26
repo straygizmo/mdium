@@ -2,6 +2,19 @@
   "title": "WORKFLOWS",
   "noFolder": "Open a folder to use workflows.",
   "loading": "Loading…",
+  "emptyBoard": "No tasks to show.",
+  "workspace": {
+    "count": "{{count}} tasks",
+    "roleHeader": "Role",
+    "noRole": "No role",
+    "updatedAt": "Updated {{time}}",
+    "slot": "Slot",
+    "holdsSlot": "Holds a concurrency slot"
+  },
+  "awaiting": {
+    "plan_approval": "Plan approval",
+    "question": "Question"
+  },
   "template": {
     "standardName": "Standard workflow"
   },

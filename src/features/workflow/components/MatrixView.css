@@ -1,0 +1,56 @@
+.workflow-matrix {
+  flex: 1;
+  min-height: 0;
+  padding: 8px;
+  overflow: auto;
+}
+
+.workflow-matrix__table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.workflow-matrix__table th,
+.workflow-matrix__table td {
+  border: 1px solid var(--border);
+  padding: 4px;
+  vertical-align: top;
+}
+
+.workflow-matrix__corner,
+.workflow-matrix__status,
+.workflow-matrix__role {
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.workflow-matrix__status {
+  width: 160px;
+}
+
+.workflow-matrix__cell {
+  width: 160px;
+}
+
+.workflow-matrix__count {
+  display: inline-block;
+  margin-bottom: 4px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--bg-overlay);
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.workflow-matrix__cards {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 240px;
+  overflow-y: auto;
+}

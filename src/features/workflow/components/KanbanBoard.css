@@ -1,0 +1,56 @@
+.workflow-kanban {
+  display: flex;
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+  padding: 8px;
+  overflow-x: auto;
+}
+
+.workflow-kanban__column {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 220px;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-surface);
+}
+
+.workflow-kanban__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.workflow-kanban__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-kanban__count {
+  flex-shrink: 0;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--bg-overlay);
+  color: var(--text-secondary);
+  font-size: 10px;
+  text-align: center;
+}
+
+.workflow-kanban__cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  overflow-y: auto;
+}
