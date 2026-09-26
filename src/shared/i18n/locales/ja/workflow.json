@@ -115,6 +115,55 @@
   "template": {
     "standardName": "標準ワークフロー"
   },
+  "edit": {
+    "title": "ワークフローの編集",
+    "name": "名前",
+    "enabled": "有効",
+    "stages": "ステージ",
+    "stageName": "ステージ名",
+    "provider": "プロバイダー",
+    "model": "モデル",
+    "modelPlaceholder": "プロバイダーの既定",
+    "prompt": "プロンプト",
+    "completionCriteria": "完了条件",
+    "timeoutMinutes": "制限時間（分）",
+    "requiresApproval": "計画の承認を必須にする",
+    "settings": "設定",
+    "reviewReturnTo": "レビューの差し戻し先",
+    "maxReentryCount": "最大再投入回数",
+    "maxConcurrentRuns": "最大同時実行数",
+    "saveDesignDoc": "設計ドキュメントを保存する",
+    "designDocPath": "設計ドキュメントのパス",
+    "designDocPathHelp": "{date} は日付に、{slug} はタスクのタイトルに置き換えられます。",
+    "issueTracking": "Issue 連携",
+    "issueTrackingOption": {
+      "auto": "自動",
+      "off": "オフ"
+    },
+    "unavailable": "{{provider}}（利用不可: {{reason}}）",
+    "availability": {
+      "missing": "未インストール",
+      "unauthenticated": "未サインイン",
+      "too_old": "バージョンが古い",
+      "error": "確認に失敗"
+    },
+    "errors": "ワークフローを保存できませんでした:",
+    "save": "保存",
+    "cancel": "キャンセル"
+  },
+  "create": {
+    "title": "新しいタスク",
+    "taskTitle": "タイトル",
+    "body": "説明（Markdown）",
+    "write": "編集",
+    "preview": "プレビュー",
+    "emptyPreview": "プレビューする内容がありません。",
+    "workflow": "ワークフロー",
+    "noWorkflows": "有効なワークフローがありません。パネルでワークフローを有効にするか、標準ワークフローを追加して有効にしてください。",
+    "create": "作成",
+    "cancel": "キャンセル",
+    "failed": "タスクを作成できませんでした。"
+  },
   "panel": {
     "workflows": "ワークフロー",
     "empty": "ワークフローはまだありません。",

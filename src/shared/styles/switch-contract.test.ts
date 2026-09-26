@@ -16,6 +16,7 @@ const targetStylesheets: string[] = [
   "src/features/workflow/components/WorkflowPanel.css",
   "src/features/workflow/components/RetryDialog.css",
   "src/features/workflow/components/MergeSection.css",
+  "src/features/workflow/components/WorkflowEditDialog.css",
 ];
 
 // Components that render span-based switches. Extended as features adopt data-switch.
@@ -40,6 +41,7 @@ const checkboxSwitchComponents: string[] = [
   "src/features/workflow/components/WorkflowPanel.tsx",
   "src/features/workflow/components/RetryDialog.tsx",
   "src/features/workflow/components/MergeSection.tsx",
+  "src/features/workflow/components/WorkflowEditDialog.tsx",
 ];
 
 function cssRules(css: string): Array<[selector: string, body: string]> {

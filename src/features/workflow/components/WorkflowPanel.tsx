@@ -6,6 +6,8 @@ import type { Provider, StoreWarning, Workflow, WorkflowInput } from "@/shared/t
 import { formatCode, formatCommandError } from "../lib/format";
 import { workflowApi } from "../lib/workflow-api";
 import { useWorkflowStore } from "../workflow-store";
+import { CreateTaskDialog } from "./CreateTaskDialog";
+import { WorkflowEditDialog } from "./WorkflowEditDialog";
 import "./WorkflowPanel.css";
 
 const PROVIDERS: readonly Provider[] = ["codex", "copilot", "opencode", "claude"];
@@ -14,9 +16,9 @@ const PROVIDERS: readonly Provider[] = ["codex", "copilot", "opencode", "claude"
 const WORKFLOWS_SCHEMA_VERSION = 1;
 
 interface WorkflowPanelProps {
-  /** Opens the task creation dialog; the button is hidden without it. */
+  /** Replaces the built-in task creation dialog. */
   onCreateTask?: () => void;
-  /** Opens the workflow edit dialog; the button is hidden without it. */
+  /** Replaces the built-in workflow edit dialog. */
   onEditWorkflow?: (workflow: Workflow) => void;
   /** Asked before a workflow is enabled; resolves false to keep it disabled. */
   confirmEnable?: (workflow: Workflow) => Promise<boolean>;
@@ -43,12 +45,22 @@ export function WorkflowPanel({ onCreateTask, onEditWorkflow, confirmEnable = al
   const setFilters = useWorkflowStore((s) => s.setFilters);
   const [provider, setProvider] = useState<Provider>("codex");
   const [busy, setBusy] = useState(false);
+  /** Workflow shown in the built-in edit dialog. */
+  const [editing, setEditing] = useState<Workflow | null>(null);
+  /** Whether the built-in task creation dialog is open. */
+  const [creating, setCreating] = useState(false);
   /** Synchronous guard: only one workflow operation runs at a time. */
   const busyRef = useRef(false);
 
   useEffect(() => {
     void useWorkflowStore.getState().activate(activeFolderPath);
   }, [activeFolderPath]);
+
+  // Dialogs belong to the project they were opened for.
+  useEffect(() => {
+    setEditing(null);
+    setCreating(false);
+  }, [activeRoot]);
 
   const workflows = project?.workflows ?? [];
   /** Workflows listed in the panel and in the workflow filter. */
@@ -148,8 +160,23 @@ export function WorkflowPanel({ onCreateTask, onEditWorkflow, confirmEnable = al
         .run(t("panel.addFailed"), (root) => workflowApi.addStandard(root, name.trim(), provider));
     });
 
+  const openCreate = onCreateTask ?? (() => setCreating(true));
+  const openEdit = onEditWorkflow ?? setEditing;
+
   return (
     <div className="workflow-panel">
+      {editing && (
+        <WorkflowEditDialog workflow={editing} confirmEnable={confirmEnable} onClose={() => setEditing(null)} />
+      )}
+      {creating && (
+        <CreateTaskDialog
+          onClose={() => setCreating(false)}
+          onAddStandard={() => {
+            setCreating(false);
+            void addStandard();
+          }}
+        />
+      )}
       {attachError && (
         <p className="workflow-panel__error" role="alert">
           {attachError}
@@ -162,11 +189,9 @@ export function WorkflowPanel({ onCreateTask, onEditWorkflow, confirmEnable = al
       )}
       {activeRoot && (
         <>
-          {onCreateTask && (
-            <button type="button" className="workflow-panel__btn workflow-panel__btn--primary" onClick={onCreateTask}>
-              {t("panel.newTask")}
-            </button>
-          )}
+          <button type="button" className="workflow-panel__btn workflow-panel__btn--primary" onClick={openCreate}>
+            {t("panel.newTask")}
+          </button>
 
           <section className="workflow-panel__section">
             <h3 className="workflow-panel__heading">{t("panel.workflows")}</h3>
@@ -204,11 +229,9 @@ export function WorkflowPanel({ onCreateTask, onEditWorkflow, confirmEnable = al
                     {w.stages.map((s) => t(`provider.${s.provider}`)).join(" / ")}
                   </div>
                   <div className="workflow-panel__workflow-actions">
-                    {onEditWorkflow && (
-                      <button type="button" className="workflow-panel__btn" disabled={busy} onClick={() => onEditWorkflow(w)}>
-                        {t("panel.edit")}
-                      </button>
-                    )}
+                    <button type="button" className="workflow-panel__btn" disabled={busy} onClick={() => openEdit(w)}>
+                      {t("panel.edit")}
+                    </button>
                     {w.archived ? (
                       <>
                         <button type="button" className="workflow-panel__btn" disabled={busy} onClick={() => void restore(w)}>

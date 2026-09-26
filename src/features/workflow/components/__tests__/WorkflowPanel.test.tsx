@@ -12,6 +12,8 @@ const api = vi.hoisted(() => ({
   saveWorkflows: vi.fn(),
   addStandard: vi.fn(),
   activeRunCount: vi.fn(),
+  probeProviders: vi.fn(),
+  createTask: vi.fn(),
 }));
 const dialogs = vi.hoisted(() => ({
   showMessage: vi.fn(),
@@ -78,6 +80,7 @@ describe("WorkflowPanel", () => {
     api.listRuns.mockResolvedValue({ runs: [], warnings: [] });
     api.saveWorkflows.mockResolvedValue(undefined);
     api.activeRunCount.mockResolvedValue(0);
+    api.probeProviders.mockResolvedValue([]);
     useTabStore.setState({ activeFolderPath: "C:/proj" });
     container = document.createElement("div");
     root = createRoot(container);
@@ -304,11 +307,43 @@ describe("WorkflowPanel", () => {
     expect(useWorkflowStore.getState().filters.workflowId).toBeNull();
   });
 
-  it("shows the new task and edit buttons only when their handlers are given", async () => {
+  it("opens the built-in edit and task creation dialogs", async () => {
     await render();
-    expect(button(container, i18n.t("workflow:panel.newTask"))).toBeUndefined();
-    expect(button(row("wf1")!, i18n.t("workflow:panel.edit"))).toBeUndefined();
+    await act(async () => button(row("wf1")!, i18n.t("workflow:panel.edit"))!.click());
+    const edit = container.querySelector('[role="dialog"]')!;
+    expect(edit.textContent).toContain(i18n.t("workflow:edit.title"));
+    expect(edit.querySelector<HTMLInputElement>('[name="name"]')!.value).toBe("Flow wf1");
+    await act(async () => button(edit, i18n.t("workflow:edit.cancel"))!.click());
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
 
+    await act(async () => button(container, i18n.t("workflow:panel.newTask"))!.click());
+    const create = container.querySelector('[role="dialog"]')!;
+    expect(create.textContent).toContain(i18n.t("workflow:create.title"));
+    const options = [...create.querySelectorAll<HTMLOptionElement>('[name="workflow"] option')].map((o) => o.value);
+    expect(options).toEqual(["wf2"]);
+  });
+
+  it("passes the enable confirmation to the edit dialog", async () => {
+    const confirmEnable = vi.fn(async () => false);
+    await render({ confirmEnable });
+    await act(async () => button(row("wf1")!, i18n.t("workflow:panel.edit"))!.click());
+    const enabled = container.querySelector<HTMLInputElement>('[role="dialog"] [name="enabled"]')!;
+    await act(async () => enabled.click());
+    expect(confirmEnable).toHaveBeenCalledWith(expect.objectContaining({ id: "wf1" }));
+    expect(enabled.checked).toBe(false);
+  });
+
+  it("closes the create dialog and adds the standard workflow from it", async () => {
+    workflows = [workflow("wf1")];
+    dialogs.showPrompt.mockResolvedValue(null);
+    await render();
+    await act(async () => button(container, i18n.t("workflow:panel.newTask"))!.click());
+    await act(async () => button(container.querySelector('[role="dialog"]')!, i18n.t("workflow:panel.addStandard"))!.click());
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(dialogs.showPrompt).toHaveBeenCalled();
+  });
+
+  it("uses the given handlers instead of the built-in dialogs", async () => {
     const onCreateTask = vi.fn();
     const onEditWorkflow = vi.fn();
     await render({ onCreateTask, onEditWorkflow });
@@ -316,5 +351,6 @@ describe("WorkflowPanel", () => {
     expect(onCreateTask).toHaveBeenCalled();
     await act(async () => button(row("wf1")!, i18n.t("workflow:panel.edit"))!.click());
     expect(onEditWorkflow).toHaveBeenCalledWith(expect.objectContaining({ id: "wf1" }));
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
   });
 });

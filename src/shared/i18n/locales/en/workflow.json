@@ -115,6 +115,55 @@
   "template": {
     "standardName": "Standard workflow"
   },
+  "edit": {
+    "title": "Edit workflow",
+    "name": "Name",
+    "enabled": "Enabled",
+    "stages": "Stages",
+    "stageName": "Stage name",
+    "provider": "Provider",
+    "model": "Model",
+    "modelPlaceholder": "Provider default",
+    "prompt": "Prompt",
+    "completionCriteria": "Completion criteria",
+    "timeoutMinutes": "Time limit (minutes)",
+    "requiresApproval": "Require plan approval",
+    "settings": "Settings",
+    "reviewReturnTo": "Review sends tasks back to",
+    "maxReentryCount": "Maximum re-entries",
+    "maxConcurrentRuns": "Maximum concurrent runs",
+    "saveDesignDoc": "Save the design document",
+    "designDocPath": "Design document path",
+    "designDocPathHelp": "{date} is replaced with the date and {slug} with the task title.",
+    "issueTracking": "Issue tracking",
+    "issueTrackingOption": {
+      "auto": "Automatic",
+      "off": "Off"
+    },
+    "unavailable": "{{provider}} (unavailable: {{reason}})",
+    "availability": {
+      "missing": "not installed",
+      "unauthenticated": "not signed in",
+      "too_old": "version too old",
+      "error": "check failed"
+    },
+    "errors": "The workflow could not be saved:",
+    "save": "Save",
+    "cancel": "Cancel"
+  },
+  "create": {
+    "title": "New task",
+    "taskTitle": "Title",
+    "body": "Description (Markdown)",
+    "write": "Write",
+    "preview": "Preview",
+    "emptyPreview": "Nothing to preview.",
+    "workflow": "Workflow",
+    "noWorkflows": "No workflow is enabled. Enable a workflow in the panel, or add the standard workflow and enable it.",
+    "create": "Create",
+    "cancel": "Cancel",
+    "failed": "The task could not be created."
+  },
   "panel": {
     "workflows": "Workflows",
     "empty": "No workflows yet.",
