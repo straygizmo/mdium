@@ -18,3 +18,4 @@ pub mod runner_client;
 pub mod screening;
 pub mod state;
 pub mod store;
+pub mod template;

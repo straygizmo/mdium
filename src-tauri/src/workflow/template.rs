@@ -1,0 +1,251 @@
+//! The builtin "standard" workflow template: a design -> implement -> review
+//! pipeline with self-contained English stage prompts.
+//!
+//! The prompts here are only the stage-specific part of what an agent sees;
+//! `prompt.rs` wraps them with the task, requirement, previous-stage input,
+//! user instructions, review diff and the frontmatter output contract. They
+//! therefore do not restate the output contract, and stay in English
+//! (user-facing names and descriptions are localized by the UI instead).
+
+use crate::workflow::fsutil::new_id;
+use crate::workflow::model::{
+    IssueTracking, Provider, Role, Stage, Workflow, DEFAULT_MAX_CONCURRENT_RUNS,
+    DEFAULT_MAX_REENTRY_COUNT, DEFAULT_TIMEOUT_MINUTES,
+};
+
+/// Suggested `Workflow::design_doc_path` offered by the UI. `{date}` and
+/// `{slug}` are rendered when the design document is written.
+pub const DEFAULT_DESIGN_DOC_PATH: &str = "docs/designs/{date}-{slug}-design.md";
+
+/// Stage instructions for the design stage (read-only).
+pub const DESIGN_PROMPT: &str = r#"You are the design stage of an automated design -> implement -> review pipeline. Your job is to turn the requirement into a concrete, reviewable technical design that another engineer can implement without having to ask you anything.
+
+Do not modify, create or delete any file, and do not run commands that change the repository or its git state. You may read files and run read-only commands (listing, searching, viewing history) to understand the code.
+
+How to work:
+1. Read the requirement carefully and work out what must be true when the work is done. If the input from the previous stage contains review findings, this is a revision: address every finding in the new design and state how each one is resolved.
+2. Explore the repository: its layout, build and test setup, coding conventions, and any project instructions. Identify the modules, files, types and functions the change affects, and the existing tests around them.
+3. Consider at least two ways to implement the requirement, compare them on correctness, risk, size of the change and fit with the existing code, and choose one.
+4. Write the design document as your final response body, in Markdown, with exactly these sections:
+
+## Goal
+What the change achieves, in a few sentences, and what is explicitly out of scope.
+
+## Context
+The existing code that is relevant, with real repository-relative file paths (and function or type names), and how it currently behaves.
+
+## Approach
+The alternatives you considered, the approach you chose, and why.
+
+## Changes
+A list per file: the file path, whether it is new or modified, and what changes in it.
+
+## Data/Interfaces
+New or changed data structures, function signatures, APIs, configuration, file formats or persisted data, including compatibility with existing data.
+
+## Error handling
+How failures and invalid input are detected, reported and recovered from.
+
+## Test plan
+The concrete tests to add or change: for each, the test file, a descriptive test name, and the behavior it verifies. Include the commands to run them.
+
+## Risks/Open questions
+What could go wrong, what you assumed, and anything the implementer should watch for.
+
+The design document is handed to the implement stage as its only description of the work, so make it self-contained. Keep it specific to this repository: name real paths and identifiers, not placeholders. Prefer the smallest design that fully satisfies the requirement. If the requirement is too ambiguous to design responsibly, ask one precise question instead of guessing."#;
+
+/// Completion criteria for the design stage.
+pub const DESIGN_CRITERIA: &str = r#"The design is complete only when all of the following hold:
+- Every point of the requirement (and every review finding in the input, if any) is addressed in the design or explicitly listed as out of scope.
+- Every file path referenced as existing actually exists in the repository; new files are clearly marked as new.
+- The test plan names concrete tests (file and test name) and the behavior each one verifies.
+- No file in the repository was modified."#;
+
+/// Stage instructions for the implement stage (full access in the run's
+/// worktree).
+pub const IMPLEMENT_PROMPT: &str = r#"You are the implement stage of an automated design -> implement -> review pipeline. Implement the requirement by following the design document given as the input from the previous stage. If that input instead lists review findings to address, fix every finding.
+
+Your working directory is a dedicated git worktree on its own branch, created for this task. Work only inside it.
+
+How to work:
+1. Read the design and the code it references. If the design is wrong or incomplete in a way that matters, make the smallest sound correction and explain it in your summary; if you cannot proceed safely, stop and report why.
+2. Work test-first for each piece of behavior: write a failing test, run it and confirm it fails for the expected reason, write the minimum code to make it pass, run the tests again, then refactor while keeping them green.
+3. Keep the change minimal and focused on the requirement. Follow the existing style, structure and conventions of the surrounding code. Do not reformat, rename or reorganize unrelated code.
+4. Run the full relevant test suite (and any build or lint step the project uses) before you finish, and fix any failure you caused.
+5. Commit your work in logical steps with clear, descriptive messages using `git commit` inside the working directory. Leave no uncommitted changes that belong to the work.
+
+Rules you must not break:
+- Never push, never add, remove or change git remotes, and never switch branches or rewrite the history of other branches.
+- Never edit configuration files of coding agents or tools (for example agent instruction, settings, hook or MCP server configuration files), and never try to weaken sandboxing or permissions.
+- Never add secrets, credentials or tokens to the repository.
+
+Finish with a summary as your final response body: what you changed and why (per file), any deviation from the design and the reason, the tests you added, and the exact test commands you ran with their results. The review stage reads this summary together with the diff."#;
+
+/// Completion criteria for the implement stage.
+pub const IMPLEMENT_CRITERIA: &str = r#"The implementation is complete only when all of the following hold:
+- All new or changed behavior is covered by tests that verify the behavior, not just that the code runs.
+- The full relevant test suite passes, and you ran it after your last change.
+- All work is committed on the current branch; there are no uncommitted changes that belong to the work.
+- There are no unrelated changes (no drive-by refactoring, reformatting or configuration edits)."#;
+
+/// Stage instructions for the review stage (read-only).
+pub const REVIEW_PROMPT: &str = r#"You are the review stage of an automated design -> implement -> review pipeline. Review the changes provided in the input (the diff of the work branch against its base) against the requirement, and against the design and implementation summary from the previous stages.
+
+Do not modify, create or delete any file, and do not run commands that change the repository or its git state. You may read files and run read-only commands, and you may run the tests as long as doing so does not modify tracked files.
+
+Check at least:
+- Correctness: logic errors, edge cases, off-by-one errors, concurrency and ordering issues, broken existing behavior.
+- Missing requirements: anything the requirement or design asks for that the change does not do.
+- Tests: whether the tests actually verify the new behavior and would fail if it were broken, and whether important cases are untested.
+- Error handling: failures that are ignored, swallowed, or reported unclearly.
+- Security: injection (shell, SQL, path, HTML), hardcoded secrets, unsafe file or process use, missing validation of untrusted input.
+- Maintainability: clarity, naming, duplication, and consistency with the existing code.
+
+Report each finding with its location as file:line, a severity, what is wrong, and how to fix it. Use these severities:
+- Critical: incorrect behavior, data loss, a security problem, or a failing build or test.
+- Important: a missing requirement, missing tests for new behavior, poor error handling, or a significant maintainability problem.
+- Minor: style, naming or small optional improvements.
+
+Write the findings so they can be acted on without this conversation: the next stage receives only your final response body. If the diff is truncated, review what is shown and read the remaining changed files from the working directory."#;
+
+/// Completion criteria for the review stage.
+pub const REVIEW_CRITERIA: &str = r#"Use `outcome: completed` only when there are no Critical or Important findings; Minor findings may still be listed in the body.
+Otherwise use `outcome: attention`, list all findings in the body grouped by severity, and give a one-line `reason` summarizing them (for example the number of Critical and Important findings)."#;
+
+/// Builds a new builtin "standard" workflow named `name` (the caller passes
+/// the localized name) whose three stages all use `provider`. It starts
+/// disabled so the user can review it before it picks up tasks.
+pub fn standard_workflow(name: &str, provider: Provider) -> Workflow {
+    let stage = |role: Role, stage_name: &str, prompt: &str, criteria: &str| Stage {
+        id: new_id(),
+        role,
+        name: stage_name.to_string(),
+        prompt: prompt.to_string(),
+        completion_criteria: criteria.to_string(),
+        provider,
+        model: None,
+        requires_approval: false,
+        timeout_minutes: DEFAULT_TIMEOUT_MINUTES,
+    };
+
+    Workflow {
+        id: new_id(),
+        name: name.to_string(),
+        enabled: false,
+        archived: false,
+        stages: vec![
+            stage(Role::Design, "design", DESIGN_PROMPT, DESIGN_CRITERIA),
+            stage(
+                Role::Implement,
+                "implement",
+                IMPLEMENT_PROMPT,
+                IMPLEMENT_CRITERIA,
+            ),
+            stage(Role::Review, "review", REVIEW_PROMPT, REVIEW_CRITERIA),
+        ],
+        review_return_to: Role::Design,
+        max_reentry_count: DEFAULT_MAX_REENTRY_COUNT,
+        max_concurrent_runs: DEFAULT_MAX_CONCURRENT_RUNS,
+        design_doc_path: None,
+        issue_tracking: IssueTracking::Off,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workflow::fsutil::is_valid_id;
+    use crate::workflow::model::{IssueTracking, Role};
+
+    #[test]
+    fn standard_workflow_is_valid() {
+        let workflow = standard_workflow("x", Provider::Codex);
+        assert_eq!(workflow.validate(), Ok(()));
+    }
+
+    #[test]
+    fn standard_workflow_has_roles_in_order_with_role_names() {
+        let workflow = standard_workflow("x", Provider::Codex);
+        let roles: Vec<Role> = workflow.stages.iter().map(|s| s.role).collect();
+        assert_eq!(roles, vec![Role::Design, Role::Implement, Role::Review]);
+        let names: Vec<&str> = workflow.stages.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["design", "implement", "review"]);
+    }
+
+    #[test]
+    fn standard_workflow_uses_given_name_provider_and_defaults() {
+        let workflow = standard_workflow("My flow", Provider::Opencode);
+        assert_eq!(workflow.name, "My flow");
+        assert!(!workflow.enabled);
+        assert!(!workflow.archived);
+        assert_eq!(workflow.review_return_to, Role::Design);
+        assert_eq!(workflow.max_reentry_count, 5);
+        assert_eq!(workflow.max_concurrent_runs, 1);
+        assert_eq!(workflow.design_doc_path, None);
+        assert_eq!(workflow.issue_tracking, IssueTracking::Off);
+        for stage in &workflow.stages {
+            assert_eq!(stage.provider, Provider::Opencode);
+            assert_eq!(stage.model, None);
+            assert!(!stage.requires_approval);
+            assert_eq!(stage.timeout_minutes, 60);
+        }
+    }
+
+    #[test]
+    fn standard_workflow_uses_the_builtin_prompts() {
+        let workflow = standard_workflow("x", Provider::Claude);
+        let texts: Vec<(&str, &str)> = workflow
+            .stages
+            .iter()
+            .map(|s| (s.prompt.as_str(), s.completion_criteria.as_str()))
+            .collect();
+        assert_eq!(
+            texts,
+            vec![
+                (DESIGN_PROMPT, DESIGN_CRITERIA),
+                (IMPLEMENT_PROMPT, IMPLEMENT_CRITERIA),
+                (REVIEW_PROMPT, REVIEW_CRITERIA),
+            ]
+        );
+    }
+
+    #[test]
+    fn prompts_are_non_empty_ascii() {
+        for text in [
+            DESIGN_PROMPT,
+            DESIGN_CRITERIA,
+            IMPLEMENT_PROMPT,
+            IMPLEMENT_CRITERIA,
+            REVIEW_PROMPT,
+            REVIEW_CRITERIA,
+            DEFAULT_DESIGN_DOC_PATH,
+        ] {
+            assert!(!text.trim().is_empty());
+            assert!(text.is_ascii(), "non-ASCII text in: {text}");
+        }
+    }
+
+    #[test]
+    fn ids_are_valid_and_distinct() {
+        let workflow = standard_workflow("x", Provider::Codex);
+        let mut ids = vec![workflow.id.as_str()];
+        ids.extend(workflow.stages.iter().map(|s| s.id.as_str()));
+        for id in &ids {
+            assert!(is_valid_id(id), "invalid id {id}");
+        }
+        let mut unique = ids.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), ids.len());
+
+        let other = standard_workflow("x", Provider::Codex);
+        assert_ne!(other.id, workflow.id);
+    }
+
+    #[test]
+    fn default_design_doc_path_is_accepted_by_validation() {
+        let mut workflow = standard_workflow("x", Provider::Codex);
+        workflow.design_doc_path = Some(DEFAULT_DESIGN_DOC_PATH.to_string());
+        assert_eq!(workflow.validate(), Ok(()));
+    }
+}
