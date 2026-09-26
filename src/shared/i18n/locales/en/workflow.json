@@ -149,7 +149,8 @@
     },
     "errors": "The workflow could not be saved:",
     "save": "Save",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "discardConfirm": "Discard the changes to this workflow?"
   },
   "create": {
     "title": "New task",
@@ -162,7 +163,8 @@
     "noWorkflows": "No workflow is enabled. Enable a workflow in the panel, or add the standard workflow and enable it.",
     "create": "Create",
     "cancel": "Cancel",
-    "failed": "The task could not be created."
+    "failed": "The task could not be created.",
+    "discardConfirm": "Discard this new task?"
   },
   "panel": {
     "workflows": "Workflows",

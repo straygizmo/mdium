@@ -215,4 +215,33 @@ describe("CreateTaskDialog", () => {
     await act(async () => button(i18n.t("workflow:panel.addStandard"))!.click());
     expect(onAddStandard).toHaveBeenCalled();
   });
+
+  it("asks before discarding a typed task and closes from the overlay only on a full press", async () => {
+    await render();
+    const overlay = container.querySelector<HTMLElement>(".workflow-create-overlay")!;
+    const dialog = container.querySelector<HTMLElement>('[role="dialog"]')!;
+    await act(async () => {
+      dialog.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      overlay.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(onClose).not.toHaveBeenCalled();
+
+    await act(async () => setValue(field("title")!, "Draft"));
+    dialogs.showConfirm.mockResolvedValueOnce(false);
+    await act(async () =>
+      dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })),
+    );
+    expect(dialogs.showConfirm).toHaveBeenCalledWith(
+      i18n.t("workflow:create.discardConfirm"),
+      expect.objectContaining({ kind: "warning" }),
+    );
+    expect(onClose).not.toHaveBeenCalled();
+
+    dialogs.showConfirm.mockResolvedValueOnce(true);
+    await act(async () => {
+      overlay.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      overlay.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
 });

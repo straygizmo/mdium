@@ -14,6 +14,7 @@ import { trapTab, useDialogFocus } from "../lib/dialog-focus";
 import { isCommandError, isRecord } from "../lib/errors";
 import { formatCode, formatCommandError } from "../lib/format";
 import { workflowApi } from "../lib/workflow-api";
+import { showConfirm } from "@/stores/dialog-store";
 import { useWorkflowStore } from "../workflow-store";
 import "./WorkflowEditDialog.css";
 
@@ -65,10 +66,32 @@ function unavailableReason(result: unknown, t: (key: string) => string): string 
   return CODE_PATTERN.test(detail) ? `${label}: ${formatCode(detail)}` : label;
 }
 
-/** Parses a number field; an empty or invalid value becomes 0 (rejected by validation). */
-function toCount(value: string): number {
-  const n = Number.parseInt(value, 10);
-  return Number.isFinite(n) ? n : 0;
+/** Largest value the backend accepts for a count (`u32`). */
+const MAX_COUNT = 4294967295;
+
+/** Parses a count field: a whole number from 1 to `MAX_COUNT`, else null. */
+export function parseCount(raw: string): number | null {
+  const text = raw.trim();
+  if (!/^\d+$/.test(text)) return null;
+  const n = Number(text);
+  return n >= 1 && n <= MAX_COUNT ? n : null;
+}
+
+/** Raw text of the number fields, validated on save. */
+interface NumberFields {
+  timeouts: Record<Role, string>;
+  maxReentryCount: string;
+  maxConcurrentRuns: string;
+}
+
+function numberFields(workflow: Workflow): NumberFields {
+  const timeouts: Record<Role, string> = { design: "", implement: "", review: "" };
+  for (const s of workflow.stages) timeouts[s.role] = String(s.timeoutMinutes);
+  return {
+    timeouts,
+    maxReentryCount: String(workflow.maxReentryCount),
+    maxConcurrentRuns: String(workflow.maxConcurrentRuns),
+  };
 }
 
 interface WorkflowEditDialogProps {
@@ -82,6 +105,23 @@ interface WorkflowEditDialogProps {
 export function WorkflowEditDialog({ workflow, confirmEnable, onClose }: WorkflowEditDialogProps) {
   const { t } = useTranslation("workflow");
   const [draft, setDraft] = useState<Workflow>(workflow);
+  const [numbers, setNumbers] = useState<NumberFields>(() => numberFields(workflow));
+  /** The user's enabled choice; null keeps the latest stored value. */
+  const [enabledChoice, setEnabledChoice] = useState<boolean | null>(null);
+  /** Whether `confirmEnable` accepted enabling in this dialog. */
+  const enableConfirmedRef = useRef(false);
+  const closingRef = useRef(false);
+  /** Whether the current pointer press started on the overlay. */
+  const pressOnOverlayRef = useRef(false);
+  const stored = useWorkflowStore((st) =>
+    st.activeRoot ? st.projects[st.activeRoot]?.workflows.find((w) => w.id === workflow.id) : undefined,
+  );
+  const storedEnabled = stored?.enabled ?? workflow.enabled;
+  const enabled = enabledChoice ?? storedEnabled;
+  const dirty =
+    enabledChoice !== null ||
+    JSON.stringify(draft) !== JSON.stringify(workflow) ||
+    JSON.stringify(numbers) !== JSON.stringify(numberFields(workflow));
   const [availability, setAvailability] = useState<Partial<Record<Provider, string | null>>>({});
   const [errors, setErrors] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
@@ -111,58 +151,118 @@ export function WorkflowEditDialog({ workflow, confirmEnable, onClose }: Workflo
   const patchStage = (role: Role, p: Partial<Stage>) =>
     setDraft((d) => ({ ...d, stages: d.stages.map((s) => (s.role === role ? { ...s, ...p } : s)) }));
 
-  const toggleEnabled = async (checked: boolean) => {
-    if (!checked || workflow.enabled) {
-      patch({ enabled: checked });
-      return;
-    }
-    if (confirmingRef.current) return;
+  /** Asks `confirmEnable` once per dialog; resolves whether enabling may proceed. */
+  const confirmEnabling = async () => {
+    if (enableConfirmedRef.current) return true;
+    if (confirmingRef.current) return false;
     confirmingRef.current = true;
     try {
-      if (await confirmEnable({ ...draft, enabled: true })) patch({ enabled: true });
+      enableConfirmedRef.current = await confirmEnable({ ...draft, enabled: true });
+      return enableConfirmedRef.current;
     } finally {
       confirmingRef.current = false;
     }
   };
 
+  const toggleEnabled = async (checked: boolean) => {
+    // Only enabling a workflow that is stored as disabled needs the confirmation.
+    if (checked && !storedEnabled && !(await confirmEnabling())) return;
+    setEnabledChoice(checked);
+  };
+
+  /** Localizes a validation detail: a stage id becomes its role label. */
+  const detailText = (detail: string) => {
+    const stage = draft.stages.find((s) => s.id === detail);
+    return stage ? t(`role.${stage.role}`) : detail;
+  };
+
+  /** Client-side check of the number fields; returns the error lines. */
+  const numberErrors = (): string[] => {
+    const lines: string[] = [];
+    for (const role of ROLES) {
+      if (draft.stages.some((s) => s.role === role) && parseCount(numbers.timeouts[role]) === null) {
+        lines.push(`${formatCode("WORKFLOW_INVALID_TIMEOUT")} (${t(`role.${role}`)})`);
+      }
+    }
+    if (parseCount(numbers.maxReentryCount) === null) lines.push(formatCode("WORKFLOW_INVALID_MAX_REENTRY"));
+    if (parseCount(numbers.maxConcurrentRuns) === null) lines.push(formatCode("WORKFLOW_INVALID_MAX_CONCURRENT"));
+    return lines;
+  };
+
   const save = async () => {
     if (saving) return;
+    const invalid = numberErrors();
+    setErrors(invalid);
+    if (invalid.length > 0) return;
     setSaving(true);
-    setErrors([]);
-    const saved: Workflow = {
-      ...draft,
-      stages: draft.stages.map((s) => ({ ...s, model: s.model?.trim() ? s.model.trim() : null })),
-    };
-    const ok = await useWorkflowStore.getState().run(t("panel.saveFailed"), async (root) => {
-      const current = useWorkflowStore.getState().projects[root]?.workflows ?? [];
-      if (!current.some((w) => w.id === saved.id)) {
-        const missing: CommandError = { code: WORKFLOW_NOT_FOUND, message: saved.id };
-        throw missing;
-      }
-      // Keep the latest archived flag: it is not edited here.
-      const workflows: WorkflowInput[] = current.map((w) => (w.id === saved.id ? { ...saved, archived: w.archived } : w));
-      try {
-        await workflowApi.saveWorkflows(root, { schemaVersion: WORKFLOWS_SCHEMA_VERSION, workflows });
-      } catch (err) {
-        if (!isCommandError(err) || err.code !== STORE_INVALID) throw err;
-        const issues = parseValidationErrors(err.message);
-        setErrors(
-          issues.length > 0
-            ? issues.map((i) => (i.detail ? `${formatCode(i.code)} (${i.detail})` : formatCode(i.code)))
-            : [formatCommandError(err)],
+    try {
+      const saved: Workflow = {
+        ...draft,
+        maxReentryCount: parseCount(numbers.maxReentryCount)!,
+        maxConcurrentRuns: parseCount(numbers.maxConcurrentRuns)!,
+        stages: draft.stages.map((s) => ({
+          ...s,
+          model: s.model?.trim() ? s.model.trim() : null,
+          timeoutMinutes: parseCount(numbers.timeouts[s.role])!,
+        })),
+      };
+      // Enabling is decided against the latest stored copy, not the one the dialog opened with.
+      const state = useWorkflowStore.getState();
+      const latest = state.activeRoot
+        ? state.projects[state.activeRoot]?.workflows.find((w) => w.id === saved.id)
+        : undefined;
+      if (enabledChoice === true && latest && !latest.enabled && !(await confirmEnabling())) return;
+      const ok = await useWorkflowStore.getState().run(t("panel.saveFailed"), async (root) => {
+        const current = useWorkflowStore.getState().projects[root]?.workflows ?? [];
+        if (!current.some((w) => w.id === saved.id)) {
+          const missing: CommandError = { code: WORKFLOW_NOT_FOUND, message: saved.id };
+          throw missing;
+        }
+        // Keep the latest archived flag (not edited here) and, unless changed here, the enabled flag.
+        const workflows: WorkflowInput[] = current.map((w) =>
+          w.id === saved.id ? { ...saved, archived: w.archived, enabled: enabledChoice ?? w.enabled } : w,
         );
-        return false;
-      }
-      return true;
-    });
-    setSaving(false);
-    if (ok) onClose();
+        try {
+          await workflowApi.saveWorkflows(root, { schemaVersion: WORKFLOWS_SCHEMA_VERSION, workflows });
+        } catch (err) {
+          if (!isCommandError(err) || err.code !== STORE_INVALID) throw err;
+          const issues = parseValidationErrors(err.message);
+          setErrors(
+            issues.length > 0
+              ? issues.map((i) =>
+                  i.detail ? `${formatCode(i.code)} (${detailText(i.detail)})` : formatCode(i.code),
+                )
+              : [formatCommandError(err)],
+          );
+          return false;
+        }
+        return true;
+      });
+      if (ok) onClose();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  /** Closes unless saving; asks before discarding changes. */
+  const requestClose = async () => {
+    if (saving || closingRef.current) return;
+    if (!dirty) {
+      onClose();
+      return;
+    }
+    closingRef.current = true;
+    try {
+      if (await showConfirm(t("edit.discardConfirm"), { kind: "warning" })) onClose();
+    } finally {
+      closingRef.current = false;
+    }
   };
 
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.key === "Escape") {
       e.stopPropagation();
-      onClose();
+      void requestClose();
     } else trapTab(e, dialogRef.current);
   };
 
@@ -177,8 +277,14 @@ export function WorkflowEditDialog({ workflow, confirmEnable, onClose }: Workflo
   return (
     <div
       className="workflow-edit-overlay"
+      onMouseDown={(e) => {
+        pressOnOverlayRef.current = e.target === e.currentTarget;
+      }}
       onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        // A press that started inside the dialog (e.g. a text selection) must not close it.
+        const pressed = pressOnOverlayRef.current;
+        pressOnOverlayRef.current = false;
+        if (pressed && e.target === e.currentTarget) void requestClose();
       }}
     >
       <div
@@ -203,7 +309,7 @@ export function WorkflowEditDialog({ workflow, confirmEnable, onClose }: Workflo
               type="checkbox"
               data-switch
               name="enabled"
-              checked={draft.enabled}
+              checked={enabled}
               onChange={(e) => void toggleEnabled(e.target.checked)}
             />
             <span>{t("edit.enabled")}</span>
@@ -253,8 +359,11 @@ export function WorkflowEditDialog({ workflow, confirmEnable, onClose }: Workflo
                     type="number"
                     min={1}
                     name={`${s.role}.timeoutMinutes`}
-                    value={String(s.timeoutMinutes)}
-                    onChange={(e) => patchStage(s.role, { timeoutMinutes: toCount(e.target.value) })}
+                    value={numbers.timeouts[s.role]}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setNumbers((n) => ({ ...n, timeouts: { ...n.timeouts, [s.role]: value } }));
+                    }}
                   />
                 </label>
               </div>
@@ -316,8 +425,11 @@ export function WorkflowEditDialog({ workflow, confirmEnable, onClose }: Workflo
                 type="number"
                 min={1}
                 name="maxReentryCount"
-                value={String(draft.maxReentryCount)}
-                onChange={(e) => patch({ maxReentryCount: toCount(e.target.value) })}
+                value={numbers.maxReentryCount}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setNumbers((n) => ({ ...n, maxReentryCount: value }));
+                }}
               />
             </label>
             <label className="workflow-edit__field workflow-edit__field--narrow">
@@ -326,8 +438,11 @@ export function WorkflowEditDialog({ workflow, confirmEnable, onClose }: Workflo
                 type="number"
                 min={1}
                 name="maxConcurrentRuns"
-                value={String(draft.maxConcurrentRuns)}
-                onChange={(e) => patch({ maxConcurrentRuns: toCount(e.target.value) })}
+                value={numbers.maxConcurrentRuns}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setNumbers((n) => ({ ...n, maxConcurrentRuns: value }));
+                }}
               />
             </label>
           </div>
@@ -380,7 +495,12 @@ export function WorkflowEditDialog({ workflow, confirmEnable, onClose }: Workflo
           </div>
         )}
         <div className="workflow-edit__buttons">
-          <button type="button" className="workflow-edit__cancel" onClick={onClose}>
+          <button
+            type="button"
+            className="workflow-edit__cancel"
+            disabled={saving}
+            onClick={() => void requestClose()}
+          >
             {t("edit.cancel")}
           </button>
           <button type="button" className="workflow-edit__save" disabled={saving} onClick={() => void save()}>

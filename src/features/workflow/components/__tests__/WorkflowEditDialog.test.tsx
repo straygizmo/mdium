@@ -21,7 +21,7 @@ vi.mock("@/stores/dialog-store", () => dialogs);
 
 import i18n from "@/shared/i18n";
 import { useWorkflowStore } from "../../workflow-store";
-import { DEFAULT_DESIGN_DOC_PATH, parseValidationErrors, WorkflowEditDialog } from "../WorkflowEditDialog";
+import { DEFAULT_DESIGN_DOC_PATH, parseCount, parseValidationErrors, WorkflowEditDialog } from "../WorkflowEditDialog";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -91,6 +91,17 @@ describe("parseValidationErrors", () => {
   });
 });
 
+describe("parseCount", () => {
+  it("accepts whole numbers from 1 to the u32 maximum", () => {
+    expect(parseCount("1")).toBe(1);
+    expect(parseCount(" 42 ")).toBe(42);
+    expect(parseCount("4294967295")).toBe(4294967295);
+    for (const raw of ["", "0", "-5", "2.5", "1e3", "abc", "4294967296", "99999999999999999999"]) {
+      expect(parseCount(raw)).toBeNull();
+    }
+  });
+});
+
 describe("WorkflowEditDialog", () => {
   let root: ReturnType<typeof createRoot>;
   let container: HTMLDivElement;
@@ -154,6 +165,25 @@ describe("WorkflowEditDialog", () => {
 
   function button(label: string) {
     return [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === label);
+  }
+
+  function setStored(update: (list: Workflow[]) => Workflow[]) {
+    workflows = update(workflows);
+    useWorkflowStore.setState((st) => ({
+      projects: { ...st.projects, [ROOT]: { ...st.projects[ROOT], workflows } },
+    }));
+  }
+
+  function dialog() {
+    return container.querySelector<HTMLElement>('[role="dialog"]')!;
+  }
+
+  function overlay() {
+    return container.querySelector<HTMLElement>(".workflow-edit-overlay")!;
+  }
+
+  function key(target: HTMLElement, init: KeyboardEventInit) {
+    target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }));
   }
 
   async function save() {
@@ -241,14 +271,15 @@ describe("WorkflowEditDialog", () => {
   it("shows STORE_INVALID validation errors inside the dialog", async () => {
     api.saveWorkflows.mockRejectedValue({
       code: "STORE_INVALID",
-      message: "STORE_INVALID: [WORKFLOW_NAME_EMPTY, WORKFLOW_INVALID_TIMEOUT: design]",
+      message: "STORE_INVALID: [WORKFLOW_NAME_EMPTY, WORKFLOW_INVALID_TIMEOUT: design-id, WORKFLOW_STAGE_ID_DUPLICATE: x]",
     });
     await render(workflows[0]);
     await save();
     const items = [...container.querySelectorAll(".workflow-edit__errors li")].map((li) => li.textContent);
     expect(items).toEqual([
       i18n.t("workflow:codes.WORKFLOW_NAME_EMPTY"),
-      `${i18n.t("workflow:codes.WORKFLOW_INVALID_TIMEOUT")} (design)`,
+      `${i18n.t("workflow:codes.WORKFLOW_INVALID_TIMEOUT")} (${i18n.t("workflow:role.design")})`,
+      `${i18n.t("workflow:codes.WORKFLOW_STAGE_ID_DUPLICATE")} (x)`,
     ]);
     expect(dialogs.showMessage).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
@@ -315,5 +346,124 @@ describe("WorkflowEditDialog", () => {
     await act(async () => button(i18n.t("workflow:edit.cancel"))!.click());
     expect(onClose).toHaveBeenCalledTimes(2);
     expect(api.saveWorkflows).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["-5"],
+    ["2.5"],
+    [""],
+    ["99999999999"],
+  ])("rejects the number %j before saving", async (raw) => {
+    await render(workflows[0]);
+    await act(async () => setValue(field("review.timeoutMinutes")!, raw));
+    await act(async () => setValue(field("maxReentryCount")!, raw));
+    await act(async () => setValue(field("maxConcurrentRuns")!, raw));
+    await save();
+    expect(api.saveWorkflows).not.toHaveBeenCalled();
+    const items = [...container.querySelectorAll(".workflow-edit__errors li")].map((li) => li.textContent);
+    expect(items).toEqual([
+      `${i18n.t("workflow:codes.WORKFLOW_INVALID_TIMEOUT")} (${i18n.t("workflow:role.review")})`,
+      i18n.t("workflow:codes.WORKFLOW_INVALID_MAX_REENTRY"),
+      i18n.t("workflow:codes.WORKFLOW_INVALID_MAX_CONCURRENT"),
+    ]);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("closes from the overlay only when the press starts and ends on it", async () => {
+    await render(workflows[0]);
+    // A drag that starts inside the dialog and ends on the overlay keeps it open.
+    await act(async () => {
+      dialog().dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      overlay().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(onClose).not.toHaveBeenCalled();
+    await act(async () => {
+      overlay().dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      overlay().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks before discarding changes", async () => {
+    await render(workflows[0]);
+    await act(async () => setValue(field("name")!, "Changed"));
+    dialogs.showConfirm.mockResolvedValueOnce(false);
+    await act(async () => key(dialog(), { key: "Escape" }));
+    expect(dialogs.showConfirm).toHaveBeenCalledWith(
+      i18n.t("workflow:edit.discardConfirm"),
+      expect.objectContaining({ kind: "warning" }),
+    );
+    expect(onClose).not.toHaveBeenCalled();
+    dialogs.showConfirm.mockResolvedValueOnce(true);
+    await act(async () => button(i18n.t("workflow:edit.cancel"))!.click());
+    expect(dialogs.showConfirm).toHaveBeenCalledTimes(2);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("cannot be closed while saving", async () => {
+    let finish!: () => void;
+    api.saveWorkflows.mockImplementation(() => new Promise<void>((r) => (finish = r)));
+    await render(workflows[0]);
+    await save();
+    expect(button(i18n.t("workflow:edit.cancel"))!.disabled).toBe(true);
+    await act(async () => key(dialog(), { key: "Escape" }));
+    await act(async () => {
+      overlay().dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      overlay().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(onClose).not.toHaveBeenCalled();
+    await act(async () => finish());
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("follows the latest stored enabled flag unless it is changed here", async () => {
+    const confirmEnable = await render(workflows[0]);
+    // Enabled elsewhere (e.g. from the panel) while the dialog is open.
+    await act(async () => setStored((list) => list.map((w) => (w.id === "wf1" ? { ...w, enabled: true } : w))));
+    expect(field("enabled")!.checked).toBe(true);
+    await save();
+    expect(confirmEnable).not.toHaveBeenCalled();
+    expect(api.saveWorkflows.mock.calls[0][1].workflows[0].enabled).toBe(true);
+  });
+
+  it("asks for the enable confirmation against the latest stored copy", async () => {
+    const confirmEnable = await render(workflows[1], vi.fn(async () => true));
+    // Disabled elsewhere after the dialog opened with an enabled copy.
+    await act(async () => setStored((list) => list.map((w) => (w.id === "wf2" ? { ...w, enabled: false } : w))));
+    expect(field("enabled")!.checked).toBe(false);
+    await act(async () => field("enabled")!.click());
+    expect(confirmEnable).toHaveBeenCalledTimes(1);
+    await save();
+    expect(confirmEnable).toHaveBeenCalledTimes(1);
+    expect(api.saveWorkflows.mock.calls[0][1].workflows[1].enabled).toBe(true);
+  });
+
+  it("saves on top of the latest stored workflows", async () => {
+    await render(workflows[0]);
+    await act(async () => setValue(field("name")!, "Renamed"));
+    await act(async () =>
+      setStored((list) => [
+        ...list.map((w) =>
+          w.id === "wf1" ? { ...w, archived: true } : w.id === "wf2" ? { ...w, name: "Changed elsewhere" } : w,
+        ),
+        workflow("wf3"),
+      ]),
+    );
+    await save();
+    const saved: Workflow[] = api.saveWorkflows.mock.calls[0][1].workflows;
+    expect(saved.map((w) => w.id)).toEqual(["wf1", "wf2", "wf3"]);
+    expect(saved[0]).toMatchObject({ name: "Renamed", archived: true });
+    expect(saved[1].name).toBe("Changed elsewhere");
+  });
+
+  it("keeps Tab focus inside the dialog", async () => {
+    await render(workflows[0]);
+    const save = button(i18n.t("workflow:edit.save"))!;
+    const first = field("name")!;
+    save.focus();
+    await act(async () => key(dialog(), { key: "Tab" }));
+    expect(document.activeElement).toBe(first);
+    await act(async () => key(dialog(), { key: "Tab", shiftKey: true }));
+    expect(document.activeElement).toBe(save);
   });
 });

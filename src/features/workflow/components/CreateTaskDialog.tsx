@@ -4,6 +4,7 @@ import { renderMarkdownSafe } from "@/shared/lib/markdown/render-markdown-safe";
 import type { Workflow } from "@/shared/types/workflow";
 import { trapTab, useDialogFocus } from "../lib/dialog-focus";
 import { workflowApi } from "../lib/workflow-api";
+import { showConfirm } from "@/stores/dialog-store";
 import { useWorkflowStore } from "../workflow-store";
 import "./CreateTaskDialog.css";
 
@@ -35,6 +36,9 @@ export function CreateTaskDialog({ onClose, onAddStandard }: CreateTaskDialogPro
   const [preview, setPreview] = useState(false);
   const [creating, setCreating] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
+  const closingRef = useRef(false);
+  /** Whether the current pointer press started on the overlay. */
+  const pressOnOverlayRef = useRef(false);
 
   useDialogFocus(dialogRef, true);
 
@@ -54,18 +58,39 @@ export function CreateTaskDialog({ onClose, onAddStandard }: CreateTaskDialogPro
     useWorkflowStore.getState().openTask(task.meta.id);
   };
 
+  /** Closes unless creating; asks before discarding a typed title or body. */
+  const requestClose = async () => {
+    if (creating || closingRef.current) return;
+    if (!title.trim() && !body.trim()) {
+      onClose();
+      return;
+    }
+    closingRef.current = true;
+    try {
+      if (await showConfirm(t("create.discardConfirm"), { kind: "warning" })) onClose();
+    } finally {
+      closingRef.current = false;
+    }
+  };
+
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.key === "Escape") {
       e.stopPropagation();
-      onClose();
+      void requestClose();
     } else trapTab(e, dialogRef.current);
   };
 
   return (
     <div
       className="workflow-create-overlay"
+      onMouseDown={(e) => {
+        pressOnOverlayRef.current = e.target === e.currentTarget;
+      }}
       onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        // A press that started inside the dialog (e.g. a text selection) must not close it.
+        const pressed = pressOnOverlayRef.current;
+        pressOnOverlayRef.current = false;
+        if (pressed && e.target === e.currentTarget) void requestClose();
       }}
     >
       <div
@@ -130,7 +155,12 @@ export function CreateTaskDialog({ onClose, onAddStandard }: CreateTaskDialogPro
           </div>
         )}
         <div className="workflow-create__buttons">
-          <button type="button" className="workflow-create__cancel" onClick={onClose}>
+          <button
+            type="button"
+            className="workflow-create__cancel"
+            disabled={creating}
+            onClick={() => void requestClose()}
+          >
             {t("create.cancel")}
           </button>
           <button type="button" className="workflow-create__confirm" disabled={!canCreate} onClick={() => void create()}>
