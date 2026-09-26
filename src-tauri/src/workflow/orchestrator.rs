@@ -1,0 +1,1254 @@
+//! Orchestrator service: attaches projects, dispatches inbox workflow tasks
+//! to attempts (respecting each workflow's concurrency limit), runs every
+//! attempt on its own thread, cancels attempts on request, reports changes
+//! through an [`EventSink`], and shuts everything down on exit.
+//!
+//! Locking: the project's [`ProjectGuard`](crate::workflow::state::ProjectGuard)
+//! is only held for short store work (recovery, starting and finishing an
+//! attempt), never while a runner session runs. The orchestrator's own
+//! mutex (`inner`) may be taken while holding a project guard, but a
+//! project guard is never taken while holding `inner`.
+
+use crate::workflow::attempt::{
+    run_attempt, AttemptEnd, CancelReason, CancelToken, ProgressUpdate,
+};
+use crate::workflow::checks::{self, CheckResult};
+use crate::workflow::flow::{
+    begin_attempt, finish_attempt, recover, BeginResult, FinishInput, PlannedAttempt,
+};
+use crate::workflow::model::{Task, TaskStatus, WorkflowRun};
+use crate::workflow::runner_host::RunnerApi;
+use crate::workflow::state::{normalize_root, project_key};
+use crate::workflow::store::WorkflowStore;
+use std::collections::{BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
+
+/// Code of an attempt whose thread could not be started.
+const WORKFLOW_THREAD_SPAWN_FAILED: &str = "WORKFLOW_THREAD_SPAWN_FAILED";
+
+/// Receives every task/run change and attempt progress update.
+pub trait EventSink: Send + Sync {
+    fn task_changed(&self, project_root: &Path, task: &Task);
+    fn run_changed(&self, project_root: &Path, run: &WorkflowRun);
+    fn progress(
+        &self,
+        project_root: &Path,
+        task_id: &str,
+        attempt_id: &str,
+        update: &ProgressUpdate,
+    );
+}
+
+/// One attached project.
+struct Project {
+    /// The normalized root (letter case preserved) used for its store and
+    /// its events.
+    root: PathBuf,
+    /// A dispatch thread is running for this project.
+    dispatching: bool,
+    /// A dispatch was requested while one was running: run one more pass.
+    dirty: bool,
+}
+
+/// An attempt between its start and the end of its thread.
+struct ActiveAttempt {
+    /// Key of the attempt's project.
+    project: PathBuf,
+    /// Id of the workflow snapshot of the attempt's run.
+    workflow_id: String,
+    cancel: CancelToken,
+}
+
+#[derive(Default)]
+struct Inner {
+    /// Attached projects by [`project_key`].
+    projects: HashMap<PathBuf, Project>,
+    /// Active attempts by task id.
+    active: HashMap<String, ActiveAttempt>,
+    shut_down: bool,
+}
+
+impl Inner {
+    fn is_idle(&self) -> bool {
+        self.active.is_empty() && self.projects.values().all(|p| !p.dispatching)
+    }
+
+    /// Records a dispatch request for project `key`. Returns true when the
+    /// caller must start the dispatch thread; a request while one runs only
+    /// makes it run one more pass.
+    fn request_dispatch(&mut self, key: &Path) -> bool {
+        if self.shut_down {
+            return false;
+        }
+        let Some(project) = self.projects.get_mut(key) else {
+            return false;
+        };
+        if project.dispatching {
+            project.dirty = true;
+            false
+        } else {
+            project.dispatching = true;
+            project.dirty = false;
+            true
+        }
+    }
+}
+
+pub struct Orchestrator {
+    runner: Arc<dyn RunnerApi>,
+    sink: Arc<dyn EventSink>,
+    worktree_base: PathBuf,
+    inner: Mutex<Inner>,
+    /// Notified whenever an attempt or a dispatch thread ends.
+    idle: Condvar,
+}
+
+impl Orchestrator {
+    pub fn new(
+        runner: Arc<dyn RunnerApi>,
+        sink: Arc<dyn EventSink>,
+        worktree_base: PathBuf,
+    ) -> Arc<Self> {
+        Arc::new(Orchestrator {
+            runner,
+            sink,
+            worktree_base,
+            inner: Mutex::new(Inner::default()),
+            idle: Condvar::new(),
+        })
+    }
+
+    /// Locks `inner`. Nothing in it can be left half-updated by a panic,
+    /// so a poisoned lock is recovered.
+    fn inner(&self) -> MutexGuard<'_, Inner> {
+        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Attaches `project_root` (any spelling of it) and returns its
+    /// normalized key. The first attach of a key recovers the project as
+    /// after a restart (running tasks become `ATTENTION_INTERRUPTED`); later
+    /// attaches only finish half-done stage advances. Does nothing after
+    /// [`Self::shutdown`].
+    pub fn attach_project(self: &Arc<Self>, project_root: &Path) -> PathBuf {
+        let key = project_key(project_root);
+        let root = {
+            let inner = self.inner();
+            if inner.shut_down {
+                return key;
+            }
+            inner.projects.get(&key).map(|p| p.root.clone())
+        }
+        .unwrap_or_else(|| normalize_root(project_root));
+        let store = WorkflowStore::new(root);
+        // Registering under the project guard means no dispatch pass of
+        // this project can run before the first recovery is done.
+        let guard = store.lock();
+        let first = {
+            let mut inner = self.inner();
+            let first = !inner.projects.contains_key(&key);
+            if first {
+                inner.projects.insert(
+                    key.clone(),
+                    Project {
+                        root: store.project_root().to_path_buf(),
+                        dispatching: false,
+                        dirty: false,
+                    },
+                );
+            }
+            first
+        };
+        match recover(&guard, &store, first) {
+            Ok(changed) => self.emit_changes(&store, &changed),
+            Err(err) => eprintln!(
+                "[workflow] recovery of {} failed: {err}",
+                store.project_root().display()
+            ),
+        }
+        key
+    }
+
+    /// Requests a dispatch pass for the project (attaching it first if
+    /// needed). Requests during a running pass are coalesced into one more
+    /// pass. Ignored after [`Self::shutdown`].
+    pub fn kick(self: &Arc<Self>, project_root: &Path) {
+        let key = project_key(project_root);
+        let attached = {
+            let inner = self.inner();
+            if inner.shut_down {
+                return;
+            }
+            inner.projects.contains_key(&key)
+        };
+        if !attached {
+            self.attach_project(project_root);
+        }
+        if self.inner().request_dispatch(&key) {
+            self.spawn_dispatch(key);
+        }
+    }
+
+    /// Signals the active attempt of `task_id` to cancel. Returns false if
+    /// the task has no active attempt.
+    pub fn cancel_task(&self, task_id: &str, reason: CancelReason) -> bool {
+        match self.inner().active.get(task_id) {
+            Some(attempt) => {
+                attempt.cancel.cancel(reason);
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn is_active(&self, task_id: &str) -> bool {
+        self.inner().active.contains_key(task_id)
+    }
+
+    /// The store of `project_root` (the attached root when the project is
+    /// attached under any spelling).
+    pub fn store(&self, project_root: &Path) -> WorkflowStore {
+        let key = project_key(project_root);
+        let root = self.inner().projects.get(&key).map(|p| p.root.clone());
+        WorkflowStore::new(root.unwrap_or_else(|| normalize_root(project_root)))
+    }
+
+    pub fn sink(&self) -> &Arc<dyn EventSink> {
+        &self.sink
+    }
+
+    pub fn runner(&self) -> &Arc<dyn RunnerApi> {
+        &self.runner
+    }
+
+    /// Cancels every active attempt (`Shutdown`, so the tasks stay running
+    /// and are interrupted on the next start), waits up to `wait` for the
+    /// attempt and dispatch threads to end, and shuts the runner down.
+    /// Later kicks are ignored.
+    pub fn shutdown(&self, wait: Duration) {
+        {
+            let mut inner = self.inner();
+            inner.shut_down = true;
+            for attempt in inner.active.values() {
+                attempt.cancel.cancel(CancelReason::Shutdown);
+            }
+        }
+        if !self.wait_until_idle(wait) {
+            eprintln!("[workflow] shutdown: attempts still running after {wait:?}");
+        }
+        self.runner.shutdown();
+    }
+
+    /// Waits until no dispatch pass and no attempt is running.
+    #[cfg(test)]
+    pub fn wait_idle(&self, timeout: Duration) -> bool {
+        self.wait_until_idle(timeout)
+    }
+
+    fn wait_until_idle(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now().checked_add(timeout);
+        let mut inner = self.inner();
+        while !inner.is_idle() {
+            let left = match deadline {
+                Some(deadline) => deadline.saturating_duration_since(Instant::now()),
+                None => Duration::MAX,
+            };
+            if left.is_zero() {
+                return false;
+            }
+            inner = self
+                .idle
+                .wait_timeout(inner, left)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+        true
+    }
+
+    /// Starts the dispatch thread of project `key`, whose `dispatching`
+    /// flag the caller has just set.
+    fn spawn_dispatch(self: &Arc<Self>, key: PathBuf) {
+        let orch = Arc::clone(self);
+        let thread_key = key.clone();
+        let spawned = std::thread::Builder::new()
+            .name("workflow-dispatch".to_string())
+            .spawn(move || orch.dispatch_loop(thread_key));
+        if let Err(err) = spawned {
+            eprintln!("[workflow] failed to start dispatch thread: {err}");
+            self.end_dispatch(&key);
+        }
+    }
+
+    /// Clears the `dispatching` flag of project `key`.
+    fn end_dispatch(&self, key: &Path) {
+        let mut inner = self.inner();
+        if let Some(project) = inner.projects.get_mut(key) {
+            project.dispatching = false;
+            project.dirty = false;
+        }
+        self.idle.notify_all();
+    }
+
+    /// Runs dispatch passes until no further pass was requested.
+    fn dispatch_loop(self: Arc<Self>, key: PathBuf) {
+        // Clears the flag even if a pass panics, so later kicks still work.
+        struct Done<'a>(&'a Orchestrator, &'a Path);
+        impl Drop for Done<'_> {
+            fn drop(&mut self) {
+                self.0.end_dispatch(self.1);
+            }
+        }
+        let _done = Done(&self, &key);
+        loop {
+            let root = {
+                let inner = self.inner();
+                match inner.projects.get(&key) {
+                    Some(project) => project.root.clone(),
+                    None => return,
+                }
+            };
+            self.dispatch_pass(&key, &root);
+            let mut inner = self.inner();
+            let shut_down = inner.shut_down;
+            match inner.projects.get_mut(&key) {
+                Some(project) if project.dirty && !shut_down => project.dirty = false,
+                _ => return,
+            }
+        }
+    }
+
+    /// One dispatch pass: recovers half-done advances, then starts every
+    /// startable inbox task (oldest first) within its workflow's
+    /// concurrency limit, and spawns one thread per started attempt.
+    fn dispatch_pass(self: &Arc<Self>, key: &Path, root: &Path) {
+        let store = WorkflowStore::new(root.to_path_buf());
+        let mut started = Vec::new();
+        {
+            let guard = store.lock();
+            match recover(&guard, &store, false) {
+                Ok(changed) => self.emit_changes(&store, &changed),
+                Err(err) => eprintln!("[workflow] recovery of {} failed: {err}", root.display()),
+            }
+            let workflows = match store.load_workflows() {
+                Ok(list) => list.workflows,
+                Err(err) => {
+                    eprintln!(
+                        "[workflow] loading workflows of {} failed: {err}",
+                        root.display()
+                    );
+                    return;
+                }
+            };
+            let tasks = match store.list_tasks() {
+                Ok(list) => list.tasks,
+                Err(err) => {
+                    eprintln!(
+                        "[workflow] listing tasks of {} failed: {err}",
+                        root.display()
+                    );
+                    return;
+                }
+            };
+            // `list_tasks` is sorted by creation time, oldest first.
+            for task in tasks
+                .iter()
+                .filter(|t| t.meta.status == TaskStatus::Inbox && !t.meta.archived)
+            {
+                let Some(task_workflow) = &task.meta.workflow_id else {
+                    continue;
+                };
+                // An existing run keeps running under its workflow snapshot.
+                let (workflow_id, limit) = match store.get_run(&task.meta.root_id) {
+                    Ok(run) => (run.workflow.id, Some(run.workflow.max_concurrent_runs)),
+                    Err(_) => (
+                        task_workflow.clone(),
+                        workflows
+                            .iter()
+                            .find(|w| w.id == *task_workflow)
+                            .map(|w| w.max_concurrent_runs),
+                    ),
+                };
+                {
+                    let inner = self.inner();
+                    if inner.shut_down {
+                        break;
+                    }
+                    if inner.active.contains_key(&task.meta.id) {
+                        continue;
+                    }
+                    let running = inner
+                        .active
+                        .values()
+                        .filter(|a| a.project == key && a.workflow_id == workflow_id)
+                        .count();
+                    if limit.is_some_and(|limit| running >= limit as usize) {
+                        continue;
+                    }
+                }
+                let begun = begin_attempt(
+                    &guard,
+                    &store,
+                    &workflows,
+                    &task.meta.id,
+                    &self.worktree_base,
+                );
+                match begun {
+                    Ok(BeginResult::Started(planned)) => {
+                        let cancel = CancelToken::default();
+                        {
+                            // Registered before the guard is released, so no
+                            // other pass can start the task again.
+                            let mut inner = self.inner();
+                            if inner.shut_down {
+                                cancel.cancel(CancelReason::Shutdown);
+                            }
+                            inner.active.insert(
+                                task.meta.id.clone(),
+                                ActiveAttempt {
+                                    project: key.to_path_buf(),
+                                    workflow_id: planned.run.workflow.id.clone(),
+                                    cancel: cancel.clone(),
+                                },
+                            );
+                        }
+                        self.emit_task(&store, &task.meta.id);
+                        self.sink.run_changed(root, &planned.run);
+                        started.push((planned, cancel));
+                    }
+                    Ok(BeginResult::Parked) => self.emit_task(&store, &task.meta.id),
+                    Ok(BeginResult::Skipped) => {}
+                    Err(err) => {
+                        eprintln!("[workflow] starting task {} failed: {err}", task.meta.id)
+                    }
+                }
+            }
+        }
+        for (planned, cancel) in started {
+            self.spawn_attempt(key, root, planned, cancel);
+        }
+    }
+
+    /// Runs a registered attempt on its own thread.
+    fn spawn_attempt(
+        self: &Arc<Self>,
+        key: &Path,
+        root: &Path,
+        planned: PlannedAttempt,
+        cancel: CancelToken,
+    ) {
+        let registration = Registration {
+            orch: Arc::clone(self),
+            key: key.to_path_buf(),
+            task_id: planned.request.task_id.clone(),
+        };
+        let orch = Arc::clone(self);
+        let thread_root = root.to_path_buf();
+        let thread_planned = planned.clone();
+        let spawned = std::thread::Builder::new()
+            .name("workflow-attempt".to_string())
+            .spawn(move || {
+                let _registration = registration;
+                orch.attempt_thread(&thread_root, &thread_planned, &cancel);
+            });
+        if let Err(err) = spawned {
+            // The closure (and with it the registration) is gone already;
+            // do not leave the task running with nothing behind it.
+            let input = FinishInput {
+                end: AttemptEnd::Failed {
+                    code: WORKFLOW_THREAD_SPAWN_FAILED.to_string(),
+                    message: err.to_string(),
+                },
+                check: CheckResult {
+                    after: None,
+                    reason: None,
+                },
+            };
+            self.finish(&WorkflowStore::new(root.to_path_buf()), &planned, input);
+        }
+    }
+
+    /// The body of an attempt thread: integrity baseline, the runner
+    /// session, the post-attempt checks, and the finish.
+    fn attempt_thread(&self, root: &Path, planned: &PlannedAttempt, cancel: &CancelToken) {
+        let store = WorkflowStore::new(root.to_path_buf());
+        let input = match checks::baseline(&planned.repo_root, &planned.run) {
+            // No session is started without a baseline.
+            Err(reason) => FinishInput {
+                end: AttemptEnd::Failed {
+                    code: reason.code.clone(),
+                    message: String::new(),
+                },
+                check: CheckResult {
+                    after: None,
+                    reason: Some(reason),
+                },
+            },
+            Ok(before) => {
+                let req = &planned.request;
+                let progress = |update: ProgressUpdate| {
+                    self.sink
+                        .progress(root, &req.task_id, &req.attempt_id, &update)
+                };
+                let end = run_attempt(self.runner.as_ref(), &store, req, cancel, &progress);
+                let check = checks::post_attempt(
+                    &planned.worktree_base,
+                    &planned.repo_root,
+                    &planned.run,
+                    &before,
+                );
+                FinishInput { end, check }
+            }
+        };
+        self.finish(&store, planned, input);
+    }
+
+    /// Applies an attempt's end under the project guard and reports it.
+    fn finish(&self, store: &WorkflowStore, planned: &PlannedAttempt, input: FinishInput) {
+        let guard = store.lock();
+        match finish_attempt(&guard, store, planned, input) {
+            Ok(summary) => {
+                for task in &summary.changed_tasks {
+                    self.sink.task_changed(store.project_root(), task);
+                }
+                if let Some(run) = &summary.run {
+                    self.sink.run_changed(store.project_root(), run);
+                }
+            }
+            Err(err) => eprintln!(
+                "[workflow] finishing attempt {} failed: {err}",
+                planned.request.attempt_id
+            ),
+        }
+    }
+
+    /// Reports task `task_id` as currently stored.
+    fn emit_task(&self, store: &WorkflowStore, task_id: &str) {
+        match store.get_task(task_id) {
+            Ok(task) => self.sink.task_changed(store.project_root(), &task),
+            Err(err) => eprintln!("[workflow] reading task {task_id} failed: {err}"),
+        }
+    }
+
+    /// Reports `tasks` and the runs they belong to.
+    fn emit_changes(&self, store: &WorkflowStore, tasks: &[Task]) {
+        let root = store.project_root();
+        for task in tasks {
+            self.sink.task_changed(root, task);
+        }
+        let run_ids: BTreeSet<&str> = tasks.iter().map(|t| t.meta.root_id.as_str()).collect();
+        for run_id in run_ids {
+            if let Ok(run) = store.get_run(run_id) {
+                self.sink.run_changed(root, &run);
+            }
+        }
+    }
+}
+
+/// Keeps an attempt registered as active while its thread runs. Dropping
+/// it (also when the thread panics) unregisters the attempt and requests
+/// another dispatch pass for its project in the same critical section, so
+/// the orchestrator is never seen idle in between.
+struct Registration {
+    orch: Arc<Orchestrator>,
+    key: PathBuf,
+    task_id: String,
+}
+
+impl Drop for Registration {
+    fn drop(&mut self) {
+        let dispatch = {
+            let mut inner = self.orch.inner();
+            inner.active.remove(&self.task_id);
+            let dispatch = inner.request_dispatch(&self.key);
+            self.orch.idle.notify_all();
+            dispatch
+        };
+        if dispatch {
+            self.orch.spawn_dispatch(self.key.clone());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workflow::fsutil::{self, new_id};
+    use crate::workflow::gitops::{self, test_support::Fixture};
+    use crate::workflow::model::{
+        Provider, Role, RunStatus, TaskMeta, TaskStatus, Workflow, WorkflowsFile,
+    };
+    use crate::workflow::runner_client::{
+        RunnerError, RunnerEvent, RunnerPermission, StartSessionParams,
+    };
+    use crate::workflow::state::transition;
+    use crate::workflow::template::standard_workflow;
+    use std::collections::{HashMap, VecDeque};
+    use std::sync::mpsc::{self, Receiver, Sender};
+    use std::sync::Barrier;
+
+    /// Upper bound for every wait; only reached when a test fails.
+    const WAIT: Duration = Duration::from_secs(60);
+
+    type Hook = Box<dyn Fn(&StartSessionParams) + Send + Sync>;
+
+    /// What the fake runner does with one session's turn.
+    enum Script {
+        /// Runs `hook` (mid-turn) and then completes with `response`.
+        Complete {
+            hook: Option<Hook>,
+            response: String,
+        },
+        /// Reports the turn as waiting and ends it with `on_cancel` once
+        /// the session is cancelled.
+        WaitForCancel { on_cancel: RunnerEvent },
+    }
+
+    impl Script {
+        fn complete(response: &str) -> Self {
+            Script::Complete {
+                hook: None,
+                response: response.to_string(),
+            }
+        }
+
+        fn complete_after(
+            hook: impl Fn(&StartSessionParams) + Send + Sync + 'static,
+            response: &str,
+        ) -> Self {
+            Script::Complete {
+                hook: Some(Box::new(hook)),
+                response: response.to_string(),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    enum Call {
+        Start(String, RunnerPermission),
+        Cancel(String),
+        Close(String),
+        Shutdown,
+    }
+
+    struct Session {
+        tx: Sender<RunnerEvent>,
+        params: StartSessionParams,
+        script: Option<Script>,
+        on_cancel: Option<RunnerEvent>,
+    }
+
+    /// Scripted runner: sessions take scripts in start order (an unscripted
+    /// session reports `attention`), and every call is recorded.
+    struct FakeRunner {
+        scripts: Mutex<VecDeque<Script>>,
+        sessions: Mutex<HashMap<String, Session>>,
+        calls: Mutex<Vec<Call>>,
+        /// Receives the session id of every turn that waits for a cancel.
+        waiting: Mutex<Sender<String>>,
+    }
+
+    impl FakeRunner {
+        fn new() -> (Arc<FakeRunner>, Receiver<String>) {
+            let (tx, rx) = mpsc::channel();
+            let runner = FakeRunner {
+                scripts: Mutex::new(VecDeque::new()),
+                sessions: Mutex::new(HashMap::new()),
+                calls: Mutex::new(Vec::new()),
+                waiting: Mutex::new(tx),
+            };
+            (Arc::new(runner), rx)
+        }
+
+        fn script(&self, script: Script) {
+            self.scripts.lock().unwrap().push_back(script);
+        }
+
+        fn calls(&self) -> Vec<Call> {
+            self.calls.lock().unwrap().clone()
+        }
+
+        fn starts(&self) -> Vec<RunnerPermission> {
+            self.calls()
+                .into_iter()
+                .filter_map(|call| match call {
+                    Call::Start(_, permission) => Some(permission),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        fn record(&self, call: Call) {
+            self.calls.lock().unwrap().push(call);
+        }
+    }
+
+    impl RunnerApi for FakeRunner {
+        fn start_session(
+            &self,
+            params: StartSessionParams,
+            _timeout: Duration,
+        ) -> Result<(Receiver<RunnerEvent>, Option<String>), RunnerError> {
+            self.record(Call::Start(params.session_id.clone(), params.permission));
+            let script = self
+                .scripts
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| Script::complete(&attention("unscripted")));
+            let (tx, rx) = mpsc::channel();
+            self.sessions.lock().unwrap().insert(
+                params.session_id.clone(),
+                Session {
+                    tx,
+                    params,
+                    script: Some(script),
+                    on_cancel: None,
+                },
+            );
+            Ok((rx, None))
+        }
+
+        fn send(&self, session_id: &str, _text: &str) -> Result<(), RunnerError> {
+            let (tx, params, script) = {
+                let mut sessions = self.sessions.lock().unwrap();
+                let session = sessions.get_mut(session_id).ok_or(RunnerError::Exited)?;
+                (
+                    session.tx.clone(),
+                    session.params.clone(),
+                    session.script.take(),
+                )
+            };
+            match script {
+                Some(Script::Complete { hook, response }) => {
+                    if let Some(hook) = hook {
+                        hook(&params);
+                    }
+                    let _ = tx.send(RunnerEvent::TurnCompleted {
+                        final_response: response,
+                        native_session_id: None,
+                    });
+                }
+                Some(Script::WaitForCancel { on_cancel }) => {
+                    if let Some(session) = self.sessions.lock().unwrap().get_mut(session_id) {
+                        session.on_cancel = Some(on_cancel);
+                    }
+                    let _ = self.waiting.lock().unwrap().send(session_id.to_string());
+                }
+                None => {}
+            }
+            Ok(())
+        }
+
+        fn cancel(&self, session_id: &str) -> Result<(), RunnerError> {
+            self.record(Call::Cancel(session_id.to_string()));
+            let mut sessions = self.sessions.lock().unwrap();
+            let session = sessions.get_mut(session_id).ok_or(RunnerError::Exited)?;
+            if let Some(event) = session.on_cancel.take() {
+                let _ = session.tx.send(event);
+            }
+            Ok(())
+        }
+
+        fn respond_permission(
+            &self,
+            _session_id: &str,
+            _permission_id: &str,
+            _allow: bool,
+        ) -> Result<(), RunnerError> {
+            Ok(())
+        }
+
+        fn close_session(&self, session_id: &str) -> Result<(), RunnerError> {
+            self.record(Call::Close(session_id.to_string()));
+            self.sessions.lock().unwrap().remove(session_id);
+            Ok(())
+        }
+
+        fn probe(
+            &self,
+            _provider: Provider,
+            _timeout: Duration,
+        ) -> Result<serde_json::Value, RunnerError> {
+            Err(RunnerError::Exited)
+        }
+
+        fn shutdown(&self) {
+            self.record(Call::Shutdown);
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    enum Event {
+        Task(String, TaskStatus),
+        Run(String, RunStatus),
+    }
+
+    #[derive(Default)]
+    struct RecordingSink {
+        events: Mutex<Vec<Event>>,
+        roots: Mutex<Vec<PathBuf>>,
+    }
+
+    impl RecordingSink {
+        fn events(&self) -> Vec<Event> {
+            self.events.lock().unwrap().clone()
+        }
+
+        fn task_events(&self) -> Vec<(String, TaskStatus)> {
+            self.events()
+                .into_iter()
+                .filter_map(|event| match event {
+                    Event::Task(id, status) => Some((id, status)),
+                    Event::Run(..) => None,
+                })
+                .collect()
+        }
+    }
+
+    impl EventSink for RecordingSink {
+        fn task_changed(&self, project_root: &Path, task: &Task) {
+            self.roots.lock().unwrap().push(project_root.to_path_buf());
+            self.events
+                .lock()
+                .unwrap()
+                .push(Event::Task(task.meta.id.clone(), task.meta.status));
+        }
+
+        fn run_changed(&self, project_root: &Path, run: &WorkflowRun) {
+            self.roots.lock().unwrap().push(project_root.to_path_buf());
+            self.events
+                .lock()
+                .unwrap()
+                .push(Event::Run(run.root_task_id.clone(), run.status));
+        }
+
+        fn progress(
+            &self,
+            _project_root: &Path,
+            _task_id: &str,
+            _attempt_id: &str,
+            _update: &ProgressUpdate,
+        ) {
+        }
+    }
+
+    fn completed(body: &str) -> String {
+        format!("---\noutcome: completed\n---\n\n{body}")
+    }
+
+    fn attention(reason: &str) -> String {
+        format!("---\noutcome: attention\nreason: {reason}\n---\n\nstopped")
+    }
+
+    /// A repo fixture with one enabled standard workflow, a fake runner, a
+    /// recording sink, and an orchestrator attached to the repo.
+    struct Env {
+        fx: Fixture,
+        store: WorkflowStore,
+        runner: Arc<FakeRunner>,
+        waiting: Receiver<String>,
+        sink: Arc<RecordingSink>,
+        orch: Arc<Orchestrator>,
+    }
+
+    impl Env {
+        fn new() -> Self {
+            let fx = Fixture::new();
+            let store = WorkflowStore::new(fx.root().to_path_buf());
+            let mut workflow = standard_workflow("Standard", Provider::Codex);
+            workflow.enabled = true;
+            store
+                .save_workflows(&WorkflowsFile {
+                    schema_version: 1,
+                    workflows: vec![workflow],
+                })
+                .unwrap();
+            let (runner, waiting) = FakeRunner::new();
+            let sink = Arc::new(RecordingSink::default());
+            let orch = Orchestrator::new(runner.clone(), sink.clone(), fx.base().to_path_buf());
+            orch.attach_project(fx.root());
+            Env {
+                fx,
+                store,
+                runner,
+                waiting,
+                sink,
+                orch,
+            }
+        }
+
+        fn workflow(&self) -> Workflow {
+            self.store.load_workflows().unwrap().workflows[0].clone()
+        }
+
+        /// Creates an inbox root task of the workflow.
+        fn root_task(&self, title: &str, body: &str) -> Task {
+            let id = new_id();
+            let meta = TaskMeta {
+                schema_version: 1,
+                id: id.clone(),
+                title: title.to_string(),
+                status: TaskStatus::Inbox,
+                root_id: id,
+                parent_id: None,
+                workflow_id: Some(self.workflow().id),
+                stage_id: None,
+                role: None,
+                auto_generated: false,
+                archived: false,
+                created_at: fsutil::now(),
+                updated_at: fsutil::now(),
+                attention: None,
+                history: Vec::new(),
+                awaiting: None,
+                plan_approved: false,
+                user_input: None,
+                screening_ack: None,
+            };
+            self.store
+                .create_task(&self.store.lock(), meta, body)
+                .unwrap()
+        }
+
+        fn kick(&self) {
+            self.orch.kick(self.fx.root());
+        }
+
+        fn wait_idle(&self) {
+            assert!(self.orch.wait_idle(WAIT), "orchestrator did not go idle");
+        }
+
+        /// Blocks until a scripted turn waits for its cancel.
+        fn wait_for_waiting_turn(&self) -> String {
+            self.waiting.recv_timeout(WAIT).expect("no turn is waiting")
+        }
+
+        fn task(&self, id: &str) -> Task {
+            self.store.get_task(id).unwrap()
+        }
+
+        fn tasks(&self) -> Vec<Task> {
+            self.store.list_tasks().unwrap().tasks
+        }
+
+        fn run(&self, root_id: &str) -> WorkflowRun {
+            self.store.get_run(root_id).unwrap()
+        }
+    }
+
+    fn attention_code(task: &Task) -> String {
+        task.meta.attention.as_ref().unwrap().code.clone()
+    }
+
+    #[test]
+    fn root_task_runs_through_all_stages_to_awaiting_merge() {
+        let env = Env::new();
+        env.runner
+            .script(Script::complete(&completed("# Design\nthe plan")));
+        env.runner.script(Script::complete_after(
+            |params| {
+                let wt = Path::new(&params.working_directory);
+                gitops::test_support::write_file(wt, "feature.txt", "brand new line\n");
+                gitops::git(wt, &["add", "feature.txt"]).unwrap();
+                gitops::git(wt, &["commit", "-m", "add feature"]).unwrap();
+            },
+            &completed("Implemented feature.txt"),
+        ));
+        env.runner
+            .script(Script::complete(&completed("Looks good.")));
+        let root = env.root_task("Feature", "Build it.");
+
+        env.kick();
+        env.wait_idle();
+
+        let run = env.run(&root.meta.id);
+        assert_eq!(run.status, RunStatus::AwaitingMerge);
+        let tasks = env.tasks();
+        assert_eq!(tasks.len(), 3);
+        let roles: Vec<_> = tasks.iter().map(|t| t.meta.role).collect();
+        assert_eq!(roles, [None, Some(Role::Implement), Some(Role::Review)]);
+        assert!(tasks.iter().all(|t| t.meta.status == TaskStatus::Completed));
+        assert_eq!(
+            env.runner.starts(),
+            [
+                RunnerPermission::ReadOnly,
+                RunnerPermission::FullAccess,
+                RunnerPermission::ReadOnly
+            ]
+        );
+        let outcomes: Vec<_> = run
+            .attempts
+            .iter()
+            .map(|a| a.outcome.as_deref().unwrap().to_string())
+            .collect();
+        assert_eq!(outcomes, ["completed", "completed", "completed"]);
+
+        let (design, implement, review) = (&tasks[0].meta.id, &tasks[1].meta.id, &tasks[2].meta.id);
+        let expected = [
+            (design, TaskStatus::Running),
+            (design, TaskStatus::Completed),
+            (implement, TaskStatus::Inbox),
+            (implement, TaskStatus::Running),
+            (implement, TaskStatus::Completed),
+            (review, TaskStatus::Inbox),
+            (review, TaskStatus::Running),
+            (review, TaskStatus::Completed),
+        ]
+        .map(|(id, status)| (id.clone(), status));
+        assert_eq!(env.sink.task_events(), expected);
+        assert_eq!(
+            env.sink.events().last(),
+            Some(&Event::Run(root.meta.id.clone(), RunStatus::AwaitingMerge))
+        );
+        // Events carry the attached project root.
+        let project = env.orch.store(env.fx.root()).project_root().to_path_buf();
+        assert!(env.sink.roots.lock().unwrap().iter().all(|r| *r == project));
+        assert!(!env.orch.is_active(design));
+    }
+
+    #[test]
+    fn max_concurrent_runs_starts_the_next_run_only_after_the_first_closes() {
+        let env = Env::new();
+        assert_eq!(env.workflow().max_concurrent_runs, 1);
+        let first = env.root_task("First", "one");
+        let second = env.root_task("Second", "two");
+
+        env.kick();
+        env.wait_idle();
+
+        let sessions: Vec<_> = env
+            .runner
+            .calls()
+            .into_iter()
+            .filter(|call| !matches!(call, Call::Cancel(_)))
+            .collect();
+        let runs = [env.run(&first.meta.id), env.run(&second.meta.id)];
+        let session = |run: &WorkflowRun| run.attempts[0].session_id.clone();
+        assert_eq!(
+            sessions,
+            [
+                Call::Start(session(&runs[0]), RunnerPermission::ReadOnly),
+                Call::Close(session(&runs[0])),
+                Call::Start(session(&runs[1]), RunnerPermission::ReadOnly),
+                Call::Close(session(&runs[1])),
+            ]
+        );
+        for task in [&first, &second] {
+            let task = env.task(&task.meta.id);
+            assert_eq!(attention_code(&task), "ATTENTION_STAGE_REPORTED");
+        }
+    }
+
+    #[test]
+    fn user_commit_to_base_branch_mid_turn_needs_attention_and_retry_succeeds() {
+        let env = Env::new();
+        let repo = env.fx.root().to_path_buf();
+        env.runner.script(Script::complete_after(
+            move |_| {
+                gitops::test_support::write_file(&repo, "user.txt", "user work\n");
+                gitops::git(&repo, &["add", "user.txt"]).unwrap();
+                gitops::git(&repo, &["commit", "-m", "user commit"]).unwrap();
+            },
+            &completed("# Design"),
+        ));
+        let root = env.root_task("Feature", "Build it.");
+
+        env.kick();
+        env.wait_idle();
+
+        let task = env.task(&root.meta.id);
+        assert_eq!(task.meta.status, TaskStatus::Attention);
+        assert_eq!(attention_code(&task), "ATTENTION_INTEGRITY_CHANGED");
+        let items: serde_json::Value =
+            serde_json::from_str(&task.meta.attention.as_ref().unwrap().params["items"]).unwrap();
+        assert!(
+            items
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["code"] == "INTEGRITY_BASE_BRANCH_MOVED"),
+            "{items}"
+        );
+        assert_eq!(env.tasks().len(), 1, "no child task on an integrity change");
+
+        // Retry: a fresh baseline is taken and the stage succeeds.
+        transition(
+            &env.store,
+            &root.meta.id,
+            TaskStatus::Attention,
+            TaskStatus::Inbox,
+            None,
+        )
+        .unwrap();
+        env.runner
+            .script(Script::complete(&completed("# Design again")));
+        env.kick();
+        env.wait_idle();
+
+        assert_eq!(env.task(&root.meta.id).meta.status, TaskStatus::Completed);
+        let tasks = env.tasks();
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks[1].meta.role, Some(Role::Implement));
+        // The user's commit is still on main.
+        assert!(env
+            .fx
+            .run(&["log", "--format=%s", "main"])
+            .contains("user commit"));
+    }
+
+    #[test]
+    fn hold_while_the_agent_finishes_keeps_the_task_on_hold() {
+        let env = Env::new();
+        env.runner.script(Script::WaitForCancel {
+            on_cancel: RunnerEvent::TurnCompleted {
+                final_response: completed("# Design"),
+                native_session_id: None,
+            },
+        });
+        let root = env.root_task("Feature", "Build it.");
+        let id = root.meta.id.clone();
+
+        env.kick();
+        let session = env.wait_for_waiting_turn();
+        assert!(env.orch.is_active(&id));
+        transition(
+            &env.store,
+            &id,
+            TaskStatus::Running,
+            TaskStatus::OnHold,
+            None,
+        )
+        .unwrap();
+        assert!(env.orch.cancel_task(&id, CancelReason::User));
+        env.wait_idle();
+
+        assert_eq!(env.task(&id).meta.status, TaskStatus::OnHold);
+        assert_eq!(env.tasks().len(), 1, "no child task");
+        let attempt = env.run(&id).attempts.last().unwrap().clone();
+        assert_eq!(attempt.outcome.as_deref(), Some("cancelled"));
+        assert!(attempt.finished_at.is_some());
+        assert!(env.runner.calls().contains(&Call::Cancel(session)));
+        assert!(!env.orch.is_active(&id));
+        assert!(!env.orch.cancel_task(&id, CancelReason::User));
+    }
+
+    #[test]
+    fn different_spellings_share_one_project_and_concurrent_kicks_start_once() {
+        let env = Env::new();
+        let key = env.orch.attach_project(env.fx.root());
+        assert_eq!(env.orch.attach_project(&env.fx.root().join("")), key);
+        if cfg!(windows) {
+            let upper = PathBuf::from(env.fx.root().to_string_lossy().to_uppercase());
+            assert_eq!(env.orch.attach_project(&upper), key);
+            let verbatim = PathBuf::from(format!(
+                r"\\?\{}",
+                crate::workflow::state::normalize_root(env.fx.root()).display()
+            ));
+            assert_eq!(env.orch.attach_project(&verbatim), key);
+        }
+
+        // Later attaches do not treat running tasks as interrupted.
+        let running = env.root_task("Running", "r");
+        transition(
+            &env.store,
+            &running.meta.id,
+            TaskStatus::Inbox,
+            TaskStatus::Running,
+            None,
+        )
+        .unwrap();
+        env.orch.attach_project(&env.fx.root().join(""));
+        assert_eq!(env.task(&running.meta.id).meta.status, TaskStatus::Running);
+
+        let task = env.root_task("Feature", "Build it.");
+        let barrier = Arc::new(Barrier::new(2));
+        let kicks: Vec<_> = [env.fx.root().to_path_buf(), env.fx.root().join("")]
+            .into_iter()
+            .map(|root| {
+                let orch = env.orch.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    orch.kick(&root);
+                })
+            })
+            .collect();
+        for kick in kicks {
+            kick.join().unwrap();
+        }
+        env.wait_idle();
+
+        assert_eq!(env.runner.starts().len(), 1);
+        assert_eq!(env.run(&task.meta.id).attempts.len(), 1);
+        assert_eq!(env.task(&task.meta.id).meta.status, TaskStatus::Attention);
+    }
+
+    #[test]
+    fn shutdown_cancels_the_attempt_and_next_start_marks_it_interrupted() {
+        let env = Env::new();
+        env.runner.script(Script::WaitForCancel {
+            on_cancel: RunnerEvent::TurnCancelled,
+        });
+        let root = env.root_task("Feature", "Build it.");
+        let id = root.meta.id.clone();
+
+        env.kick();
+        let session = env.wait_for_waiting_turn();
+        env.orch.shutdown(WAIT);
+
+        assert!(!env.orch.is_active(&id));
+        let calls = env.runner.calls();
+        let cancel = calls
+            .iter()
+            .position(|c| *c == Call::Cancel(session.clone()));
+        let close = calls
+            .iter()
+            .position(|c| *c == Call::Close(session.clone()));
+        assert!(cancel.is_some() && close.is_some());
+        assert_eq!(calls.last(), Some(&Call::Shutdown));
+        assert_eq!(env.task(&id).meta.status, TaskStatus::Running);
+        let attempt = env.run(&id).attempts.last().unwrap().clone();
+        assert_eq!(attempt.outcome.as_deref(), Some("cancelled"));
+
+        // Kicks after shutdown are ignored.
+        let other = env.root_task("Other", "o");
+        env.kick();
+        env.wait_idle();
+        assert_eq!(env.runner.starts().len(), 1);
+        assert_eq!(env.task(&other.meta.id).meta.status, TaskStatus::Inbox);
+
+        // The next start (a new orchestrator) interrupts the running task.
+        let (runner, _waiting) = FakeRunner::new();
+        let sink = Arc::new(RecordingSink::default());
+        let next = Orchestrator::new(runner.clone(), sink.clone(), env.fx.base().to_path_buf());
+        next.attach_project(env.fx.root());
+        let task = env.task(&id);
+        assert_eq!(task.meta.status, TaskStatus::Attention);
+        assert_eq!(attention_code(&task), "ATTENTION_INTERRUPTED");
+        assert!(sink
+            .task_events()
+            .contains(&(id.clone(), TaskStatus::Attention)));
+        assert!(runner.calls().is_empty());
+    }
+
+    #[test]
+    fn a_panicking_attempt_thread_does_not_stay_active() {
+        let env = Env::new();
+        env.runner.script(Script::complete_after(
+            |_| panic!("scripted panic"),
+            &completed("# Design"),
+        ));
+        let root = env.root_task("Feature", "Build it.");
+
+        env.kick();
+        env.wait_idle();
+
+        assert!(!env.orch.is_active(&root.meta.id));
+        // The orchestrator keeps working after the panic.
+        let next = env.root_task("Next", "n");
+        env.kick();
+        env.wait_idle();
+        assert_eq!(env.run(&next.meta.id).attempts.len(), 1);
+    }
+}

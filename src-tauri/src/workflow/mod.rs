@@ -16,6 +16,7 @@ pub mod fsutil;
 pub mod gitops;
 pub mod integrity;
 pub mod model;
+pub mod orchestrator;
 pub mod outcome;
 pub mod prompt;
 pub mod runner_client;
