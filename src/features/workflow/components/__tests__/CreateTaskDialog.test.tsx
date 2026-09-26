@@ -17,6 +17,8 @@ const dialogs = vi.hoisted(() => ({
 }));
 vi.mock("../../lib/workflow-api", () => ({ workflowApi: api, subscribeWorkflowEvents: vi.fn() }));
 vi.mock("@/stores/dialog-store", () => dialogs);
+const invoke = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
 import i18n from "@/shared/i18n";
 import { useWorkflowStore } from "../../workflow-store";
@@ -204,6 +206,22 @@ describe("CreateTaskDialog", () => {
     expect(field("body")).toBeNull();
     await act(async () => button(i18n.t("workflow:create.write"))!.click());
     expect(field<HTMLTextAreaElement>("body")!.value).toContain("**bold**");
+  });
+
+  it("opens preview links externally instead of navigating", async () => {
+    invoke.mockResolvedValue(undefined);
+    await render();
+    await act(async () => setValue(field<HTMLTextAreaElement>("body")!, "[site](https://example.com/) [rel](a.md)"));
+    await act(async () => button(i18n.t("workflow:create.preview"))!.click());
+    const links = container.querySelectorAll<HTMLAnchorElement>(".workflow-create__preview a");
+    const clicks = [...links].map((a) => {
+      const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+      a.dispatchEvent(event);
+      return event.defaultPrevented;
+    });
+    expect(clicks).toEqual([true, true]);
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith("open_external_url", { url: "https://example.com/" });
   });
 
   it("offers to add the standard workflow when no workflow is usable", async () => {

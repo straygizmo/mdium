@@ -14,6 +14,8 @@ vi.mock("../../lib/workflow-api", () => ({
   subscribeWorkflowEvents: vi.fn(),
 }));
 vi.mock("@/stores/dialog-store", () => ({ showMessage: vi.fn(), showConfirm: vi.fn(), showPrompt: vi.fn() }));
+const invoke = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
 import i18n from "@/shared/i18n";
 import { formatAttention } from "../../lib/format";
@@ -312,6 +314,26 @@ describe("TaskDetailModal", () => {
       expect(el.querySelector("strong")?.textContent).toBe("still bold");
     }
     expect((window as typeof window & { __pwned?: number }).__pwned).toBeUndefined();
+  });
+
+  it("opens body and output links externally instead of navigating", async () => {
+    invoke.mockResolvedValue(undefined);
+    const withLinks = "[site](https://example.com/x) [rel](docs/a.md) [js](javascript:alert(1))";
+    api.taskDetail.mockResolvedValue(detail({ task: { ...current, body: withLinks }, latestOutput: withLinks }));
+    await render();
+    for (const name of ["body", "output"]) {
+      const prevented = [...section(name)!.querySelectorAll("a")].map((a) => {
+        const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+        a.dispatchEvent(event);
+        return event.defaultPrevented;
+      });
+      expect(prevented.every(Boolean), name).toBe(true);
+    }
+    expect(invoke.mock.calls).toEqual([
+      ["open_external_url", { url: "https://example.com/x" }],
+      ["open_external_url", { url: "https://example.com/x" }],
+    ]);
+    expect(useWorkflowStore.getState().selectedTaskId).toBe("t2");
   });
 
   it("closes on Escape, on the close button and on an overlay click", async () => {

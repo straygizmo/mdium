@@ -1,11 +1,11 @@
 import { type KeyboardEvent, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { renderMarkdownSafe } from "@/shared/lib/markdown/render-markdown-safe";
 import type { Workflow } from "@/shared/types/workflow";
 import { trapTab, useDialogFocus } from "../lib/dialog-focus";
 import { workflowApi } from "../lib/workflow-api";
 import { showConfirm } from "@/stores/dialog-store";
 import { useWorkflowStore } from "../workflow-store";
+import { SafeMarkdown } from "./SafeMarkdown";
 import "./CreateTaskDialog.css";
 
 const NO_WORKFLOWS: Workflow[] = [];
@@ -19,10 +19,9 @@ interface CreateTaskDialogProps {
 /** Sanitized Markdown preview of the task body. */
 function BodyPreview({ body }: { body: string }) {
   const { t } = useTranslation("workflow");
-  // User-entered Markdown: only ever rendered through the sanitizing renderer.
-  const html = useMemo(() => renderMarkdownSafe(body), [body]);
   if (!body.trim()) return <p className="workflow-create__empty">{t("create.emptyPreview")}</p>;
-  return <div className="workflow-create__preview" dangerouslySetInnerHTML={{ __html: html }} />;
+  // User-entered Markdown: only ever rendered through the sanitizing renderer.
+  return <SafeMarkdown source={body} className="workflow-create__preview" />;
 }
 
 /** Creates a task for one of the enabled workflows and opens its detail. */

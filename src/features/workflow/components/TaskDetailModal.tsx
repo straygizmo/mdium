@@ -1,12 +1,12 @@
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { renderMarkdownSafe } from "@/shared/lib/markdown/render-markdown-safe";
 import type { AttemptRecord, HistoryEntry, Task, TaskDetail, WorkflowRun } from "@/shared/types/workflow";
 import { trapTab, useDialogFocus } from "../lib/dialog-focus";
 import { formatAttention, formatCommandError } from "../lib/format";
 import { workflowApi } from "../lib/workflow-api";
 import { useWorkflowStore } from "../workflow-store";
 import { MergeSection } from "./MergeSection";
+import { SafeMarkdown } from "./SafeMarkdown";
 import { TaskActions } from "./TaskActions";
 import { statusBackground } from "./TaskCard";
 import "./TaskDetailModal.css";
@@ -42,14 +42,11 @@ function latestTransition(run: WorkflowRun, tasks: Task[]): { from: string; to: 
 function Markdown({ source, className }: { source: string; className: string }) {
   const { t } = useTranslation("workflow");
   const truncated = source.length > MAX_MARKDOWN_CHARS;
-  // Untrusted Markdown: only ever rendered through the sanitizing renderer.
-  const html = useMemo(
-    () => renderMarkdownSafe(truncated ? source.slice(0, MAX_MARKDOWN_CHARS) : source),
-    [source, truncated],
-  );
+  const text = useMemo(() => (truncated ? source.slice(0, MAX_MARKDOWN_CHARS) : source), [source, truncated]);
   return (
     <>
-      <div className={className} dangerouslySetInnerHTML={{ __html: html }} />
+      {/* Untrusted Markdown: only ever rendered through the sanitizing renderer. */}
+      <SafeMarkdown source={text} className={className} />
       {truncated && (
         <p className="workflow-detail__truncated">{t("detail.truncated", { size: MAX_MARKDOWN_CHARS / 1024 })}</p>
       )}
