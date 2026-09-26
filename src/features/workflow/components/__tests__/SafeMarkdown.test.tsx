@@ -95,12 +95,6 @@ describe("SafeMarkdown", () => {
 });
 
 describe("externalUrl", () => {
-  const originalUserAgent = navigator.userAgent;
-
-  afterEach(() => {
-    Object.defineProperty(navigator, "userAgent", { value: originalUserAgent, configurable: true });
-  });
-
   it("accepts only absolute http and https URLs", () => {
     expect(externalUrl("https://example.com/x")).toBe("https://example.com/x");
     expect(externalUrl("HTTP://Example.com")).toBe("http://example.com/");
@@ -110,12 +104,15 @@ describe("externalUrl", () => {
     expect(externalUrl("")).toBeNull();
   });
 
-  it("refuses URLs with shell metacharacters on Windows", () => {
-    Object.defineProperty(navigator, "userAgent", { value: "Mozilla/5.0 (Windows NT 10.0)", configurable: true });
-    expect(externalUrl("https://example.com/?a=1&calc")).toBeNull();
-    expect(externalUrl("https://example.com/%CD%")).toBeNull();
-    expect(externalUrl("https://example.com/a|b")).toBeNull();
-    expect(externalUrl("https://example.com/a^b")).toBeNull();
-    expect(externalUrl("https://example.com/path")).toBe("https://example.com/path");
+  it("keeps query separators and percent-encoding", () => {
+    expect(externalUrl("https://example.com/search?q=a&page=2")).toBe("https://example.com/search?q=a&page=2");
+    expect(externalUrl("https://ja.wikipedia.org/wiki/%E6%97%A5")).toBe("https://ja.wikipedia.org/wiki/%E6%97%A5");
+  });
+
+  it("never opens URLs with whitespace or control characters", () => {
+    // Spaces and DEL in the path are percent-encoded by the parser.
+    expect(externalUrl("https://example.com/a b")).toBe("https://example.com/a%20b");
+    expect(externalUrl(`https://example.com/${String.fromCharCode(0x7f)}`)).toBe("https://example.com/%7F");
+    expect(externalUrl(`https://exa${String.fromCharCode(0)}mple.com/`)).toBeNull();
   });
 });

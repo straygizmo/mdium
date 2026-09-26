@@ -2,19 +2,19 @@ import { type MouseEvent, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { renderMarkdownSafe } from "@/shared/lib/markdown/render-markdown-safe";
 
-/**
- * Characters the Windows URL opener (`cmd /C start`) would interpret instead
- * of passing on: command separators, redirections, escapes and `%VAR%`
- * expansion. Links containing them are not opened on Windows.
- */
-const WINDOWS_SHELL_CHARS = /[\s"%&<>^|!`]/;
-
-const isWindows = () => navigator.userAgent.includes("Windows");
+/** Whether `text` contains whitespace or a control character (code 0x20 and below, or DEL). */
+function hasUnsafeChar(text: string): boolean {
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code <= 0x20 || code === 0x7f) return true;
+  }
+  return false;
+}
 
 /**
  * The normalized URL an untrusted link may be opened with, or null. Only
- * absolute http/https URLs qualify; on Windows, URLs with shell
- * metacharacters are refused as well.
+ * absolute http/https URLs without whitespace or control characters qualify.
+ * The backend opens the URL without a shell, so other characters are safe.
  */
 export function externalUrl(href: string): string | null {
   let url: URL;
@@ -25,7 +25,7 @@ export function externalUrl(href: string): string | null {
     return null;
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-  if (isWindows() && WINDOWS_SHELL_CHARS.test(url.href)) return null;
+  if (hasUnsafeChar(url.href)) return null;
   return url.href;
 }
 

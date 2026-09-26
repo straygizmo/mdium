@@ -600,31 +600,31 @@ pub fn open_in_default_app(path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Program that opens a URL or path with its default handler.
+#[cfg(target_os = "windows")]
+const EXTERNAL_OPENER: &str = "explorer.exe";
+#[cfg(target_os = "macos")]
+const EXTERNAL_OPENER: &str = "open";
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+const EXTERNAL_OPENER: &str = "xdg-open";
+
+/// Builds the command that opens `target` (a URL or a path) with its default
+/// handler. The target is passed as a single argument and never through a
+/// shell, so characters such as `&`, `|` or `%` in a URL are not interpreted
+/// as shell syntax (`cmd /C start` would run `https://x/?a&calc` as two
+/// commands).
+fn external_open_command(target: &str) -> Command {
+    let mut command = Command::new(EXTERNAL_OPENER);
+    command.arg(target);
+    command
+}
+
 /// Open URL in default browser
 #[tauri::command]
 pub fn open_external_url(url: String) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        Command::new("cmd")
-            .args(["/C", "start", "", &url])
-            .creation_flags(0x08000000) // CREATE_NO_WINDOW
-            .spawn()
-            .map_err(|e| format!("Failed to open URL: {}", e))?;
-    }
-    #[cfg(target_os = "macos")]
-    {
-        Command::new("open")
-            .arg(&url)
-            .spawn()
-            .map_err(|e| format!("Failed to open URL: {}", e))?;
-    }
-    #[cfg(target_os = "linux")]
-    {
-        Command::new("xdg-open")
-            .arg(&url)
-            .spawn()
-            .map_err(|e| format!("Failed to open URL: {}", e))?;
-    }
+    external_open_command(&url)
+        .spawn()
+        .map_err(|e| format!("Failed to open URL: {}", e))?;
     Ok(())
 }
 
@@ -786,5 +786,15 @@ mod tests {
     #[test]
     fn returns_none_for_root_without_stem() {
         assert!(resolve_generated_md_path(Path::new("/"), false).is_none());
+    }
+
+    #[test]
+    fn opens_external_targets_without_a_shell() {
+        let url = "https://example.com/?a=1&calc|x^y%PATH%";
+        let command = external_open_command(url);
+        assert_eq!(command.get_program(), EXTERNAL_OPENER);
+        let args: Vec<_> = command.get_args().collect();
+        assert_eq!(args, vec![std::ffi::OsStr::new(url)]);
+        assert_ne!(command.get_program(), "cmd");
     }
 }
