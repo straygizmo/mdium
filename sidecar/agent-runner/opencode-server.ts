@@ -1,5 +1,6 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { createServer } from "node:net";
 
 export interface OpencodeServerOptions {
   /** Server configuration, passed as OPENCODE_CONFIG_CONTENT. */
@@ -7,6 +8,8 @@ export interface OpencodeServerOptions {
   spawnImpl?: typeof spawn;
   /** How long to wait for the listening line (default 20 s). */
   timeoutMs?: number;
+  /** Chooses the loopback port to serve on (default: a free OS-assigned port). */
+  pickPort?: () => Promise<number>;
 }
 
 export interface StartedOpencodeServer {
@@ -18,17 +21,34 @@ export interface StartedOpencodeServer {
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 const LISTENING = /listening on (https?:\/\/\S+)/i;
-const SERVE_ARGS = ["serve", "--hostname=127.0.0.1", "--port=0"];
+/**
+ * A free loopback port assigned by the OS. `opencode serve --port=0` does not ask the OS for
+ * one: opencode 1.18 then prefers its default 4096, which collides with the port range of
+ * MDium's own opencode panel. The port is therefore chosen here and passed explicitly; the
+ * small race until opencode binds it is covered by the caller's retry on an early exit.
+ */
+export function freeLoopbackPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      server.close(() => (port ? resolve(port) : reject(new Error("OPENCODE_NO_PORT"))));
+    });
+  });
+}
 
 /**
  * Command line of `opencode serve`. The npm install is a .cmd shim on Windows, so it runs
  * through cmd.exe with constant arguments (the same resolution the availability probe uses).
  */
-function serveCommand(): { command: string; args: string[] } {
+function serveCommand(port: number): { command: string; args: string[] } {
+  const serveArgs = ["serve", "--hostname=127.0.0.1", `--port=${port}`];
   if (process.platform === "win32") {
-    return { command: process.env.ComSpec ?? "cmd.exe", args: ["/d", "/s", "/c", `opencode ${SERVE_ARGS.join(" ")}`] };
+    return { command: process.env.ComSpec ?? "cmd.exe", args: ["/d", "/s", "/c", `opencode ${serveArgs.join(" ")}`] };
   }
-  return { command: "opencode", args: SERVE_ARGS };
+  return { command: "opencode", args: serveArgs };
 }
 
 /** Kill a process and its children (cmd.exe and the opencode process it started on Windows). */
@@ -42,14 +62,17 @@ function killTree(child: ChildProcess): void {
 }
 
 /**
- * Start a dedicated `opencode serve` on an OS-assigned loopback port, hidden, with project
- * configuration disabled and a random per-server password.
+ * Start a dedicated `opencode serve` on a free loopback port, hidden, with project
+ * configuration disabled and a random per-server password. The returned promise only covers
+ * startup; an unexpected exit after that is noticed by the adapter (failed requests or a lost
+ * event stream, then a failed health check) and handled by its dropServer/restart path.
  */
-export function startOpencodeServer(options: OpencodeServerOptions): Promise<StartedOpencodeServer> {
+export async function startOpencodeServer(options: OpencodeServerOptions): Promise<StartedOpencodeServer> {
   const spawnImpl = options.spawnImpl ?? spawn;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const port = await (options.pickPort ?? freeLoopbackPort)();
   const password = randomBytes(16).toString("hex");
-  const { command, args } = serveCommand();
+  const { command, args } = serveCommand(port);
   const child = spawnImpl(command, args, {
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],

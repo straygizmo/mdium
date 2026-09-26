@@ -514,6 +514,29 @@ describe("OpencodeAdapter hardening", () => {
     expect(startServer).toHaveBeenCalledTimes(2);
   });
 
+  it("sends the Authorization header with the default health check", async () => {
+    const fake = fakeClient();
+    const server = { url: "http://127.0.0.1:1", password: "pw", close: vi.fn() };
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const adapter = new OpencodeAdapter({
+        startServer: async () => server,
+        createClient: () => fake.client as unknown as OpencodeClientLike,
+      });
+      fake.client.session.create.mockRejectedValueOnce(new TypeError("fetch failed"));
+      await expect(adapter.startSession(baseOptions, callbacks([]))).rejects.toThrow("OPENCODE_FAILED");
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(url).toBe("http://127.0.0.1:1/path");
+      expect(init?.headers).toEqual({ Authorization: `Basic ${Buffer.from("opencode:pw").toString("base64")}` });
+      // A healthy (200) server is kept.
+      expect(server.close).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("keeps a healthy shared server when one session's request fails", async () => {
     const { adapter, fake, server, startServer, checkHealth } = setup();
     checkHealth.mockResolvedValue(true);

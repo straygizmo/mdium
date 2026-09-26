@@ -43,7 +43,16 @@ import {
  * - read/edit/apply_patch paths are relative to the git worktree root, glob/grep paths to
  *   the session directory; GET /path reports both, and the worktree is "/" outside git.
  * - OPENCODE_SERVER_PASSWORD makes the server require HTTP Basic auth (user `opencode`), so
- *   other local processes cannot drive it; every client request carries the header.
+ *   other local processes cannot drive it; every client request (and the health check)
+ *   carries the header. The variable is inherited by every process opencode spawns, including
+ *   the agent's shell tool, so a shell command could read it and call the server. The
+ *   residual risk is low: that command already runs through the guard and permission flow,
+ *   and requests it makes to the server are network calls the guard and permissions still
+ *   see. A CLI flag or password file would be preferable if opencode adds one.
+ * - The server listens on a port the runner picks (see startOpencodeServer); `--port=0` would
+ *   make opencode prefer 4096, which MDium's own opencode panel uses.
+ * - An unexpected exit after startup is not watched directly: the next failed request or lost
+ *   event stream triggers dropServer, whose health check fails, so the next session restarts it.
  *
  * Remaining gaps (not closable from here): the user's global config and the system managed
  * config still load (their plugins and MCP servers run inside the server process, and their
@@ -123,14 +132,15 @@ async function serverAnswers(url: string, password: string): Promise<boolean> {
 type ServerConfig = ReturnType<typeof opencodeServerConfig>;
 type StartServer = (options: { config: ServerConfig }) => Promise<OpencodeServerHandle>;
 
-/** The server process exited while starting (e.g. a transient bind or startup failure). */
+/** The server process exited while starting, e.g. because another process took the picked port. */
 function exitedDuringStart(error: unknown): boolean {
   return /Server exited with code|EADDRINUSE|address already in use/i.test(errorText(error));
 }
 
 /**
  * Start `opencode serve` with project configuration disabled (see the note at the top).
- * An early exit is retried once.
+ * The free port is picked before the server binds it, so an early exit is retried once
+ * (on a freshly picked port).
  */
 export async function startDedicatedServer(
   config: ServerConfig,

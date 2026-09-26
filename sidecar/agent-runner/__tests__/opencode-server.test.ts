@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { ChildProcess, spawn } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startOpencodeServer } from "../opencode-server";
+import { startOpencodeServer, type StartedOpencodeServer } from "../opencode-server";
 
 /** Minimal stand-in for a spawned `opencode serve` process (no pid, so no taskkill). */
 class FakeChild extends EventEmitter {
@@ -28,9 +28,28 @@ function fakeSpawn() {
 }
 
 type SpawnOptions = { windowsHide?: boolean; stdio?: unknown; env?: NodeJS.ProcessEnv };
+type StartOptions = Parameters<typeof startOpencodeServer>[0];
 
 function spawnOptions(spawnImpl: { mock: { calls: unknown[][] } }): SpawnOptions {
   return spawnImpl.mock.calls[0][2] as SpawnOptions;
+}
+
+function commandLine(spawnImpl: { mock: { calls: unknown[][] } }): string {
+  const [command, args] = spawnImpl.mock.calls[0] as [string, string[]];
+  return [command, ...args].join(" ");
+}
+
+/**
+ * Start with a fixed port (unless given) and wait until the process is spawned, since port
+ * selection happens before the spawn.
+ */
+async function start(options: StartOptions): Promise<{ starting: Promise<StartedOpencodeServer> }> {
+  const spawnImpl = options.spawnImpl as unknown as { mock: { calls: unknown[][] } };
+  const starting = startOpencodeServer({ pickPort: async () => 4567, ...options });
+  // Keep an early rejection from being reported as unhandled before the test awaits it.
+  starting.catch(() => undefined);
+  await vi.waitFor(() => expect(spawnImpl.mock.calls.length).toBeGreaterThan(0));
+  return { starting };
 }
 
 afterEach(() => {
@@ -40,7 +59,7 @@ afterEach(() => {
 describe("startOpencodeServer", () => {
   it("resolves with the URL from the listening line", async () => {
     const { child, spawnImpl } = fakeSpawn();
-    const starting = startOpencodeServer({ config: { share: "disabled" }, spawnImpl });
+    const { starting } = await start({ config: { share: "disabled" }, spawnImpl });
     child.stdout.write("some banner\nopencode server listening on http://127.0.0.1:4567\n");
     const server = await starting;
     expect(server.url).toBe("http://127.0.0.1:4567");
@@ -49,27 +68,44 @@ describe("startOpencodeServer", () => {
 
   it("finds a listening line split across chunks", async () => {
     const { child, spawnImpl } = fakeSpawn();
-    const starting = startOpencodeServer({ config: {}, spawnImpl });
+    const { starting } = await start({ config: {}, spawnImpl });
     child.stdout.write("opencode server listen");
     child.stdout.write("ing on http://127.0.0.1:9");
     child.stdout.write("876\n");
     await expect(starting).resolves.toMatchObject({ url: "http://127.0.0.1:9876" });
   });
 
-  it("runs `opencode serve` on an OS-assigned loopback port", async () => {
+  it("runs `opencode serve` on the loopback port chosen by the runner", async () => {
+    const { child, spawnImpl } = fakeSpawn();
+    const { starting } = await start({ config: {}, spawnImpl, pickPort: async () => 51234 });
+    child.stdout.write("opencode server listening on http://127.0.0.1:51234\n");
+    await starting;
+    expect(commandLine(spawnImpl)).toContain("opencode serve --hostname=127.0.0.1 --port=51234");
+  });
+
+  it("picks a free OS-assigned loopback port by default", async () => {
     const { child, spawnImpl } = fakeSpawn();
     const starting = startOpencodeServer({ config: {}, spawnImpl });
+    await vi.waitFor(() => expect(spawnImpl).toHaveBeenCalled());
     child.stdout.write("opencode server listening on http://127.0.0.1:1\n");
     await starting;
-    const [command, args] = spawnImpl.mock.calls[0] as [string, string[]];
-    const commandLine = [command, ...args].join(" ");
-    expect(commandLine).toContain("opencode serve --hostname=127.0.0.1 --port=0");
+    const port = Number(/--port=(\d+)/.exec(commandLine(spawnImpl))?.[1]);
+    expect(port).toBeGreaterThan(0);
+    expect(port).not.toBe(4096);
+  });
+
+  it("rejects without spawning when no port can be picked", async () => {
+    const { spawnImpl } = fakeSpawn();
+    await expect(
+      startOpencodeServer({ config: {}, spawnImpl, pickPort: async () => Promise.reject(new Error("OPENCODE_NO_PORT")) }),
+    ).rejects.toThrow("OPENCODE_NO_PORT");
+    expect(spawnImpl).not.toHaveBeenCalled();
   });
 
   it("spawns hidden with piped output, the config, a random password, and project config disabled", async () => {
     const { child, spawnImpl } = fakeSpawn();
     const config = { share: "disabled", formatter: false };
-    const starting = startOpencodeServer({ config, spawnImpl });
+    const { starting } = await start({ config, spawnImpl });
     child.stdout.write("opencode server listening on http://127.0.0.1:1\n");
     const server = await starting;
     const options = spawnOptions(spawnImpl);
@@ -85,16 +121,16 @@ describe("startOpencodeServer", () => {
   it("uses a different password for each server", async () => {
     const first = fakeSpawn();
     const second = fakeSpawn();
-    const a = startOpencodeServer({ config: {}, spawnImpl: first.spawnImpl });
-    const b = startOpencodeServer({ config: {}, spawnImpl: second.spawnImpl });
+    const a = await start({ config: {}, spawnImpl: first.spawnImpl });
+    const b = await start({ config: {}, spawnImpl: second.spawnImpl });
     first.child.stdout.write("opencode server listening on http://127.0.0.1:1\n");
     second.child.stdout.write("opencode server listening on http://127.0.0.1:2\n");
-    expect((await a).password).not.toBe((await b).password);
+    expect((await a.starting).password).not.toBe((await b.starting).password);
   });
 
   it("rejects when the process exits before listening", async () => {
     const { child, spawnImpl } = fakeSpawn();
-    const starting = startOpencodeServer({ config: {}, spawnImpl });
+    const { starting } = await start({ config: {}, spawnImpl });
     child.stderr.write("Failed to start server\n");
     await new Promise((resolve) => setImmediate(resolve));
     child.exit(1);
@@ -103,7 +139,7 @@ describe("startOpencodeServer", () => {
 
   it("rejects when the process cannot be spawned", async () => {
     const { child, spawnImpl } = fakeSpawn();
-    const starting = startOpencodeServer({ config: {}, spawnImpl });
+    const { starting } = await start({ config: {}, spawnImpl });
     child.emit("error", Object.assign(new Error("spawn opencode ENOENT"), { code: "ENOENT" }));
     await expect(starting).rejects.toThrow("ENOENT");
   });
@@ -111,7 +147,7 @@ describe("startOpencodeServer", () => {
   it("rejects and kills the process on timeout", async () => {
     vi.useFakeTimers();
     const { child, spawnImpl } = fakeSpawn();
-    const starting = startOpencodeServer({ config: {}, spawnImpl, timeoutMs: 1_000 });
+    const { starting } = await start({ config: {}, spawnImpl, timeoutMs: 1_000 });
     const assertion = expect(starting).rejects.toThrow(/Timeout/);
     await vi.advanceTimersByTimeAsync(1_000);
     await assertion;
@@ -120,7 +156,7 @@ describe("startOpencodeServer", () => {
 
   it("close() kills the running server", async () => {
     const { child, spawnImpl } = fakeSpawn();
-    const starting = startOpencodeServer({ config: {}, spawnImpl });
+    const { starting } = await start({ config: {}, spawnImpl });
     child.stdout.write("opencode server listening on http://127.0.0.1:1\n");
     const server = await starting;
     server.close();
@@ -129,7 +165,7 @@ describe("startOpencodeServer", () => {
 
   it("close() does nothing once the server has exited", async () => {
     const { child, spawnImpl } = fakeSpawn();
-    const starting = startOpencodeServer({ config: {}, spawnImpl });
+    const { starting } = await start({ config: {}, spawnImpl });
     child.stdout.write("opencode server listening on http://127.0.0.1:1\n");
     const server = await starting;
     child.exit(0);
