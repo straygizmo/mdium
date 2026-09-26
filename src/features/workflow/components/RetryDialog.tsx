@@ -1,6 +1,7 @@
-import { type KeyboardEvent, useEffect, useRef, useState } from "react";
+import { type KeyboardEvent, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { AttentionReason } from "@/shared/types/workflow";
+import { trapTab, useDialogFocus } from "../lib/dialog-focus";
 import { isRecord } from "../lib/errors";
 import { formatAttention, formatCode } from "../lib/format";
 import "./RetryDialog.css";
@@ -23,15 +24,19 @@ const ACK_INTEGRITY_CODES: ReadonlySet<string> = new Set([
   "INTEGRITY_HOOKS_PATH_CHANGED",
 ]);
 
-/** Whether an integrity attention lists a git config or hooks change. */
+/**
+ * Whether an integrity attention lists a git config or hooks change. An
+ * unreadable list counts as one, so the acknowledgement is never hidden.
+ */
 function needsIntegrityAck(reason: AttentionReason): boolean {
   let items: unknown;
   try {
     items = JSON.parse(reason.params?.items ?? "[]");
   } catch {
-    return false;
+    return true;
   }
-  return Array.isArray(items) && items.some((item) => isRecord(item) && ACK_INTEGRITY_CODES.has(String(item.code)));
+  if (!Array.isArray(items)) return true;
+  return items.some((item) => isRecord(item) && ACK_INTEGRITY_CODES.has(String(item.code)));
 }
 
 /** The acceptance flags that are relevant to an attention reason. */
@@ -63,14 +68,13 @@ export function RetryDialog({ reason, integrityAckRequired, initialOptions, onCo
   const dialogRef = useRef<HTMLDivElement>(null);
   const flags = relevantRetryFlags(reason, integrityAckRequired);
 
-  useEffect(() => {
-    dialogRef.current?.focus();
-  }, []);
+  useDialogFocus(dialogRef, true);
 
   const onKeyDown = (e: KeyboardEvent) => {
-    // Keep Escape from also closing the task detail modal underneath.
+    // Keep Escape and Tab from reaching the task detail modal underneath.
     e.stopPropagation();
     if (e.key === "Escape") onCancel();
+    else trapTab(e, dialogRef.current);
   };
 
   return (

@@ -221,3 +221,10 @@ summary.workflow-detail__heading {
   font-size: 11px;
   white-space: pre-wrap;
 }
+
+.workflow-detail__truncated {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-style: italic;
+}

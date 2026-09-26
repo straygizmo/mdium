@@ -91,9 +91,13 @@ export function TaskActions({ task }: { task: Task }) {
 
   const onAction = async (action: Action) => {
     switch (action) {
-      case "cancel":
-        await execute((root) => workflowApi.cancelTask(root, id));
+      case "cancel": {
+        const text = t(status === "running" ? "actions.cancelRunningConfirm" : "actions.cancelConfirm", { title });
+        if (await showConfirm(text, { kind: "warning" })) {
+          await execute((root) => workflowApi.cancelTask(root, id));
+        }
         break;
+      }
       case "hold":
         await execute((root) => workflowApi.holdTask(root, id));
         break;

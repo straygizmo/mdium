@@ -46,12 +46,15 @@
     "transition": "Latest transition",
     "transitionValue": "from {{from}} to {{to}}",
     "log": "Log (latest lines)",
+    "truncated": "This text is too long; only the first {{size}} KB is shown.",
     "noLog": "No log output."
   },
   "actions": {
     "label": "Task actions",
     "failed": "The operation failed.",
     "cancel": "Cancel task",
+    "cancelConfirm": "Cancel the task \"{{title}}\"?",
+    "cancelRunningConfirm": "Cancel the running task \"{{title}}\"? The agent is stopped. If this is the current task of its run, the whole run is cancelled.",
     "hold": "Hold",
     "resume": "Resume",
     "retry": "Retry",

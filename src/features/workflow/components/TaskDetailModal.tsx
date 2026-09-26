@@ -2,12 +2,16 @@ import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next";
 import { renderMarkdownSafe } from "@/shared/lib/markdown/render-markdown-safe";
 import type { AttemptRecord, HistoryEntry, Task, TaskDetail, WorkflowRun } from "@/shared/types/workflow";
+import { trapTab, useDialogFocus } from "../lib/dialog-focus";
 import { formatAttention, formatCommandError } from "../lib/format";
 import { workflowApi } from "../lib/workflow-api";
 import { useWorkflowStore } from "../workflow-store";
 import { TaskActions } from "./TaskActions";
 import { statusBackground } from "./TaskCard";
 import "./TaskDetailModal.css";
+
+/** Longest Markdown text (in characters) rendered in the modal; the rest is cut off. */
+export const MAX_MARKDOWN_CHARS = 200 * 1024;
 
 type Loaded = { taskId: string; detail: TaskDetail } | { taskId: string; error: string };
 
@@ -35,9 +39,21 @@ function latestTransition(run: WorkflowRun, tasks: Task[]): { from: string; to: 
 }
 
 function Markdown({ source, className }: { source: string; className: string }) {
+  const { t } = useTranslation("workflow");
+  const truncated = source.length > MAX_MARKDOWN_CHARS;
   // Untrusted Markdown: only ever rendered through the sanitizing renderer.
-  const html = useMemo(() => renderMarkdownSafe(source), [source]);
-  return <div className={className} dangerouslySetInnerHTML={{ __html: html }} />;
+  const html = useMemo(
+    () => renderMarkdownSafe(truncated ? source.slice(0, MAX_MARKDOWN_CHARS) : source),
+    [source, truncated],
+  );
+  return (
+    <>
+      <div className={className} dangerouslySetInnerHTML={{ __html: html }} />
+      {truncated && (
+        <p className="workflow-detail__truncated">{t("detail.truncated", { size: MAX_MARKDOWN_CHARS / 1024 })}</p>
+      )}
+    </>
+  );
 }
 
 /**
@@ -80,9 +96,14 @@ export function TaskDetailModal() {
     };
   }, [taskId, activeRoot, version]);
 
+  useDialogFocus(dialogRef, taskId !== null);
+
+  const hasDetail = loaded?.taskId === taskId && loaded !== null && "detail" in loaded;
+  const storeLoaded = project?.loaded ?? false;
   useEffect(() => {
-    if (taskId) dialogRef.current?.focus();
-  }, [taskId]);
+    // The task was deleted (or is no longer listed) after it had been shown.
+    if (taskId && hasDetail && storeLoaded && !storeTask) openTask(null);
+  }, [taskId, hasDetail, storeLoaded, storeTask, openTask]);
 
   const dateFormat = useMemo(
     () => new Intl.DateTimeFormat(i18n.language, { dateStyle: "short", timeStyle: "short" }),
@@ -95,7 +116,15 @@ export function TaskDetailModal() {
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.key === "Escape") {
       e.stopPropagation();
+      const target = e.target;
+      if (target instanceof HTMLTextAreaElement && target.value !== "") {
+        // Keep typed text: the first Escape only leaves the text field.
+        dialogRef.current?.focus();
+        return;
+      }
       close();
+    } else {
+      trapTab(e, dialogRef.current);
     }
   };
   const formatDate = (iso: string | null) => (iso ? (time(iso) ? dateFormat.format(time(iso)) : iso) : "");
@@ -222,12 +251,18 @@ function DetailSections({ detail, tasks, formatDate }: DetailSectionsProps) {
       </section>
 
       {latestOutput !== null && (
-        <details className="workflow-detail__section" data-section="output" open>
+        <details
+          className="workflow-detail__section"
+          data-section="output"
+          open={latestOutput.length <= MAX_MARKDOWN_CHARS}
+        >
           <summary className="workflow-detail__heading">
             {t("detail.latestOutput")}
             {latestFinished && (
               <span className="workflow-detail__labels">
-                <span className="workflow-detail__label">{t(`mode.${latestFinished.mode}`)}</span>
+                <span className="workflow-detail__label">
+                  {t(`mode.${latestFinished.mode}`, { defaultValue: latestFinished.mode })}
+                </span>
                 {latestFinished.outcome && (
                   <span className="workflow-detail__label">
                     {t(`outcome.${latestFinished.outcome}`, { defaultValue: latestFinished.outcome })}

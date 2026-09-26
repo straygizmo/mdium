@@ -170,6 +170,19 @@ describe("TaskActions", () => {
     expect(api.listTasks).toHaveBeenCalled();
   });
 
+  it.each([
+    ["inbox", "workflow:actions.cancelConfirm"],
+    ["running", "workflow:actions.cancelRunningConfirm"],
+  ] as const)("confirms cancelling a task in %s", async (status, key) => {
+    await render(task({ status }));
+    vi.mocked(showConfirm).mockResolvedValueOnce(false);
+    await click(button("cancel"));
+    expect(showConfirm).toHaveBeenCalledWith(i18n.t(key, { title: "Task t1" }), { kind: "warning" });
+    expect(api.cancelTask).not.toHaveBeenCalled();
+    await click(button("cancel"));
+    expect(api.cancelTask).toHaveBeenCalledWith(ROOT, "t1");
+  });
+
   it("confirms mark complete", async () => {
     await render(task({ status: "attention", attention: { code: "ATTENTION_TIMEOUT", params: {} } }));
     vi.mocked(showConfirm).mockResolvedValueOnce(false);
@@ -244,6 +257,8 @@ describe("TaskActions", () => {
         { code: "ATTENTION_INTEGRITY_CHANGED", params: { items: JSON.stringify([{ code: "INTEGRITY_HEAD_MOVED", detail: "" }]) } },
         [],
       ],
+      // An unreadable list never hides the acknowledgement.
+      [{ code: "ATTENTION_INTEGRITY_CHANGED", params: { items: "not json" } }, ["acceptIntegrity"]],
     ] as [AttentionReason, string[]][])("shows the checkboxes for %j", async (reason, expected) => {
       await openRetry(reason);
       expect(checkboxes()).toEqual(expected);

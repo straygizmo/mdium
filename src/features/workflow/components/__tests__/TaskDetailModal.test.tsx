@@ -342,6 +342,92 @@ describe("TaskDetailModal", () => {
     expect(api.taskDetail).toHaveBeenCalledTimes(3);
   });
 
+  it("keeps the newest selection when detail responses arrive out of order", async () => {
+    const resolvers: Record<string, (d: TaskDetail) => void> = {};
+    api.taskDetail.mockImplementation(
+      (_root, id) => new Promise<TaskDetail>((resolve) => (resolvers[id] = resolve)),
+    );
+    const other = task("t3", { status: "inbox", title: "Task B" });
+    useWorkflowStore.setState({ projects: { [ROOT]: project([rootTask, current, other], [runOf()]) } });
+    await render();
+    await act(async () => useWorkflowStore.setState({ selectedTaskId: "t3" }));
+    await act(async () => resolvers.t3(detail({ task: other })));
+    await act(async () => resolvers.t2(detail()));
+    expect(container.querySelector(".workflow-detail__title")?.textContent).toBe("Task B");
+  });
+
+  it("keeps the modal open when Escape closes the retry dialog", async () => {
+    await render();
+    await act(async () => container.querySelector<HTMLButtonElement>('button[data-action="retry"]')!.click());
+    const retry = container.querySelector<HTMLElement>(".workflow-retry")!;
+    expect(document.activeElement).toBe(retry);
+    await act(async () => retry.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(container.querySelector(".workflow-retry")).toBeNull();
+    expect(useWorkflowStore.getState().selectedTaskId).toBe("t2");
+  });
+
+  it("leaves a non-empty text field on the first Escape", async () => {
+    const waiting = task("t2", { status: "awaiting_user", awaiting: { kind: "question", question: "?" } });
+    api.taskDetail.mockResolvedValue(detail({ task: waiting }));
+    await render();
+    const textarea = container.querySelector("textarea")!;
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+    await act(async () => {
+      setter.call(textarea, "draft");
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    textarea.focus();
+    const escape = (el: HTMLElement) =>
+      act(async () => el.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await escape(textarea);
+    expect(useWorkflowStore.getState().selectedTaskId).toBe("t2");
+    expect(container.querySelector("textarea")!.value).toBe("draft");
+    const dialog = container.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(document.activeElement).toBe(dialog);
+    await escape(dialog);
+    expect(useWorkflowStore.getState().selectedTaskId).toBeNull();
+  });
+
+  it("traps Tab inside the modal and restores focus on close", async () => {
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    opener.focus();
+    await render();
+    const dialog = container.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(document.activeElement).toBe(dialog);
+    const tab = (shiftKey: boolean) =>
+      act(async () =>
+        document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", shiftKey, bubbles: true })),
+      );
+    await tab(true);
+    const buttons = dialog.querySelectorAll<HTMLButtonElement>("button:not([disabled])");
+    const last = buttons[buttons.length - 1];
+    expect(document.activeElement).toBe(last);
+    await tab(false);
+    expect(document.activeElement).toBe(dialog.querySelector(".workflow-detail__close"));
+    await act(async () => useWorkflowStore.getState().openTask(null));
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
+  });
+
+  it("caps very long Markdown with a note and collapses a long output", async () => {
+    const long = "word ".repeat(50 * 1024);
+    api.taskDetail.mockResolvedValue(detail({ task: { ...current, body: long }, latestOutput: long }));
+    await render();
+    const note = i18n.t("workflow:detail.truncated", { size: 200 });
+    expect(section("body")!.querySelector(".workflow-detail__truncated")?.textContent).toBe(note);
+    expect(section("output")!.querySelector(".workflow-detail__truncated")?.textContent).toBe(note);
+    expect((section("output") as HTMLDetailsElement).open).toBe(false);
+    expect(section("body")!.textContent!.length).toBeLessThan(long.length);
+  });
+
+  it("closes when the shown task disappears from the store", async () => {
+    await render();
+    expect(container.querySelector(".workflow-detail__title")?.textContent).toBe("Task t2");
+    await act(async () => useWorkflowStore.setState({ projects: { [ROOT]: project([rootTask], [runOf()]) } }));
+    expect(useWorkflowStore.getState().selectedTaskId).toBeNull();
+  });
+
   it("shows a load error inside the modal", async () => {
     api.taskDetail.mockRejectedValue({ code: "TASK_NOT_FOUND", message: "gone" });
     await render();

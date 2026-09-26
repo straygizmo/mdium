@@ -46,12 +46,15 @@
     "transition": "直近の遷移",
     "transitionValue": "{{from}} から {{to}} へ",
     "log": "ログ (最新の行)",
+    "truncated": "テキストが長すぎるため、先頭の {{size}} KB のみ表示しています。",
     "noLog": "ログ出力はありません。"
   },
   "actions": {
     "label": "タスクの操作",
     "failed": "操作を完了できませんでした。",
     "cancel": "タスクを中止",
+    "cancelConfirm": "タスク「{{title}}」を中止しますか？",
+    "cancelRunningConfirm": "実行中のタスク「{{title}}」を中止しますか？エージェントは停止されます。このタスクが実行の現在のタスクである場合、実行全体が中止されます。",
     "hold": "保留",
     "resume": "再開",
     "retry": "再試行",
