@@ -11,6 +11,7 @@ vi.mock("../../lib/workflow-api", () => ({
     listRuns: vi.fn(),
     mergePreview: vi.fn(),
     mergeRun: vi.fn(),
+    acknowledgeIntegrity: vi.fn(),
     discardRun: vi.fn(),
   },
   subscribeWorkflowEvents: vi.fn(),
@@ -84,6 +85,7 @@ describe("MergeSection", () => {
     api.listRuns.mockResolvedValue({ runs: [], warnings: [] });
     api.mergePreview.mockResolvedValue(preview());
     api.mergeRun.mockResolvedValue(runOf("merged"));
+    api.acknowledgeIntegrity.mockResolvedValue(runOf("awaiting_merge"));
     api.discardRun.mockResolvedValue(runOf("discarded", false));
     vi.mocked(showConfirm).mockResolvedValue(true);
     container = document.createElement("div");
@@ -180,18 +182,16 @@ describe("MergeSection", () => {
     expect(api.mergeRun).toHaveBeenCalledWith(ROOT, "t1", [], false);
   });
 
-  it("acknowledges integrity changes in two steps and re-runs the preview", async () => {
-    api.mergePreview
-      .mockResolvedValueOnce(
-        preview({
-          commits: [],
-          diff: "",
-          reviewPaths: [],
-          integrityChanges: [{ code: "INTEGRITY_HOOKS_CHANGED", detail: "pre-commit" }],
-        }),
-      )
-      .mockResolvedValueOnce(preview());
-    api.mergeRun.mockRejectedValueOnce({ code: "WORKFLOW_MERGE_REVIEW_CHANGED", message: "" });
+  const integrityPreview = () =>
+    preview({
+      commits: [],
+      diff: "",
+      reviewPaths: [],
+      integrityChanges: [{ code: "INTEGRITY_HOOKS_CHANGED", detail: "pre-commit" }],
+    });
+
+  it("acknowledges integrity changes without merging and re-runs the preview", async () => {
+    api.mergePreview.mockResolvedValueOnce(integrityPreview()).mockResolvedValueOnce(preview());
     await render(runOf("awaiting_merge"));
     await showPreview();
 
@@ -205,25 +205,34 @@ describe("MergeSection", () => {
     expect(button("recheck")!.disabled).toBe(false);
 
     await click(button("recheck"));
-    expect(showConfirm).toHaveBeenCalledTimes(1);
-    expect(api.mergeRun).toHaveBeenCalledWith(ROOT, "t1", [], true);
-    // The expected refusal is not an error for the user: the preview is loaded again.
+    expect(showConfirm).toHaveBeenCalledWith(i18n.t("workflow:merge.recheckConfirm"), expect.anything());
+    expect(api.acknowledgeIntegrity).toHaveBeenCalledWith(ROOT, "t1");
+    expect(api.mergeRun).not.toHaveBeenCalled();
     expect(showMessage).not.toHaveBeenCalled();
     expect(api.mergePreview).toHaveBeenCalledTimes(2);
     expect(pathBoxes()).toHaveLength(2);
     expect(container.querySelector('input[name="acknowledgeIntegrity"]')).toBeNull();
+    expect(container.textContent).not.toContain(i18n.t("workflow:merge.done"));
   });
 
-  it("shows the merge as done when the acknowledgement merged right away", async () => {
-    api.mergePreview.mockResolvedValue(
-      preview({ commits: [], diff: "", reviewPaths: [], integrityChanges: [{ code: "INTEGRITY_GIT_CONFIG_CHANGED", detail: "" }] }),
-    );
+  it("keeps the preview when the acknowledgement is declined or fails", async () => {
+    api.mergePreview.mockResolvedValue(integrityPreview());
     await render(runOf("awaiting_merge"));
     await showPreview();
     await click(container.querySelector<HTMLInputElement>('input[name="acknowledgeIntegrity"]'));
+
+    vi.mocked(showConfirm).mockResolvedValueOnce(false);
     await click(button("recheck"));
-    expect(api.mergeRun).toHaveBeenCalledWith(ROOT, "t1", [], true);
-    expect(container.textContent).toContain(i18n.t("workflow:merge.done"));
+    expect(api.acknowledgeIntegrity).not.toHaveBeenCalled();
+
+    api.acknowledgeIntegrity.mockRejectedValueOnce({ code: "WORKFLOW_RUN_NOT_AWAITING_MERGE", message: "" });
+    await click(button("recheck"));
+    expect(showMessage).toHaveBeenCalledWith(i18n.t("workflow:codes.WORKFLOW_RUN_NOT_AWAITING_MERGE"), {
+      title: i18n.t("workflow:merge.failed"),
+      kind: "error",
+    });
+    expect(api.mergePreview).toHaveBeenCalledTimes(1);
+    expect(api.mergeRun).not.toHaveBeenCalled();
   });
 
   it.each([

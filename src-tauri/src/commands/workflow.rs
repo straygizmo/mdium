@@ -612,6 +612,18 @@ pub async fn workflow_merge_run(
 }
 
 #[tauri::command]
+pub async fn workflow_acknowledge_integrity(
+    state: tauri::State<'_, WorkflowState>,
+    project_root: String,
+    root_task_id: String,
+) -> Result<WorkflowRun, CommandError> {
+    with_project(state, project_root, move |orch, root| {
+        actions::acknowledge_integrity(orch, root, &root_task_id)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn workflow_discard_run(
     state: tauri::State<'_, WorkflowState>,
     project_root: String,

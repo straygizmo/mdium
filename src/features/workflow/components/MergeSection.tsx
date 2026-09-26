@@ -13,8 +13,10 @@ import "./MergeSection.css";
 const MAX_DIFF_LINES = 5000;
 
 /** Refusals after which the preview no longer matches the repository. */
-const REVIEW_CHANGED = "WORKFLOW_MERGE_REVIEW_CHANGED";
-const STALE_PREVIEW_CODES: ReadonlySet<string> = new Set([REVIEW_CHANGED, "WORKFLOW_MERGE_INTEGRITY_CHANGED"]);
+const STALE_PREVIEW_CODES: ReadonlySet<string> = new Set([
+  "WORKFLOW_MERGE_REVIEW_CHANGED",
+  "WORKFLOW_MERGE_INTEGRITY_CHANGED",
+]);
 
 function shortHash(hash: string): string {
   return hash.slice(0, 7);
@@ -61,21 +63,14 @@ export function MergeSection({ run }: { run: WorkflowRun }) {
     }
   };
 
-  /**
-   * Runs `workflow_merge_run` through the store. Resolves to "merged",
-   * "stale" (refused because the preview no longer matches) or "failed".
-   */
-  const merge = async (paths: string[], acknowledgeIntegrity: boolean, silentReviewChanged: boolean) => {
-    let refusal: string | null = null;
+  /** Runs `workflow_merge_run` through the store; a refusal against a stale preview reloads it. */
+  const merge = async (paths: string[]) => {
+    let stale = false;
     const merged = await useWorkflowStore.getState().run(t("merge.failed"), async (root) => {
       try {
-        return await workflowApi.mergeRun(root, rootTaskId, paths, acknowledgeIntegrity);
+        return await workflowApi.mergeRun(root, rootTaskId, paths, false);
       } catch (err) {
-        if (isCommandError(err) && STALE_PREVIEW_CODES.has(err.code)) {
-          refusal = err.code;
-          // Expected after acknowledging: the review paths are only known now.
-          if (silentReviewChanged && err.code === REVIEW_CHANGED) return null;
-        }
+        if (isCommandError(err) && STALE_PREVIEW_CODES.has(err.code)) stale = true;
         throw err;
       }
     });
@@ -84,7 +79,7 @@ export function MergeSection({ run }: { run: WorkflowRun }) {
       setMergedHere(true);
       return;
     }
-    if (refusal) await loadPreview();
+    if (stale) await loadPreview();
   };
 
   const onMerge = async (target: MergePreview) => {
@@ -92,14 +87,18 @@ export function MergeSection({ run }: { run: WorkflowRun }) {
       t("merge.mergeConfirm", { branch: target.branch, baseBranch: target.baseBranch }),
       { kind: "warning" },
     );
-    if (confirmed) await withBusy(() => merge(target.reviewPaths, false, false));
+    if (confirmed) await withBusy(() => merge(target.reviewPaths));
   };
 
   const onRecheck = async () => {
-    // Acknowledging merges right away when the branch has no review paths.
-    if (await showConfirm(t("merge.recheckConfirm"), { kind: "warning" })) {
-      await withBusy(() => merge([], true, true));
-    }
+    if (!(await showConfirm(t("merge.recheckConfirm"), { kind: "warning" }))) return;
+    await withBusy(async () => {
+      // Only stores a new integrity baseline; the merge is a separate step.
+      const acknowledged = await useWorkflowStore
+        .getState()
+        .run(t("merge.failed"), (root) => workflowApi.acknowledgeIntegrity(root, rootTaskId));
+      if (acknowledged) await loadPreview();
+    });
   };
 
   const onDiscard = async () => {

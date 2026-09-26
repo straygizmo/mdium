@@ -96,6 +96,8 @@ export const workflowApi = {
     call<MergePreview>("workflow_merge_preview", { projectRoot, rootTaskId }),
   mergeRun: (projectRoot: string, rootTaskId: string, acknowledgedPaths: string[], acknowledgeIntegrity: boolean) =>
     call<WorkflowRun>("workflow_merge_run", { projectRoot, rootTaskId, acknowledgedPaths, acknowledgeIntegrity }),
+  acknowledgeIntegrity: (projectRoot: string, rootTaskId: string) =>
+    call<WorkflowRun>("workflow_acknowledge_integrity", { projectRoot, rootTaskId }),
   discardRun: (projectRoot: string, rootTaskId: string) =>
     call<WorkflowRun>("workflow_discard_run", { projectRoot, rootTaskId }),
   probeProviders: () => call<ProviderProbe[]>("workflow_probe_providers"),

@@ -358,6 +358,7 @@ pub fn run() {
             commands::workflow::workflow_delete_task,
             commands::workflow::workflow_merge_preview,
             commands::workflow::workflow_merge_run,
+            commands::workflow::workflow_acknowledge_integrity,
             commands::workflow::workflow_discard_run,
             commands::workflow::workflow_probe_providers,
         ])

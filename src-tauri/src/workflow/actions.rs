@@ -970,8 +970,7 @@ fn merge_locked(
         if !acknowledge_integrity {
             return Err(ActionError::InvalidState(WORKFLOW_MERGE_INTEGRITY_CHANGED));
         }
-        run.integrity_baseline = Some(now);
-        run = store.put_run(guard, &run)?;
+        store_acknowledged_baseline(guard, store, &mut run, now)?;
         *rebaselined = Some(run.clone());
     }
     // Sorted and unique.
@@ -985,6 +984,44 @@ fn merge_locked(
     gitops::merge_into_base_in(base, store.project_root(), &info)?;
     run.status = RunStatus::Merged;
     Ok(store.put_run(guard, &run)?)
+}
+
+/// Stores `now` as the run's acknowledged integrity baseline.
+fn store_acknowledged_baseline(
+    guard: &ProjectGuard,
+    store: &WorkflowStore,
+    run: &mut WorkflowRun,
+    now: IntegritySnapshot,
+) -> Result<(), ActionError> {
+    run.integrity_baseline = Some(now);
+    *run = store.put_run(guard, run)?;
+    Ok(())
+}
+
+/// Acknowledges the repository changes reported by [`merge_preview`] for an
+/// AwaitingMerge run without merging: the repository as it is now becomes
+/// the run's integrity baseline. Nothing is stored when there are no
+/// changes to acknowledge.
+pub fn acknowledge_integrity(
+    orch: &Arc<Orchestrator>,
+    project_root: &Path,
+    root_task_id: &str,
+) -> Result<WorkflowRun, ActionError> {
+    let store = orch.store(project_root);
+    let (run, stored) = {
+        let guard = store.lock();
+        let (mut run, info) = awaiting_merge(&store, root_task_id)?;
+        let (changes, now) = integrity_state(store.project_root(), &run, &info)?;
+        let stored = !changes.is_empty();
+        if stored {
+            store_acknowledged_baseline(&guard, &store, &mut run, now)?;
+        }
+        (run, stored)
+    };
+    if stored {
+        emit(orch, &store, &[], Some(&run));
+    }
+    Ok(run)
 }
 
 /// Removes a run's worktree and branch. Refused while a task of the run is
@@ -2139,6 +2176,67 @@ mod tests {
         assert_eq!(preview.review_paths, acknowledged);
         let merged = merge_run(&env.orch, env.root(), &id, &acknowledged, false).unwrap();
         assert_eq!(merged.status, RunStatus::Merged);
+        env.wait_idle();
+    }
+
+    #[test]
+    fn acknowledging_integrity_changes_never_merges() {
+        let env = Env::new();
+        let (root, _info) = env.awaiting_merge();
+        let id = root.meta.id.clone();
+        env.fx.run(&["config", "core.fsmonitor", "false"]);
+        let preview = merge_preview(&env.orch, env.root(), &id).unwrap();
+        assert_eq!(preview.integrity_changes.len(), 1);
+        assert!(preview.commits.is_empty());
+        let before = env.run(&id);
+        let merges_before = env.fx.run(&["rev-list", "--merges", "--count", "main"]);
+
+        let events = env.sink.events().len();
+        let run = acknowledge_integrity(&env.orch, env.root(), &id).unwrap();
+        assert_eq!(run.status, RunStatus::AwaitingMerge);
+        assert_eq!(run, env.run(&id));
+        assert_ne!(run.integrity_baseline, before.integrity_baseline);
+        assert_eq!(
+            env.sink.events()[events..],
+            [format!("run {id} AwaitingMerge")]
+        );
+        assert_eq!(
+            env.fx.run(&["rev-list", "--merges", "--count", "main"]),
+            merges_before
+        );
+
+        // The preview is complete now.
+        let preview = merge_preview(&env.orch, env.root(), &id).unwrap();
+        assert!(preview.integrity_changes.is_empty());
+        assert!(preview.commits.iter().any(|c| c.subject == "agent work"));
+        assert!(preview.diff.contains("ci.yml"));
+        assert_eq!(
+            preview.review_paths,
+            [".github/workflows/ci.yml", "AGENTS.md"]
+        );
+
+        // Nothing left to acknowledge: nothing is stored or reported.
+        let events = env.sink.events().len();
+        let again = acknowledge_integrity(&env.orch, env.root(), &id).unwrap();
+        assert_eq!(again, env.run(&id));
+        assert_eq!(env.sink.events().len(), events);
+        env.wait_idle();
+    }
+
+    #[test]
+    fn acknowledging_integrity_requires_a_run_awaiting_merge() {
+        let env = Env::new();
+        let (root, _info) = env.awaiting_merge();
+        let id = root.meta.id.clone();
+        let acknowledged = vec![
+            ".github/workflows/ci.yml".to_string(),
+            "AGENTS.md".to_string(),
+        ];
+        merge_run(&env.orch, env.root(), &id, &acknowledged, false).unwrap();
+        assert_eq!(
+            code(acknowledge_integrity(&env.orch, env.root(), &id)),
+            WORKFLOW_RUN_NOT_AWAITING_MERGE
+        );
         env.wait_idle();
     }
 

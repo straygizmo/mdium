@@ -82,6 +82,12 @@ const cases: Case[] = [
     "workflow_merge_run",
     { projectRoot: ROOT, rootTaskId: "r1", acknowledgedPaths: ["a.txt"], acknowledgeIntegrity: true },
   ],
+  [
+    "acknowledgeIntegrity",
+    () => workflowApi.acknowledgeIntegrity(ROOT, "r1"),
+    "workflow_acknowledge_integrity",
+    { projectRoot: ROOT, rootTaskId: "r1" },
+  ],
   ["discardRun", () => workflowApi.discardRun(ROOT, "r1"), "workflow_discard_run", { projectRoot: ROOT, rootTaskId: "r1" }],
   ["probeProviders", () => workflowApi.probeProviders(), "workflow_probe_providers", undefined],
   ["gitignoreStatus", () => workflowApi.gitignoreStatus(ROOT), "workflow_gitignore_status", { projectRoot: ROOT }],

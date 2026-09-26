@@ -102,7 +102,7 @@
     "integrityHelp": "The project's git configuration or hooks changed since the run started. Acknowledge the changes to see the commits and the diff.",
     "acknowledgeIntegrity": "Acknowledge these repository changes",
     "recheck": "Acknowledge and re-check",
-    "recheckConfirm": "Acknowledge the repository changes? A new baseline is taken from the repository as it is now. If the branch changes no configuration files, it is merged right away.",
+    "recheckConfirm": "Acknowledge the repository changes? A new baseline is taken from the repository as it is now. Nothing is merged yet.",
     "merge": "Merge locally",
     "mergeConfirm": "Merge the branch \"{{branch}}\" into \"{{baseBranch}}\" in the project?",
     "done": "The branch was merged.",
