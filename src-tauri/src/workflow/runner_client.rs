@@ -345,6 +345,11 @@ impl RunnerClient {
         }
     }
 
+    /// Whether the runner process has not been reported gone yet.
+    pub fn is_alive(&self) -> bool {
+        !self.state.lock().unwrap().dead
+    }
+
     fn new_request_id(&self) -> String {
         format!("wf-{}", self.next_request.fetch_add(1, Ordering::Relaxed))
     }
