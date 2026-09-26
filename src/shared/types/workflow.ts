@@ -160,6 +160,18 @@ export interface WorktreeInfo {
 
 export type AttemptMode = "single" | "plan" | "execute";
 
+/** How an attempt ended (`AttemptRecord.outcome`). */
+export type AttemptOutcome =
+  | "completed"
+  | "attention"
+  | "awaiting_user"
+  | "cancelled"
+  | "timeout"
+  | "failed"
+  | "guard_blocked"
+  | "output_invalid"
+  | "interrupted";
+
 export interface AttemptRecord {
   attemptId: string;
   taskId: string;
@@ -169,7 +181,7 @@ export interface AttemptRecord {
   runnerPid: number | null;
   startedAt: string;
   finishedAt: string | null;
-  outcome: string | null;
+  outcome: AttemptOutcome | null;
   mode: AttemptMode;
   userInput: string | null;
 }
@@ -278,6 +290,11 @@ export interface ProviderProbe {
   provider: Provider;
   /** The runner's availability report, or `{ kind: "error", detail: <code> }`. */
   result: unknown;
+}
+
+/** Result of `workflow_gitignore_status`: workflow paths `.gitignore` does not cover. */
+export interface GitignoreStatus {
+  missing: string[];
 }
 
 /** Rejection value of every workflow command. `message` is a log detail; localize by `code`. */
