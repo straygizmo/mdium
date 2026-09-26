@@ -502,7 +502,7 @@ pub fn changed_paths_matching(
     changed_paths_matching_in(&default_worktree_base(), info, patterns)
 }
 
-fn changed_paths_matching_in(
+pub(crate) fn changed_paths_matching_in(
     base_dir: &Path,
     info: &WorktreeInfo,
     patterns: &[&str],

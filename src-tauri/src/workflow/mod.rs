@@ -7,6 +7,7 @@
 #![allow(dead_code)]
 
 pub mod attempt;
+pub mod checks;
 pub mod containment;
 pub mod errors;
 pub mod frontmatter;
