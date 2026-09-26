@@ -32,6 +32,7 @@ function updatedTime(task: Task): number {
 export function Workspace() {
   const { t, i18n } = useTranslation("workflow");
   const activeRoot = useWorkflowStore((s) => s.activeRoot);
+  const attachError = useWorkflowStore((s) => s.attachError);
   const project = useWorkflowStore((s) => (s.activeRoot ? s.projects[s.activeRoot] : undefined));
   const filters = useWorkflowStore((s) => s.filters);
   const setFilters = useWorkflowStore((s) => s.setFilters);
@@ -56,9 +57,12 @@ export function Workspace() {
   );
 
   const slotHolders = useMemo(() => {
-    const activeRuns = new Set(runs.filter((r) => r.status === "active").map((r) => r.rootTaskId));
+    // An active run holds one slot; it is shown on the run's current task while that task waits.
+    const currentTasks = new Set(runs.filter((r) => r.status === "active").map((r) => r.currentTaskId));
     return new Set(
-      tasks.filter((task) => SLOT_HOLDING.has(task.meta.status) && activeRuns.has(task.meta.rootId)).map((task) => task.meta.id),
+      tasks
+        .filter((task) => SLOT_HOLDING.has(task.meta.status) && currentTasks.has(task.meta.id))
+        .map((task) => task.meta.id),
     );
   }, [tasks, runs]);
 
@@ -71,8 +75,20 @@ export function Workspace() {
   const Board = view === "matrix" ? MatrixView : KanbanBoard;
 
   let content: ReactNode;
-  if (!project?.loaded) {
-    content = project?.error ? null : <p className="workflow-workspace__message">{t("loading")}</p>;
+  if (attachError) {
+    content = (
+      <p className="workflow-workspace__error" role="alert">
+        {attachError}
+      </p>
+    );
+  } else if (!project?.loaded) {
+    content = project?.error ? (
+      <p className="workflow-workspace__error" role="alert">
+        {project.error}
+      </p>
+    ) : (
+      <p className="workflow-workspace__message">{t("loading")}</p>
+    );
   } else if (visible.length === 0) {
     content = <p className="workflow-workspace__message">{t("emptyBoard")}</p>;
   } else {

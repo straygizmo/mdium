@@ -35,6 +35,14 @@
   font-size: 12px;
 }
 
+.workflow-workspace__error {
+  margin: 0;
+  padding: 16px;
+  color: var(--accent-red);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
 .workflow-workspace__view {
   display: flex;
   flex-shrink: 0;

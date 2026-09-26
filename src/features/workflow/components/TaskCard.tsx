@@ -95,7 +95,7 @@ export const TaskCard = memo(function TaskCard({
         <span className="workflow-card__line workflow-card__attention">{formatAttention(meta.attention).text}</span>
       )}
       {meta.status === "awaiting_user" && meta.awaiting && (
-        <span className="workflow-card__line workflow-card__awaiting">{t(`awaiting.${meta.awaiting.kind}`)}</span>
+        <span className="workflow-card__line workflow-card__awaiting">{t(`awaiting.${meta.awaiting.kind}`, { defaultValue: meta.awaiting.kind })}</span>
       )}
       {meta.status === "running" && progress && (
         <span className="workflow-card__line workflow-card__progress" title={progress}>

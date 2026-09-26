@@ -4,7 +4,8 @@
   "loading": "Loading…",
   "emptyBoard": "No tasks to show.",
   "workspace": {
-    "count": "{{count}} tasks",
+    "count_one": "{{count}} task",
+    "count_other": "{{count}} tasks",
     "roleHeader": "Role",
     "noRole": "No role",
     "updatedAt": "Updated {{time}}",

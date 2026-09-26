@@ -45,13 +45,13 @@ function task(id: string, patch: Partial<TaskMeta> = {}): Task {
   };
 }
 
-function run(rootTaskId: string, status: WorkflowRun["status"]): WorkflowRun {
+function run(rootTaskId: string, status: WorkflowRun["status"], currentTaskId = rootTaskId): WorkflowRun {
   return {
     schemaVersion: 1,
     rootTaskId,
     workflow: {} as WorkflowRun["workflow"],
     status,
-    currentTaskId: rootTaskId,
+    currentTaskId,
     reentryCount: 0,
     worktree: null,
     attempts: [],
@@ -185,22 +185,74 @@ describe("Workspace", () => {
     expect(container.querySelector("h1, strong")).toBeNull();
   });
 
-  it("marks attention/awaiting tasks whose run is active as holding a slot", async () => {
+  it("marks the waiting current task of an active run as holding a slot", async () => {
+    const attention = { code: "X", params: {} };
     setProject(
       project(
         [
-          task("held", { status: "attention", rootId: "r1", attention: { code: "X", params: {} } }),
-          task("free", { status: "attention", rootId: "r2", attention: { code: "X", params: {} } }),
-          task("busy", { status: "running", rootId: "r1" }),
+          task("held", { status: "attention", rootId: "r1", attention }),
+          // Same run, but not its current task: the run's one slot is shown once.
+          task("old", { status: "attention", rootId: "r1", attention }),
+          task("free", { status: "attention", rootId: "r2", attention }),
+          task("wait", { status: "awaiting_user", rootId: "r3", awaiting: { kind: "question", question: "?" } }),
+          task("busy", { status: "running", rootId: "r4" }),
         ],
-        { runs: [run("r1", "active"), run("r2", "awaiting_merge")] },
+        {
+          runs: [
+            run("r1", "active", "held"),
+            run("r2", "awaiting_merge", "free"),
+            run("r3", "active", "wait"),
+            run("r4", "active", "busy"),
+          ],
+        },
       ),
     );
     await render();
     const badge = card("held")!.querySelector<HTMLElement>(".workflow-card__slot");
     expect(badge?.title).toBe(i18n.t("workflow:workspace.holdsSlot"));
+    expect(card("wait")!.querySelector(".workflow-card__slot")).not.toBeNull();
+    expect(card("old")!.querySelector(".workflow-card__slot")).toBeNull();
     expect(card("free")!.querySelector(".workflow-card__slot")).toBeNull();
     expect(card("busy")!.querySelector(".workflow-card__slot")).toBeNull();
+  });
+
+  it("shows the attach error instead of loading", async () => {
+    useWorkflowStore.setState({ activeRoot: null, attachError: "Attach failed: detail" });
+    await render();
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe("Attach failed: detail");
+    expect(container.textContent).not.toContain(i18n.t("workflow:loading"));
+  });
+
+  it("shows loading until the first load completes", async () => {
+    setProject(project([], { loaded: false, loading: true }));
+    await render();
+    expect(container.textContent).toContain(i18n.t("workflow:loading"));
+    expect(container.textContent).not.toContain(i18n.t("workflow:emptyBoard"));
+  });
+
+  it("shows the load error before the first load completes", async () => {
+    setProject(project([], { loaded: false, error: "Load failed" }));
+    await render();
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe("Load failed");
+    expect(container.textContent).not.toContain(i18n.t("workflow:loading"));
+  });
+
+  it("labels columns and pluralizes the count tooltip", async () => {
+    setProject(project([task("a")]));
+    await render();
+    const inbox = column("inbox")!;
+    const label = document.getElementById(inbox.getAttribute("aria-labelledby")!);
+    expect(label?.textContent).toBe(i18n.t("workflow:status.inbox"));
+    expect(inbox.querySelector<HTMLElement>(".workflow-kanban__count")!.title).toBe("1 task");
+    expect(column("running")!.querySelector<HTMLElement>(".workflow-kanban__count")!.title).toBe("0 tasks");
+  });
+
+  it("falls back to the raw awaiting kind when it has no translation", async () => {
+    setProject(
+      project([task("w", { status: "awaiting_user", awaiting: { kind: "future_kind" as never, question: null } })]),
+    );
+    await render();
+    expect(card("w")!.querySelector(".workflow-card__awaiting")?.textContent).toBe("future_kind");
   });
 
   it("uses the status CSS variable as the card background", async () => {
@@ -227,7 +279,7 @@ describe("Workspace", () => {
         task("r1", { role: "review", status: "completed" }),
       ]),
     );
-    useWorkflowStore.getState().setFilters({ view: "matrix" });
+    await act(async () => useWorkflowStore.getState().setFilters({ view: "matrix" }));
     await render();
     const cell = (role: string, status: TaskStatus) =>
       container.querySelector<HTMLElement>(`.workflow-matrix__cell[data-role="${role}"][data-status="${status}"]`)!;

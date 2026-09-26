@@ -6,6 +6,7 @@
 }
 
 .workflow-matrix__table {
+  width: max-content;
   border-collapse: collapse;
   table-layout: fixed;
   font-size: 12px;

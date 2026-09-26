@@ -1,3 +1,4 @@
+import { useId } from "react";
 import { useTranslation } from "react-i18next";
 import type { Task, TaskStatus } from "@/shared/types/workflow";
 import { type BoardProps, TaskCard } from "./TaskCard";
@@ -17,6 +18,7 @@ function groupByStatus(tasks: Task[]): Map<TaskStatus, Task[]> {
 /** One column per status with a count badge. */
 export function KanbanBoard({ tasks, statuses, progress, slotHolders, dateFormat, onOpen }: BoardProps) {
   const { t } = useTranslation("workflow");
+  const idPrefix = useId();
   const groups = groupByStatus(tasks);
 
   return (
@@ -24,9 +26,14 @@ export function KanbanBoard({ tasks, statuses, progress, slotHolders, dateFormat
       {statuses.map((status) => {
         const list = groups.get(status) ?? [];
         return (
-          <section key={status} className="workflow-kanban__column" data-status={status}>
+          <section
+            key={status}
+            className="workflow-kanban__column"
+            data-status={status}
+            aria-labelledby={`${idPrefix}-${status}`}
+          >
             <header className="workflow-kanban__header">
-              <span className="workflow-kanban__title">{t(`status.${status}`)}</span>
+              <span id={`${idPrefix}-${status}`} className="workflow-kanban__title">{t(`status.${status}`)}</span>
               <span className="workflow-kanban__count" title={t("workspace.count", { count: list.length })}>
                 {list.length}
               </span>
