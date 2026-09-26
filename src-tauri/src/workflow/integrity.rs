@@ -611,27 +611,38 @@ fn fold_case(s: &str) -> String {
 
 /// True if `path` matches `pattern` (see [`AGENT_CONFIG_PATTERNS`]). A
 /// `path` ending in `/` is a whole directory: it matches a `dir/**`
-/// pattern when it is that directory or lies inside it. See [`fold_case`]
-/// for separator and case handling.
+/// pattern when it is that directory or lies inside it. Any other `path`
+/// (a file or symlink) also matches when it sits where the pattern's
+/// directory, or one of that directory's ancestors, belongs: such an entry
+/// replaces the directory (e.g. a `.claude` symlink or junction pointing
+/// elsewhere). See [`fold_case`] for separator and case handling.
 fn path_matches(path: &str, pattern: &str) -> bool {
     let path = fold_case(path);
     let pattern = fold_case(pattern);
     let is_dir = path.ends_with('/');
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-    if let Some(dir) = pattern.strip_suffix("/**") {
-        // `dir` must appear as whole segments with something inside it (a
-        // directory entry may be `dir` itself).
-        let dir: Vec<&str> = dir.split('/').collect();
-        let inner = usize::from(!is_dir);
-        segments.len() >= dir.len() + inner
-            && (0..=segments.len() - dir.len() - inner)
-                .any(|i| segments[i..i + dir.len()] == dir[..])
-    } else {
-        // What a plain pattern names is never known to be inside a
-        // collapsed directory.
-        let tail: Vec<&str> = pattern.split('/').collect();
-        !is_dir && segments.ends_with(&tail)
+    let (target, recursive) = match pattern.strip_suffix("/**") {
+        Some(dir) => (dir, true),
+        None => (pattern.as_str(), false),
+    };
+    let target: Vec<&str> = target.split('/').collect();
+    // `target` appears as whole segments starting at index `i`.
+    let at = |i: usize| segments[i..i + target.len()] == target[..];
+    if is_dir {
+        // A collapsed directory matches a `dir/**` pattern when it is `dir`
+        // or lies inside it. What a plain pattern names is never known to be
+        // inside a collapsed directory.
+        return recursive
+            && segments.len() >= target.len()
+            && (0..=segments.len() - target.len()).any(at);
     }
+    // Inside a `dir/**` directory (with something after `dir`).
+    let inside =
+        recursive && segments.len() > target.len() && (0..segments.len() - target.len()).any(at);
+    // The whole path a plain pattern names, or an entry replacing the
+    // pattern's directory or one of its ancestors.
+    let replaces = (1..=target.len()).any(|n| segments.ends_with(&target[..n]));
+    inside || replaces
 }
 
 #[cfg(test)]
@@ -994,7 +1005,7 @@ mod tests {
         // `/**` patterns match the directory's contents at any depth.
         assert!(yes(".claude/settings.json", ".claude/**"));
         assert!(yes("pkg/.claude/commands/x.md", ".claude/**"));
-        assert!(!yes(".claude", ".claude/**"));
+        assert!(!yes("my.claude", ".claude/**"));
         assert!(!yes("my.claude/x", ".claude/**"));
         assert!(yes("a/.github/hooks/h.json", ".github/hooks/**"));
         assert!(!yes(".github/workflows/ci.yml", ".github/hooks/**"));
@@ -1014,6 +1025,35 @@ mod tests {
         assert!(!yes(".github/", ".github/hooks/**"));
         assert!(!yes("node_modules/", ".claude/**"));
         assert!(!yes(".vscode/", ".vscode/settings.json"));
+    }
+
+    #[test]
+    fn entries_replacing_a_pattern_directory_match() {
+        let yes = |path: &str, pattern: &str| path_matches(path, pattern);
+        // A file or symlink where a `dir/**` directory belongs.
+        assert!(yes(".claude", ".claude/**"));
+        assert!(yes("pkg/.claude", ".claude/**"));
+        assert!(yes(".github/hooks", ".github/hooks/**"));
+        // ... or where one of its ancestors belongs.
+        assert!(yes(".github", ".github/hooks/**"));
+        assert!(yes(".vscode", ".vscode/settings.json"));
+        assert!(yes("sub/.vscode", ".vscode/mcp.json"));
+        // Unrelated names still do not match.
+        assert!(!yes("my.claude", ".claude/**"));
+        assert!(!yes(".claude.bak", ".claude/**"));
+        assert!(!yes("hooks", ".github/hooks/**"));
+        assert!(!yes("settings.json", ".vscode/settings.json"));
+        assert!(!yes(".claude/x", "opencode.json"));
+    }
+
+    #[test]
+    fn changed_paths_include_a_replaced_config_directory() {
+        let fixture = Fixture::new();
+        let info = fixture.create("t");
+        write_file(Path::new(&info.path), ".claude", "not a directory\n");
+        let found =
+            changed_paths_matching_in(fixture.base(), &info, AGENT_CONFIG_PATTERNS).unwrap();
+        assert_eq!(found, [".claude"]);
     }
 
     #[test]

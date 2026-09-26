@@ -8,7 +8,7 @@
 //! attention reason; later checks are skipped.
 
 use crate::workflow::errors::to_attention;
-use crate::workflow::gitops::{default_worktree_base, GIT_INVALID_WORKTREE_INFO};
+use crate::workflow::gitops::GIT_INVALID_WORKTREE_INFO;
 use crate::workflow::integrity::{
     changed_paths_matching_in, compare, snapshot_with_worktree, IntegrityChange, IntegrityError,
     IntegritySnapshot, AGENT_CONFIG_PATTERNS,
@@ -16,6 +16,7 @@ use crate::workflow::integrity::{
 use crate::workflow::model::{AttentionReason, FileFingerprint, WorkflowRun, WorktreeInfo};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::fs::File;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
@@ -25,6 +26,12 @@ const ITEMS_MAX: usize = 20;
 const ITEM_MAX_CHARS: usize = 160;
 /// Most entries hashed for one changed path that is a directory.
 const DIR_ENTRIES_MAX: usize = 10_000;
+/// Most file bytes read to fingerprint one changed path (a file, or all
+/// files of a directory together).
+const FINGERPRINT_BYTES_MAX: u64 = 64 * 1024 * 1024;
+/// Code of the check failure when a changed path exceeds
+/// [`FINGERPRINT_BYTES_MAX`].
+const CHECKS_FILE_TOO_LARGE: &str = "CHECKS_FILE_TOO_LARGE";
 
 /// Outcome of the post-attempt checks.
 #[derive(Debug, Clone, PartialEq)]
@@ -39,23 +46,20 @@ pub struct CheckResult {
 /// Snapshot of the user's repository (plus the run's worktree admin state)
 /// taken right before a session starts. A run without a worktree or a
 /// failed snapshot yields `ATTENTION_INTEGRITY_CHECK_FAILED`.
+///
+/// Unlike [`post_attempt`] this needs no worktree base: the snapshot finds
+/// the worktree's admin dir from the user's common git dir and never
+/// validates the worktree location.
 pub fn baseline(repo_root: &Path, run: &WorkflowRun) -> Result<IntegritySnapshot, AttentionReason> {
     let info = run.worktree.as_ref().ok_or_else(missing_worktree)?;
     take_snapshot(repo_root, info)
 }
 
-/// Runs the post-attempt checks against the `before` snapshot. See the
-/// module docs for the order.
+/// Runs the post-attempt checks against the `before` snapshot (see the
+/// module docs for the order). `worktree_base` is the base dir the run's
+/// worktree was created under (`gitops::create_worktree_in`).
 pub fn post_attempt(
-    repo_root: &Path,
-    run: &WorkflowRun,
-    before: &IntegritySnapshot,
-) -> CheckResult {
-    post_attempt_in(&default_worktree_base(), repo_root, run, before)
-}
-
-pub(crate) fn post_attempt_in(
-    base_dir: &Path,
+    worktree_base: &Path,
     repo_root: &Path,
     run: &WorkflowRun,
     before: &IntegritySnapshot,
@@ -92,7 +96,7 @@ pub(crate) fn post_attempt_in(
             )),
         };
     }
-    let reason = match agent_config_fingerprints_in(base_dir, info) {
+    let reason = match agent_config_fingerprints(worktree_base, info) {
         Err(reason) => Some(reason),
         Ok(current) => {
             let paths: Vec<String> = unacknowledged(&current, &run.acknowledged_agent_config)
@@ -114,22 +118,16 @@ pub(crate) fn post_attempt_in(
 }
 
 /// Fingerprints of the worktree's changed agent-config paths (see
-/// [`AGENT_CONFIG_PATTERNS`]), sorted by path. `sha256` is `None` for a
-/// deleted file. Symlinks are never followed: a symlink (or a path below a
-/// symlinked directory) is fingerprinted by its link target, and a
-/// directory by its entries.
+/// [`AGENT_CONFIG_PATTERNS`]), sorted by path; `worktree_base` as in
+/// [`post_attempt`]. `sha256` is `None` for a deleted file. Symlinks are
+/// never followed: a symlink (or a path below a symlinked directory) is
+/// fingerprinted by its link target, and a directory by its entries.
 pub fn agent_config_fingerprints(
+    worktree_base: &Path,
     info: &WorktreeInfo,
 ) -> Result<Vec<FileFingerprint>, AttentionReason> {
-    agent_config_fingerprints_in(&default_worktree_base(), info)
-}
-
-pub(crate) fn agent_config_fingerprints_in(
-    base_dir: &Path,
-    info: &WorktreeInfo,
-) -> Result<Vec<FileFingerprint>, AttentionReason> {
-    let paths = changed_paths_matching_in(base_dir, info, AGENT_CONFIG_PATTERNS)
-        .map_err(|err| check_failed(&err))?;
+    let paths = changed_paths_matching_in(worktree_base, info, AGENT_CONFIG_PATTERNS)
+        .map_err(|err| check_failed(err.code()))?;
     let root = Path::new(&info.path);
     let mut fingerprints = paths
         .iter()
@@ -137,7 +135,8 @@ pub(crate) fn agent_config_fingerprints_in(
             let path = path.trim_end_matches('/');
             Ok(FileFingerprint {
                 path: path.to_string(),
-                sha256: hash_worktree_path(root, path).map_err(|err| check_failed(&err))?,
+                sha256: hash_worktree_path(root, path, FINGERPRINT_BYTES_MAX)
+                    .map_err(|err| check_failed(err.code()))?,
             })
         })
         .collect::<Result<Vec<_>, AttentionReason>>()?;
@@ -163,27 +162,51 @@ fn take_snapshot(
     info: &WorktreeInfo,
 ) -> Result<IntegritySnapshot, AttentionReason> {
     snapshot_with_worktree(repo_root, Some(&info.base_branch), Some(info))
-        .map_err(|err| check_failed(&err))
+        .map_err(|err| check_failed(err.code()))
 }
 
-fn check_failed(err: &IntegrityError) -> AttentionReason {
-    to_attention("ATTENTION_INTEGRITY_CHECK_FAILED", [("code", err.code())])
+fn check_failed(code: &str) -> AttentionReason {
+    to_attention("ATTENTION_INTEGRITY_CHECK_FAILED", [("code", code)])
 }
 
 /// A run without a worktree cannot be checked; fail closed.
 fn missing_worktree() -> AttentionReason {
-    to_attention(
-        "ATTENTION_INTEGRITY_CHECK_FAILED",
-        [("code", GIT_INVALID_WORKTREE_INFO)],
-    )
+    check_failed(GIT_INVALID_WORKTREE_INFO)
+}
+
+/// Why fingerprinting a worktree path failed.
+#[derive(Debug)]
+enum HashError {
+    Integrity(IntegrityError),
+    /// More than the byte budget would have to be read.
+    TooLarge(String),
+}
+
+impl HashError {
+    fn code(&self) -> &'static str {
+        match self {
+            HashError::Integrity(err) => err.code(),
+            HashError::TooLarge(_) => CHECKS_FILE_TOO_LARGE,
+        }
+    }
+}
+
+impl From<IntegrityError> for HashError {
+    fn from(err: IntegrityError) -> Self {
+        HashError::Integrity(err)
+    }
+}
+
+fn io_error(path: &Path, err: std::io::Error) -> HashError {
+    HashError::Integrity(IntegrityError::Io(format!("{}: {err}", path.display())))
 }
 
 /// Hex sha256 fingerprint of the worktree-relative `rel` (a `/`-separated
 /// path as git prints it), or `None` if nothing exists there. A regular file
-/// hashes as its content (streamed, so its size does not matter); a
-/// symlink, including one on the way to `rel`, as its link target; a
-/// directory as its entries. Nothing outside `root` is ever read.
-fn hash_worktree_path(root: &Path, rel: &str) -> Result<Option<String>, IntegrityError> {
+/// hashes as its content; a symlink (or junction), including one on the way
+/// to `rel`, as its link target; a directory as its entries. Nothing outside
+/// `root` is ever read, and at most `max_bytes` of file content are read.
+fn hash_worktree_path(root: &Path, rel: &str, max_bytes: u64) -> Result<Option<String>, HashError> {
     let invalid = || IntegrityError::Io(format!("invalid worktree path {rel:?}"));
     let segments: Vec<&str> = rel.split('/').collect();
     let valid = !rel.is_empty()
@@ -192,8 +215,9 @@ fn hash_worktree_path(root: &Path, rel: &str) -> Result<Option<String>, Integrit
             matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
         });
     if !valid {
-        return Err(invalid());
+        return Err(invalid().into());
     }
+    let mut budget = max_bytes;
     let mut path = root.to_path_buf();
     for (index, segment) in segments.iter().enumerate() {
         path.push(segment);
@@ -210,9 +234,9 @@ fn hash_worktree_path(root: &Path, rel: &str) -> Result<Option<String>, Integrit
         }
         if index + 1 == segments.len() {
             return if meta.is_file() {
-                hash_file(&path).map(Some)
+                hash_file(&path, &mut budget).map(Some)
             } else if meta.is_dir() {
-                hash_dir(&path).map(Some)
+                hash_dir(&path, &mut budget).map(Some)
             } else {
                 Ok(Some(hex(Sha256::digest(b"special\0"))))
             };
@@ -221,11 +245,7 @@ fn hash_worktree_path(root: &Path, rel: &str) -> Result<Option<String>, Integrit
             return Ok(None);
         }
     }
-    Err(invalid())
-}
-
-fn io_error(path: &Path, err: std::io::Error) -> IntegrityError {
-    IntegrityError::Io(format!("{}: {err}", path.display()))
+    Err(invalid().into())
 }
 
 fn hex(digest: impl AsRef<[u8]>) -> String {
@@ -238,7 +258,7 @@ fn hex(digest: impl AsRef<[u8]>) -> String {
 
 /// Fingerprint of a symlink's target string; `depth` is how many path
 /// segments below the link the fingerprinted path lies.
-fn hash_link(path: &Path, depth: usize) -> Result<String, IntegrityError> {
+fn hash_link(path: &Path, depth: usize) -> Result<String, HashError> {
     let target = std::fs::read_link(path).map_err(|err| io_error(path, err))?;
     let mut hasher = Sha256::new();
     hasher.update(b"symlink\0");
@@ -247,8 +267,83 @@ fn hash_link(path: &Path, depth: usize) -> Result<String, IntegrityError> {
     Ok(hex(hasher.finalize()))
 }
 
-fn hash_file(path: &Path) -> Result<String, IntegrityError> {
-    let mut file = std::fs::File::open(path).map_err(|err| io_error(path, err))?;
+/// `open(2)` flags that keep the final path component from being followed
+/// if it is a symlink, and keep a FIFO from blocking the open. Values are
+/// per platform, since the crate has no `libc` dependency; on other Unix
+/// targets only the post-open regular-file check applies.
+#[cfg(unix)]
+mod open_flags {
+    #[cfg(all(
+        any(target_os = "linux", target_os = "android"),
+        any(target_arch = "x86", target_arch = "x86_64", target_arch = "riscv64")
+    ))]
+    pub const FLAGS: i32 = 0o400000 | 0o4000;
+    #[cfg(all(
+        any(target_os = "linux", target_os = "android"),
+        any(target_arch = "arm", target_arch = "aarch64")
+    ))]
+    pub const FLAGS: i32 = 0o100000 | 0o4000;
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+    pub const FLAGS: i32 = 0x0100 | 0x0004;
+    #[cfg(not(any(
+        all(
+            any(target_os = "linux", target_os = "android"),
+            any(
+                target_arch = "x86",
+                target_arch = "x86_64",
+                target_arch = "riscv64",
+                target_arch = "arm",
+                target_arch = "aarch64"
+            )
+        ),
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd"
+    )))]
+    pub const FLAGS: i32 = 0;
+}
+
+/// Opens `path` for reading without following a final symlink (or reparse
+/// point) and verifies through the opened handle that it is a regular file,
+/// so a path swapped after the `symlink_metadata` check fails closed.
+fn open_regular_file(path: &Path) -> Result<File, HashError> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(open_flags::FLAGS);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        /// Open a reparse point itself instead of its target.
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options.open(path).map_err(|err| io_error(path, err))?;
+    let meta = file.metadata().map_err(|err| io_error(path, err))?;
+    let regular = meta.is_file();
+    #[cfg(windows)]
+    let regular = {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        regular && meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
+    };
+    if !regular {
+        return Err(IntegrityError::Io(format!("{}: not a regular file", path.display())).into());
+    }
+    Ok(file)
+}
+
+/// sha256 of a regular file's content, charging the bytes read to `budget`.
+fn hash_file(path: &Path, budget: &mut u64) -> Result<String, HashError> {
+    let too_large = || HashError::TooLarge(path.display().to_string());
+    let mut file = open_regular_file(path)?;
+    let len = file.metadata().map_err(|err| io_error(path, err))?.len();
+    if len > *budget {
+        return Err(too_large());
+    }
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; 64 * 1024];
     loop {
@@ -256,6 +351,8 @@ fn hash_file(path: &Path) -> Result<String, IntegrityError> {
         if read == 0 {
             break;
         }
+        // The file may grow while it is read.
+        *budget = budget.checked_sub(read as u64).ok_or_else(too_large)?;
         hasher.update(&buf[..read]);
     }
     Ok(hex(hasher.finalize()))
@@ -263,8 +360,8 @@ fn hash_file(path: &Path) -> Result<String, IntegrityError> {
 
 /// Hashes the sorted (relative path, kind, fingerprint) entries under `dir`
 /// without following symlinks; more than [`DIR_ENTRIES_MAX`] entries fail
-/// closed.
-fn hash_dir(dir: &Path) -> Result<String, IntegrityError> {
+/// closed, and file contents are charged to `budget`.
+fn hash_dir(dir: &Path, budget: &mut u64) -> Result<String, HashError> {
     let mut entries: Vec<(Vec<u8>, u8, String)> = Vec::new();
     let mut pending: Vec<(PathBuf, Vec<u8>)> = vec![(dir.to_path_buf(), Vec::new())];
     while let Some((current, prefix)) = pending.pop() {
@@ -275,7 +372,8 @@ fn hash_dir(dir: &Path) -> Result<String, IntegrityError> {
                 return Err(IntegrityError::Io(format!(
                     "{}: more than {DIR_ENTRIES_MAX} entries",
                     dir.display()
-                )));
+                ))
+                .into());
             }
             let path = entry.path();
             let rel = [prefix.as_slice(), entry.file_name().as_encoded_bytes()].concat();
@@ -286,7 +384,7 @@ fn hash_dir(dir: &Path) -> Result<String, IntegrityError> {
                 pending.push((path, [rel.as_slice(), b"/"].concat()));
                 entries.push((rel, b'd', String::new()));
             } else if file_type.is_file() {
-                entries.push((rel, b'f', hash_file(&path)?));
+                entries.push((rel, b'f', hash_file(&path, budget)?));
             } else {
                 entries.push((rel, b's', String::new()));
             }
@@ -354,7 +452,7 @@ mod tests {
     }
 
     fn check(fixture: &Fixture, run: &WorkflowRun, before: &IntegritySnapshot) -> CheckResult {
-        post_attempt_in(fixture.base(), fixture.root(), run, before)
+        post_attempt(fixture.base(), fixture.root(), run, before)
     }
 
     fn items(reason: &AttentionReason) -> Vec<serde_json::Value> {
@@ -419,7 +517,7 @@ mod tests {
 
         // The user accepts the current state of those files.
         run.acknowledged_agent_config =
-            agent_config_fingerprints_in(fixture.base(), run.worktree.as_ref().unwrap()).unwrap();
+            agent_config_fingerprints(fixture.base(), run.worktree.as_ref().unwrap()).unwrap();
         assert_eq!(run.acknowledged_agent_config.len(), 1);
         assert_eq!(
             run.acknowledged_agent_config[0].path,
@@ -454,7 +552,7 @@ mod tests {
         let (fixture, run, before) = setup();
         let not_a_repo = tempfile::TempDir::new().unwrap();
         write_file(wt(&run), ".claude/settings.json", "{}\n");
-        let result = post_attempt_in(fixture.base(), not_a_repo.path(), &run, &before);
+        let result = post_attempt(fixture.base(), not_a_repo.path(), &run, &before);
         assert!(result.after.is_none());
         let reason = result.reason.expect("reason");
         assert_eq!(reason.code, "ATTENTION_INTEGRITY_CHECK_FAILED");
@@ -530,7 +628,7 @@ mod tests {
         fixture.run(&["commit", "-m", "mcp"]);
         let info = fixture.create("t");
         std::fs::remove_file(Path::new(&info.path).join(".mcp.json")).unwrap();
-        let found = agent_config_fingerprints_in(fixture.base(), &info).unwrap();
+        let found = agent_config_fingerprints(fixture.base(), &info).unwrap();
         assert_eq!(
             found,
             [FileFingerprint {
@@ -547,7 +645,7 @@ mod tests {
         let root = Path::new(&info.path);
         write_file(root, "opencode.json", "{}\n");
         write_file(root, ".claude/settings.json", "{}\n");
-        let found = agent_config_fingerprints_in(fixture.base(), &info).unwrap();
+        let found = agent_config_fingerprints(fixture.base(), &info).unwrap();
         let paths: Vec<_> = found.iter().map(|fp| fp.path.as_str()).collect();
         assert_eq!(paths, [".claude/settings.json", "opencode.json"]);
         // sha256("{}\n")
@@ -596,14 +694,14 @@ mod tests {
             root.join(".claude").join("settings.json"),
         )
         .unwrap();
-        let before = agent_config_fingerprints_in(fixture.base(), &info).unwrap();
+        let before = agent_config_fingerprints(fixture.base(), &info).unwrap();
         assert_eq!(before.len(), 1);
         assert!(before[0].sha256.is_some());
         // Changing the target outside the worktree does not change the
         // fingerprint: only the link itself is hashed.
         write_file(outside.path(), "secret.json", "two\n");
         assert_eq!(
-            agent_config_fingerprints_in(fixture.base(), &info).unwrap(),
+            agent_config_fingerprints(fixture.base(), &info).unwrap(),
             before
         );
     }
@@ -612,7 +710,115 @@ mod tests {
     fn worktree_paths_must_stay_inside() {
         let dir = tempfile::TempDir::new().unwrap();
         for bad in ["../x", "/etc/passwd", "a/../../x", "C:/x", ""] {
-            assert!(hash_worktree_path(dir.path(), bad).is_err(), "{bad}");
+            assert!(
+                hash_worktree_path(dir.path(), bad, FINGERPRINT_BYTES_MAX).is_err(),
+                "{bad}"
+            );
         }
+    }
+
+    #[test]
+    fn config_directory_replaced_by_a_file_is_reported() {
+        let (fixture, run, before) = setup();
+        write_file(wt(&run), ".claude", "not a directory\n");
+        let reason = check(&fixture, &run, &before).reason.expect("reason");
+        assert_eq!(reason.code, "ATTENTION_AGENT_CONFIG_CHANGED");
+        assert_eq!(items(&reason), [serde_json::json!(".claude")]);
+    }
+
+    /// Makes `link` a directory symlink (or, on Windows, a junction) to
+    /// `target`; false if the platform does not permit it.
+    fn link_dir(target: &Path, link: &Path) -> bool {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link).is_ok()
+        }
+        #[cfg(windows)]
+        {
+            if std::os::windows::fs::symlink_dir(target, link).is_ok() {
+                return true;
+            }
+            std::process::Command::new("cmd")
+                .arg("/c")
+                .arg("mklink")
+                .arg("/J")
+                .arg(link)
+                .arg(target)
+                .output()
+                .is_ok_and(|out| out.status.success())
+                && link.exists()
+        }
+    }
+
+    #[test]
+    fn config_directory_replaced_by_a_link_is_reported() {
+        let (fixture, run, before) = setup();
+        let root = wt(&run);
+        write_file(root, "elsewhere/settings.json", "{}\n");
+        if !link_dir(&root.join("elsewhere"), &root.join(".claude")) {
+            eprintln!("skipped: cannot create a directory link here");
+            return;
+        }
+        let reason = check(&fixture, &run, &before).reason.expect("reason");
+        assert_eq!(reason.code, "ATTENTION_AGENT_CONFIG_CHANGED");
+        let found = items(&reason);
+        assert!(!found.is_empty());
+        assert!(
+            found
+                .iter()
+                .all(|item| item.as_str().unwrap().starts_with(".claude")),
+            "{found:?}"
+        );
+        // The link is fingerprinted, not what it points at.
+        let info = run.worktree.as_ref().unwrap();
+        let first = agent_config_fingerprints(fixture.base(), info).unwrap();
+        write_file(root, "elsewhere/settings.json", "{\"x\":1}\n");
+        assert_eq!(
+            agent_config_fingerprints(fixture.base(), info).unwrap(),
+            first
+        );
+    }
+
+    #[test]
+    fn oversized_files_fail_closed() {
+        let dir = tempfile::TempDir::new().unwrap();
+        write_file(dir.path(), "big.json", "0123456789");
+        write_file(dir.path(), "cfg/a.json", "01234");
+        write_file(dir.path(), "cfg/b.json", "56789");
+        assert!(hash_worktree_path(dir.path(), "big.json", 10)
+            .unwrap()
+            .is_some());
+        let err = hash_worktree_path(dir.path(), "big.json", 9).unwrap_err();
+        assert_eq!(err.code(), "CHECKS_FILE_TOO_LARGE");
+        // A directory's files share one budget.
+        assert!(hash_worktree_path(dir.path(), "cfg", 10).unwrap().is_some());
+        let err = hash_worktree_path(dir.path(), "cfg", 9).unwrap_err();
+        assert_eq!(err.code(), "CHECKS_FILE_TOO_LARGE");
+        assert_eq!(
+            check_failed(err.code())
+                .params
+                .get("code")
+                .map(String::as_str),
+            Some("CHECKS_FILE_TOO_LARGE")
+        );
+    }
+
+    #[test]
+    fn only_regular_files_are_opened_for_hashing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        write_file(dir.path(), "a.json", "{}\n");
+        assert!(open_regular_file(&dir.path().join("a.json")).is_ok());
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        assert!(open_regular_file(&dir.path().join("sub")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn opening_a_symlink_fails_instead_of_following_it() {
+        let dir = tempfile::TempDir::new().unwrap();
+        write_file(dir.path(), "real.json", "{}\n");
+        std::os::unix::fs::symlink(dir.path().join("real.json"), dir.path().join("link.json"))
+            .unwrap();
+        assert!(open_regular_file(&dir.path().join("link.json")).is_err());
     }
 }
