@@ -207,6 +207,15 @@ fn common_git_dir(path: &Path) -> Option<PathBuf> {
 /// letters/digits, collapses every other run to `-`, is trimmed of `-`,
 /// capped at 40 chars, and falls back to `task` when empty.
 pub fn branch_name(root_task_id: &str, title: &str) -> String {
+    let slug = title_slug(title).unwrap_or_else(|| "task".to_string());
+    let prefix: String = root_task_id.chars().take(BRANCH_ID_LEN).collect();
+    format!("{BRANCH_PREFIX}{prefix}-{slug}")
+}
+
+/// The slug rules of [`branch_name`] without the fallback: lowercase ASCII
+/// letters/digits, every other run collapsed to `-`, capped at 40 chars and
+/// trimmed of `-`. `None` when nothing remains (e.g. a non-ASCII title).
+pub(crate) fn title_slug(title: &str) -> Option<String> {
     let mut slug = String::new();
     for c in title.chars() {
         let c = c.to_ascii_lowercase();
@@ -219,9 +228,7 @@ pub fn branch_name(root_task_id: &str, title: &str) -> String {
     // The slug is pure ASCII, so byte truncation is char-safe.
     slug.truncate(MAX_SLUG_LEN);
     let slug = slug.trim_matches('-');
-    let slug = if slug.is_empty() { "task" } else { slug };
-    let prefix: String = root_task_id.chars().take(BRANCH_ID_LEN).collect();
-    format!("{BRANCH_PREFIX}{prefix}-{slug}")
+    (!slug.is_empty()).then(|| slug.to_string())
 }
 
 /// True if `branch` has the exact shape [`branch_name`] produces for a
