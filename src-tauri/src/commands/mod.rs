@@ -17,3 +17,4 @@ pub mod slidev;
 pub mod speech;
 pub mod vba;
 pub mod video;
+pub mod workflow;

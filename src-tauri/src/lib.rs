@@ -89,6 +89,9 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_icon(icon.clone());
             }
+            // The one workflow orchestrator of this process.
+            let workflow_state = commands::workflow::create_state(app.handle());
+            app.manage::<commands::workflow::WorkflowState>(workflow_state);
             // Start local HTTP bridge for MCP server callback
             let handle = app.handle().clone();
             let bridge_state = app.state::<HttpBridgeState>().inner().clone();
@@ -333,9 +336,40 @@ pub fn run() {
             commands::medium::medium_test_connection,
             commands::medium::medium_upload_image,
             commands::medium::medium_create_post,
+            // Workflow orchestrator
+            commands::workflow::workflow_attach_project,
+            commands::workflow::workflow_list_workflows,
+            commands::workflow::workflow_save_workflows,
+            commands::workflow::workflow_add_standard,
+            commands::workflow::workflow_active_run_count,
+            commands::workflow::workflow_list_tasks,
+            commands::workflow::workflow_list_runs,
+            commands::workflow::workflow_task_detail,
+            commands::workflow::workflow_create_task,
+            commands::workflow::workflow_cancel_task,
+            commands::workflow::workflow_hold_task,
+            commands::workflow::workflow_resume_task,
+            commands::workflow::workflow_retry_task,
+            commands::workflow::workflow_mark_complete,
+            commands::workflow::workflow_approve_plan,
+            commands::workflow::workflow_request_revision,
+            commands::workflow::workflow_answer_question,
+            commands::workflow::workflow_archive_task,
+            commands::workflow::workflow_delete_task,
+            commands::workflow::workflow_merge_preview,
+            commands::workflow::workflow_merge_run,
+            commands::workflow::workflow_discard_run,
+            commands::workflow::workflow_probe_providers,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                if let Some(state) = app.try_state::<commands::workflow::WorkflowState>() {
+                    state.shutdown(std::time::Duration::from_secs(5));
+                }
+            }
+        });
 }
 
 #[cfg(test)]
