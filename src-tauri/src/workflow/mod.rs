@@ -10,6 +10,7 @@ pub mod attempt;
 pub mod checks;
 pub mod containment;
 pub mod errors;
+pub mod flow;
 pub mod frontmatter;
 pub mod fsutil;
 pub mod gitops;

@@ -533,7 +533,10 @@ pub fn diff_against_base(info: &WorktreeInfo) -> Result<String, GitError> {
     diff_against_base_in(&default_worktree_base(), info)
 }
 
-fn diff_against_base_in(base_dir: &Path, info: &WorktreeInfo) -> Result<String, GitError> {
+pub(crate) fn diff_against_base_in(
+    base_dir: &Path,
+    info: &WorktreeInfo,
+) -> Result<String, GitError> {
     validate_worktree(base_dir, info)?;
     let wt = Path::new(&info.path);
     let mut out = worktree_git(
@@ -608,7 +611,7 @@ pub fn commit_paths(
     commit_paths_in(&default_worktree_base(), info, paths, message)
 }
 
-fn commit_paths_in(
+pub(crate) fn commit_paths_in(
     base_dir: &Path,
     info: &WorktreeInfo,
     paths: &[&str],
