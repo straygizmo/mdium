@@ -6,6 +6,7 @@
 //! the module is allowed to have unused items in the meantime.
 #![allow(dead_code)]
 
+pub mod actions;
 pub mod attempt;
 pub mod checks;
 pub mod containment;

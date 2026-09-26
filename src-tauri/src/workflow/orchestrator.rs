@@ -257,6 +257,11 @@ impl Orchestrator {
         &self.runner
     }
 
+    /// Base dir the runs' worktrees are created under.
+    pub fn worktree_base(&self) -> &Path {
+        &self.worktree_base
+    }
+
     /// Cancels every active attempt (`Shutdown`, so the tasks stay running
     /// and are interrupted on the next start), waits up to `wait` for the
     /// attempt and dispatch threads to end, and shuts the runner down.

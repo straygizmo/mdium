@@ -23,7 +23,7 @@ pub struct GitError {
 }
 
 /// One commit on the worktree branch since its base commit.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct CommitSummary {
     pub hash: String,
     pub subject: String,
@@ -573,7 +573,7 @@ pub fn commits_since_base(info: &WorktreeInfo) -> Result<Vec<CommitSummary>, Git
     commits_since_base_in(&default_worktree_base(), info)
 }
 
-fn commits_since_base_in(
+pub(crate) fn commits_since_base_in(
     base_dir: &Path,
     info: &WorktreeInfo,
 ) -> Result<Vec<CommitSummary>, GitError> {
@@ -660,7 +660,7 @@ pub fn merge_into_base(repo_root: &Path, info: &WorktreeInfo) -> Result<String, 
     merge_into_base_in(&default_worktree_base(), repo_root, info)
 }
 
-fn merge_into_base_in(
+pub(crate) fn merge_into_base_in(
     base_dir: &Path,
     repo_root: &Path,
     info: &WorktreeInfo,
@@ -735,7 +735,11 @@ pub fn discard(repo_root: &Path, info: &WorktreeInfo) -> Result<(), GitError> {
 /// confined by [`validate_info`] to this repo's managed worktree location,
 /// so a leftover directory git no longer knows as a worktree can be deleted
 /// without ever touching an arbitrary folder.
-fn discard_in(base_dir: &Path, repo_root: &Path, info: &WorktreeInfo) -> Result<(), GitError> {
+pub(crate) fn discard_in(
+    base_dir: &Path,
+    repo_root: &Path,
+    info: &WorktreeInfo,
+) -> Result<(), GitError> {
     validate_info(base_dir, Some(repo_root), info)?;
     let path = Path::new(&info.path);
     let removed = run_git_raw(
