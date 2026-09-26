@@ -86,6 +86,9 @@ pub enum RunnerError {
     /// The request was rejected locally before being sent; carries the
     /// specific `RUNNER_*` code (e.g. `RUNNER_GUARD_REQUIRED`).
     InvalidRequest(&'static str),
+    /// No runner can be started at all; carries the specific cause code
+    /// (e.g. `AGENT_RUNNER_MISSING` when the bundled runner is missing).
+    Unavailable(&'static str),
 }
 
 impl RunnerError {
@@ -98,15 +101,17 @@ impl RunnerError {
             RunnerError::Transport(_) => "RUNNER_TRANSPORT_ERROR",
             RunnerError::Protocol(_) => "RUNNER_PROTOCOL_ERROR",
             RunnerError::InvalidRequest(_) => "RUNNER_INVALID_REQUEST",
+            RunnerError::Unavailable(_) => "RUNNER_UNAVAILABLE",
         }
     }
 
     /// The specific cause within [`Self::code`]'s category, when there is
     /// a machine-readable one: the `RUNNER_*` validation code of an
-    /// `InvalidRequest`, or the runner's wire code of a `Remote` error.
+    /// `InvalidRequest`, the runner's wire code of a `Remote` error, or
+    /// the cause code of an `Unavailable` runner.
     pub fn detail_code(&self) -> Option<&str> {
         match self {
-            RunnerError::InvalidRequest(code) => Some(code),
+            RunnerError::InvalidRequest(code) | RunnerError::Unavailable(code) => Some(code),
             RunnerError::Remote(code) => Some(code),
             _ => None,
         }
@@ -120,7 +125,9 @@ impl std::fmt::Display for RunnerError {
             RunnerError::Remote(detail)
             | RunnerError::Transport(detail)
             | RunnerError::Protocol(detail) => write!(f, "{}: {detail}", self.code()),
-            RunnerError::InvalidRequest(detail) => write!(f, "{}: {detail}", self.code()),
+            RunnerError::InvalidRequest(detail) | RunnerError::Unavailable(detail) => {
+                write!(f, "{}: {detail}", self.code())
+            }
         }
     }
 }

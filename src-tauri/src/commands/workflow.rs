@@ -194,7 +194,7 @@ impl EventSink for TauriSink {
 pub struct MissingRunner;
 
 fn runner_missing() -> RunnerError {
-    RunnerError::Transport(AGENT_RUNNER_MISSING.to_string())
+    RunnerError::Unavailable(AGENT_RUNNER_MISSING)
 }
 
 impl RunnerApi for MissingRunner {
@@ -764,7 +764,7 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             err,
-            crate::workflow::runner_client::RunnerError::Transport(AGENT_RUNNER_MISSING.into())
+            crate::workflow::runner_client::RunnerError::Unavailable(AGENT_RUNNER_MISSING)
         );
     }
 }

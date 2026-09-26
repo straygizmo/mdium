@@ -61,10 +61,10 @@ const ACK_REQUIRED_CHANGES: &[&str] = &[
 ];
 
 /// The merge-review paths changed since the preview the user acknowledged.
-pub const MERGE_REVIEW_CHANGED: &str = "MERGE_REVIEW_CHANGED";
+pub const WORKFLOW_MERGE_REVIEW_CHANGED: &str = "WORKFLOW_MERGE_REVIEW_CHANGED";
 /// The user's repository changed since the run's integrity baseline and
 /// the change was not acknowledged.
-pub const MERGE_INTEGRITY_CHANGED: &str = "MERGE_INTEGRITY_CHANGED";
+pub const WORKFLOW_MERGE_INTEGRITY_CHANGED: &str = "WORKFLOW_MERGE_INTEGRITY_CHANGED";
 /// A new task's title is empty.
 pub const WORKFLOW_TITLE_EMPTY: &str = "WORKFLOW_TITLE_EMPTY";
 /// A revision instruction or answer is empty.
@@ -331,10 +331,7 @@ pub fn cancel_task(
         let from = current.meta.status;
         let task = move_task(&guard, &store, task_id, from, TaskStatus::Cancelled)?;
         let run = match run {
-            Some(mut run)
-                if run.current_task_id == task_id
-                    && matches!(run.status, RunStatus::Active | RunStatus::Attention) =>
-            {
+            Some(mut run) if run.current_task_id == task_id && run.status == RunStatus::Active => {
                 run.status = RunStatus::Cancelled;
                 Some(store.put_run(&guard, &run)?)
             }
@@ -953,7 +950,7 @@ fn merge_locked(
     let (changes, now) = integrity_state(store.project_root(), &run, &info)?;
     if !changes.is_empty() {
         if !acknowledge_integrity {
-            return Err(ActionError::InvalidState(MERGE_INTEGRITY_CHANGED));
+            return Err(ActionError::InvalidState(WORKFLOW_MERGE_INTEGRITY_CHANGED));
         }
         run.integrity_baseline = Some(now);
         run = store.put_run(guard, &run)?;
@@ -965,7 +962,7 @@ fn merge_locked(
     acknowledged.sort();
     acknowledged.dedup();
     if current != acknowledged {
-        return Err(ActionError::InvalidState(MERGE_REVIEW_CHANGED));
+        return Err(ActionError::InvalidState(WORKFLOW_MERGE_REVIEW_CHANGED));
     }
     gitops::merge_into_base_in(base, store.project_root(), &info)?;
     run.status = RunStatus::Merged;
@@ -1091,7 +1088,8 @@ pub fn active_run_count(
 }
 
 /// Probes every provider (concurrently). A failed probe is reported as
-/// `{"kind":"error","detail":<code>}`.
+/// `{"kind":"error","detail":<code>}` with the error's specific cause code
+/// when it has one (e.g. `AGENT_RUNNER_MISSING`), else its category code.
 pub fn probe_providers(orch: &Arc<Orchestrator>) -> Vec<(Provider, serde_json::Value)> {
     let runner = orch.runner();
     std::thread::scope(|scope| {
@@ -1109,7 +1107,10 @@ pub fn probe_providers(orch: &Arc<Orchestrator>) -> Vec<(Provider, serde_json::V
             .map(|(provider, probe)| {
                 let value = match probe.join() {
                     Ok(Ok(value)) => value,
-                    Ok(Err(err)) => json!({ "kind": "error", "detail": err.code() }),
+                    Ok(Err(err)) => {
+                        let code = err.detail_code().unwrap_or(err.code());
+                        json!({ "kind": "error", "detail": code })
+                    }
                     Err(_) => json!({ "kind": "error", "detail": "RUNNER_PROBE_PANICKED" }),
                 };
                 (provider, value)
@@ -1212,6 +1213,7 @@ mod tests {
         ) -> Result<serde_json::Value, RunnerError> {
             match provider {
                 Provider::Codex => Ok(json!({ "kind": "ready" })),
+                Provider::Claude => Err(RunnerError::Unavailable("AGENT_RUNNER_MISSING")),
                 _ => Err(RunnerError::Timeout),
             }
         }
@@ -2031,7 +2033,7 @@ mod tests {
                 &["AGENTS.md".to_string()],
                 false
             )),
-            MERGE_REVIEW_CHANGED
+            WORKFLOW_MERGE_REVIEW_CHANGED
         );
         assert_eq!(env.run(&id), before);
 
@@ -2093,7 +2095,7 @@ mod tests {
         let before = env.run(&id);
         assert_eq!(
             code(merge_run(&env.orch, env.root(), &id, &acknowledged, false)),
-            MERGE_INTEGRITY_CHANGED
+            WORKFLOW_MERGE_INTEGRITY_CHANGED
         );
         assert_eq!(env.run(&id), before);
 
@@ -2102,7 +2104,7 @@ mod tests {
         let events = env.sink.events().len();
         assert_eq!(
             code(merge_run(&env.orch, env.root(), &id, &[], true)),
-            MERGE_REVIEW_CHANGED
+            WORKFLOW_MERGE_REVIEW_CHANGED
         );
         let run = env.run(&id);
         assert_eq!(run.status, RunStatus::AwaitingMerge);
@@ -2389,8 +2391,13 @@ mod tests {
         );
         assert_eq!(results[0].1, json!({ "kind": "ready" }));
         assert_eq!(
-            results[3].1,
+            results[2].1,
             json!({ "kind": "error", "detail": "RUNNER_TIMEOUT" })
+        );
+        // A specific cause is reported rather than its category.
+        assert_eq!(
+            results[3].1,
+            json!({ "kind": "error", "detail": "AGENT_RUNNER_MISSING" })
         );
     }
 }

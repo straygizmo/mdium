@@ -31,7 +31,7 @@ const DIR_ENTRIES_MAX: usize = 10_000;
 const FINGERPRINT_BYTES_MAX: u64 = 64 * 1024 * 1024;
 /// Code of the check failure when a changed path exceeds
 /// [`FINGERPRINT_BYTES_MAX`].
-const CHECKS_FILE_TOO_LARGE: &str = "CHECKS_FILE_TOO_LARGE";
+const INTEGRITY_FILE_TOO_LARGE: &str = "INTEGRITY_FILE_TOO_LARGE";
 
 /// Outcome of the post-attempt checks.
 #[derive(Debug, Clone, PartialEq)]
@@ -186,7 +186,7 @@ impl HashError {
     fn code(&self) -> &'static str {
         match self {
             HashError::Integrity(err) => err.code(),
-            HashError::TooLarge(_) => CHECKS_FILE_TOO_LARGE,
+            HashError::TooLarge(_) => INTEGRITY_FILE_TOO_LARGE,
         }
     }
 }
@@ -789,17 +789,17 @@ mod tests {
             .unwrap()
             .is_some());
         let err = hash_worktree_path(dir.path(), "big.json", 9).unwrap_err();
-        assert_eq!(err.code(), "CHECKS_FILE_TOO_LARGE");
+        assert_eq!(err.code(), "INTEGRITY_FILE_TOO_LARGE");
         // A directory's files share one budget.
         assert!(hash_worktree_path(dir.path(), "cfg", 10).unwrap().is_some());
         let err = hash_worktree_path(dir.path(), "cfg", 9).unwrap_err();
-        assert_eq!(err.code(), "CHECKS_FILE_TOO_LARGE");
+        assert_eq!(err.code(), "INTEGRITY_FILE_TOO_LARGE");
         assert_eq!(
             check_failed(err.code())
                 .params
                 .get("code")
                 .map(String::as_str),
-            Some("CHECKS_FILE_TOO_LARGE")
+            Some("INTEGRITY_FILE_TOO_LARGE")
         );
     }
 

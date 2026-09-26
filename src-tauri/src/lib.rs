@@ -366,7 +366,7 @@ pub fn run() {
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 if let Some(state) = app.try_state::<commands::workflow::WorkflowState>() {
-                    state.shutdown(std::time::Duration::from_secs(5));
+                    state.shutdown(workflow::orchestrator::SHUTDOWN_WAIT);
                 }
             }
         });

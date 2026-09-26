@@ -10,7 +10,7 @@
 //! project guard is never taken while holding `inner`.
 
 use crate::workflow::attempt::{
-    run_attempt, AttemptEnd, CancelReason, CancelToken, ProgressUpdate,
+    run_attempt, AttemptEnd, CancelReason, CancelToken, ProgressUpdate, CANCEL_GRACE,
 };
 use crate::workflow::checks::{self, CheckResult};
 use crate::workflow::errors::to_attention;
@@ -29,6 +29,11 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
+
+/// How long the app's exit waits for attempts to end after cancelling
+/// them: the attempt loop's grace for `TurnCancelled` plus time to close
+/// the session, run the post-attempt checks and record the attempt.
+pub const SHUTDOWN_WAIT: Duration = Duration::from_secs(CANCEL_GRACE.as_secs() + 2);
 
 /// Code of an attempt whose thread could not be started.
 const WORKFLOW_THREAD_SPAWN_FAILED: &str = "WORKFLOW_THREAD_SPAWN_FAILED";
@@ -1661,5 +1666,10 @@ mod tests {
             .task_events()
             .contains(&(id.clone(), TaskStatus::Attention)));
         assert!(!env.orch.is_active(&id));
+    }
+
+    #[test]
+    fn shutdown_waits_for_the_cancel_grace_and_the_finish() {
+        assert!(SHUTDOWN_WAIT >= CANCEL_GRACE + Duration::from_secs(2));
     }
 }

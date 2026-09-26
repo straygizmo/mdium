@@ -103,8 +103,10 @@ pub struct ProgressUpdate {
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 /// How long `start_session` may take to be acknowledged.
 const START_TIMEOUT: Duration = Duration::from_secs(60);
-/// How long to wait for `TurnCancelled` after cancelling the session.
-const CANCEL_GRACE: Duration = Duration::from_secs(10);
+/// How long to wait for `TurnCancelled` after cancelling the session. Kept
+/// short because the app's exit waits for it ([`crate::workflow::orchestrator::SHUTDOWN_WAIT`]);
+/// a turn still running after it is torn down by closing the session.
+pub(crate) const CANCEL_GRACE: Duration = Duration::from_secs(4);
 /// Added to the stage timeout for the runner's own turn timeout, so this
 /// side's deadline normally ends the turn first (as `TimedOut`).
 const RUNNER_TIMEOUT_MARGIN: Duration = Duration::from_secs(60);
@@ -115,6 +117,9 @@ const RUNNER_TIMEOUT_MESSAGE: &str = "TIMEOUT";
 const RUNNER_GUARD_BLOCKED_MESSAGE: &str = "GUARD_BLOCKED";
 /// Rule reported for a guard block whose violation event was not seen.
 const UNKNOWN_GUARD_RULE: &str = "unknown";
+/// Code of an attempt whose worktree path is not valid UTF-8 (it cannot be
+/// passed to the runner as the guard root without loss).
+const WORKFLOW_WORKTREE_PATH_NOT_UTF8: &str = "WORKFLOW_WORKTREE_PATH_NOT_UTF8";
 /// Code of a turn the runner cancelled without being asked to.
 const RUNNER_TURN_CANCELLED: &str = "RUNNER_TURN_CANCELLED";
 /// Minimum spacing between progress updates (at most 4 per second).
@@ -216,7 +221,7 @@ fn drive(
     // The guard root must be exactly the worktree; never pass a lossy path.
     let Some(worktree) = req.worktree.to_str() else {
         return AttemptEnd::Failed {
-            code: "WORKTREE_PATH_NOT_UTF8".to_string(),
+            code: WORKFLOW_WORKTREE_PATH_NOT_UTF8.to_string(),
             message: req.worktree.display().to_string(),
         };
     };
@@ -966,6 +971,14 @@ mod tests {
         assert!(!runner.calls().iter().any(|c| c.starts_with("send:")));
 
         let (mut runner, _tx) = FakeRunner::new();
+        runner.start_error = Some(RunnerError::Unavailable("AGENT_RUNNER_MISSING"));
+        let (end, _) = run(&runner, &store, &request(&dir), &CancelToken::default());
+        assert!(
+            matches!(&end, AttemptEnd::Failed { code, .. } if code == "AGENT_RUNNER_MISSING"),
+            "{end:?}"
+        );
+
+        let (mut runner, _tx) = FakeRunner::new();
         runner.start_error = Some(RunnerError::Timeout);
         let (end, _) = run(&runner, &store, &request(&dir), &CancelToken::default());
         assert!(
@@ -1072,7 +1085,7 @@ mod tests {
         canceller.join().unwrap();
 
         assert_eq!(end, AttemptEnd::Cancelled(CancelReason::User));
-        // Well below the 10 s grace period.
+        // Well below the grace period.
         assert!(started.elapsed() < Duration::from_secs(2));
         assert_eq!(
             runner.calls(),

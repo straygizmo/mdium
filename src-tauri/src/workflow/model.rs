@@ -224,7 +224,6 @@ pub struct WorktreeInfo {
 pub enum RunStatus {
     Active,
     AwaitingMerge,
-    Attention,
     Cancelled,
     Merged,
     Discarded,
@@ -255,6 +254,9 @@ pub struct AttemptRecord {
     pub task_id: String,
     pub stage_id: String,
     pub session_id: String,
+    /// Reserved; currently always `None`. The runner API does not expose
+    /// its process id, and nothing needs it: attempts never outlive the
+    /// app process, so recovery does not probe runner liveness.
     pub runner_pid: Option<u32>,
     pub started_at: String,
     pub finished_at: Option<String>,

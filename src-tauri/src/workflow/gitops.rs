@@ -489,6 +489,72 @@ pub(crate) fn create_worktree_in(
     })
 }
 
+/// The run worktree of `root_task_id` left behind by an earlier
+/// [`create_worktree_in`] whose run was never recorded: `Some` only when
+/// the expected path is a worktree git has registered for `repo`, checked
+/// out on the expected branch (from `title`), whose link is intact. Its
+/// base branch is the checkout's current branch and its base commit the
+/// merge base of that branch and the worktree branch (the commit it was
+/// created from, unless the user rewrote their branch since).
+pub(crate) fn orphan_worktree_in(
+    base_dir: &Path,
+    repo: &Path,
+    root_task_id: &str,
+    title: &str,
+) -> Result<Option<WorktreeInfo>, GitError> {
+    if !is_valid_id(root_task_id) {
+        return Ok(None);
+    }
+    let top = repo_root(repo)?;
+    let path = worktree_path_in(base_dir, &top, root_task_id);
+    let branch = branch_name(root_task_id, title);
+    if !path.is_dir() || registered_branch(&top, &path)? != Some(format!("refs/heads/{branch}")) {
+        return Ok(None);
+    }
+    let Some(base_branch) = current_branch(&top)? else {
+        return Ok(None);
+    };
+    let branch_ref = format!("refs/heads/{branch}");
+    let base_commit = git(&top, &["merge-base", "HEAD", &branch_ref])?
+        .trim()
+        .to_string();
+    let info = WorktreeInfo {
+        path: path.to_string_lossy().into_owned(),
+        branch,
+        base_branch,
+        base_commit,
+    };
+    Ok(validate_worktree(base_dir, &info).is_ok().then_some(info))
+}
+
+/// The branch ref (`refs/heads/...`) git records as checked out in the
+/// registered worktree at `path`, or `None` if `path` is not a registered
+/// worktree of `repo_root` or has a detached HEAD.
+fn registered_branch(repo_root: &Path, path: &Path) -> Result<Option<String>, GitError> {
+    let Ok(target) = std::fs::canonicalize(path) else {
+        return Ok(None);
+    };
+    let list = git(repo_root, &["worktree", "list", "--porcelain"])?;
+    // Entries are blank-line separated; each starts with "worktree <path>".
+    for entry in list.split(
+        "
+
+",
+    ) {
+        let mut lines = entry.lines();
+        let Some(listed) = lines.next().and_then(|l| l.strip_prefix("worktree ")) else {
+            continue;
+        };
+        if std::fs::canonicalize(listed).ok().as_deref() != Some(target.as_path()) {
+            continue;
+        }
+        return Ok(lines
+            .find_map(|line| line.strip_prefix("branch "))
+            .map(str::to_string));
+    }
+    Ok(None)
+}
+
 /// The checked-out branch name, or `None` on a detached HEAD.
 fn current_branch(repo: &Path) -> Result<Option<String>, GitError> {
     let output = run_git_raw(repo, &["symbolic-ref", "--quiet", "--short", "HEAD"])?;

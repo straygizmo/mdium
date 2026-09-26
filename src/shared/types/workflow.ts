@@ -39,7 +39,6 @@ export type TaskStatus =
 export type RunStatus =
   | "active"
   | "awaiting_merge"
-  | "attention"
   | "cancelled"
   | "merged"
   | "discarded";
@@ -166,6 +165,7 @@ export interface AttemptRecord {
   taskId: string;
   stageId: string;
   sessionId: string;
+  /** Reserved; currently always null. */
   runnerPid: number | null;
   startedAt: string;
   finishedAt: string | null;
