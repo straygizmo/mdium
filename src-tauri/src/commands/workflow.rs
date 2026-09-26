@@ -3,9 +3,10 @@
 //!
 //! There is exactly one [`Orchestrator`] per process ([`WorkflowState`]),
 //! created in `setup` by [`create_state`] and shut down on
-//! `RunEvent::Exit`. Every project-scoped command attaches the project and
-//! kicks its dispatcher before running (attaching alone never starts
-//! queued work), then does its work on a blocking thread.
+//! `RunEvent::Exit`. Every project-scoped command validates the root and
+//! attaches the project before running; the first attach also kicks its
+//! dispatcher (attaching alone never starts queued work, and user
+//! operations kick by themselves). The work runs on a blocking thread.
 //!
 //! Events carry the orchestrator's normalized project root
 //! (`projectRoot`), which is the value [`workflow_attach_project`]
@@ -23,7 +24,7 @@ use crate::workflow::model::{
 use crate::workflow::orchestrator::{EventSink, Orchestrator};
 use crate::workflow::runner_client::{RunnerError, RunnerEvent, StartSessionParams};
 use crate::workflow::runner_host::{RunnerApi, RunnerHost, SidecarSpawner};
-use crate::workflow::store::{RunList, StoreError, StoreWarning, TaskList, WorkflowList};
+use crate::workflow::store::{RunList, StoreError, TaskList, WorkflowList};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
@@ -41,6 +42,8 @@ pub const PROGRESS_EVENT: &str = "workflow://progress";
 
 /// Code of every runner call when the bundled agent runner script is missing.
 pub const AGENT_RUNNER_MISSING: &str = "AGENT_RUNNER_MISSING";
+/// The project root is empty, not absolute, or not an existing directory.
+pub const WORKFLOW_PROJECT_INVALID: &str = "WORKFLOW_PROJECT_INVALID";
 /// Code of a command whose blocking task could not be joined.
 pub const WORKFLOW_COMMAND_FAILED: &str = "WORKFLOW_COMMAND_FAILED";
 
@@ -240,9 +243,15 @@ pub fn create_state(app: &AppHandle) -> WorkflowState {
     let runner: Arc<dyn RunnerApi> =
         match node_sidecar::resolve_script(app, "agent-runner", "agent-runner.mjs") {
             Ok(script_path) => {
-                let data_dir = dirs::data_local_dir()
-                    .unwrap_or_else(std::env::temp_dir)
-                    .join("mdium");
+                let base = dirs::data_local_dir().unwrap_or_else(|| {
+                    let temp = std::env::temp_dir();
+                    eprintln!(
+                        "[workflow] no local data dir; runner data goes to {}",
+                        temp.display()
+                    );
+                    temp
+                });
+                let data_dir = base.join("mdium");
                 Arc::new(RunnerHost::new(Box::new(SidecarSpawner {
                     script_path,
                     data_dir,
@@ -255,78 +264,6 @@ pub fn create_state(app: &AppHandle) -> WorkflowState {
         };
     let sink = Arc::new(TauriSink { app: app.clone() });
     Orchestrator::new(runner, sink, gitops::default_worktree_base())
-}
-
-/// A store warning as sent to the UI.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct StoreWarningPayload {
-    pub file: String,
-    pub message: String,
-}
-
-impl From<StoreWarning> for StoreWarningPayload {
-    fn from(warning: StoreWarning) -> Self {
-        StoreWarningPayload {
-            file: warning.file,
-            message: warning.message,
-        }
-    }
-}
-
-fn warnings(list: Vec<StoreWarning>) -> Vec<StoreWarningPayload> {
-    list.into_iter().map(Into::into).collect()
-}
-
-/// Result of [`workflow_list_tasks`].
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TaskListPayload {
-    pub tasks: Vec<Task>,
-    pub warnings: Vec<StoreWarningPayload>,
-}
-
-impl From<TaskList> for TaskListPayload {
-    fn from(list: TaskList) -> Self {
-        TaskListPayload {
-            tasks: list.tasks,
-            warnings: warnings(list.warnings),
-        }
-    }
-}
-
-/// Result of [`workflow_list_workflows`].
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkflowListPayload {
-    pub workflows: Vec<Workflow>,
-    pub warnings: Vec<StoreWarningPayload>,
-}
-
-impl From<WorkflowList> for WorkflowListPayload {
-    fn from(list: WorkflowList) -> Self {
-        WorkflowListPayload {
-            workflows: list.workflows,
-            warnings: warnings(list.warnings),
-        }
-    }
-}
-
-/// Result of [`workflow_list_runs`].
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RunListPayload {
-    pub runs: Vec<WorkflowRun>,
-    pub warnings: Vec<StoreWarningPayload>,
-}
-
-impl From<RunList> for RunListPayload {
-    fn from(list: RunList) -> Self {
-        RunListPayload {
-            runs: list.runs,
-            warnings: warnings(list.warnings),
-        }
-    }
 }
 
 /// One provider's probe result (`{"kind":"error","detail":<code>}` when
@@ -347,8 +284,30 @@ where
     tauri::async_runtime::spawn_blocking(op).await?
 }
 
-/// Attaches `project_root`, kicks its dispatcher, and runs `op` with the
-/// orchestrator and the root on a blocking thread.
+/// Checks that `project_root` names an existing directory by an absolute
+/// path.
+fn validate_project_root(project_root: &str) -> Result<PathBuf, CommandError> {
+    let invalid = |detail: &str| CommandError {
+        code: WORKFLOW_PROJECT_INVALID.to_string(),
+        message: format!("{WORKFLOW_PROJECT_INVALID}: {detail}"),
+    };
+    if project_root.trim().is_empty() {
+        return Err(invalid("empty"));
+    }
+    let root = PathBuf::from(project_root);
+    if !root.is_absolute() {
+        return Err(invalid("not absolute"));
+    }
+    if !root.is_dir() {
+        return Err(invalid("not a directory"));
+    }
+    Ok(root)
+}
+
+/// Validates `project_root`, attaches it (kicking its dispatcher only when
+/// this call attached it: user operations kick by themselves, and reads
+/// must stay cheap), and runs `op` with the orchestrator and the root on a
+/// blocking thread.
 async fn with_project<T, F>(
     state: tauri::State<'_, WorkflowState>,
     project_root: String,
@@ -360,9 +319,10 @@ where
 {
     let orch = state.inner().clone();
     blocking(move || {
-        let root = PathBuf::from(project_root);
-        orch.attach_project(&root);
-        orch.kick(&root);
+        let root = validate_project_root(&project_root)?;
+        if orch.attach(&root).1 {
+            orch.kick(&root);
+        }
         op(&orch, &root).map_err(CommandError::from)
     })
     .await
@@ -385,9 +345,9 @@ pub async fn workflow_attach_project(
 pub async fn workflow_list_workflows(
     state: tauri::State<'_, WorkflowState>,
     project_root: String,
-) -> Result<WorkflowListPayload, CommandError> {
+) -> Result<WorkflowList, CommandError> {
     with_project(state, project_root, |orch, root| {
-        actions::list_workflows(orch, root).map(Into::into)
+        actions::list_workflows(orch, root)
     })
     .await
 }
@@ -433,9 +393,9 @@ pub async fn workflow_active_run_count(
 pub async fn workflow_list_tasks(
     state: tauri::State<'_, WorkflowState>,
     project_root: String,
-) -> Result<TaskListPayload, CommandError> {
+) -> Result<TaskList, CommandError> {
     with_project(state, project_root, |orch, root| {
-        Ok(orch.store(root).list_tasks()?.into())
+        Ok(orch.store(root).list_tasks()?)
     })
     .await
 }
@@ -444,9 +404,9 @@ pub async fn workflow_list_tasks(
 pub async fn workflow_list_runs(
     state: tauri::State<'_, WorkflowState>,
     project_root: String,
-) -> Result<RunListPayload, CommandError> {
+) -> Result<RunList, CommandError> {
     with_project(state, project_root, |orch, root| {
-        Ok(orch.store(root).list_runs()?.into())
+        Ok(orch.store(root).list_runs()?)
     })
     .await
 }
@@ -756,17 +716,38 @@ mod tests {
     }
 
     #[test]
-    fn list_payloads_include_warnings() {
-        let list = TaskListPayload::from(crate::workflow::store::TaskList {
+    fn task_list_serializes_with_warnings() {
+        let list = crate::workflow::store::TaskList {
             tasks: vec![],
             warnings: vec![crate::workflow::store::StoreWarning {
                 file: "x.md".into(),
                 message: "STORE_CORRUPT: bad".into(),
             }],
-        });
+        };
         assert_eq!(
             serde_json::to_value(&list).unwrap(),
             json!({ "tasks": [], "warnings": [{ "file": "x.md", "message": "STORE_CORRUPT: bad" }] })
+        );
+    }
+
+    fn assert_invalid_root(root: &str) {
+        let err = validate_project_root(root).unwrap_err();
+        assert_eq!(err.code, WORKFLOW_PROJECT_INVALID);
+    }
+
+    #[test]
+    fn project_root_must_be_an_existing_absolute_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_invalid_root("");
+        assert_invalid_root("   ");
+        assert_invalid_root("relative/project");
+        assert_invalid_root(&dir.path().join("missing").to_string_lossy());
+        let file = dir.path().join("file.txt");
+        std::fs::write(&file, "x").unwrap();
+        assert_invalid_root(&file.to_string_lossy());
+        assert_eq!(
+            validate_project_root(&dir.path().to_string_lossy()).unwrap(),
+            dir.path()
         );
     }
 

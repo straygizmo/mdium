@@ -4,8 +4,13 @@
  * camelCase serde names of the Rust structs.
  *
  * Command arguments are passed in camelCase (e.g. `projectRoot`, `taskId`).
- * Every project-scoped command attaches the project and kicks its
- * dispatcher before running.
+ * Every project-scoped command rejects a `projectRoot` that is empty, not
+ * absolute, or not an existing directory (`WORKFLOW_PROJECT_INVALID`), then
+ * attaches the project.
+ *
+ * Output types (`Workflow`, `Stage`, ...) have every field present;
+ * `WorkflowsFileInput` / `WorkflowInput` / `StageInput` may omit fields the
+ * backend defaults.
  *
  * Project roots: every event carries the orchestrator's normalized root in
  * `projectRoot` (canonicalized, no trailing separator, no `\\?\` prefix,
@@ -55,7 +60,7 @@ export type AwaitingKind = "plan_approval" | "question";
 export interface AwaitingInfo {
   kind: AwaitingKind;
   /** The agent's question, when `kind` is `question`. */
-  question?: string | null;
+  question: string | null;
 }
 
 export interface HistoryEntry {
@@ -92,6 +97,7 @@ export interface Task {
   body: string;
 }
 
+/** A stage as the backend returns it (every field present). */
 export interface Stage {
   id: string;
   role: Role;
@@ -99,28 +105,51 @@ export interface Stage {
   prompt: string;
   completionCriteria: string;
   provider: Provider;
-  model?: string | null;
-  requiresApproval?: boolean;
-  timeoutMinutes?: number;
+  model: string | null;
+  requiresApproval: boolean;
+  timeoutMinutes: number;
 }
 
+/** A workflow as the backend returns it (every field present). */
 export interface Workflow {
   id: string;
   name: string;
   enabled: boolean;
   archived: boolean;
   stages: Stage[];
-  reviewReturnTo?: Role;
-  maxReentryCount?: number;
-  maxConcurrentRuns?: number;
-  designDocPath?: string | null;
+  reviewReturnTo: Role;
+  maxReentryCount: number;
+  maxConcurrentRuns: number;
+  designDocPath: string | null;
   issueTracking: IssueTracking;
 }
 
+/**
+ * A stage as sent to the backend: fields with a backend default may be
+ * omitted (`model`: null, `requiresApproval`: false, `timeoutMinutes`: 60).
+ */
+export type StageInput = Omit<Stage, "model" | "requiresApproval" | "timeoutMinutes"> &
+  Partial<Pick<Stage, "model" | "requiresApproval" | "timeoutMinutes">>;
+
+/**
+ * A workflow as sent to the backend: fields with a backend default may be
+ * omitted (`reviewReturnTo`: "design", `maxReentryCount`: 5,
+ * `maxConcurrentRuns`: 1, `designDocPath`: null). A `Workflow` is a valid
+ * `WorkflowInput`.
+ */
+export type WorkflowInput = Omit<
+  Workflow,
+  "stages" | "reviewReturnTo" | "maxReentryCount" | "maxConcurrentRuns" | "designDocPath"
+> & {
+  stages: StageInput[];
+} & Partial<
+    Pick<Workflow, "reviewReturnTo" | "maxReentryCount" | "maxConcurrentRuns" | "designDocPath">
+  >;
+
 /** Argument of `workflow_save_workflows` (`file`). */
-export interface WorkflowsFile {
+export interface WorkflowsFileInput {
   schemaVersion: number;
-  workflows: Workflow[];
+  workflows: WorkflowInput[];
 }
 
 export interface WorktreeInfo {

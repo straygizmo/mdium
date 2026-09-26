@@ -12,7 +12,7 @@ use crate::workflow::model::{
     Task, TaskMeta, ValidationError, Workflow, WorkflowRun, WorkflowsFile,
 };
 use crate::workflow::state::{ProjectGuard, ProjectLocks};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// The only schema version this store currently reads or writes. A file
@@ -101,7 +101,8 @@ impl From<InvalidId> for StoreError {
 /// A record that could not be loaded while listing (a task or run file, or
 /// one workflow inside `workflows.json`). Listing never fails because of
 /// one bad record; it reports it here instead.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StoreWarning {
     /// Path of the offending file.
     pub file: String,
@@ -111,7 +112,8 @@ pub struct StoreWarning {
 
 /// Result of [`WorkflowStore::list_tasks`]: every task that loaded, sorted
 /// by `created_at` then id, plus one warning per file that did not.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TaskList {
     pub tasks: Vec<Task>,
     pub warnings: Vec<StoreWarning>,
@@ -120,7 +122,8 @@ pub struct TaskList {
 /// Result of [`WorkflowStore::load_workflows`]: every workflow that decoded
 /// and passed `Workflow::validate()`, in file order, plus one warning per
 /// workflow that did not.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkflowList {
     pub workflows: Vec<Workflow>,
     pub warnings: Vec<StoreWarning>,
@@ -128,7 +131,8 @@ pub struct WorkflowList {
 
 /// Result of [`WorkflowStore::list_runs`]: every run that loaded, sorted by
 /// `created_at` then root task id, plus one warning per file that did not.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RunList {
     pub runs: Vec<WorkflowRun>,
     pub warnings: Vec<StoreWarning>,

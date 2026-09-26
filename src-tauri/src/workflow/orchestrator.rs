@@ -163,46 +163,55 @@ impl Orchestrator {
     }
 
     /// Attaches `project_root` (any spelling of it) and returns its
-    /// normalized key. The first attach of a key recovers the project as
-    /// after a restart (running tasks become `ATTENTION_INTERRUPTED`); later
-    /// attaches only finish half-done stage advances. Does nothing after
-    /// [`Self::shutdown`].
+    /// normalized key. See [`Self::attach`].
     pub fn attach_project(self: &Arc<Self>, project_root: &Path) -> PathBuf {
+        self.attach(project_root).0
+    }
+
+    /// Attaches `project_root` (any spelling of it) and returns its
+    /// normalized key and whether this call attached it. The first attach
+    /// of a key recovers the project as after a restart (running tasks
+    /// become `ATTENTION_INTERRUPTED`); a later attach does nothing (every
+    /// dispatch pass finishes half-done stage advances), so it is cheap.
+    /// Does nothing after [`Self::shutdown`].
+    pub fn attach(self: &Arc<Self>, project_root: &Path) -> (PathBuf, bool) {
         let key = project_key(project_root);
-        let root = {
+        {
             let inner = self.inner();
-            if inner.shut_down {
-                return key;
+            if inner.shut_down || inner.projects.contains_key(&key) {
+                return (key, false);
             }
-            inner.projects.get(&key).map(|p| p.root.clone())
         }
-        .unwrap_or_else(|| normalize_root(project_root));
-        let store = WorkflowStore::new(root);
+        let store = WorkflowStore::new(normalize_root(project_root));
         // Registering under the project guard means no dispatch pass of
         // this project can run before the first recovery is done.
         let guard = store.lock();
-        let (first, root) = {
+        {
             let mut inner = self.inner();
-            let entry = inner.projects.entry(key.clone());
-            let first = matches!(entry, Entry::Vacant(_));
-            let project = entry.or_insert_with(|| Project {
-                root: store.project_root().to_path_buf(),
-                dispatching: false,
-                dirty: false,
-            });
-            (first, project.root.clone())
-        };
-        // Another attach may have registered the project meanwhile under a
-        // different spelling: always use the registered root.
-        let store = WorkflowStore::new(root);
-        match recover(&guard, &store, first) {
+            if inner.shut_down {
+                return (key, false);
+            }
+            match inner.projects.entry(key.clone()) {
+                // Another attach registered the project meanwhile (under
+                // any spelling) and has already recovered it.
+                Entry::Occupied(_) => return (key, false),
+                Entry::Vacant(entry) => {
+                    entry.insert(Project {
+                        root: store.project_root().to_path_buf(),
+                        dispatching: false,
+                        dirty: false,
+                    });
+                }
+            }
+        }
+        match recover(&guard, &store, true) {
             Ok(changed) => self.emit_changes(&store, &changed),
             Err(err) => eprintln!(
                 "[workflow] recovery of {} failed: {err}",
                 store.project_root().display()
             ),
         }
-        key
+        (key, true)
     }
 
     /// Requests a dispatch pass for the project (attaching it first if
@@ -1484,6 +1493,9 @@ mod tests {
             assert_eq!(env.orch.attach_project(&verbatim), key);
         }
 
+        // Only the first attach of a key reports attaching it.
+        assert!(!env.orch.attach(&env.fx.root().join("")).1);
+
         // Later attaches do not treat running tasks as interrupted.
         let running = env.root_task("Running", "r");
         transition(
@@ -1558,7 +1570,7 @@ mod tests {
         let (runner, _waiting) = FakeRunner::new();
         let sink = Arc::new(RecordingSink::default());
         let next = Orchestrator::new(runner.clone(), sink.clone(), env.fx.base().to_path_buf());
-        next.attach_project(env.fx.root());
+        assert!(next.attach(env.fx.root()).1);
         let task = env.task(&id);
         assert_eq!(task.meta.status, TaskStatus::Attention);
         assert_eq!(attention_code(&task), "ATTENTION_INTERRUPTED");
