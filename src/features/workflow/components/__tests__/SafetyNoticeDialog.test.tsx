@@ -41,7 +41,7 @@ describe("SafetyNoticeDialog", () => {
     const dialog = container.querySelector('[role="dialog"]')!;
     expect(dialog.getAttribute("aria-modal")).toBe("true");
     const text = dialog.textContent ?? "";
-    for (const key of ["title", "isolation", "guardScreening", "guardRuntime", "guardContainment", "guardPostCheck", "limits", "noPush"]) {
+    for (const key of ["title", "isolation", "guardScreening", "guardRuntime", "guardContainment", "guardPostCheck", "guardMergeReview", "limits", "noPush"]) {
       expect(text).toContain(i18n.t(`workflow:safety.${key}`));
     }
   });

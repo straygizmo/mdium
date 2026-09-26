@@ -24,7 +24,13 @@ export function acknowledgeSafety(): void {
   }
 }
 
-const GUARD_KEYS = ["guardScreening", "guardRuntime", "guardContainment", "guardPostCheck"] as const;
+const GUARD_KEYS = [
+  "guardScreening",
+  "guardRuntime",
+  "guardContainment",
+  "guardPostCheck",
+  "guardMergeReview",
+] as const;
 
 interface SafetyNoticeDialogProps {
   onAccept(): void;

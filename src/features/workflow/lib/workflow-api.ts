@@ -113,7 +113,6 @@ export const workflowApi = {
   discardRun: (projectRoot: string, rootTaskId: string) =>
     call<WorkflowRun>("workflow_discard_run", { projectRoot, rootTaskId }),
   probeProviders: () => call<ProviderProbe[]>("workflow_probe_providers"),
-  /** The backend command lands in a later task (gitignore guidance). */
   gitignoreStatus: (projectRoot: string) => call<GitignoreStatus>("workflow_gitignore_status", { projectRoot }),
 };
 

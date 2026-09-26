@@ -828,6 +828,16 @@ mod tests {
         );
     }
 
+    /// A throwaway repo whose excludes file is empty, so the user's global
+    /// or XDG excludes cannot affect the ignore checks.
+    fn isolated_fixture() -> gitops::test_support::Fixture {
+        let fixture = gitops::test_support::Fixture::new();
+        let excludes = fixture.base().join("empty-excludes");
+        std::fs::write(&excludes, "").unwrap();
+        fixture.run(&["config", "core.excludesFile", &excludes.to_string_lossy()]);
+        fixture
+    }
+
     #[test]
     fn gitignore_status_shape() {
         let status = GitignoreStatus {
@@ -841,21 +851,21 @@ mod tests {
 
     #[test]
     fn gitignore_status_is_empty_when_mdium_is_ignored() {
-        let fixture = gitops::test_support::Fixture::new();
+        let fixture = isolated_fixture();
         fixture.write(".gitignore", ".mdium/\n");
         assert!(gitignore_missing(fixture.root()).is_empty());
     }
 
     #[test]
     fn gitignore_status_lists_every_path_without_rules() {
-        let fixture = gitops::test_support::Fixture::new();
+        let fixture = isolated_fixture();
         fixture.write(".gitignore", "");
         assert_eq!(gitignore_missing(fixture.root()), GITIGNORE_PATHS);
     }
 
     #[test]
     fn gitignore_status_lists_only_uncovered_paths() {
-        let fixture = gitops::test_support::Fixture::new();
+        let fixture = isolated_fixture();
         fixture.write(".gitignore", ".mdium/tasks/\n.mdium/runs/\n");
         assert_eq!(
             gitignore_missing(fixture.root()),

@@ -428,6 +428,58 @@ describe("WorkflowPanel", () => {
     expect(enabled.checked).toBe(true);
   });
 
+  it("keeps the workflow disabled when the safety notice is cancelled from the edit dialog", async () => {
+    await render();
+    await act(async () => button(row("wf1")!, i18n.t("workflow:panel.edit"))!.click());
+    const enabled = container.querySelector<HTMLInputElement>('.workflow-edit [name="enabled"]')!;
+    await act(async () => enabled.click());
+    await act(async () => button(safetyDialog()!, i18n.t("workflow:safety.cancel"))!.click());
+    expect(safetyDialog()).toBeNull();
+    expect(enabled.checked).toBe(false);
+    expect(container.querySelector(".workflow-edit")).not.toBeNull();
+    expect(localStorage.getItem("mdium-workflow-safety-ack")).toBeNull();
+  });
+
+  it("remembers a dismissed ignore suggestion per project", async () => {
+    api.gitignoreStatus.mockResolvedValue({ missing: [".mdium/runs/"] });
+    await render();
+    const notice = container.querySelector<HTMLElement>(".workflow-panel__gitignore")!;
+    await act(async () => button(notice, i18n.t("workflow:gitignore.dismiss"))!.click());
+    expect(localStorage.getItem(`mdium-workflow-gitignore-dismissed:${ROOT}`)).toBe("1");
+    await act(async () => root.unmount());
+    api.gitignoreStatus.mockClear();
+    root = createRoot(container);
+    await render();
+    expect(api.gitignoreStatus).not.toHaveBeenCalled();
+    expect(container.querySelector(".workflow-panel__gitignore")).toBeNull();
+  });
+
+  it("logs a failed ignore check without a dialog", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    api.gitignoreStatus.mockRejectedValue({ code: "WORKFLOW_COMMAND_FAILED", message: "" });
+    await render();
+    expect(warn).toHaveBeenCalled();
+    expect(dialogs.showMessage).not.toHaveBeenCalled();
+    expect(container.querySelector(".workflow-panel__gitignore")).toBeNull();
+  });
+
+  it("resets the copied label after a moment", async () => {
+    const writeText = vi.fn(async () => undefined);
+    vi.spyOn(navigator, "clipboard", "get").mockReturnValue({ writeText } as unknown as Clipboard);
+    api.gitignoreStatus.mockResolvedValue({ missing: [".mdium/runs/"] });
+    await render();
+    const notice = container.querySelector<HTMLElement>(".workflow-panel__gitignore")!;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await act(async () => button(notice, i18n.t("workflow:gitignore.copy"))!.click());
+      expect(button(notice, i18n.t("workflow:gitignore.copied"))).toBeDefined();
+      await act(async () => vi.advanceTimersByTime(2000));
+      expect(button(notice, i18n.t("workflow:gitignore.copy"))).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not check the ignore rules while no workflow is enabled", async () => {
     workflows = [workflow("wf1")];
     await render();

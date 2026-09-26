@@ -17,6 +17,7 @@ const targetStylesheets: string[] = [
   "src/features/workflow/components/RetryDialog.css",
   "src/features/workflow/components/MergeSection.css",
   "src/features/workflow/components/WorkflowEditDialog.css",
+  "src/features/workflow/components/SafetyNoticeDialog.css",
 ];
 
 // Components that render span-based switches. Extended as features adopt data-switch.

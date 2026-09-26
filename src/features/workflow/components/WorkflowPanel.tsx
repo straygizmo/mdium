@@ -34,6 +34,30 @@ interface GitignoreNotice {
   missing: string[];
 }
 
+/** How long the copy button shows "copied". */
+const COPIED_RESET_MS = 2000;
+
+/** localStorage key remembering that the ignore suggestion was dismissed for a root. */
+const gitignoreDismissedKey = (root: string) => `mdium-workflow-gitignore-dismissed:${root}`;
+
+/** Whether the ignore suggestion was dismissed for `root`; unreadable storage counts as not dismissed. */
+function isGitignoreDismissed(root: string): boolean {
+  try {
+    return localStorage.getItem(gitignoreDismissedKey(root)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Remembers the dismissal; a storage failure only means the suggestion returns later. */
+function rememberGitignoreDismissed(root: string): void {
+  try {
+    localStorage.setItem(gitignoreDismissedKey(root), "1");
+  } catch {
+    // The notice is still hidden for this session of the panel.
+  }
+}
+
 /** Localizes a store warning (`STORE_*` code plus an optional `: detail`). */
 function formatWarning(warning: StoreWarning): string {
   const match = /^([A-Z][A-Z0-9_]*)(?::\s*(.*))?$/s.exec(warning.message);
@@ -64,6 +88,14 @@ export function WorkflowPanel({ onCreateTask, onEditWorkflow, confirmEnable: con
   /** Ignore rules to suggest; cleared when dismissed. */
   const [gitignore, setGitignore] = useState<GitignoreNotice | null>(null);
   const [copied, setCopied] = useState(false);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearCopiedTimer = () => {
+    if (copiedTimerRef.current !== null) clearTimeout(copiedTimerRef.current);
+    copiedTimerRef.current = null;
+  };
+
+  useEffect(() => clearCopiedTimer, []);
 
   useEffect(() => {
     void useWorkflowStore.getState().activate(activeFolderPath);
@@ -89,7 +121,7 @@ export function WorkflowPanel({ onCreateTask, onEditWorkflow, confirmEnable: con
   useEffect(() => {
     setGitignore(null);
     setCopied(false);
-    if (!activeRoot || !enabledKey) return;
+    if (!activeRoot || !enabledKey || isGitignoreDismissed(activeRoot)) return;
     let cancelled = false;
     workflowApi
       .gitignoreStatus(activeRoot)
@@ -97,7 +129,7 @@ export function WorkflowPanel({ onCreateTask, onEditWorkflow, confirmEnable: con
         if (!cancelled && missing.length > 0) setGitignore({ root: activeRoot, missing });
       })
       // The suggestion is advisory: without a status nothing is shown.
-      .catch(() => undefined);
+      .catch((err: unknown) => console.warn("[workflow] gitignore status failed", err));
     return () => {
       cancelled = true;
     };
@@ -204,9 +236,19 @@ export function WorkflowPanel({ onCreateTask, onEditWorkflow, confirmEnable: con
     try {
       await navigator.clipboard.writeText(`${missing.join("\n")}\n`);
       setCopied(true);
+      clearCopiedTimer();
+      copiedTimerRef.current = setTimeout(() => {
+        copiedTimerRef.current = null;
+        setCopied(false);
+      }, COPIED_RESET_MS);
     } catch {
       void showMessage(t("gitignore.copyFailed"), { kind: "error" });
     }
+  };
+
+  const dismissGitignore = (root: string) => {
+    rememberGitignoreDismissed(root);
+    setGitignore(null);
   };
 
   const openCreate = onCreateTask ?? (() => setCreating(true));
@@ -254,7 +296,7 @@ export function WorkflowPanel({ onCreateTask, onEditWorkflow, confirmEnable: con
                 <button type="button" className="workflow-panel__btn" onClick={() => void copyGitignore(gitignore.missing)}>
                   {t(copied ? "gitignore.copied" : "gitignore.copy")}
                 </button>
-                <button type="button" className="workflow-panel__btn" onClick={() => setGitignore(null)}>
+                <button type="button" className="workflow-panel__btn" onClick={() => dismissGitignore(gitignore.root)}>
                   {t("gitignore.dismiss")}
                 </button>
               </div>
