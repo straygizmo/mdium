@@ -166,6 +166,11 @@ impl ProjectLocks {
 /// exists (falling back to the path as given), without a trailing
 /// separator, and without the Windows verbatim (`\\?\`) prefix that
 /// `canonicalize` adds. Letter case is preserved.
+///
+/// The result is meant as a lock/identity key and a display root. Without
+/// the verbatim prefix, Win32 APIs apply the `MAX_PATH` limit and path
+/// normalization again, so do not use it to reach deep paths below the
+/// root on Windows.
 pub(crate) fn normalize_root(project_root: &Path) -> PathBuf {
     // `canonicalize` fails for paths that do not exist (yet). Fall back to
     // `absolute`, which needs no file system access, so a relative and an
