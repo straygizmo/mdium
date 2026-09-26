@@ -763,7 +763,9 @@ fn apply_action(
         Action::Advance { to, body } => {
             if planned.stage.role == Role::Design {
                 if let Some(template) = run.workflow.design_doc_path.clone() {
-                    if let Err(code) = write_design_doc(store, planned, run, &template, &body) {
+                    if let Err(code) =
+                        write_design_doc(store, &planned.worktree_base, run, &template, &body)
+                    {
                         *outcome = "attention";
                         return attention(design_doc_failed(&code));
                     }
@@ -809,10 +811,11 @@ fn move_task(
 }
 
 /// Writes the design document into the run's worktree and commits it.
+/// `worktree_base` is the base dir the run's worktree was created under.
 /// Returns the failure code on error.
-fn write_design_doc(
+pub(crate) fn write_design_doc(
     store: &WorkflowStore,
-    planned: &PlannedAttempt,
+    worktree_base: &Path,
     run: &WorkflowRun,
     template: &str,
     body: &str,
@@ -832,8 +835,7 @@ fn write_design_doc(
     )
     .ok_or_else(|| WORKFLOW_INVALID_DESIGN_DOC_PATH.to_string())?;
     // Validate the worktree link before writing anything into it.
-    gitops::validate_worktree(&planned.worktree_base, info)
-        .map_err(|err| err.code().to_string())?;
+    gitops::validate_worktree(worktree_base, info).map_err(|err| err.code().to_string())?;
     let target = safe_worktree_file(Path::new(&info.path), &rel)
         .ok_or_else(|| WORKFLOW_DESIGN_DOC_UNSAFE_PATH.to_string())?;
     fsutil::atomic_write(&target, body.as_bytes())
@@ -845,7 +847,7 @@ fn write_design_doc(
         .collect::<Vec<_>>()
         .join(" ");
     gitops::commit_paths_in(
-        &planned.worktree_base,
+        worktree_base,
         info,
         &[rel.as_str()],
         &format!("docs: design for {title}"),

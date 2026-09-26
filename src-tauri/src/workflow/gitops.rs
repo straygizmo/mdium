@@ -651,8 +651,10 @@ fn merge_in_progress(repo: &Path) -> Result<bool, GitError> {
 
 /// Merges the worktree branch into the base branch of the user's checkout
 /// with `--no-ff`, returning the merge commit hash. Refuses unless the
-/// checkout is on `base_branch` (`GIT_NOT_ON_BASE_BRANCH`) and clean
-/// (`GIT_DIRTY_WORKTREE`). A conflicted merge is aborted (`GIT_MERGE_CONFLICT`,
+/// checkout is on `base_branch` (`GIT_NOT_ON_BASE_BRANCH`) and has no
+/// staged or unstaged changes to tracked files (`GIT_DIRTY_WORKTREE`;
+/// untracked files such as `.mdium/` are normal user activity and ignored).
+/// A conflicted merge is aborted (`GIT_MERGE_CONFLICT`,
 /// or `GIT_MERGE_ABORT_FAILED` if the repo could not be restored); a merge that
 /// fails without starting (missing branch, hook rejection, ...) is
 /// `GIT_MERGE_FAILED`.
@@ -673,7 +675,10 @@ pub(crate) fn merge_into_base_in(
             current.unwrap_or_default(),
         ));
     }
-    let status = git(repo_root, &["status", "--porcelain"])?;
+    let status = git(
+        repo_root,
+        &["status", "--porcelain", "--untracked-files=no"],
+    )?;
     if !status.trim().is_empty() {
         return Err(GitError::new(GIT_DIRTY_WORKTREE, status));
     }
@@ -698,7 +703,10 @@ pub(crate) fn merge_into_base_in(
     if !merge_in_progress(repo_root)? {
         // The merge never started; make sure it left nothing behind.
         let after = run_git_raw(repo_root, &["rev-parse", "HEAD"])?;
-        let status = run_git_raw(repo_root, &["status", "--porcelain"])?;
+        let status = run_git_raw(
+            repo_root,
+            &["status", "--porcelain", "--untracked-files=no"],
+        )?;
         let untouched = after.success
             && after.stdout.trim() == before
             && status.success
@@ -1039,6 +1047,28 @@ mod tests {
         fixture.write("a.txt", "dirty\n");
         let err = merge_into_base_in(fixture.base(), fixture.root(), &info).unwrap_err();
         assert_eq!(err.code(), "GIT_DIRTY_WORKTREE");
+    }
+
+    #[test]
+    fn merge_ignores_untracked_files() {
+        let fixture = Fixture::new();
+        let info = fixture.create("t");
+        commit_in_worktree(
+            &info, "b.txt", "b
+", "feature",
+        );
+        fixture.write(
+            ".mdium/tasks/x.md",
+            "task
+",
+        );
+        fixture.write(
+            "foo.txt", "scratch
+",
+        );
+        merge_into_base_in(fixture.base(), fixture.root(), &info).unwrap();
+        assert!(fixture.root().join("b.txt").is_file());
+        assert!(fixture.root().join("foo.txt").is_file());
     }
 
     #[test]

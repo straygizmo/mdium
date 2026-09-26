@@ -49,6 +49,16 @@ const PROVIDERS: [Provider; 4] = [
 /// Integrity change reported when a run has no baseline to compare with
 /// (fails closed: treated like any other unacknowledged change).
 const INTEGRITY_BASELINE_MISSING: &str = "INTEGRITY_BASELINE_MISSING";
+/// Integrity changes that must be acknowledged before MDium runs git in a
+/// run's worktree or merges it outside an attempt. Branch, HEAD and base
+/// branch movement of the user's checkout is normal activity there (the
+/// merge itself checks the checkout's branch), so it is not listed.
+const ACK_REQUIRED_CHANGES: &[&str] = &[
+    "INTEGRITY_GIT_CONFIG_CHANGED",
+    "INTEGRITY_HOOKS_CHANGED",
+    "INTEGRITY_HOOKS_PATH_CHANGED",
+    INTEGRITY_BASELINE_MISSING,
+];
 
 /// The merge-review paths changed since the preview the user acknowledged.
 pub const MERGE_REVIEW_CHANGED: &str = "MERGE_REVIEW_CHANGED";
@@ -82,6 +92,11 @@ pub const WORKFLOW_RUN_NO_WORKTREE: &str = "WORKFLOW_RUN_NO_WORKTREE";
 pub const WORKFLOW_INTEGRITY_CHANGED: &str = "WORKFLOW_INTEGRITY_CHANGED";
 /// The worktree's agent-config files could not be fingerprinted.
 pub const WORKFLOW_AGENT_CONFIG_CHECK_FAILED: &str = "WORKFLOW_AGENT_CONFIG_CHECK_FAILED";
+/// The design document could not be written or committed.
+pub const WORKFLOW_DESIGN_DOC_FAILED: &str = "WORKFLOW_DESIGN_DOC_FAILED";
+/// `workflows.json` has entries that do not load; rewriting it would drop
+/// them.
+pub const WORKFLOWS_HAVE_WARNINGS: &str = "WORKFLOWS_HAVE_WARNINGS";
 
 /// Why a user operation failed.
 #[derive(Debug, Clone, PartialEq)]
@@ -199,8 +214,9 @@ pub struct MergePreview {
     pub diff: String,
     /// Changed paths matching [`MERGE_REVIEW_PATTERNS`].
     pub review_paths: Vec<String>,
-    /// Changes of the user's repository since the run's integrity baseline.
-    /// While there are any, `commits`, `diff` and `review_paths` are empty:
+    /// Changes of the user's repository since the run's integrity baseline
+    /// that need acknowledgement (git config and hooks, or no baseline;
+    /// branch movement is not reported). While there are any, `commits`, `diff` and `review_paths` are empty:
     /// no git command runs in the worktree before they are acknowledged.
     pub integrity_changes: Vec<IntegrityChange>,
 }
@@ -446,7 +462,9 @@ pub fn retry_task(
 
 /// Completes the current task of an Active run that needs attention, as if
 /// its stage had completed: a design or implement task advances to the
-/// next stage with the body of its latest attempt output (parsed if
+/// next stage (a design task first writes and commits its design document
+/// when the workflow has a `designDocPath`; if that fails the task stays
+/// in attention) with the body of its latest attempt output (parsed if
 /// possible, else raw, else empty); a review task sets the run
 /// AwaitingMerge.
 pub fn mark_complete(
@@ -476,6 +494,11 @@ pub fn mark_complete(
         match next {
             Some(to) => {
                 let body = latest_output_body(&store, &run, task_id).unwrap_or_default();
+                if to == Role::Implement {
+                    if let Some(template) = run.workflow.design_doc_path.clone() {
+                        write_design_doc(orch, &store, &run, &template, &body)?;
+                    }
+                }
                 let child = flow::advance(&guard, &store, &mut run, &task, to, &body)?;
                 let done = store.get_task(task_id)?;
                 (done.clone(), vec![done, child], run)
@@ -497,6 +520,33 @@ pub fn mark_complete(
     emit(orch, &store, &changed, Some(&run));
     orch.kick(project_root);
     Ok(done)
+}
+
+/// Writes and commits the design document of a design task completed by
+/// hand, as a completed design attempt would. The commit is a git command
+/// in the worktree, so the repository's integrity is checked first.
+fn write_design_doc(
+    orch: &Orchestrator,
+    store: &WorkflowStore,
+    run: &WorkflowRun,
+    template: &str,
+    body: &str,
+) -> Result<(), ActionError> {
+    let info = run
+        .worktree
+        .as_ref()
+        .ok_or(ActionError::InvalidState(WORKFLOW_RUN_NO_WORKTREE))?;
+    let (changes, _) = integrity_state(store.project_root(), run, info)?;
+    if !changes.is_empty() {
+        return Err(ActionError::InvalidState(WORKFLOW_INTEGRITY_CHANGED));
+    }
+    flow::write_design_doc(store, orch.worktree_base(), run, template, body).map_err(|code| {
+        eprintln!(
+            "[workflow] design document of run {} failed: {code}",
+            run.root_task_id
+        );
+        ActionError::InvalidState(WORKFLOW_DESIGN_DOC_FAILED)
+    })
 }
 
 /// The attempts of `task_id` in `run`, newest first.
@@ -728,13 +778,22 @@ fn integrity_state(
 ) -> Result<(Vec<IntegrityChange>, IntegritySnapshot), ActionError> {
     let now = integrity::snapshot_with_worktree(repo_root, Some(&info.base_branch), Some(info))?;
     let changes = match &run.integrity_baseline {
-        Some(before) => integrity::compare(before, &now),
+        Some(before) => merge_relevant(integrity::compare(before, &now)),
         None => vec![IntegrityChange {
             code: INTEGRITY_BASELINE_MISSING.to_string(),
             detail: String::new(),
         }],
     };
     Ok((changes, now))
+}
+
+/// The changes among `changes` that need acknowledgement
+/// ([`ACK_REQUIRED_CHANGES`]).
+fn merge_relevant(changes: Vec<IntegrityChange>) -> Vec<IntegrityChange> {
+    changes
+        .into_iter()
+        .filter(|change| ACK_REQUIRED_CHANGES.contains(&change.code.as_str()))
+        .collect()
 }
 
 /// The run and its worktree, if the run is awaiting its merge.
@@ -785,8 +844,9 @@ pub fn merge_preview(
     })
 }
 
-/// Merges an AwaitingMerge run into its base branch. The repository must
-/// be unchanged since the run's integrity baseline unless
+/// Merges an AwaitingMerge run into its base branch. The repository's git
+/// config and hooks must be unchanged since the run's integrity baseline
+/// (branch movement does not matter) unless
 /// `acknowledge_integrity` (the acknowledged state then becomes the
 /// baseline, also if the merge is refused afterwards), and
 /// `acknowledged_paths` must be exactly the current merge-review paths.
@@ -798,33 +858,69 @@ pub fn merge_run(
     acknowledge_integrity: bool,
 ) -> Result<WorkflowRun, ActionError> {
     let store = orch.store(project_root);
-    let base = orch.worktree_base();
-    let run = {
+    let mut rebaselined = None;
+    let merged = {
         let guard = store.lock();
-        let (mut run, info) = awaiting_merge(&store, root_task_id)?;
-        let (changes, now) = integrity_state(store.project_root(), &run, &info)?;
-        if !changes.is_empty() {
-            if !acknowledge_integrity {
-                return Err(ActionError::InvalidState(MERGE_INTEGRITY_CHANGED));
-            }
-            run.integrity_baseline = Some(now);
-            run = store.put_run(&guard, &run)?;
-        }
-        // Sorted and unique.
-        let current = integrity::changed_paths_matching_in(base, &info, MERGE_REVIEW_PATTERNS)?;
-        let mut acknowledged = acknowledged_paths.to_vec();
-        acknowledged.sort();
-        acknowledged.dedup();
-        if current != acknowledged {
-            return Err(ActionError::InvalidState(MERGE_REVIEW_CHANGED));
-        }
-        gitops::merge_into_base_in(base, store.project_root(), &info)?;
-        run.status = RunStatus::Merged;
-        store.put_run(&guard, &run)?
+        merge_locked(
+            orch,
+            &guard,
+            &store,
+            root_task_id,
+            acknowledged_paths,
+            acknowledge_integrity,
+            &mut rebaselined,
+        )
     };
-    emit(orch, &store, &[], Some(&run));
-    orch.kick(project_root);
-    Ok(run)
+    match merged {
+        Ok(run) => {
+            emit(orch, &store, &[], Some(&run));
+            orch.kick(project_root);
+            Ok(run)
+        }
+        Err(err) => {
+            // The acknowledged baseline was stored before the refusal.
+            if let Some(run) = rebaselined {
+                emit(orch, &store, &[], Some(&run));
+            }
+            Err(err)
+        }
+    }
+}
+
+/// The store and git work of [`merge_run`] under `guard`. Sets
+/// `rebaselined` to the run as stored when an acknowledged integrity
+/// baseline was saved.
+fn merge_locked(
+    orch: &Orchestrator,
+    guard: &ProjectGuard,
+    store: &WorkflowStore,
+    root_task_id: &str,
+    acknowledged_paths: &[String],
+    acknowledge_integrity: bool,
+    rebaselined: &mut Option<WorkflowRun>,
+) -> Result<WorkflowRun, ActionError> {
+    let base = orch.worktree_base();
+    let (mut run, info) = awaiting_merge(store, root_task_id)?;
+    let (changes, now) = integrity_state(store.project_root(), &run, &info)?;
+    if !changes.is_empty() {
+        if !acknowledge_integrity {
+            return Err(ActionError::InvalidState(MERGE_INTEGRITY_CHANGED));
+        }
+        run.integrity_baseline = Some(now);
+        run = store.put_run(guard, &run)?;
+        *rebaselined = Some(run.clone());
+    }
+    // Sorted and unique.
+    let current = integrity::changed_paths_matching_in(base, &info, MERGE_REVIEW_PATTERNS)?;
+    let mut acknowledged = acknowledged_paths.to_vec();
+    acknowledged.sort();
+    acknowledged.dedup();
+    if current != acknowledged {
+        return Err(ActionError::InvalidState(MERGE_REVIEW_CHANGED));
+    }
+    gitops::merge_into_base_in(base, store.project_root(), &info)?;
+    run.status = RunStatus::Merged;
+    Ok(store.put_run(guard, &run)?)
 }
 
 /// Removes a run's worktree and branch. Refused while a task of the run is
@@ -856,10 +952,9 @@ pub fn discard_run(
             gitops::discard_in(orch.worktree_base(), store.project_root(), &info)?;
             run.worktree = None;
         }
-        if run.status != RunStatus::Merged {
-            run.status = RunStatus::Discarded;
-        }
-        let run = store.put_run(&guard, &run)?;
+        // The open tasks are cancelled before the run is stored as
+        // Discarded, so no stored state has a discarded run with tasks
+        // still waiting to run.
         let mut cancelled = Vec::new();
         for task in tasks.iter().filter(|task| !is_finished(task.meta.status)) {
             let from = task.meta.status;
@@ -871,6 +966,10 @@ pub fn discard_run(
                 TaskStatus::Cancelled,
             )?);
         }
+        if run.status != RunStatus::Merged {
+            run.status = RunStatus::Discarded;
+        }
+        let run = store.put_run(&guard, &run)?;
         (cancelled, run)
     };
     emit(orch, &store, &cancelled, Some(&run));
@@ -914,7 +1013,11 @@ pub fn add_standard_workflow(
     let workflow = standard_workflow(name, provider);
     {
         let _guard = store.lock();
-        let mut workflows = store.load_workflows()?.workflows;
+        let list = store.load_workflows()?;
+        if !list.warnings.is_empty() {
+            return Err(ActionError::InvalidState(WORKFLOWS_HAVE_WARNINGS));
+        }
+        let mut workflows = list.workflows;
         workflows.push(workflow.clone());
         store.save_workflows(&WorkflowsFile {
             schema_version: SCHEMA_VERSION,
@@ -1119,9 +1222,9 @@ mod tests {
         task.meta.attention.as_ref().unwrap().code.clone()
     }
 
-    /// A repo fixture (with `.mdium/` excluded from git, as the user is
-    /// advised to do) with one enabled standard workflow, a fake runner, a
-    /// recording sink, and an orchestrator attached to the repo.
+    /// A repo fixture (`.mdium/` stays untracked, as in a user's repo
+    /// that does not ignore it) with one enabled standard workflow, a fake
+    /// runner, a recording sink, and an orchestrator attached to the repo.
     struct Env {
         fx: Fixture,
         store: WorkflowStore,
@@ -1134,7 +1237,6 @@ mod tests {
     impl Env {
         fn new() -> Self {
             let fx = Fixture::new();
-            write_file(fx.root(), ".git/info/exclude", ".mdium/\n");
             let (tx, waiting) = mpsc::channel();
             let runner = Arc::new(FakeRunner {
                 hold: AtomicBool::new(false),
@@ -1569,9 +1671,7 @@ mod tests {
         let root = env.root_task();
         let id = root.meta.id.clone();
         env.stage(&id, failed());
-        env.fx.write("user.txt", "user work\n");
-        env.fx.run(&["add", "user.txt"]);
-        env.fx.run(&["commit", "-m", "user commit"]);
+        env.fx.run(&["config", "core.fsmonitor", "false"]);
 
         let before = env.raw(&id);
         let opts = RetryOptions {
@@ -1820,20 +1920,20 @@ mod tests {
     }
 
     #[test]
-    fn merge_after_an_integrity_change_needs_acknowledgement() {
+    fn merge_after_a_git_config_change_needs_acknowledgement() {
         let env = Env::new();
         let (root, _info) = env.awaiting_merge();
         let id = root.meta.id.clone();
-        env.fx.write("user.txt", "user work\n");
-        env.fx.run(&["add", "user.txt"]);
-        env.fx.run(&["commit", "-m", "user commit"]);
+        env.fx.run(&["config", "core.fsmonitor", "false"]);
 
         // No git command runs in the worktree before the change is accepted.
         let preview = merge_preview(&env.orch, env.root(), &id).unwrap();
-        assert!(preview
+        let codes: Vec<&str> = preview
             .integrity_changes
             .iter()
-            .any(|c| c.code == "INTEGRITY_BASE_BRANCH_MOVED"));
+            .map(|c| c.code.as_str())
+            .collect();
+        assert_eq!(codes, ["INTEGRITY_GIT_CONFIG_CHANGED"]);
         assert!(preview.commits.is_empty());
         assert!(preview.diff.is_empty());
         assert!(preview.review_paths.is_empty());
@@ -1849,7 +1949,51 @@ mod tests {
         );
         assert_eq!(env.run(&id), before);
 
-        let merged = merge_run(&env.orch, env.root(), &id, &acknowledged, true).unwrap();
+        // Acknowledged with the (unseen) paths wrong: refused, but the
+        // acknowledged state is the new baseline and is reported.
+        let events = env.sink.events().len();
+        assert_eq!(
+            code(merge_run(&env.orch, env.root(), &id, &[], true)),
+            MERGE_REVIEW_CHANGED
+        );
+        let run = env.run(&id);
+        assert_eq!(run.status, RunStatus::AwaitingMerge);
+        assert_ne!(run.integrity_baseline, before.integrity_baseline);
+        assert_eq!(
+            env.sink.events()[events..],
+            [format!("run {id} AwaitingMerge")]
+        );
+
+        // The next preview shows everything; the merge needs no more
+        // acknowledgement.
+        let preview = merge_preview(&env.orch, env.root(), &id).unwrap();
+        assert!(preview.integrity_changes.is_empty());
+        assert_eq!(preview.review_paths, acknowledged);
+        let merged = merge_run(&env.orch, env.root(), &id, &acknowledged, false).unwrap();
+        assert_eq!(merged.status, RunStatus::Merged);
+        env.wait_idle();
+    }
+
+    #[test]
+    fn a_user_commit_on_main_neither_blocks_nor_hides_the_merge() {
+        let env = Env::new();
+        let (root, _info) = env.awaiting_merge();
+        let id = root.meta.id.clone();
+        env.fx.write("user.txt", "user work\n");
+        env.fx.run(&["add", "user.txt"]);
+        env.fx.run(&["commit", "-m", "user commit"]);
+        // Untracked user files do not block the merge either.
+        env.fx.write("foo.txt", "scratch\n");
+
+        let preview = merge_preview(&env.orch, env.root(), &id).unwrap();
+        assert!(preview.integrity_changes.is_empty());
+        assert_eq!(
+            preview.review_paths,
+            [".github/workflows/ci.yml", "AGENTS.md"]
+        );
+        assert!(preview.diff.contains("ci.yml"));
+
+        let merged = merge_run(&env.orch, env.root(), &id, &preview.review_paths, false).unwrap();
         assert_eq!(merged.status, RunStatus::Merged);
         let log = env.fx.run(&["log", "--format=%s", "main"]);
         assert!(log.contains("user commit"));
@@ -1859,6 +2003,85 @@ mod tests {
                 .trim(),
             "1"
         );
+        assert!(env.root().join("foo.txt").exists());
+        env.wait_idle();
+    }
+
+    /// Saves the workflow with `designDocPath` set.
+    fn with_design_doc(env: &Env) {
+        let mut workflow = env.workflow();
+        workflow.design_doc_path = Some("docs/design.md".to_string());
+        env.store
+            .save_workflows(&WorkflowsFile {
+                schema_version: 1,
+                workflows: vec![workflow],
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn mark_complete_of_a_design_task_commits_the_design_doc() {
+        let env = Env::new();
+        with_design_doc(&env);
+        let root = env.root_task();
+        let id = root.meta.id.clone();
+        env.stage(
+            &id,
+            AttemptEnd::Completed {
+                final_response: reported("stuck", "the design body"),
+            },
+        );
+
+        mark_complete(&env.orch, env.root(), &id).unwrap();
+        let info = env.run(&id).worktree.unwrap();
+        let wt = Path::new(&info.path);
+        assert_eq!(
+            std::fs::read_to_string(wt.join("docs/design.md")).unwrap(),
+            "the design body"
+        );
+        let log = gitops::git(wt, &["log", "--format=%s", "-1", "--", "docs/design.md"]).unwrap();
+        assert_eq!(log.trim(), "docs: design for Task");
+        assert_eq!(env.tasks().len(), 2);
+        env.wait_idle();
+    }
+
+    #[test]
+    fn mark_complete_of_a_design_task_refuses_after_a_hooks_change() {
+        let env = Env::new();
+        with_design_doc(&env);
+        let root = env.root_task();
+        let id = root.meta.id.clone();
+        env.stage(&id, failed());
+        write_file(env.root(), ".git/hooks/pre-commit", "#!/bin/sh\n");
+
+        let before = env.raw(&id);
+        assert_eq!(
+            code(mark_complete(&env.orch, env.root(), &id)),
+            WORKFLOW_INTEGRITY_CHANGED
+        );
+        assert_eq!(env.raw(&id), before);
+        assert_eq!(env.tasks().len(), 1);
+        let info = env.run(&id).worktree.unwrap();
+        assert!(!Path::new(&info.path).join("docs/design.md").exists());
+    }
+
+    #[test]
+    fn add_standard_workflow_refuses_to_drop_invalid_entries() {
+        let env = Env::new();
+        let path = MdiumPaths::new(env.store.project_root()).workflows_file();
+        let text = r#"{"schemaVersion":1,"workflows":[{"id":"broken"}]}"#;
+        std::fs::write(&path, text).unwrap();
+
+        assert_eq!(
+            code(add_standard_workflow(
+                &env.orch,
+                env.root(),
+                "Mine",
+                Provider::Claude
+            )),
+            WORKFLOWS_HAVE_WARNINGS
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
     }
 
     #[test]
