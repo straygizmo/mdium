@@ -216,6 +216,19 @@ describe("TaskDetailModal", () => {
     return container.querySelector<HTMLElement>(`[data-section="${name}"]`);
   }
 
+  it("shows the merge section only for runs with merge or discard operations", async () => {
+    await render();
+    expect(section("merge")).toBeNull();
+
+    api.taskDetail.mockResolvedValue(detail({ run: runOf({ status: "awaiting_merge" }) }));
+    await act(async () =>
+      useWorkflowStore.setState({
+        projects: { [ROOT]: project([rootTask, current], [runOf({ status: "awaiting_merge", updatedAt: "2026-09-06T00:00:00Z" })]) },
+      }),
+    );
+    expect(section("run")!.querySelector('[data-section="merge"] button[data-action="preview"]')).not.toBeNull();
+  });
+
   it("renders nothing without a selected task", async () => {
     useWorkflowStore.setState({ selectedTaskId: null });
     await render();

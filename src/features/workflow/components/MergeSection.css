@@ -1,0 +1,143 @@
+.workflow-merge {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
+.workflow-merge__heading,
+.workflow-merge__subheading {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.workflow-merge__subheading {
+  margin-bottom: 4px;
+  font-weight: 500;
+}
+
+.workflow-merge__done {
+  margin: 0;
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.workflow-merge__facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px 12px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.workflow-merge__facts dt {
+  color: var(--text-secondary);
+}
+
+.workflow-merge__facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.workflow-merge__block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.workflow-merge__help,
+.workflow-merge__muted {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.workflow-merge__list {
+  max-height: 160px;
+  margin: 0;
+  padding-left: 18px;
+  overflow-y: auto;
+  font-size: 12px;
+}
+
+.workflow-merge__hash,
+.workflow-merge__path {
+  font-family: "Consolas", "Courier New", monospace;
+  overflow-wrap: anywhere;
+}
+
+.workflow-merge__toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.workflow-merge__toggle input[data-switch] {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex-shrink: 0;
+  width: 26px;
+  height: 14px;
+  margin: 0;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.workflow-merge__toggle input[data-switch]::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  margin-top: -5px;
+  left: 1px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  transition: transform 0.2s, background 0.2s;
+}
+
+.workflow-merge__toggle input[data-switch]:checked::after {
+  transform: translateX(12px);
+}
+
+.workflow-merge__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.workflow-merge__btn {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.workflow-merge__btn:hover:not(:disabled) {
+  border-color: var(--border-hover);
+}
+
+.workflow-merge__btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.workflow-merge__btn--primary {
+  border-color: var(--primary);
+}
+
+.workflow-merge__btn--danger {
+  color: var(--accent-red);
+}

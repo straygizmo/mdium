@@ -6,6 +6,7 @@ import { trapTab, useDialogFocus } from "../lib/dialog-focus";
 import { formatAttention, formatCommandError } from "../lib/format";
 import { workflowApi } from "../lib/workflow-api";
 import { useWorkflowStore } from "../workflow-store";
+import { MergeSection } from "./MergeSection";
 import { TaskActions } from "./TaskActions";
 import { statusBackground } from "./TaskCard";
 import "./TaskDetailModal.css";
@@ -348,7 +349,7 @@ function DetailSections({ detail, tasks, formatDate }: DetailSectionsProps) {
               </>
             )}
           </dl>
-          {/* Mount point of the merge section for runs awaiting a merge (added separately). */}
+          <MergeSection run={run} />
         </section>
       )}
 
