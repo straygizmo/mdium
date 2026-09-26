@@ -228,11 +228,22 @@ interface Stage<R extends "design" | "implement" | "review"> {
 
 表にない遷移は拒否する。状態変化のたびに状態履歴へ追記し、`workflow://task-changed` イベントを送る。
 
+orchestrator が UI へ送るイベントは次の 3 種類とする（ペイロードは camelCase。`projectRoot` は正規化済みのプロジェクトルートで、UI 側も正規化してから比較する）。
+
+| イベント | ペイロード | 契機 |
+|---|---|---|
+| `workflow://task-changed` | `projectRoot`、`taskId`、`rootId`、`status` | タスクの状態変化 |
+| `workflow://run-changed` | `projectRoot`、`rootTaskId`、`status` | フロー実行の状態変化（完了・取込み待ち、マージ、破棄など） |
+| `workflow://progress` | `projectRoot`、`taskId`、`attemptId`、`kind`、`text` | 試行中の進捗メッセージ（試行の停止後は送らない） |
+
 ### 3.5 orchestrator
 
 - 取得: 有効なワークフローごとに、同時実行中のフロー実行数が `maxConcurrentRuns` 未満なら inbox のタスクを古い順に取得する。排他はプロセス内のミューテックスで行う。
+  - 同時実行数は進行中（Active）のフロー実行の数で数える。上限が効くのは新しいフロー実行の開始（ルートタスクの取得）だけで、既存のフロー実行の後続タスクは上限で待たされない。
+  - 要対応（attention）・承認待ち（awaiting_user）のタスクを抱えるフロー実行も進行中であり、枠を占有する（UI ではこの占有が分かるように表示する）。
 - 実行記録: 試行開始時、フロー実行に `{ attemptId, runnerPid, startedAt }` を記録する。
-- 回復: アプリのプロセス起動時に一度だけ、running のタスクのうち実行記録のランナーが存在しないものを `attention`（理由: 中断）にする。WebView のリロードでは回復処理を行わない。
+- 回復: アプリのプロセス起動後、各プロジェクトへ最初に接続したときに一度だけ、running のタスクをすべて `attention`（理由: 中断）にし、終了時刻のない試行記録を「中断」として閉じる。試行はアプリのプロセスを越えて継続しないため、ランナーの生存確認は行わない。WebView のリロードや同じプロジェクトへの再接続では回復処理を行わない。自動の再実行もしない。
+- 遷移予定の回復: 最初の接続時と各取得処理のたびに、遷移予定（3.10）が残っているフロー実行について遷移を冪等に再開する。親タスクが既に保留・中止になっている場合は遷移予定を破棄する。
 - キャンセル: on_hold / cancelled への遷移時、該当セッションを `cancel` し、ランナー側でプロセスツリーを終了する。成果は worktree に残る。
 - タイムアウト: 工程の `timeoutMinutes` を超えたらキャンセルし `attention`（理由: タイムアウト）にする。
 - アプリ終了時は全セッションをキャンセルする。running のタスクは次回起動時の回復で `attention` になる。
@@ -258,6 +269,8 @@ interface Stage<R extends "design" | "implement" | "review"> {
 実装の本実行は利用者の承認なしで全権限を与えてよい。その代わり、次の多層の安全ガードを必ず適用する。ガードは危険操作の検出を完全には保証しない（難読化されたコマンドやネットワーク送信は網羅できない）ため、ワークフローを初めて有効にするときにこの限界を説明し、利用者の確認を得る。
 
 1. 入力検査: 工程の開始前に、エージェントへ渡す外部由来テキスト（タスク本文、Issue 本文・コメント、テキスト系の添付）を検査する。既知のインジェクション表現（以前の指示の無視、システムプロンプトの上書き、資格情報や環境変数の送信依頼など）、不可視文字・双方向制御文字、長大なエンコード済みペイロードを検出した場合は実行せず `attention`（理由: 入力に危険な指示の疑い、該当箇所を表示）とする。利用者は内容を確認して「このまま続行」できる。
+   - 検査対象: ルートタスクはタイトル・本文・利用者入力（回答・修正依頼）を、後続タスクは自身の本文と利用者入力のみを検査する（ルートの本文は開始時に検査済みのため）。ルートタスクの検査は worktree の作成前に行い、検出時は worktree を作らない。
+   - 「このまま続行」は検査対象テキストのハッシュとしてタスクに記録する。以降の試行では、検査対象テキストがこのハッシュと一致する間は検出を再度報告しない。テキストが変われば改めて検査する。
 2. 実行時ガード: 2.1 のガードフックで、次の操作を拒否リストとして判定する。
    - `git push`、リモートの追加・変更、`gh` / `glab` による外部変更
    - worktree 外への書き込み・削除
@@ -268,9 +281,15 @@ interface Stage<R extends "design" | "implement" | "review"> {
    - `git config` による永続設定（コマンドを保持するキー、`core.hooksPath`、`include.path`、`alias.*`、`remote.*` 等）の書き込み。worktree は元のリポジトリと `.git/config` を共有するため。
    Copilot / opencode / Claude は実行前に拒否する。Codex は実行開始イベントで検出した時点でターンを中止する。いずれも `attention`（理由: 危険操作を検出、内容を表示）とする。
 3. 環境による封じ込め: エージェントの子プロセス環境（2.1 の `env`）で、`GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_n` / `GIT_CONFIG_VALUE_n` により `protocol.allow=never` を既定とし `protocol.file.allow=always` のみ許可したうえで、`protocol.https.allow` / `protocol.http.allow` / `protocol.ssh.allow` / `protocol.git.allow` / `protocol.ext.allow` をそれぞれ `never` にする（環境変数由来の設定はリポジトリローカルの `protocol.<name>.allow` より優先されるため、リポジトリ設定で再許可できない）。あわせて `GIT_TERMINAL_PROMPT=0`・`GCM_INTERACTIVE=never` とし、`GH_TOKEN` / `GITHUB_TOKEN` / `GITLAB_TOKEN` / `GH_ENTERPRISE_TOKEN` / `GITHUB_ENTERPRISE_TOKEN` / `GITLAB_ACCESS_TOKEN` を無効値に、`GH_CONFIG_DIR` / `GLAB_CONFIG_DIR` を空ディレクトリにする。MDium 自身の Issue 連携は Rust から通常の環境で行うため影響を受けない。
+   - この環境はエージェントの子プロセスだけでなく、ワークフロー用ランナーのプロセス全体に適用する（ランナーをこの環境で起動するため、ランナーが起動する opencode の専用サーバも含めて同じ封じ込めを受ける）。
+   - opencode の専用サーバは非表示ウィンドウで起動し、起動ごとに生成したランダムなパスワード（`OPENCODE_SERVER_PASSWORD`、HTTP Basic 認証）を必須とする。ポートは既定値に頼らず空きポートを明示指定する（MDium の opencode パネルが使うサーバと衝突させないため）。
+   - 読み取り専用の Claude セッションでは WebSearch も拒否する（ネットワークアクセスとして扱う）。
 4. 事後検査: 工程の終了後、利用者のリポジトリのブランチ位置と HEAD、base ブランチ、共有される `.git/config` と hooks（`core.hooksPath` を含む）が工程開始前から変化していないこと、worktree の管理ディレクトリ（`<common-dir>/worktrees/<name>`）の `config.worktree`、および worktree 内でエージェント設定ファイル（`.claude/`・`.mdium/` 等）が変更されていないことを確認し、変化していれば `attention`（理由: 作業ツリー外への変更を検出）とする。利用者が並行して編集しうる作業ツリーのファイル内容は検査対象にしない。MDium が worktree 内で git を実行する前には、`<worktree>/.git` が通常ファイルで、その `gitdir:` が利用者リポジトリの `<common-dir>/worktrees/<name>` を指していることを確認し（違えば `GIT_WORKTREE_LINK_TAMPERED`）、読み取り系の git は `-c core.fsmonitor=false` 付きで実行する。取込み（ローカルマージ）の前には、`.github/`・`AGENTS.md`・`CLAUDE.md`・`.husky/`・`.githooks/`・`.devcontainer/` を含む設定系ファイルの変更一覧を示し、利用者の明示的な確認を求める。
+   - 比較の基準: 試行ごとに、試行開始直前のスナップショットと試行後を比較する。基準はフロー実行開始時ではなく試行ごとに取り直すため、利用者が工程の合間に base ブランチへコミットしたりブランチを切り替えたりしても次の試行を妨げない。試行中に変化した場合は `attention` となり、再試行すると新しい基準を取って実行し直す。
+   - 取込み時の判定: 取込み（差分のプレビュー・ローカルマージ）の前には、共有される git 設定と hooks の変化のみ利用者の確認を要する。ブランチ位置や HEAD の移動は利用者の通常の作業であり対象外とする。確認が済むまで MDium は worktree 内で git を実行しない。
+   - エージェント設定の確認: worktree 内のエージェント設定ファイルの変更（`ATTENTION_AGENT_CONFIG_CHANGED`）は、利用者が内容を確認したうえで再試行時に「確認済み」とできる。確認済みの記録はファイルのパスと内容ハッシュの組でフロー実行に保存し、同じ内容である限り以降の試行で再び報告しない。内容が変われば再度報告する。設定ディレクトリがファイルやシンボリックリンクに置き換えられた場合も変更として検出する。
 
-補足（ガードの限界）: Codex には実行前フックがないため、ガードはコマンド開始後に検出してターンを中止する（最初の操作自体は防げない場合がある）。Claude は SDK の PreToolUse フックで全ツール呼び出しを検査し、ガード付き・読み取り専用のセッションでは利用者・プロジェクト設定のフックと許可ルールを無視する。
+補足（ガードの限界）: Codex には実行前フックがないため、ガードはコマンド開始後に検出してターンを中止する（最初の操作自体は防げない場合がある）。Claude は SDK の PreToolUse フックで全ツール呼び出しを検査し、ガード付き・読み取り専用のセッションでは利用者・プロジェクト設定のフックと許可ルールを無視する。ただし、組織（Enterprise）のポリシーとして配布された Claude の管理設定（managed settings）のフックと許可ルールは引き続き適用されうる。これは MDium から無効化できないため、管理設定がガードと異なる判定をする可能性がある。opencode もシステムの管理設定と利用者のグローバル設定は MDium から上書きできない。
 
 ### 3.8 工程の入出力
 
@@ -281,6 +300,8 @@ interface Stage<R extends "design" | "implement" | "review"> {
   - 主に Issue トラッカーを使わない運用で、設計の記録をリポジトリに残すための設定である（Issue 連携の有無とは独立して設定できる）。
   - ワークフロー編集ダイアログで保存を有効にすると、初期値として `docs/designs/{date}-{slug}-design.md` が入る。`{date}` はフロー実行開始日（YYYY-MM-DD）、`{slug}` はルートタスクのタイトルから生成する。
   - パスはリポジトリ相対とし、リポジトリ外・`.git/`・`.mdium/` を指すものは保存時に検証エラーとする。
+  - 利用者が設計タスクを手動で完了扱いにした場合も、整合性チェックの後に同じく設計書を保存・コミットする。整合性に変化がある場合や書き出し・コミットに失敗した場合は操作エラー（`WORKFLOW_INTEGRITY_CHANGED` / `WORKFLOW_DESIGN_DOC_FAILED`）として理由を表示し、タスクは `attention` のまま次工程へ進まない。
+- レビュー工程には、差分に加えて、そのフロー実行で最後に完了した設計タスクの成果物（設計書）を入力として渡す（再設計があった場合は最新のもの）。
 
 ### 3.9 承認（実装工程）
 
@@ -303,6 +324,8 @@ interface Stage<R extends "design" | "implement" | "review"> {
 
 - ブランチ名、base、コミット一覧、差分（既存の git 差分ビューアを再利用）
 - 「ローカルにマージ」: 利用者の作業ツリーで base ブランチを checkout 済みであることを確認し、`git merge --no-ff <branch>` を実行する。作業ツリーに未コミット変更がある、base 以外のブランチにいる、競合が発生した場合はマージせず（競合時は `merge --abort`）理由を表示する。成功時は Issue をクローズし（パート4）、worktree の削除を提案する。
+  - 未コミット変更の判定は追跡ファイルのみを対象とし、未追跡ファイルはマージを妨げない。
+  - マージ前に 3.7-4 の取込み時の判定（git 設定・hooks の変化）と設定系ファイルの変更一覧の確認を行う。
 - 「破棄」: 確認のうえ worktree とブランチを削除する。
 - push・PR 作成は行わない。
 
@@ -310,6 +333,7 @@ interface Stage<R extends "design" | "implement" | "review"> {
 
 - アクティビティバーに「ワークフロー」を追加する。選択時、左パネルにワークフロー一覧・定期 JOB 一覧・フィルタ、メイン領域にワークスペースを表示する。
 - ワークスペース: カンバン表示（状態別の列、件数バッジ）とマトリクス表示（工程 × 状態）を切り替える。カードに状態別背景色、更新日時、要対応理由を表示する。完了タスクのアーカイブ・削除ができる。
+- 表示の更新は 3.4 のイベント（`workflow://task-changed` / `workflow://run-changed` / `workflow://progress`）で行い、ポーリングしない。
 - タスク詳細: アプリ内モーダル。本文、状態履歴、LLM 作業状況（最新の進捗メッセージ）、フロー実行情報（再入回数、直近遷移を工程名で表示）、ブランチと差分、状態に応じた操作ボタン。
 - ワークフロー編集ダイアログ: 3.3 の各項目を編集。保存時に権限・プロバイダー可否を検証し、エラーをダイアログ内に表示する。
 - テーマ: タスク状態ごとの背景色トークン（`taskStatus*Background`）を全テーマプリセットに追加する。
@@ -319,7 +343,31 @@ interface Stage<R extends "design" | "implement" | "review"> {
 ### 3.13 エラー処理
 
 - UI からの操作失敗は、該当ダイアログまたはトーストで理由を表示する（握りつぶさない）。
-- orchestrator 内部の失敗は該当タスクを `attention` にし、理由コードを記録する。同じ失敗を短周期で再試行しない。
+- orchestrator 内部の失敗は該当タスクを `attention` にし、理由コードを記録する。同じ失敗を短周期で再試行しない（自動の再試行は行わず、再試行は利用者操作のみ）。
+- UI 操作のコマンドの失敗は `{ code, message }` で返す。`message` はログ用の詳細であり、表示文は `code` から i18n で生成する。
+
+要対応理由コード（パラメータ）:
+
+| コード | パラメータ | 意味 |
+|---|---|---|
+| `ATTENTION_INTERRUPTED` | — | 実行中にアプリが終了した（再起動後の回復で設定） |
+| `ATTENTION_TIMEOUT` | — | `timeoutMinutes` を超えた |
+| `ATTENTION_ATTEMPT_FAILED` | `code`、`message` | 試行の失敗（下記の失敗コード） |
+| `ATTENTION_GUARD_BLOCKED` | `rule`、`summary` | 実行時ガードが危険操作を検出 |
+| `ATTENTION_SCREENING_FLAGGED` | `items`（`kind`、`line`、`excerpt`） | 入力検査で危険な指示の疑いを検出 |
+| `ATTENTION_INTEGRITY_CHANGED` | `items`（`code`、`detail`） | 事後検査で作業ツリー外への変更を検出 |
+| `ATTENTION_INTEGRITY_CHECK_FAILED` | `code` | 事後検査自体が失敗（安全側に倒して要対応） |
+| `ATTENTION_AGENT_CONFIG_CHANGED` | `items`（パス） | worktree 内のエージェント設定ファイルの未確認の変更 |
+| `ATTENTION_OUTPUT_INVALID` | `code` | 最終応答が出力契約に従っていない |
+| `ATTENTION_STAGE_REPORTED` | `reason` | 工程自身が要対応を報告（レビュー以外） |
+| `ATTENTION_REENTRY_LIMIT` | `count` | 再入上限に達した |
+| `ATTENTION_WORKTREE_FAILED` | `code` | worktree の作成・差分取得に失敗 |
+| `ATTENTION_DESIGN_DOC_FAILED` | `code` | 設計書の保存・コミットに失敗 |
+| `ATTENTION_NOT_A_REPO` | — | プロジェクトが git リポジトリでない |
+| `ATTENTION_WORKFLOW_MISSING` | `workflowId` | ワークフローが存在しない・無効・アーカイブ済み |
+
+- `ATTENTION_INTEGRITY_CHANGED` の項目コード: `INTEGRITY_BRANCH_SWITCHED`、`INTEGRITY_HEAD_MOVED`、`INTEGRITY_BASE_BRANCH_MOVED`、`INTEGRITY_GIT_CONFIG_CHANGED`、`INTEGRITY_HOOKS_CHANGED`、`INTEGRITY_HOOKS_PATH_CHANGED`、`INTEGRITY_BASELINE_MISSING`、`INTEGRITY_IO_FAILED`。
+- `ATTENTION_ATTEMPT_FAILED` の失敗コード（`code`）には、ランナー由来のエラーコードのほか、MDium 側で付与する `RUNNER_EXITED`（ランナーの異常終了）、`AGENT_RUNNER_MISSING`（同梱のランナーが見つからない）、`WORKFLOW_ATTEMPT_PANICKED`（試行処理の内部異常）、`WORKFLOW_THREAD_SPAWN_FAILED`（試行スレッドを起動できない）がある。整合性チェック中の内部異常は `ATTENTION_INTEGRITY_CHECK_FAILED`（`code`: `WORKFLOW_ATTEMPT_PANICKED`）とする。
 
 ---
 
