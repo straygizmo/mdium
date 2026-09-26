@@ -21,7 +21,7 @@ import {
   type WorkflowRun,
   type WorkflowsFileInput,
 } from "@/shared/types/workflow";
-import { isCommandError } from "./format";
+import { isCommandError } from "./errors";
 
 /**
  * Converts a rejection value into a `CommandError` when it is one (an object

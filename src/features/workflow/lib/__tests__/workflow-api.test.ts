@@ -1,5 +1,3 @@
-// @vitest-environment happy-dom
-// happy-dom: the client reuses format.ts, which initializes i18n (localStorage).
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.hoisted(() => vi.fn());
@@ -12,6 +10,9 @@ import {
   WORKFLOW_PROGRESS_EVENT,
   WORKFLOW_RUN_CHANGED_EVENT,
   WORKFLOW_TASK_CHANGED_EVENT,
+  type ProgressEvent,
+  type RunChangedEvent,
+  type TaskChangedEvent,
 } from "@/shared/types/workflow";
 
 const ROOT = "C:\\proj";
@@ -156,9 +157,9 @@ describe("subscribeWorkflowEvents", () => {
       [WORKFLOW_TASK_CHANGED_EVENT, WORKFLOW_RUN_CHANGED_EVENT, WORKFLOW_PROGRESS_EVENT].sort(),
     );
 
-    const task = { projectRoot: ROOT, taskId: "t1", rootId: "t1", status: "running" };
-    const run = { projectRoot: ROOT, rootTaskId: "t1", status: "active" };
-    const progress = { projectRoot: ROOT, taskId: "t1", attemptId: "a1", kind: "message", text: "hi" };
+    const task: TaskChangedEvent = { projectRoot: ROOT, taskId: "t1", rootId: "t1", status: "running" };
+    const run: RunChangedEvent = { projectRoot: ROOT, rootTaskId: "t1", status: "active" };
+    const progress: ProgressEvent = { projectRoot: ROOT, taskId: "t1", attemptId: "a1", kind: "message", text: "hi" };
     handlers.get(WORKFLOW_TASK_CHANGED_EVENT)?.({ payload: task });
     handlers.get(WORKFLOW_RUN_CHANGED_EVENT)?.({ payload: run });
     handlers.get(WORKFLOW_PROGRESS_EVENT)?.({ payload: progress });

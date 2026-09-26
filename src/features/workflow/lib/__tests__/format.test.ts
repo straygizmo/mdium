@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import i18n from "@/shared/i18n";
-import { formatAttention, formatCode, formatCommandError, isCommandError, sameRoot } from "../format";
+import { formatAttention, formatCode, formatCommandError } from "../format";
 
 const ATTENTION_CODES = [
   "ATTENTION_INTERRUPTED",
@@ -102,6 +102,49 @@ describe("workflow format", () => {
         params: { rule: "git-remote", summary: "git push" },
       });
       expect(result.text).toContain("git push");
+      expect(result.text).toContain(i18n.t("workflow:guardRule.git-remote"));
+      expect(result.text).not.toContain("git-remote");
+    });
+
+    it("shows an unknown guard rule raw next to the unknown-rule label", () => {
+      const result = formatAttention({
+        code: "ATTENTION_GUARD_BLOCKED",
+        params: { rule: "future-rule", summary: "" },
+      });
+      expect(result.text).toContain(`${i18n.t("workflow:guardRule.unknown")} (future-rule)`);
+    });
+
+    it("localizes the failure code inside an attempt failure", () => {
+      const result = formatAttention({
+        code: "ATTENTION_ATTEMPT_FAILED",
+        params: { code: "RUNNER_EXITED", message: "exit 3" },
+      });
+      expect(result.text).toContain(formatCode("RUNNER_EXITED"));
+      expect(result.text).toContain("exit 3");
+      expect(result.text).not.toContain("RUNNER_EXITED");
+      expect(result.text).not.toContain("{{");
+    });
+
+    it("never shows a placeholder for an omitted param", () => {
+      const result = formatAttention({ code: "ATTENTION_ATTEMPT_FAILED", params: { code: "RUNNER_EXITED" } });
+      expect(result.text).not.toContain("{{");
+      expect(result.text).not.toContain("message");
+      expect(formatCode("ATTENTION_REENTRY_LIMIT")).not.toContain("{{");
+    });
+
+    it("shows an unknown code inside an integrity item", () => {
+      const items = JSON.stringify([{ code: "INTEGRITY_FUTURE_CHECK", detail: "x" }]);
+      const result = formatAttention({ code: "ATTENTION_INTEGRITY_CHANGED", params: { items } });
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0]).toContain("INTEGRITY_FUTURE_CHECK");
+      expect(result.items[0]).toContain(": x");
+      expect(result.items[0]).not.toContain("workflow:codes");
+    });
+
+    it("falls back to JSON for an unknown item shape", () => {
+      const items = JSON.stringify([{ path: "a.txt" }, 7]);
+      const result = formatAttention({ code: "ATTENTION_AGENT_CONFIG_CHANGED", params: { items } });
+      expect(result.items).toEqual(['{"path":"a.txt"}', "7"]);
     });
   });
 
@@ -121,34 +164,6 @@ describe("workflow format", () => {
       expect(formatCommandError(new Error("boom"))).toBe("boom");
       expect(formatCommandError("plain")).toBe("plain");
       expect(formatCommandError(42)).toBe("42");
-    });
-  });
-
-  describe("isCommandError", () => {
-    it("accepts objects with string code and message", () => {
-      expect(isCommandError({ code: "X", message: "" })).toBe(true);
-      expect(isCommandError({ code: "X" })).toBe(false);
-      expect(isCommandError(new Error("x"))).toBe(false);
-      expect(isCommandError(null)).toBe(false);
-      expect(isCommandError("X")).toBe(false);
-    });
-  });
-
-  describe("sameRoot", () => {
-    it("matches identical roots", () => {
-      expect(sameRoot("C:/repo", "C:/repo")).toBe(true);
-      expect(sameRoot("/a/b", "/a/c")).toBe(false);
-    });
-
-    it("compares case-insensitively only on Windows", () => {
-      try {
-        vi.stubGlobal("navigator", { userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" });
-        expect(sameRoot("C:/Repo", "c:/repo")).toBe(true);
-        vi.stubGlobal("navigator", { userAgent: "Mozilla/5.0 (X11; Linux x86_64)" });
-        expect(sameRoot("/home/Repo", "/home/repo")).toBe(false);
-      } finally {
-        vi.unstubAllGlobals();
-      }
     });
   });
 });
