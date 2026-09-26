@@ -97,6 +97,21 @@ impl Inner {
         }
     }
 
+    /// Called when the dispatch thread of project `key` panicked. Clears
+    /// `dispatching`; if a request arrived meanwhile (and no shutdown),
+    /// consumes it and sets `dispatching` again. Returns true when the
+    /// caller must start a new dispatch thread.
+    fn abort_pass(&mut self, key: &Path) -> bool {
+        let shut_down = self.shut_down;
+        let Some(project) = self.projects.get_mut(key) else {
+            return false;
+        };
+        let respawn = project.dirty && !shut_down;
+        project.dirty = false;
+        project.dispatching = respawn;
+        respawn
+    }
+
     /// Called by the dispatch thread of project `key` after a pass. Returns
     /// true when another pass was requested meanwhile (consuming that
     /// request); otherwise clears `dispatching` in this same critical
@@ -313,12 +328,23 @@ impl Orchestrator {
 
     /// Runs dispatch passes until no further pass was requested.
     fn dispatch_loop(self: Arc<Self>, key: PathBuf) {
-        // Clears the flag if a pass panics, so later kicks still work.
-        struct Unwind<'a>(&'a Orchestrator, &'a Path);
+        // If a pass panics: clear the flag so later kicks still work, and
+        // honour a request that arrived during the pass with one new
+        // dispatch thread (one re-spawn per panic, so no tight loop).
+        struct Unwind<'a>(&'a Arc<Orchestrator>, &'a Path);
         impl Drop for Unwind<'_> {
             fn drop(&mut self) {
-                if std::thread::panicking() {
-                    self.0.end_dispatch(self.1);
+                if !std::thread::panicking() {
+                    return;
+                }
+                let respawn = {
+                    let mut inner = self.0.inner();
+                    let respawn = inner.abort_pass(self.1);
+                    self.0.idle.notify_all();
+                    respawn
+                };
+                if respawn {
+                    self.0.spawn_dispatch(self.1.to_path_buf());
                 }
             }
         }
@@ -368,6 +394,8 @@ impl Orchestrator {
                     return;
                 }
             };
+            // Counted once per pass; runs started below are added.
+            let mut active_runs = active_run_counts(&store);
             // `list_tasks` is sorted by creation time, oldest first.
             for task in tasks
                 .iter()
@@ -385,7 +413,8 @@ impl Orchestrator {
                         continue;
                     }
                 }
-                if !within_run_limit(&store, &workflows, task) {
+                let slot = run_slot(&store, &workflows, task, active_runs.as_ref());
+                if slot == RunSlot::Full {
                     continue;
                 }
                 let begun = begin_attempt(
@@ -411,6 +440,11 @@ impl Orchestrator {
                                     cancel: cancel.clone(),
                                 },
                             );
+                        }
+                        if let (RunSlot::Free(workflow_id), Some(counts)) =
+                            (slot, active_runs.as_mut())
+                        {
+                            *counts.entry(workflow_id).or_default() += 1;
                         }
                         self.emit_task(&store, &task.meta.id);
                         self.sink.run_changed(root, &planned.run);
@@ -479,12 +513,10 @@ impl Orchestrator {
             checks::baseline(&planned.repo_root, &planned.run)
         }));
         let input = match baseline {
+            // No session was started; the missing baseline fails closed.
             Err(payload) => FinishInput {
                 end: panicked(payload),
-                check: CheckResult {
-                    after: None,
-                    reason: None,
-                },
+                check: panicked_check(),
             },
             // No session is started without a baseline.
             Ok(Err(reason)) => FinishInput {
@@ -507,11 +539,18 @@ impl Orchestrator {
                 }))
                 .unwrap_or_else(|payload| {
                     // `run_attempt` did not get to close the session.
-                    if let Err(err) = self.runner.close_session(&req.session_id) {
-                        eprintln!(
+                    let closed = catch_unwind(AssertUnwindSafe(|| {
+                        self.runner.close_session(&req.session_id)
+                    }));
+                    match closed {
+                        Ok(Ok(())) => {}
+                        Ok(Err(err)) => eprintln!(
                             "[workflow] failed to close session {}: {err}",
                             req.session_id
-                        );
+                        ),
+                        Err(_) => {
+                            eprintln!("[workflow] closing session {} panicked", req.session_id)
+                        }
                     }
                     panicked(payload)
                 });
@@ -525,13 +564,7 @@ impl Orchestrator {
                         &before,
                     )
                 }))
-                .unwrap_or_else(|_| CheckResult {
-                    after: None,
-                    reason: Some(to_attention(
-                        "ATTENTION_INTEGRITY_CHECK_FAILED",
-                        [("code", WORKFLOW_ATTEMPT_PANICKED)],
-                    )),
-                });
+                .unwrap_or_else(|_| panicked_check());
                 FinishInput { end, check }
             }
         };
@@ -588,37 +621,76 @@ impl Orchestrator {
     }
 }
 
-/// Whether `task` may start under its workflow's concurrency limit, which
-/// counts the project's Active runs. A task of an existing run is never
-/// blocked (its run is already counted); a root task without a run may
-/// start only while fewer than `max_concurrent_runs` runs whose workflow
-/// snapshot has the task's workflow id are Active. A task whose workflow
-/// is unknown is left to `begin_attempt`, which parks it.
-fn within_run_limit(store: &WorkflowStore, workflows: &[Workflow], task: &Task) -> bool {
-    match store.get_run(&task.meta.root_id) {
-        Err(StoreError::NotFound) => {}
-        // An existing run, or one `begin_attempt` will report on.
-        _ => return true,
-    }
-    let Some(workflow_id) = task.meta.workflow_id.as_deref() else {
-        return true;
-    };
-    let Some(workflow) = workflows.iter().find(|w| w.id == workflow_id) else {
-        return true;
-    };
+/// The project's Active runs per workflow snapshot id, or `None` if the
+/// runs cannot be listed (then no new run is started in this pass).
+fn active_run_counts(store: &WorkflowStore) -> Option<HashMap<String, usize>> {
     match store.list_runs() {
         Ok(list) => {
-            let active = list
-                .runs
-                .iter()
-                .filter(|run| run.status == RunStatus::Active && run.workflow.id == workflow_id)
-                .count();
-            active < workflow.max_concurrent_runs as usize
+            let mut counts = HashMap::new();
+            for run in list.runs.iter().filter(|r| r.status == RunStatus::Active) {
+                *counts.entry(run.workflow.id.clone()).or_default() += 1;
+            }
+            Some(counts)
         }
         Err(err) => {
             eprintln!("[workflow] listing runs failed: {err}");
-            false
+            None
         }
+    }
+}
+
+/// How a task stands against its workflow's concurrency limit.
+#[derive(Debug, PartialEq)]
+enum RunSlot {
+    /// The task needs no new run slot: it belongs to an existing run
+    /// (already counted), or `begin_attempt` will park or report it.
+    NotNeeded,
+    /// The task would start a new run of this workflow id.
+    Free(String),
+    /// The workflow already has `max_concurrent_runs` Active runs.
+    Full,
+}
+
+/// Checks `task` against the concurrency limit, which counts Active runs
+/// (`active_runs`, see [`active_run_counts`]) whose workflow snapshot has
+/// the task's workflow id, against the loaded workflow's
+/// `max_concurrent_runs`.
+fn run_slot(
+    store: &WorkflowStore,
+    workflows: &[Workflow],
+    task: &Task,
+    active_runs: Option<&HashMap<String, usize>>,
+) -> RunSlot {
+    match store.get_run(&task.meta.root_id) {
+        Err(StoreError::NotFound) => {}
+        // An existing run, or one `begin_attempt` will report on.
+        _ => return RunSlot::NotNeeded,
+    }
+    let Some(workflow_id) = task.meta.workflow_id.as_deref() else {
+        return RunSlot::NotNeeded;
+    };
+    let Some(workflow) = workflows.iter().find(|w| w.id == workflow_id) else {
+        return RunSlot::NotNeeded;
+    };
+    let Some(active_runs) = active_runs else {
+        return RunSlot::Full;
+    };
+    let active = active_runs.get(workflow_id).copied().unwrap_or(0);
+    if active < workflow.max_concurrent_runs as usize {
+        RunSlot::Free(workflow_id.to_string())
+    } else {
+        RunSlot::Full
+    }
+}
+
+/// The check result of an integrity check that panicked (fails closed).
+fn panicked_check() -> CheckResult {
+    CheckResult {
+        after: None,
+        reason: Some(to_attention(
+            "ATTENTION_INTEGRITY_CHECK_FAILED",
+            [("code", WORKFLOW_ATTEMPT_PANICKED)],
+        )),
     }
 }
 
@@ -1183,6 +1255,52 @@ mod tests {
                 Call::Close(session(&run_b, 0)),
             ]
         );
+    }
+
+    #[test]
+    fn runs_started_in_a_pass_count_against_the_limit() {
+        let env = Env::new();
+        let first = env.root_task("First", "one");
+        let second = env.root_task("Second", "two");
+        env.set_created_at(&first, OLDEST);
+
+        env.kick();
+        env.wait_idle();
+
+        // The first run stays Active (its task needs attention), so the
+        // second root never gets a run.
+        assert_eq!(env.run(&first.meta.id).status, RunStatus::Active);
+        assert_eq!(env.runner.starts().len(), 1);
+        assert_eq!(env.task(&second.meta.id).meta.status, TaskStatus::Inbox);
+        assert_eq!(
+            env.store.get_run(&second.meta.id).unwrap_err(),
+            crate::workflow::store::StoreError::NotFound
+        );
+    }
+
+    #[test]
+    fn a_panicked_pass_honours_a_pending_request_once() {
+        let key = PathBuf::from("project");
+        let mut inner = Inner::default();
+        inner.projects.insert(
+            key.clone(),
+            Project {
+                root: key.clone(),
+                dispatching: false,
+                dirty: false,
+            },
+        );
+        assert!(inner.request_dispatch(&key));
+        assert!(!inner.request_dispatch(&key));
+        assert!(inner.abort_pass(&key), "pending request: one new thread");
+        assert!(!inner.is_idle());
+        assert!(!inner.abort_pass(&key), "nothing pending: no new thread");
+        assert!(inner.is_idle());
+        assert!(inner.request_dispatch(&key));
+        assert!(!inner.request_dispatch(&key));
+        inner.shut_down = true;
+        assert!(!inner.abort_pass(&key), "no new thread after shutdown");
+        assert!(inner.is_idle());
     }
 
     #[test]
