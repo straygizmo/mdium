@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it } from "vitest";
-import { applyTheme } from "./apply-theme";
+import { applyTheme, taskStatusDefaults } from "./apply-theme";
 import { themePresets } from "./index";
 
 const switchVariables = {
@@ -25,6 +25,60 @@ describe("applyTheme switch variables", () => {
         expect(value, `${theme.id}.${key}`).toBeTruthy();
         expect(document.documentElement.style.getPropertyValue(variable), `${theme.id} ${variable}`).toBe(value);
       }
+    }
+  });
+});
+
+const taskStatusVariables = {
+  taskStatusInboxBackground: "--task-status-inbox-background",
+  taskStatusRunningBackground: "--task-status-running-background",
+  taskStatusAwaitingUserBackground: "--task-status-awaiting-user-background",
+  taskStatusAttentionBackground: "--task-status-attention-background",
+  taskStatusOnHoldBackground: "--task-status-on-hold-background",
+  taskStatusCompletedBackground: "--task-status-completed-background",
+  taskStatusCancelledBackground: "--task-status-cancelled-background",
+} as const;
+
+describe("task status theme tokens", () => {
+  afterEach(() => {
+    document.documentElement.removeAttribute("data-theme-type");
+    document.documentElement.removeAttribute("data-theme-id");
+    document.documentElement.style.cssText = "";
+  });
+
+  it("publishes all seven task status variables for every preset", () => {
+    for (const theme of themePresets) {
+      applyTheme(theme);
+      for (const variable of Object.values(taskStatusVariables)) {
+        expect(
+          document.documentElement.style.getPropertyValue(variable).trim(),
+          `${theme.id} ${variable}`,
+        ).not.toBe("");
+      }
+    }
+  });
+
+  it("lets an explicit preset value override the derived default", () => {
+    const base = themePresets[0];
+    const theme = {
+      ...base,
+      colors: { ...base.colors, taskStatusRunningBackground: "#123456" },
+    };
+    applyTheme(theme);
+    expect(document.documentElement.style.getPropertyValue("--task-status-running-background")).toBe("#123456");
+  });
+
+  it("derives defaults from the preset's accent colors", () => {
+    for (const theme of themePresets) {
+      const defaults = taskStatusDefaults(theme.colors);
+      expect(defaults.taskStatusInboxBackground).toContain(theme.colors.textMuted);
+      expect(defaults.taskStatusRunningBackground).toContain(theme.colors.accentBlue);
+      expect(defaults.taskStatusAwaitingUserBackground).toContain(theme.colors.primary);
+      expect(defaults.taskStatusAttentionBackground).toContain(theme.colors.accentRed);
+      expect(defaults.taskStatusOnHoldBackground).toContain(theme.colors.textSecondary);
+      expect(defaults.taskStatusCompletedBackground).toContain(theme.colors.accentGreen);
+      expect(defaults.taskStatusCancelledBackground).toContain(theme.colors.textMuted);
+      expect(defaults.taskStatusRunningBackground).toContain(theme.colors.bgSurface);
     }
   });
 });

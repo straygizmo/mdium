@@ -24,6 +24,14 @@ export interface ThemeColors {
   selection: string;
   cellSelected: string;
   cellEditing: string;
+  // Workflow task status backgrounds; derived from accent tokens when omitted.
+  taskStatusInboxBackground?: string;
+  taskStatusRunningBackground?: string;
+  taskStatusAwaitingUserBackground?: string;
+  taskStatusAttentionBackground?: string;
+  taskStatusOnHoldBackground?: string;
+  taskStatusCompletedBackground?: string;
+  taskStatusCancelledBackground?: string;
 }
 
 export type ThemeType = "light" | "dark";
