@@ -104,7 +104,9 @@ describe("externalUrl", () => {
     expect(externalUrl("")).toBeNull();
   });
 
-  it("keeps query separators and percent-encoding", () => {
+  it("keeps query separators, commas and percent-encoding", () => {
+    // The backend encodes commas for the Windows opener.
+    expect(externalUrl("https://example.com/a,b")).toBe("https://example.com/a,b");
     expect(externalUrl("https://example.com/search?q=a&page=2")).toBe("https://example.com/search?q=a&page=2");
     expect(externalUrl("https://ja.wikipedia.org/wiki/%E6%97%A5")).toBe("https://ja.wikipedia.org/wiki/%E6%97%A5");
   });

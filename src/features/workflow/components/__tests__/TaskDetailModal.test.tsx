@@ -496,6 +496,8 @@ describe("TaskDetailModal", () => {
     const progress = () => container.querySelector<HTMLElement>('[data-section="progress"]');
     expect(progress()!.textContent).toContain("<b>editing</b> a.ts");
     expect(progress()!.querySelector("b")).toBeNull();
+    // Frequent updates must not flood screen readers.
+    expect(progress()!.getAttribute("aria-live")).toBe("off");
     await act(async () => useWorkflowStore.setState({ projects: { [ROOT]: withProgress("running tests") } }));
     expect(progress()!.textContent).toContain("running tests");
     expect(api.taskDetail).toHaveBeenCalledTimes(1);

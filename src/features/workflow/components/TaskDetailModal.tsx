@@ -163,7 +163,7 @@ export function TaskDetailModal() {
         </button>
       </header>
       {progress && (storeTask ?? task)?.meta.status === "running" && (
-        <p className="workflow-detail__progress" data-section="progress" aria-live="polite">
+        <p className="workflow-detail__progress" data-section="progress" aria-live="off">
           <span className="workflow-detail__progress-label">{t("detail.progress")}</span>
           <span className="workflow-detail__progress-text" title={progress.text}>
             {progress.text}

@@ -14,7 +14,8 @@ function hasUnsafeChar(text: string): boolean {
 /**
  * The normalized URL an untrusted link may be opened with, or null. Only
  * absolute http/https URLs without whitespace or control characters qualify.
- * The backend opens the URL without a shell, so other characters are safe.
+ * The backend opens the URL without a shell and percent-encodes commas, so
+ * other characters are passed through unchanged.
  */
 export function externalUrl(href: string): string | null {
   let url: URL;

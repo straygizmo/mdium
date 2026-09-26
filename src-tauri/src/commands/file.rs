@@ -600,29 +600,95 @@ pub fn open_in_default_app(path: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Program that opens a URL or path with its default handler.
-#[cfg(target_os = "windows")]
-const EXTERNAL_OPENER: &str = "explorer.exe";
-#[cfg(target_os = "macos")]
-const EXTERNAL_OPENER: &str = "open";
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
-const EXTERNAL_OPENER: &str = "xdg-open";
-
-/// Builds the command that opens `target` (a URL or a path) with its default
-/// handler. The target is passed as a single argument and never through a
-/// shell, so characters such as `&`, `|` or `%` in a URL are not interpreted
-/// as shell syntax (`cmd /C start` would run `https://x/?a&calc` as two
-/// commands).
-fn external_open_command(target: &str) -> Command {
-    let mut command = Command::new(EXTERNAL_OPENER);
-    command.arg(target);
-    command
+/// What `open_external_url` may open.
+#[derive(Debug, PartialEq)]
+enum ExternalTarget {
+    /// An http(s) URL, with commas percent-encoded.
+    Web(String),
+    /// An existing directory, canonicalized.
+    Folder(String),
 }
 
-/// Open URL in default browser
+/// Classifies `target`: an http(s) URL without whitespace, control
+/// characters or `"`, or else an existing directory. Anything else (other
+/// URL schemes, files, missing paths) is refused, so untrusted links can
+/// never launch programs or documents.
+fn classify_external_target(target: &str) -> Result<ExternalTarget, String> {
+    let scheme_end = target.find("://").map(|i| i + 3).unwrap_or(0);
+    let scheme = target[..scheme_end].to_ascii_lowercase();
+    if scheme == "http://" || scheme == "https://" {
+        if target
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || c == '"')
+        {
+            return Err("Unsupported URL".to_string());
+        }
+        // Commas separate switches in some openers' own argument parsing.
+        return Ok(ExternalTarget::Web(target.replace(',', "%2C")));
+    }
+    let is_dir = fs::metadata(target).map(|m| m.is_dir()).unwrap_or(false);
+    if !is_dir {
+        return Err("Unsupported URL or path".to_string());
+    }
+    let canonical = fs::canonicalize(target).map_err(|e| format!("Unsupported path: {}", e))?;
+    let text = canonical.to_string_lossy();
+    let text = if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{}", unc)
+    } else if let Some(local) = text.strip_prefix(r"\\?\") {
+        local.to_string()
+    } else {
+        text.to_string()
+    };
+    Ok(ExternalTarget::Folder(text))
+}
+
+/// Builds the command that opens `target` with its default handler. The
+/// target is passed as one argument and never through a shell, so `&`, `|`
+/// or `%` in a URL are not interpreted as shell syntax.
+fn external_open_command(target: &ExternalTarget) -> Command {
+    #[cfg(target_os = "windows")]
+    {
+        match target {
+            ExternalTarget::Web(url) => {
+                let mut command = Command::new("rundll32.exe");
+                command.arg("url.dll,FileProtocolHandler").arg(url);
+                command
+            }
+            ExternalTarget::Folder(path) => {
+                let mut command = Command::new("explorer.exe");
+                if path.contains(',') {
+                    // Explorer splits an unquoted argument at commas (`/select,`);
+                    // a Windows path cannot contain `"`, so quoting is safe.
+                    command.raw_arg(format!("\"{}\"", path));
+                } else {
+                    command.arg(path);
+                }
+                command
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let opener = if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        };
+        let mut command = Command::new(opener);
+        match target {
+            ExternalTarget::Web(url) => command.arg(url),
+            ExternalTarget::Folder(path) => command.arg(path),
+        };
+        command
+    }
+}
+
+/// Opens an http(s) URL in the default browser or an existing folder in the
+/// file manager. Other targets are refused.
 #[tauri::command]
 pub fn open_external_url(url: String) -> Result<(), String> {
-    external_open_command(&url)
+    let target = classify_external_target(&url)?;
+    external_open_command(&target)
         .spawn()
         .map_err(|e| format!("Failed to open URL: {}", e))?;
     Ok(())
@@ -788,13 +854,85 @@ mod tests {
         assert!(resolve_generated_md_path(Path::new("/"), false).is_none());
     }
 
+    fn args(command: &Command) -> Vec<String> {
+        command
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
     #[test]
-    fn opens_external_targets_without_a_shell() {
+    fn classifies_web_urls_and_encodes_commas() {
+        assert_eq!(
+            classify_external_target("https://example.com/a,b?q=1&x=%41"),
+            Ok(ExternalTarget::Web(
+                "https://example.com/a%2Cb?q=1&x=%41".to_string()
+            ))
+        );
+        assert_eq!(
+            classify_external_target("HTTP://example.com/"),
+            Ok(ExternalTarget::Web("HTTP://example.com/".to_string()))
+        );
+    }
+
+    #[test]
+    fn rejects_other_schemes_and_unsafe_urls() {
+        for target in [
+            "javascript:alert(1)",
+            "file:///C:/Windows/System32/calc.exe",
+            "ms-settings:",
+            "https://example.com/a b",
+            "https://example.com/\"x",
+            "https://example.com/\u{7}",
+            "",
+        ] {
+            assert!(classify_external_target(target).is_err(), "{target:?}");
+        }
+    }
+
+    #[test]
+    fn accepts_only_existing_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("a,b c");
+        fs::create_dir(&folder).unwrap();
+        let file = dir.path().join("f.txt");
+        fs::write(&file, "x").unwrap();
+
+        let expected = fs::canonicalize(&folder).unwrap();
+        match classify_external_target(folder.to_str().unwrap()) {
+            Ok(ExternalTarget::Folder(path)) => {
+                assert!(!path.starts_with(r"\\?\"), "{path}");
+                assert!(expected.to_string_lossy().ends_with(&path), "{path}");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        assert!(classify_external_target(file.to_str().unwrap()).is_err());
+        assert!(classify_external_target(dir.path().join("missing").to_str().unwrap()).is_err());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn opens_windows_targets_without_a_shell() {
         let url = "https://example.com/?a=1&calc|x^y%PATH%";
-        let command = external_open_command(url);
-        assert_eq!(command.get_program(), EXTERNAL_OPENER);
-        let args: Vec<_> = command.get_args().collect();
-        assert_eq!(args, vec![std::ffi::OsStr::new(url)]);
-        assert_ne!(command.get_program(), "cmd");
+        let web = external_open_command(&ExternalTarget::Web(url.to_string()));
+        assert_eq!(web.get_program(), "rundll32.exe");
+        assert_eq!(args(&web), vec!["url.dll,FileProtocolHandler", url]);
+
+        let plain = external_open_command(&ExternalTarget::Folder(r"C:\work\app".to_string()));
+        assert_eq!(plain.get_program(), "explorer.exe");
+        assert_eq!(args(&plain), vec![r"C:\work\app"]);
+
+        let comma = external_open_command(&ExternalTarget::Folder(r"C:\a,b".to_string()));
+        assert_eq!(comma.get_program(), "explorer.exe");
+        assert_eq!(args(&comma), vec![r#""C:\a,b""#]);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn opens_targets_without_a_shell() {
+        let url = "https://example.com/?a=1&b";
+        let web = external_open_command(&ExternalTarget::Web(url.to_string()));
+        assert_ne!(web.get_program(), "sh");
+        assert_eq!(args(&web), vec![url]);
     }
 }
