@@ -488,6 +488,7 @@ pub async fn workflow_retry_task(
     task_id: String,
     accept_screening: bool,
     accept_agent_config: bool,
+    accept_integrity: bool,
 ) -> Result<Task, CommandError> {
     with_project(state, project_root, move |orch, root| {
         actions::retry_task(
@@ -497,6 +498,7 @@ pub async fn workflow_retry_task(
             RetryOptions {
                 accept_screening,
                 accept_agent_config,
+                accept_integrity,
             },
         )
     })

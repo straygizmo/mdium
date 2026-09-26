@@ -90,6 +90,9 @@ pub const WORKFLOW_RUN_NO_WORKTREE: &str = "WORKFLOW_RUN_NO_WORKTREE";
 /// The user's repository changed since the run's integrity baseline, so no
 /// git command runs in the worktree.
 pub const WORKFLOW_INTEGRITY_CHANGED: &str = "WORKFLOW_INTEGRITY_CHANGED";
+/// The task's attempt reported a git config or hooks change of the user's
+/// repository; a retry must accept it (`accept_integrity`).
+pub const WORKFLOW_INTEGRITY_ACK_REQUIRED: &str = "WORKFLOW_INTEGRITY_ACK_REQUIRED";
 /// The worktree's agent-config files could not be fingerprinted.
 pub const WORKFLOW_AGENT_CONFIG_CHECK_FAILED: &str = "WORKFLOW_AGENT_CONFIG_CHECK_FAILED";
 /// The design document could not be written or committed.
@@ -188,6 +191,10 @@ pub struct RetryOptions {
     pub accept_screening: bool,
     /// Accept the worktree's current agent-config files for the run.
     pub accept_agent_config: bool,
+    /// Accept the user's repository as it is now: its snapshot becomes the
+    /// run's integrity baseline. Required to retry a task whose attempt
+    /// reported a git config or hooks change.
+    pub accept_integrity: bool,
 }
 
 /// A task with its run and its latest attempt's output and log.
@@ -389,7 +396,10 @@ pub fn resume_task(
 }
 
 /// Moves a task needing attention back to the inbox, optionally accepting
-/// its screened input and/or the worktree's agent-config files. Nothing is
+/// its screened input, the worktree's agent-config files and/or the user's
+/// repository as it is now (the new integrity baseline). A task whose
+/// attempt reported a git config or hooks change is only retried with
+/// `accept_integrity` (`WORKFLOW_INTEGRITY_ACK_REQUIRED`). Nothing is
 /// written if an acceptance cannot be recorded.
 pub fn retry_task(
     orch: &Arc<Orchestrator>,
@@ -404,8 +414,25 @@ pub fn retry_task(
         if current.meta.status != TaskStatus::Attention {
             return Err(conflict(current.meta.status));
         }
+        if !opts.accept_integrity && integrity_ack_required(&current) {
+            return Err(ActionError::InvalidState(WORKFLOW_INTEGRITY_ACK_REQUIRED));
+        }
+        let mut run = None;
+        if opts.accept_integrity {
+            let mut accepted = store.get_run(&current.meta.root_id)?;
+            let info = accepted
+                .worktree
+                .clone()
+                .ok_or(ActionError::InvalidState(WORKFLOW_RUN_NO_WORKTREE))?;
+            let (_, now) = integrity_state(store.project_root(), &accepted, &info)?;
+            accepted.integrity_baseline = Some(now);
+            run = Some(accepted);
+        }
         let run = if opts.accept_agent_config {
-            let mut run = store.get_run(&current.meta.root_id)?;
+            let mut run = match run {
+                Some(run) => run,
+                None => store.get_run(&current.meta.root_id)?,
+            };
             let info = run
                 .worktree
                 .clone()
@@ -431,7 +458,7 @@ pub fn retry_task(
             }
             Some(run)
         } else {
-            None
+            run
         };
         let ack = if opts.accept_screening {
             Some(flow::screening_ack_hash(&store, task_id)?)
@@ -458,6 +485,26 @@ pub fn retry_task(
     emit(orch, &store, std::slice::from_ref(&task), run.as_ref());
     orch.kick(project_root);
     Ok(task)
+}
+
+/// True when `task` needs attention because its attempt changed the user's
+/// git config or hooks ([`ACK_REQUIRED_CHANGES`]); an unreadable item list
+/// counts as such a change (fails closed). Branch or HEAD movement alone
+/// needs no acknowledgement: the next attempt takes a fresh snapshot.
+fn integrity_ack_required(task: &Task) -> bool {
+    let Some(reason) = &task.meta.attention else {
+        return false;
+    };
+    if reason.code != "ATTENTION_INTEGRITY_CHANGED" {
+        return false;
+    }
+    let items = reason.params.get("items").map(String::as_str).unwrap_or("");
+    match serde_json::from_str::<Vec<IntegrityChange>>(items) {
+        Ok(items) => items
+            .iter()
+            .any(|item| ACK_REQUIRED_CHANGES.contains(&item.code.as_str())),
+        Err(_) => true,
+    }
 }
 
 /// Completes the current task of an Active run that needs attention, as if
@@ -1632,6 +1679,7 @@ mod tests {
         let opts = RetryOptions {
             accept_screening: true,
             accept_agent_config: false,
+            accept_integrity: false,
         };
         let retried = retry_task(&env.orch, env.root(), &id, opts).unwrap();
         assert_eq!(
@@ -1655,6 +1703,7 @@ mod tests {
         let opts = RetryOptions {
             accept_screening: false,
             accept_agent_config: true,
+            accept_integrity: false,
         };
         let retried = retry_task(&env.orch, env.root(), &id, opts).unwrap();
         assert_eq!(retried.meta.status, TaskStatus::Inbox);
@@ -1677,6 +1726,7 @@ mod tests {
         let opts = RetryOptions {
             accept_screening: false,
             accept_agent_config: true,
+            accept_integrity: false,
         };
         assert_eq!(
             code(retry_task(&env.orch, env.root(), &id, opts)),
@@ -1684,6 +1734,74 @@ mod tests {
         );
         assert_eq!(env.raw(&id), before);
         assert!(env.run(&id).acknowledged_agent_config.is_empty());
+    }
+
+    /// Ends a fresh root task's attempt in `ATTENTION_INTEGRITY_CHANGED`
+    /// with item `code`, as the post-attempt checks would (the run keeps
+    /// its earlier baseline). Returns the task id.
+    fn integrity_changed_task(env: &Env, code: &str) -> String {
+        let root = env.root_task();
+        let id = root.meta.id.clone();
+        let planned = env.begin(&id);
+        let items = json!([{ "code": code, "detail": "" }]).to_string();
+        let guard = env.store.lock();
+        let input = FinishInput {
+            end: failed(),
+            check: CheckResult {
+                after: Some(checks::baseline(&planned.repo_root, &planned.run).unwrap()),
+                reason: Some(crate::workflow::errors::to_attention(
+                    "ATTENTION_INTEGRITY_CHANGED",
+                    [("items", items)],
+                )),
+            },
+        };
+        finish_attempt(&guard, &env.store, &planned, input).unwrap();
+        id
+    }
+
+    #[test]
+    fn retry_after_a_git_config_change_needs_accept_integrity() {
+        let env = Env::new();
+        let id = integrity_changed_task(&env, "INTEGRITY_GIT_CONFIG_CHANGED");
+        let old = env.run(&id).integrity_baseline;
+        env.fx.run(&["config", "core.fsmonitor", "false"]);
+
+        let before = env.raw(&id);
+        assert_eq!(
+            code(retry_task(
+                &env.orch,
+                env.root(),
+                &id,
+                RetryOptions::default()
+            )),
+            WORKFLOW_INTEGRITY_ACK_REQUIRED
+        );
+        assert_eq!(env.raw(&id), before);
+        assert_eq!(env.run(&id).integrity_baseline, old);
+
+        let opts = RetryOptions {
+            accept_integrity: true,
+            ..RetryOptions::default()
+        };
+        let retried = retry_task(&env.orch, env.root(), &id, opts).unwrap();
+        assert_eq!(retried.meta.status, TaskStatus::Inbox);
+        let run = env.run(&id);
+        let info = run.worktree.clone().unwrap();
+        let now =
+            integrity::snapshot_with_worktree(env.root(), Some(&info.base_branch), Some(&info))
+                .unwrap();
+        assert_eq!(run.integrity_baseline, Some(now));
+        assert_ne!(run.integrity_baseline, old);
+        env.wait_idle();
+    }
+
+    #[test]
+    fn retry_after_branch_movement_needs_no_acknowledgement() {
+        let env = Env::new();
+        let id = integrity_changed_task(&env, "INTEGRITY_HEAD_MOVED");
+        let retried = retry_task(&env.orch, env.root(), &id, RetryOptions::default()).unwrap();
+        assert_eq!(retried.meta.status, TaskStatus::Inbox);
+        env.wait_idle();
     }
 
     #[test]

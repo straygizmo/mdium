@@ -646,7 +646,19 @@ pub(crate) fn commit_paths_in(
 
 /// True if a merge is in progress in `repo`.
 fn merge_in_progress(repo: &Path) -> Result<bool, GitError> {
-    Ok(run_git_raw(repo, &["rev-parse", "-q", "--verify", "MERGE_HEAD"])?.success)
+    Ok(checkout_git_raw(repo, &["rev-parse", "-q", "--verify", "MERGE_HEAD"])?.success)
+}
+
+/// Runs git in the user's checkout during a merge with
+/// [`WORKTREE_SAFE_OPTS`] (the agent could have configured an fsmonitor
+/// hook in the shared git config), returning stdout or `GIT_FAILED`.
+fn checkout_git(repo: &Path, args: &[&str]) -> Result<String, GitError> {
+    git(repo, &worktree_args(args))
+}
+
+/// [`checkout_git`] returning the raw outcome.
+fn checkout_git_raw(repo: &Path, args: &[&str]) -> Result<GitOutput, GitError> {
+    run_git_raw(repo, &worktree_args(args))
 }
 
 /// Merges the worktree branch into the base branch of the user's checkout
@@ -675,7 +687,7 @@ pub(crate) fn merge_into_base_in(
             current.unwrap_or_default(),
         ));
     }
-    let status = git(
+    let status = checkout_git(
         repo_root,
         &["status", "--porcelain", "--untracked-files=no"],
     )?;
@@ -683,11 +695,15 @@ pub(crate) fn merge_into_base_in(
         return Err(GitError::new(GIT_DIRTY_WORKTREE, status));
     }
 
-    let before = git(repo_root, &["rev-parse", "HEAD"])?.trim().to_string();
+    let before = checkout_git(repo_root, &["rev-parse", "HEAD"])?
+        .trim()
+        .to_string();
     let branch_ref = format!("refs/heads/{}", info.branch);
     let output = git_with_identity(
         repo_root,
         &[
+            WORKTREE_SAFE_OPTS[0],
+            WORKTREE_SAFE_OPTS[1],
             "merge",
             "--no-ff",
             "--no-edit",
@@ -696,14 +712,16 @@ pub(crate) fn merge_into_base_in(
         ],
     )?;
     if output.success {
-        return Ok(git(repo_root, &["rev-parse", "HEAD"])?.trim().to_string());
+        return Ok(checkout_git(repo_root, &["rev-parse", "HEAD"])?
+            .trim()
+            .to_string());
     }
 
     let merge_detail = format!("{}{}", output.stdout, output.stderr);
     if !merge_in_progress(repo_root)? {
         // The merge never started; make sure it left nothing behind.
-        let after = run_git_raw(repo_root, &["rev-parse", "HEAD"])?;
-        let status = run_git_raw(
+        let after = checkout_git_raw(repo_root, &["rev-parse", "HEAD"])?;
+        let status = checkout_git_raw(
             repo_root,
             &["status", "--porcelain", "--untracked-files=no"],
         )?;
@@ -718,8 +736,8 @@ pub(crate) fn merge_into_base_in(
         };
         return Err(GitError::new(code, merge_detail));
     }
-    let abort = run_git_raw(repo_root, &["merge", "--abort"])?;
-    let after = run_git_raw(repo_root, &["rev-parse", "HEAD"])?;
+    let abort = checkout_git_raw(repo_root, &["merge", "--abort"])?;
+    let after = checkout_git_raw(repo_root, &["rev-parse", "HEAD"])?;
     let restored = abort.success
         && !merge_in_progress(repo_root)?
         && after.success
@@ -1469,6 +1487,22 @@ mod tests {
         write_file(Path::new(&info.path), "a.txt", "changed\n");
         diff_against_base_in(fixture.base(), &info).unwrap();
         commits_since_base_in(fixture.base(), &info).unwrap();
+        assert!(!marker.exists(), "fsmonitor hook must not run");
+    }
+
+    #[test]
+    fn merge_git_calls_in_the_user_checkout_disable_fsmonitor() {
+        let fixture = Fixture::new();
+        let info = fixture.create("t");
+        commit_in_worktree(&info, "b.txt", "b\n", "feature");
+        let marker = fixture.worktrees.path().join("fsmonitor-ran");
+        let marker_str = marker.to_string_lossy().replace('\\', "/");
+        fixture.run(&[
+            "config",
+            "core.fsmonitor",
+            &format!("echo ran > '{marker_str}'; exit 1"),
+        ]);
+        merge_into_base_in(fixture.base(), fixture.root(), &info).unwrap();
         assert!(!marker.exists(), "fsmonitor hook must not run");
     }
 

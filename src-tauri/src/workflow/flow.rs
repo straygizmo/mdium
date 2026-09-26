@@ -732,9 +732,7 @@ pub fn finish_attempt(
     let (mut outcome, action) = decide(planned, &input);
 
     let mut run = store.get_run(&root_id)?;
-    if let Some(after) = input.check.after.clone() {
-        run.integrity_baseline = Some(after);
-    }
+    advance_baseline(&mut run, &input.check);
     // Close the attempt record first, so every run write below (including
     // those inside `advance`) already carries it.
     let finished_at = fsutil::now();
@@ -752,9 +750,7 @@ pub fn finish_attempt(
             // created the child) is abandoned.
             Err(FlowError::Transition(TransitionError::Conflict { .. })) => {
                 run = store.get_run(&root_id)?;
-                if let Some(after) = input.check.after.clone() {
-                    run.integrity_baseline = Some(after);
-                }
+                advance_baseline(&mut run, &input.check);
                 if matches!(&run.pending_transition, Some(p) if p.from_task_id == task_id) {
                     summary.changed_tasks = abandon_pending(guard, store, &mut run)?;
                 }
@@ -766,6 +762,18 @@ pub fn finish_attempt(
     close_attempt(&mut run, &planned.request.attempt_id, &finished_at, outcome);
     summary.run = Some(store.put_run(guard, &run)?);
     Ok(summary)
+}
+
+/// Makes the post-attempt snapshot the run's integrity baseline, but only
+/// when every check passed: a flagged (or failed) check keeps the earlier
+/// baseline, so the flagged change is not absorbed and later comparisons
+/// (merge preview, merge, acknowledgement on retry) still see it.
+fn advance_baseline(run: &mut WorkflowRun, check: &CheckResult) {
+    if check.reason.is_none() {
+        if let Some(after) = check.after.clone() {
+            run.integrity_baseline = Some(after);
+        }
+    }
 }
 
 /// Sets the finish time and outcome of attempt `attempt_id` in `run`.
@@ -1674,12 +1682,39 @@ mod tests {
     }
 
     #[test]
-    fn check_reason_wins_over_a_completed_end_and_baseline_is_updated() {
+    fn a_passing_check_advances_the_integrity_baseline() {
         let env = Env::new();
         let root = env.root_task("A", "a");
         let planned = env.started(&root.meta.id);
         let snapshot = checks::baseline(env.fx.root(), &planned.run).unwrap();
-        let reason = to_attention("ATTENTION_INTEGRITY_CHECK_FAILED", [("code", "X")]);
+        let guard = env.store.lock();
+        let input = FinishInput {
+            end: AttemptEnd::TimedOut,
+            check: CheckResult {
+                after: Some(snapshot.clone()),
+                reason: None,
+            },
+        };
+        finish_attempt(&guard, &env.store, &planned, input).unwrap();
+        drop(guard);
+        assert_eq!(env.run(&root.meta.id).integrity_baseline, Some(snapshot));
+    }
+
+    #[test]
+    fn check_reason_wins_over_a_completed_end_and_keeps_the_baseline() {
+        let env = Env::new();
+        let root = env.root_task("A", "a");
+        let planned = env.started(&root.meta.id);
+        let mut snapshot = checks::baseline(env.fx.root(), &planned.run).unwrap();
+        // An earlier baseline that the flagged snapshot must not replace.
+        let old = snapshot.clone();
+        {
+            let mut run = env.run(&root.meta.id);
+            run.integrity_baseline = Some(old.clone());
+            env.store.put_run(&env.store.lock(), &run).unwrap();
+        }
+        snapshot.git_config_hash = "changed".to_string();
+        let reason = to_attention("ATTENTION_INTEGRITY_CHANGED", [("items", "[]")]);
         let guard = env.store.lock();
         let input = FinishInput {
             end: AttemptEnd::Completed {
@@ -1696,7 +1731,7 @@ mod tests {
         assert_eq!(task.meta.status, TaskStatus::Attention);
         assert_eq!(task.meta.attention, Some(reason));
         let run = env.run(&root.meta.id);
-        assert_eq!(run.integrity_baseline, Some(snapshot));
+        assert_eq!(run.integrity_baseline, Some(old));
         assert_eq!(run.attempts[0].outcome.as_deref(), Some("attention"));
         assert!(run.attempts[0].finished_at.is_some());
         assert_eq!(summary.run, Some(run));
