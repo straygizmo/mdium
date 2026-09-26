@@ -27,6 +27,7 @@ import { FolderTabBar, TabBar } from "./components/TabBar";
 import { StatusBar } from "./components/StatusBar";
 import { MainArea } from "./components/MainArea";
 import { startWorkflowEventBridge } from "@/features/workflow/workflow-store";
+import { startWorkflowFolderSync } from "@/features/workflow/folder-sync";
 import { LeftPanel } from "@/features/file-tree/components/LeftPanel";
 import { EditorPanel } from "@/features/editor/components/EditorPanel";
 import { PreviewPanel } from "@/features/preview/components/PreviewPanel";
@@ -72,6 +73,8 @@ export function App() {
       release?.();
     };
   }, []);
+  // Attach the active folder's workflows whether or not a workflow view is shown.
+  useEffect(() => startWorkflowFolderSync(), []);
   const initializeTheme = useSettingsStore((s) => s.initializeTheme);
   const activeTab = useTabStore((s) => s.getActiveTab());
   const openTab = useTabStore((s) => s.openTab);

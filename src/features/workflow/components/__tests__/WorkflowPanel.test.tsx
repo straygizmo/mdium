@@ -28,6 +28,7 @@ vi.mock("@/stores/dialog-store", () => dialogs);
 
 import i18n from "@/shared/i18n";
 import { useTabStore } from "@/stores/tab-store";
+import { startWorkflowFolderSync } from "../../folder-sync";
 import { useWorkflowStore } from "../../workflow-store";
 import { WorkflowPanel } from "../WorkflowPanel";
 
@@ -71,6 +72,8 @@ describe("WorkflowPanel", () => {
   let root: ReturnType<typeof createRoot>;
   let container: HTMLDivElement;
   let workflows: Workflow[];
+  /** The app-level folder sync, started by the first render. */
+  let stopSync: (() => void) | null;
 
   beforeEach(async () => {
     await i18n.changeLanguage("en");
@@ -86,6 +89,7 @@ describe("WorkflowPanel", () => {
     api.probeProviders.mockResolvedValue([]);
     api.gitignoreStatus.mockResolvedValue({ missing: [] });
     localStorage.clear();
+    stopSync = null;
     useTabStore.setState({ activeFolderPath: "C:/proj" });
     container = document.createElement("div");
     root = createRoot(container);
@@ -93,13 +97,18 @@ describe("WorkflowPanel", () => {
 
   afterEach(async () => {
     await act(async () => root.unmount());
+    stopSync?.();
     useTabStore.setState({ activeFolderPath: null });
     vi.restoreAllMocks();
     localStorage.clear();
   });
 
   async function render(props: Parameters<typeof WorkflowPanel>[0] = {}) {
-    await act(async () => root.render(<WorkflowPanel {...props} />));
+    await act(async () => {
+      // The app activates the folder; the panel only shows the store.
+      stopSync ??= startWorkflowFolderSync();
+      root.render(<WorkflowPanel {...props} />);
+    });
   }
 
   function row(id: string) {
@@ -296,8 +305,9 @@ describe("WorkflowPanel", () => {
     await act(async () => cancelled.click());
     expect(useWorkflowStore.getState().filters.showCancelled).toBe(true);
 
-    await act(async () => button(container, i18n.t("workflow:panel.viewMatrix"))!.click());
-    expect(useWorkflowStore.getState().filters.view).toBe("matrix");
+    // The board view is switched from the workspace header only.
+    expect(button(container, i18n.t("workflow:panel.viewMatrix"))).toBeUndefined();
+    expect(button(container, i18n.t("workflow:panel.viewKanban"))).toBeUndefined();
   });
 
   it("lists archived workflows in the filter only when they are shown and resets a hidden selection", async () => {

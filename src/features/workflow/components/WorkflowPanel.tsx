@@ -97,10 +97,6 @@ export function WorkflowPanel({ onCreateTask, onEditWorkflow, confirmEnable: con
 
   useEffect(() => clearCopiedTimer, []);
 
-  useEffect(() => {
-    void useWorkflowStore.getState().activate(activeFolderPath);
-  }, [activeFolderPath]);
-
   // Dialogs belong to the project they were opened for.
   const cancelSafety = safety.cancel;
   useEffect(() => {
@@ -173,15 +169,20 @@ export function WorkflowPanel({ onCreateTask, onEditWorkflow, confirmEnable: con
    * applied to the workflow (null removes it).
    */
   const saveChange = (id: string, change: (latest: Workflow) => Partial<Workflow> | null) =>
-    useWorkflowStore.getState().run(t("panel.saveFailed"), (root) => {
-      const current = useWorkflowStore.getState().projects[root]?.workflows ?? [];
-      const next: WorkflowInput[] = current.flatMap((w) => {
-        if (w.id !== id) return [w];
-        const patch = change(w);
-        return patch ? [{ ...w, ...patch }] : [];
-      });
-      return workflowApi.saveWorkflows(root, { schemaVersion: WORKFLOWS_SCHEMA_VERSION, workflows: next });
-    });
+    useWorkflowStore.getState().run(
+      t("panel.saveFailed"),
+      (root) => {
+        const current = useWorkflowStore.getState().projects[root]?.workflows ?? [];
+        const next: WorkflowInput[] = current.flatMap((w) => {
+          if (w.id !== id) return [w];
+          const patch = change(w);
+          return patch ? [{ ...w, ...patch }] : [];
+        });
+        return workflowApi.saveWorkflows(root, { schemaVersion: WORKFLOWS_SCHEMA_VERSION, workflows: next });
+      },
+      // Workflow file saves emit no change events.
+      { refreshNow: true },
+    );
 
   /** Confirmation text, with the number of runs in progress when there are any; null on failure. */
   const confirmText = async (workflow: Workflow, key: "panel.archiveConfirm" | "panel.deleteConfirm") => {
@@ -229,7 +230,7 @@ export function WorkflowPanel({ onCreateTask, onEditWorkflow, confirmEnable: con
       if (!name?.trim()) return;
       await useWorkflowStore
         .getState()
-        .run(t("panel.addFailed"), (root) => workflowApi.addStandard(root, name.trim(), provider));
+        .run(t("panel.addFailed"), (root) => workflowApi.addStandard(root, name.trim(), provider), { refreshNow: true });
     });
 
   const copyGitignore = async (missing: string[]) => {
@@ -430,19 +431,6 @@ export function WorkflowPanel({ onCreateTask, onEditWorkflow, confirmEnable: con
               />
               <span>{t("panel.showCancelled")}</span>
             </label>
-            <div className="workflow-panel__view" role="group" aria-label={t("panel.view")}>
-              {(["kanban", "matrix"] as const).map((view) => (
-                <button
-                  key={view}
-                  type="button"
-                  className={`workflow-panel__view-btn${filters.view === view ? " workflow-panel__view-btn--active" : ""}`}
-                  aria-pressed={filters.view === view}
-                  onClick={() => setFilters({ view })}
-                >
-                  {t(view === "kanban" ? "panel.viewKanban" : "panel.viewMatrix")}
-                </button>
-              ))}
-            </div>
           </section>
         </>
       )}

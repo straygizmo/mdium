@@ -207,6 +207,7 @@ export function WorkflowEditDialog({ workflow, confirmEnable, onClose }: Workflo
         ? state.projects[state.activeRoot]?.workflows.find((w) => w.id === saved.id)
         : undefined;
       if (enabledChoice === true && latest && !latest.enabled && !(await confirmEnabling())) return;
+      // Workflow file saves emit no change events: refresh at once.
       const ok = await useWorkflowStore.getState().run(t("panel.saveFailed"), async (root) => {
         const current = useWorkflowStore.getState().projects[root]?.workflows ?? [];
         if (!current.some((w) => w.id === saved.id)) {
@@ -232,7 +233,7 @@ export function WorkflowEditDialog({ workflow, confirmEnable, onClose }: Workflo
           return false;
         }
         return true;
-      });
+      }, { refreshNow: true });
       if (ok) onClose();
     } finally {
       setSaving(false);

@@ -228,6 +228,28 @@ describe("workflow store", () => {
     expect(api.listTasks).toHaveBeenCalledWith(ROOT_A);
   });
 
+  it("run leaves the refresh after success to the events while the bridge is active", async () => {
+    await useWorkflowStore.getState().activate(ROOT_A);
+    await startBridge();
+    api.listTasks.mockClear();
+    expect(await useWorkflowStore.getState().run("hold", async () => "ok")).toBe("ok");
+    expect(api.listTasks).not.toHaveBeenCalled();
+    // Commands without change events ask for the refresh explicitly.
+    await useWorkflowStore.getState().run("save", async () => "ok", { refreshNow: true });
+    expect(api.listTasks).toHaveBeenCalledTimes(1);
+  });
+
+  it("run refreshes at once on TRANSITION_CONFLICT while the bridge is active", async () => {
+    await useWorkflowStore.getState().activate(ROOT_A);
+    await startBridge();
+    api.listTasks.mockClear();
+    await useWorkflowStore
+      .getState()
+      .run("hold", () => Promise.reject({ code: "TRANSITION_CONFLICT", message: "raced" }));
+    expect(api.listTasks).toHaveBeenCalledWith(ROOT_A);
+    expect(showMessage).not.toHaveBeenCalled();
+  });
+
   it("stores a load error on the project", async () => {
     api.listTasks.mockRejectedValue({ code: "WORKFLOW_PROJECT_INVALID", message: "gone" });
     await useWorkflowStore.getState().activate(ROOT_A);

@@ -32,6 +32,16 @@ export interface ProjectState {
   error: string | null;
 }
 
+/** Options of `run`. */
+export interface RunOptions {
+  /**
+   * Refreshes right after success even while the event bridge is active; for
+   * commands that emit no change events (workflow file saves) or whose
+   * result must be listed at once (a created task opened in the detail).
+   */
+  refreshNow?: boolean;
+}
+
 export interface WorkflowFilters {
   workflowId: string | null;
   showArchived: boolean;
@@ -58,10 +68,12 @@ interface WorkflowState {
   /**
    * Executes an action for the active root. Errors are shown in a dialog
    * titled `errorTitle` (already localized text), except
-   * `TRANSITION_CONFLICT`, which refreshes silently. Refreshes after success.
+   * `TRANSITION_CONFLICT`, which refreshes silently at once. After success
+   * the refresh is left to the debounced event-driven one while the event
+   * bridge is active (unless `options.refreshNow`), else it runs at once.
    * Resolves to undefined on failure.
    */
-  run<T>(errorTitle: string, fn: (root: string) => Promise<T>): Promise<T | undefined>;
+  run<T>(errorTitle: string, fn: (root: string) => Promise<T>, options?: RunOptions): Promise<T | undefined>;
 }
 
 /** Debounce delay of event-driven refreshes, per project. */
@@ -172,7 +184,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => {
       set((s) => ({ filters: { ...s.filters, ...p } }));
     },
 
-    async run<T>(errorTitle: string, fn: (root: string) => Promise<T>): Promise<T | undefined> {
+    async run<T>(errorTitle: string, fn: (root: string) => Promise<T>, options?: RunOptions): Promise<T | undefined> {
       const root = get().activeRoot;
       if (!root) return undefined;
       let result: T;
@@ -187,7 +199,8 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => {
         }
         return undefined;
       }
-      await get().refresh(root);
+      // With the bridge active, the command's change events refresh the lists.
+      if (options?.refreshNow || bridgeUsers === 0) await get().refresh(root);
       return result;
     },
   };

@@ -45,7 +45,10 @@ export function CreateTaskDialog({ onClose, onAddStandard }: CreateTaskDialogPro
     setCreating(true);
     const task = await useWorkflowStore
       .getState()
-      .run(t("create.failed"), (root) => workflowApi.createTask(root, title.trim(), body, selected.id));
+      // Refresh at once: the detail opened next needs the task in the list.
+      .run(t("create.failed"), (root) => workflowApi.createTask(root, title.trim(), body, selected.id), {
+        refreshNow: true,
+      });
     setCreating(false);
     if (!task) return;
     onClose();
