@@ -2,10 +2,10 @@
 //! to agents, the text that is screened before a session starts, diff and
 //! project-instruction capping, and design-doc path rendering.
 
-use crate::workflow::frontmatter::strip_bom;
 use crate::workflow::gitops;
-use crate::workflow::model::{AttemptMode, Role, Stage};
+use crate::workflow::model::{is_invalid_design_doc_path, AttemptMode, Role, Stage};
 use sha2::{Digest, Sha256};
+use std::io::Read;
 use std::path::Path;
 
 /// Everything that goes into one stage attempt's prompt.
@@ -31,6 +31,9 @@ pub const MAX_DIFF_BYTES: usize = 200 * 1024;
 
 /// Maximum size of project instructions embedded in a prompt.
 pub const MAX_INSTRUCTIONS_BYTES: usize = 32 * 1024;
+
+/// UTF-8 byte order mark, stripped from instruction files.
+const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
 
 /// Note placed before every block of user- or agent-supplied content.
 const DATA_NOTE: &str =
@@ -88,7 +91,10 @@ The options considered and their trade-offs.
 pub fn build_prompt(input: &PromptInput) -> String {
     let stage_heading = format!("## Your stage: {}", role_name(input.stage.role));
     let sections: [(&str, Option<String>); 10] = [
-        ("# Task", plain(Some(input.root_title))),
+        (
+            "# Task",
+            non_empty(Some(input.root_title)).map(collapse_whitespace),
+        ),
         ("## Requirement", data_block(Some(input.root_body))),
         (
             "## Input from the previous stage",
@@ -135,13 +141,16 @@ pub fn build_prompt(input: &PromptInput) -> String {
 }
 
 /// The exact text passed to `screening::screen` before an attempt: the
-/// non-blank parts joined by blank lines.
+/// collapsed title and the non-blank parts, joined by blank lines. The title
+/// is included because it can come from an external source.
 pub fn screening_text(
+    root_title: &str,
     root_body: &str,
     task_body: Option<&str>,
     user_input: Option<&str>,
 ) -> String {
-    [Some(root_body), task_body, user_input]
+    let title = collapse_whitespace(root_title);
+    [Some(title.as_str()), Some(root_body), task_body, user_input]
         .into_iter()
         .filter_map(non_empty)
         .collect::<Vec<_>>()
@@ -162,39 +171,77 @@ pub fn cap_diff(diff: &str) -> String {
 /// Project instructions from `AGENTS.md`, else `CLAUDE.md`, at the worktree
 /// root: the first one that is a regular file (symlinks and directories are
 /// ignored) with non-blank content, capped at [`MAX_INSTRUCTIONS_BYTES`].
+/// At most `MAX_INSTRUCTIONS_BYTES + 4` bytes are read from disk.
 pub fn project_instructions(worktree: &Path) -> Option<String> {
-    ["AGENTS.md", "CLAUDE.md"].into_iter().find_map(|name| {
-        let path = worktree.join(name);
-        if !std::fs::symlink_metadata(&path).ok()?.is_file() {
-            return None;
+    ["AGENTS.md", "CLAUDE.md"]
+        .into_iter()
+        .find_map(|name| read_instructions(&worktree.join(name), name))
+}
+
+/// Reads one instructions file with a bounded read. The omitted byte count
+/// is derived from the file size, and a partial UTF-8 sequence at the cut is
+/// dropped.
+fn read_instructions(path: &Path, name: &str) -> Option<String> {
+    if !std::fs::symlink_metadata(path).ok()?.is_file() {
+        return None;
+    }
+    let file = std::fs::File::open(path).ok()?;
+    let total = file.metadata().ok()?.len();
+    let mut buf = Vec::new();
+    file.take(MAX_INSTRUCTIONS_BYTES as u64 + 4)
+        .read_to_end(&mut buf)
+        .ok()?;
+
+    let bom = if buf.starts_with(UTF8_BOM) {
+        UTF8_BOM.len()
+    } else {
+        0
+    };
+    let content = &buf[bom..];
+    let (kept, truncated) = if content.len() > MAX_INSTRUCTIONS_BYTES {
+        let mut cut = MAX_INSTRUCTIONS_BYTES;
+        // Back off while the byte at the cut continues a multibyte char.
+        while cut > 0 && content[cut] & 0xC0 == 0x80 {
+            cut -= 1;
         }
-        let bytes = std::fs::read(&path).ok()?;
-        let text = String::from_utf8_lossy(&bytes);
-        let text = strip_bom(&text).trim();
-        if text.is_empty() {
-            return None;
-        }
-        let capped = cap_text(text, MAX_INSTRUCTIONS_BYTES, "instructions");
-        Some(format!("Project instructions (from {name}):\n\n{capped}"))
-    })
+        (&content[..cut], true)
+    } else {
+        (content, false)
+    };
+
+    let text = String::from_utf8_lossy(kept);
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let mut out = format!("Project instructions (from {name}):\n\n{text}");
+    if truncated {
+        let omitted = total.saturating_sub((bom + kept.len()) as u64);
+        out.push_str(&format!(
+            "\n[instructions truncated: {omitted} bytes omitted]"
+        ));
+    }
+    Some(out)
 }
 
 /// Renders a design-doc path template. `{date}` is the `YYYY-MM-DD` of
-/// `run_started_at` (RFC3339, in its own offset); `{slug}` follows the
-/// branch-name slug rules on the title, falling back to the first 8 chars
-/// of the root task id.
+/// `run_started_at` (RFC3339, in its own offset) or `undated` when it does
+/// not parse; `{slug}` follows the branch-name slug rules on the title,
+/// falling back to the first 8 chars of the root task id. Returns `None`
+/// when the rendered path fails the workflow's design-doc path check.
 pub fn render_design_doc_path(
     template: &str,
     run_started_at: &str,
     root_title: &str,
     root_task_id: &str,
-) -> String {
+) -> Option<String> {
     let date = chrono::DateTime::parse_from_rfc3339(run_started_at)
         .map(|at| at.format("%Y-%m-%d").to_string())
-        .unwrap_or_else(|_| run_started_at.chars().take(10).collect());
+        .unwrap_or_else(|_| "undated".to_string());
     let slug =
         gitops::title_slug(root_title).unwrap_or_else(|| root_task_id.chars().take(8).collect());
-    template.replace("{date}", &date).replace("{slug}", &slug)
+    let path = template.replace("{date}", &date).replace("{slug}", &slug);
+    (!is_invalid_design_doc_path(&path)).then_some(path)
 }
 
 /// `Some(text)` unless it is missing or whitespace-only.
@@ -202,7 +249,13 @@ fn non_empty(text: Option<&str>) -> Option<&str> {
     text.filter(|t| !t.trim().is_empty())
 }
 
-/// Trusted text (title, stage configuration) inserted as-is.
+/// Collapses every whitespace run (including newlines) to one space, so a
+/// title from an external source stays on its heading line.
+fn collapse_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Trusted text (stage configuration, project instructions) inserted as-is.
 fn plain(text: Option<&str>) -> Option<String> {
     non_empty(text).map(|t| t.trim().to_string())
 }
@@ -543,6 +596,67 @@ DESIGN DOC
     }
 
     #[test]
+    fn project_instructions_count_omitted_bytes_from_the_file_size() {
+        let dir = TempDir::new().unwrap();
+        // BOM + 'a' + 3-byte chars: the cut at MAX lands inside a char.
+        let body = format!("a{}", "あ".repeat(MAX_INSTRUCTIONS_BYTES));
+        let mut bytes = UTF8_BOM.to_vec();
+        bytes.extend_from_slice(body.as_bytes());
+        std::fs::write(dir.path().join("AGENTS.md"), &bytes).unwrap();
+        let got = project_instructions(dir.path()).unwrap();
+        let prefix = "Project instructions (from AGENTS.md):\n\n";
+        assert!(got.starts_with(prefix));
+        let marker = got.find("\n[instructions truncated: ").unwrap();
+        let kept = &got[prefix.len()..marker];
+        assert!(!kept.contains(char::REPLACEMENT_CHARACTER));
+        assert!(kept.len() <= MAX_INSTRUCTIONS_BYTES);
+        assert!(kept.len() > MAX_INSTRUCTIONS_BYTES - 3);
+        let omitted = body.len() - kept.len();
+        assert_eq!(
+            &got[marker..],
+            format!("\n[instructions truncated: {omitted} bytes omitted]")
+        );
+    }
+
+    #[test]
+    fn blank_agents_md_falls_back_to_claude_md() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("AGENTS.md"), " \n\t\n").unwrap();
+        std::fs::write(dir.path().join("CLAUDE.md"), "claude rules").unwrap();
+        let got = project_instructions(dir.path()).unwrap();
+        assert!(
+            got.starts_with("Project instructions (from CLAUDE.md):"),
+            "{got}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_agents_md_is_ignored() {
+        let dir = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let target = outside.path().join("secret.md");
+        std::fs::write(&target, "secret").unwrap();
+        std::os::unix::fs::symlink(&target, dir.path().join("AGENTS.md")).unwrap();
+        assert_eq!(project_instructions(dir.path()), None);
+        std::fs::write(dir.path().join("CLAUDE.md"), "claude rules").unwrap();
+        let got = project_instructions(dir.path()).unwrap();
+        assert!(got.starts_with("Project instructions (from CLAUDE.md):"));
+    }
+
+    #[test]
+    fn title_whitespace_is_collapsed() {
+        let s = stage(Role::Design);
+        let mut input = full_input(&s);
+        input.root_title = "  Fix\n## Injected\r\n\tbug  ";
+        let prompt = build_prompt(&input);
+        assert!(
+            prompt.starts_with("# Task\n\nFix ## Injected bug\n\n"),
+            "{prompt}"
+        );
+    }
+
+    #[test]
     fn project_instructions_ignore_directories() {
         let dir = TempDir::new().unwrap();
         std::fs::create_dir(dir.path().join("AGENTS.md")).unwrap();
@@ -560,7 +674,7 @@ DESIGN DOC
                 "Fix: Login Bug!",
                 "0123456789abcdef",
             ),
-            "docs/designs/2026-09-25-fix-login-bug-design.md"
+            Some("docs/designs/2026-09-25-fix-login-bug-design.md".to_string())
         );
     }
 
@@ -573,16 +687,44 @@ DESIGN DOC
                 "ログイン不具合の修正",
                 "0123456789abcdef",
             ),
-            "docs/designs/2026-09-25-01234567-design.md"
+            Some("docs/designs/2026-09-25-01234567-design.md".to_string())
+        );
+    }
+
+    #[test]
+    fn design_doc_path_uses_undated_for_unparsable_dates() {
+        assert_eq!(
+            render_design_doc_path(
+                "d/{date}-{slug}.md",
+                "../../evil",
+                "Title",
+                "0123456789abcdef"
+            ),
+            Some("d/undated-title.md".to_string())
+        );
+    }
+
+    #[test]
+    fn design_doc_path_rejects_unsafe_rendered_paths() {
+        let at = "2026-09-25T10:00:00Z";
+        let id = "0123456789abcdef";
+        assert_eq!(render_design_doc_path(".{slug}/x.md", at, "Git", id), None);
+        assert_eq!(
+            render_design_doc_path(".{slug}/x.md", at, "MDium", id),
+            None
+        );
+        assert_eq!(
+            render_design_doc_path(".{slug}/x.md", at, "Notes", id),
+            Some(".notes/x.md".to_string())
         );
     }
 
     #[test]
     fn screening_text_joins_present_parts() {
-        assert_eq!(screening_text("root", None, None), "root");
+        assert_eq!(screening_text("", "root", None, None), "root");
         assert_eq!(
-            screening_text("root", Some("task"), Some("answer")),
-            "root\n\ntask\n\nanswer"
+            screening_text("A\n  title\t", "root", Some("task"), Some("answer")),
+            "A title\n\nroot\n\ntask\n\nanswer"
         );
     }
 

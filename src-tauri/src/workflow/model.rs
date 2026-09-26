@@ -377,7 +377,7 @@ crate::workflow::errors::impl_workflow_error!(ValidationError);
 
 /// True if `path` is not a safe repo-relative `designDocPath`: absolute,
 /// containing a `..` segment, or rooted under `.git`/`.mdium`.
-fn is_invalid_design_doc_path(path: &str) -> bool {
+pub(crate) fn is_invalid_design_doc_path(path: &str) -> bool {
     if std::path::Path::new(path).is_absolute() {
         return true;
     }
