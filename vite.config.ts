@@ -94,5 +94,7 @@ export default defineConfig({
     // Exclude git worktrees under .claude/ so their duplicated test files are
     // not discovered alongside the real ones (which double-counts failures).
     exclude: [...configDefaults.exclude, "**/.claude/**"],
+    // Gives happy-dom browser semantics that DOMPurify relies on (no-op elsewhere).
+    setupFiles: ["src/shared/lib/markdown/__tests__/dompurify-happy-dom-shim.ts"],
   },
 });

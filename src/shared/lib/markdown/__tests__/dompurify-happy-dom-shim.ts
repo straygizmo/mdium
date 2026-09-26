@@ -1,6 +1,7 @@
-// Test-only shim: import it before anything that loads DOMPurify, so that
-// tests running under happy-dom exercise the real sanitizer with browser
-// semantics. It patches two happy-dom deviations DOMPurify depends on:
+// Test-only shim, registered via vitest setupFiles (vite.config.ts) so it runs
+// before any test module loads DOMPurify; it is a no-op outside happy-dom. It
+// makes tests running under happy-dom exercise the real sanitizer with
+// browser semantics. It patches two happy-dom deviations DOMPurify depends on:
 //
 // 1. DOMPurify reads node names through the getter on Node.prototype (as a
 //    clobbering defence). Browsers implement nodeName once on Node.prototype,

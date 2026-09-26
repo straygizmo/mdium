@@ -64,6 +64,40 @@ describe("UnifiedDiffView", () => {
     expect(container.querySelector(".unified-diff__truncated")).toBeNull();
   });
 
+  it("renders nothing for an empty diff", async () => {
+    await render("");
+
+    expect(container.querySelectorAll(".unified-diff__line")).toHaveLength(0);
+    expect(container.querySelector(".unified-diff__truncated")).toBeNull();
+  });
+
+  it("splits CRLF diffs without keeping carriage returns", async () => {
+    await render("@@ -1 +1 @@\r\n-old\r\n+new\r\n");
+
+    const lines = Array.from(container.querySelectorAll(".unified-diff__line"));
+    expect(lines.map((l) => l.textContent)).toEqual(["@@ -1 +1 @@", "-old", "+new"]);
+    expect(lines.map(lineClass)).toEqual([
+      "unified-diff__line--header",
+      "unified-diff__line--removed",
+      "unified-diff__line--added",
+    ]);
+  });
+
+  it("hides every line when maxLines is zero or negative", async () => {
+    await render("+a\n+b", 0);
+    expect(container.querySelectorAll(".unified-diff__line")).toHaveLength(0);
+    expect(container.querySelector(".unified-diff__truncated")?.textContent).toBe(
+      i18n.t("common:truncatedLines", { count: 2 }),
+    );
+
+    await act(async () => root?.unmount());
+    await render("+a\n+b", -3);
+    expect(container.querySelectorAll(".unified-diff__line")).toHaveLength(0);
+    expect(container.querySelector(".unified-diff__truncated")?.textContent).toBe(
+      i18n.t("common:truncatedLines", { count: 2 }),
+    );
+  });
+
   it("caps rendered lines and shows a truncation note", async () => {
     const diff = Array.from({ length: 12 }, (_, i) => `+line ${i}`).join("\n");
     await render(diff, 5);

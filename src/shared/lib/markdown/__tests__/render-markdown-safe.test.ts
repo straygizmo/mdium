@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
-// The shim must load before DOMPurify; see the shim for why.
-import "./dompurify-happy-dom-shim";
+import DOMPurify from "dompurify";
+import { marked } from "marked";
 import { describe, expect, it } from "vitest";
 import { renderMarkdownSafe } from "../render-markdown-safe";
 
@@ -55,5 +55,21 @@ describe("renderMarkdownSafe", () => {
   it("returns an empty string for non-string input", () => {
     expect(renderMarkdownSafe(undefined as unknown as string)).toBe("");
     expect(renderMarkdownSafe(42 as unknown as string)).toBe("");
+  });
+
+  it("ignores global marked configuration", () => {
+    const before = renderMarkdownSafe("# Title");
+    marked.use({ renderer: { heading: () => "<h6>hijacked</h6>" } });
+    expect(marked.parse("# Title", { async: false })).toContain("hijacked");
+    const after = renderMarkdownSafe("# Title");
+    expect(after).toBe(before);
+    expect(after).not.toContain("hijacked");
+  });
+
+  it("does not add its link hook to the global DOMPurify instance", () => {
+    renderMarkdownSafe("[site](https://example.com)");
+    const link = toDom(DOMPurify.sanitize('<a href="https://example.com">x</a>')).querySelector("a");
+    expect(link?.hasAttribute("target")).toBe(false);
+    expect(link?.hasAttribute("rel")).toBe(false);
   });
 });
