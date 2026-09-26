@@ -64,34 +64,4 @@
 .external-change-dialog__diff {
   margin-top: 12px;
   margin-bottom: 12px;
-  max-height: 400px;
-  overflow-y: auto;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--bg-surface);
-  font-family: "Consolas", "Courier New", monospace;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.external-change-dialog__diff-line {
-  padding: 0 8px;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-
-.external-change-dialog__diff-line--added {
-  background: rgba(46, 160, 67, 0.15);
-  color: var(--text);
-}
-
-.external-change-dialog__diff-line--removed {
-  background: rgba(248, 81, 73, 0.15);
-  color: var(--text);
-}
-
-.external-change-dialog__diff-line--header {
-  color: var(--text-muted);
-  font-style: italic;
-  background: var(--bg-base);
 }

@@ -1,0 +1,43 @@
+.unified-diff {
+  max-height: 400px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  font-family: "Consolas", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.unified-diff__line {
+  padding: 0 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text);
+}
+
+.unified-diff__line--added {
+  background: color-mix(in srgb, var(--accent-green) 15%, transparent);
+}
+
+.unified-diff__line--removed {
+  background: color-mix(in srgb, var(--accent-red) 15%, transparent);
+}
+
+.unified-diff__line--header {
+  color: var(--text-muted);
+  font-style: italic;
+  background: var(--bg-base);
+}
+
+.unified-diff__line--meta {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.unified-diff__truncated {
+  padding: 4px 8px;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-style: italic;
+}

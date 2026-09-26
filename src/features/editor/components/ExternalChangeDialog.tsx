@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { structuredPatch } from "diff";
+import { UnifiedDiffView } from "@/shared/components/UnifiedDiffView";
 import "./ExternalChangeDialog.css";
 
 interface ExternalChangeDialogProps {
@@ -34,9 +35,9 @@ export function ExternalChangeDialog({
     [onClose],
   );
 
-  const diffLines = showDiff
-    ? computeDiffLines(currentContent, externalContent)
-    : [];
+  const diffText = showDiff
+    ? computeDiffText(currentContent, externalContent)
+    : "";
 
   return (
     <div className="external-change-overlay" onClick={onClose}>
@@ -55,14 +56,7 @@ export function ExternalChangeDialog({
 
         {showDiff && (
           <div className="external-change-dialog__diff">
-            {diffLines.map((line, i) => (
-              <div
-                key={i}
-                className={`external-change-dialog__diff-line ${getDiffLineClass(line)}`}
-              >
-                {line}
-              </div>
-            ))}
+            <UnifiedDiffView diff={diffText} />
           </div>
         )}
 
@@ -91,7 +85,7 @@ export function ExternalChangeDialog({
   );
 }
 
-function computeDiffLines(oldText: string, newText: string): string[] {
+function computeDiffText(oldText: string, newText: string): string {
   const patch = structuredPatch("file", "file", oldText, newText, "", "", {
     context: 3,
   });
@@ -102,12 +96,5 @@ function computeDiffLines(oldText: string, newText: string): string[] {
       lines.push(line);
     }
   }
-  return lines;
-}
-
-function getDiffLineClass(line: string): string {
-  if (line.startsWith("+")) return "external-change-dialog__diff-line--added";
-  if (line.startsWith("-")) return "external-change-dialog__diff-line--removed";
-  if (line.startsWith("@@")) return "external-change-dialog__diff-line--header";
-  return "";
+  return lines.join("\n");
 }

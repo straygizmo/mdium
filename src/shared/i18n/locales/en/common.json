@@ -125,5 +125,6 @@
   "cloneDestSelect": "Select folder",
   "cloneDestNotSelected": "No folder selected",
   "cloning": "Cloning...",
-  "cloneError": "Failed to clone repository"
+  "cloneError": "Failed to clone repository",
+  "truncatedLines": "{{count}} more lines not shown"
 }
