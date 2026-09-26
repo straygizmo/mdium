@@ -112,7 +112,9 @@ const PROGRESS_MAX_CHARS: usize = 500;
 /// Runs one attempt to its end. Never takes the project lock (attempt
 /// output and log writes need none). Always closes the session before
 /// returning and, on [`AttemptEnd::Completed`], saves the final response as
-/// the attempt output. Store errors are only reported via `eprintln!`.
+/// the attempt output; if that write fails the attempt ends as
+/// [`AttemptEnd::Failed`] with the store error's code. Log write errors are
+/// only reported via `eprintln!`.
 pub fn run_attempt(
     runner: &dyn RunnerApi,
     store: &WorkflowStore,
@@ -120,8 +122,29 @@ pub fn run_attempt(
     cancel: &CancelToken,
     progress: &dyn Fn(ProgressUpdate),
 ) -> AttemptEnd {
+    run_attempt_with_grace(runner, store, req, cancel, progress, CANCEL_GRACE)
+}
+
+/// [`run_attempt`] with a configurable wait for `TurnCancelled` after
+/// cancelling the session.
+fn run_attempt_with_grace(
+    runner: &dyn RunnerApi,
+    store: &WorkflowStore,
+    req: &AttemptRequest,
+    cancel: &CancelToken,
+    progress: &dyn Fn(ProgressUpdate),
+    cancel_grace: Duration,
+) -> AttemptEnd {
     let mut throttle = Throttle::default();
-    let end = drive(runner, store, req, cancel, progress, &mut throttle);
+    let mut end = drive(
+        runner,
+        store,
+        req,
+        cancel,
+        progress,
+        &mut throttle,
+        cancel_grace,
+    );
     throttle.finish(progress);
     if let AttemptEnd::Completed { final_response } = &end {
         if let Err(e) = store.write_attempt_output(
@@ -130,12 +153,14 @@ pub fn run_attempt(
             &req.attempt_id,
             final_response,
         ) {
-            eprintln!(
-                "[workflow] failed to write attempt output {}: {e}",
-                req.attempt_id
-            );
+            // An answer that cannot be saved cannot be inspected or parsed.
+            end = AttemptEnd::Failed {
+                code: e.code().to_string(),
+                message: e.to_string(),
+            };
         }
     }
+    // Also tears down a turn still in flight (e.g. after `Rejected`).
     if let Err(e) = runner.close_session(&req.session_id) {
         eprintln!("[workflow] failed to close session {}: {e}", req.session_id);
     }
@@ -173,6 +198,7 @@ fn drive(
     cancel: &CancelToken,
     progress: &dyn Fn(ProgressUpdate),
     throttle: &mut Throttle,
+    cancel_grace: Duration,
 ) -> AttemptEnd {
     // The guard root must be exactly the worktree; never pass a lossy path.
     let Some(worktree) = req.worktree.to_str() else {
@@ -191,10 +217,16 @@ fn drive(
         guard_workspace_root: Some(worktree.to_string()),
         timeout_ms: Some(u64::try_from(req.timeout.as_millis()).unwrap_or(u64::MAX)),
     };
+    if let Some(reason) = cancel.reason() {
+        return AttemptEnd::Cancelled(reason);
+    }
     let rx = match runner.start_session(params, START_TIMEOUT) {
         Ok((rx, _)) => rx,
         Err(e) => return failed(&e),
     };
+    if let Some(reason) = cancel.reason() {
+        return AttemptEnd::Cancelled(reason);
+    }
     if let Err(e) = runner.send(&req.session_id, &req.prompt) {
         return failed(&e);
     }
@@ -209,7 +241,8 @@ fn drive(
             );
         }
     };
-    let deadline = Instant::now() + req.timeout;
+    // `None` (a timeout too large to represent) means no deadline.
+    let deadline = Instant::now().checked_add(req.timeout);
     // The first guard violation of the turn.
     let mut violation: Option<(String, String)> = None;
     // Set once this side has asked the runner to cancel the turn, with the
@@ -225,26 +258,31 @@ fn drive(
             None => {
                 let cause = match cancel.reason() {
                     Some(reason) => Some(StopCause::Cancel(reason)),
-                    None if now >= deadline => Some(StopCause::Timeout),
+                    None if deadline.is_some_and(|d| now >= d) => Some(StopCause::Timeout),
                     None => None,
                 };
                 if let Some(cause) = cause {
+                    // Progress of a turn being stopped is no longer shown.
+                    throttle.stop();
                     if let Err(e) = runner.cancel(&req.session_id) {
+                        // No `TurnCancelled` will follow; closing the
+                        // session tears the turn down.
                         eprintln!(
                             "[workflow] failed to cancel session {}: {e}",
                             req.session_id
                         );
+                        return cause.end();
                     }
-                    stopping = Some((cause, now + CANCEL_GRACE));
+                    stopping = Some((cause, now + cancel_grace));
                 }
             }
         }
 
         // Wake up no later than the next deadline or due progress update.
-        let mut wake = (now + POLL_INTERVAL).min(match stopping {
-            Some((_, grace_end)) => grace_end,
-            None => deadline,
-        });
+        let mut wake = now + POLL_INTERVAL;
+        if let Some(limit) = stopping.map(|(_, grace_end)| grace_end).or(deadline) {
+            wake = wake.min(limit);
+        }
         if let Some(due) = throttle.next_due() {
             wake = wake.min(due);
         }
@@ -312,6 +350,9 @@ fn drive(
                     },
                 }
             }
+            // The runner refused a command without ending its turn. The
+            // attempt still ends here: `close_session` in `run_attempt`
+            // tears down whatever is still in flight.
             RunnerEvent::Rejected { message } => {
                 log(json!({ "type": "rejected", "message": message }).to_string());
                 AttemptEnd::Failed {
@@ -319,7 +360,9 @@ fn drive(
                     message,
                 }
             }
-            RunnerEvent::TurnCancelled if Instant::now() >= deadline => AttemptEnd::TimedOut,
+            RunnerEvent::TurnCancelled if deadline.is_some_and(|d| Instant::now() >= d) => {
+                AttemptEnd::TimedOut
+            }
             RunnerEvent::TurnCancelled => {
                 AttemptEnd::Cancelled(cancel.reason().unwrap_or(CancelReason::User))
             }
@@ -349,9 +392,16 @@ fn progress_for(event: &Value) -> Option<ProgressUpdate> {
 struct Throttle {
     last_sent: Option<Instant>,
     pending: Option<ProgressUpdate>,
+    /// Set once the turn is being stopped; nothing is forwarded after that.
+    stopped: bool,
 }
 
 impl Throttle {
+    fn stop(&mut self) {
+        self.stopped = true;
+        self.pending = None;
+    }
+
     fn is_due(&self, now: Instant) -> bool {
         self.last_sent
             .map_or(true, |last| now >= last + PROGRESS_INTERVAL)
@@ -363,6 +413,9 @@ impl Throttle {
     }
 
     fn offer(&mut self, update: ProgressUpdate, now: Instant, progress: &dyn Fn(ProgressUpdate)) {
+        if self.stopped {
+            return;
+        }
         if self.is_due(now) {
             self.pending = None;
             self.deliver(update, now, progress);
@@ -410,8 +463,12 @@ mod tests {
         params: Mutex<Option<StartSessionParams>>,
         rx: Mutex<Option<Receiver<RunnerEvent>>>,
         start_error: Option<RunnerError>,
-        /// When set, `cancel` answers with `TurnCancelled` through it.
-        cancel_reply: Mutex<Option<Sender<RunnerEvent>>>,
+        /// When set, `cancel` pushes these events through the sender.
+        cancel_reply: Mutex<Option<(Sender<RunnerEvent>, Vec<RunnerEvent>)>>,
+        cancel_error: bool,
+        /// When set, `start_session` cancels this token (a cancel that
+        /// arrives while the session is starting).
+        cancel_on_start: Option<CancelToken>,
         permissions: Mutex<Vec<(String, bool)>>,
     }
 
@@ -425,6 +482,8 @@ mod tests {
                     rx: Mutex::new(Some(rx)),
                     start_error: None,
                     cancel_reply: Mutex::new(None),
+                    cancel_error: false,
+                    cancel_on_start: None,
                     permissions: Mutex::new(vec![]),
                 },
                 tx,
@@ -432,8 +491,12 @@ mod tests {
         }
 
         fn replying_to_cancel() -> (FakeRunner, Sender<RunnerEvent>) {
+            Self::replying_to_cancel_with(vec![RunnerEvent::TurnCancelled])
+        }
+
+        fn replying_to_cancel_with(events: Vec<RunnerEvent>) -> (FakeRunner, Sender<RunnerEvent>) {
             let (runner, tx) = Self::new();
-            *runner.cancel_reply.lock().unwrap() = Some(tx.clone());
+            *runner.cancel_reply.lock().unwrap() = Some((tx.clone(), events));
             (runner, tx)
         }
 
@@ -453,6 +516,9 @@ mod tests {
             _timeout: Duration,
         ) -> Result<(Receiver<RunnerEvent>, Option<String>), RunnerError> {
             self.record("start".to_string());
+            if let Some(token) = &self.cancel_on_start {
+                token.cancel(CancelReason::Shutdown);
+            }
             *self.params.lock().unwrap() = Some(params);
             if let Some(err) = &self.start_error {
                 return Err(err.clone());
@@ -467,8 +533,13 @@ mod tests {
 
         fn cancel(&self, _session_id: &str) -> Result<(), RunnerError> {
             self.record("cancel".to_string());
-            if let Some(tx) = self.cancel_reply.lock().unwrap().as_ref() {
-                let _ = tx.send(RunnerEvent::TurnCancelled);
+            if self.cancel_error {
+                return Err(RunnerError::Exited);
+            }
+            if let Some((tx, events)) = self.cancel_reply.lock().unwrap().as_ref() {
+                for event in events {
+                    let _ = tx.send(event.clone());
+                }
             }
             Ok(())
         }
@@ -526,10 +597,25 @@ mod tests {
         req: &AttemptRequest,
         cancel: &CancelToken,
     ) -> (AttemptEnd, Vec<ProgressUpdate>) {
+        run_with_grace(runner, store, req, cancel, CANCEL_GRACE)
+    }
+
+    fn run_with_grace(
+        runner: &FakeRunner,
+        store: &WorkflowStore,
+        req: &AttemptRequest,
+        cancel: &CancelToken,
+        grace: Duration,
+    ) -> (AttemptEnd, Vec<ProgressUpdate>) {
         let updates = Mutex::new(vec![]);
-        let end = run_attempt(runner, store, req, cancel, &|u| {
-            updates.lock().unwrap().push(u)
-        });
+        let end = run_attempt_with_grace(
+            runner,
+            store,
+            req,
+            cancel,
+            &|u| updates.lock().unwrap().push(u),
+            grace,
+        );
         (end, updates.into_inner().unwrap())
     }
 
@@ -844,5 +930,137 @@ mod tests {
         // Every event is still logged.
         let log = store.read_attempt_log(ROOT, TASK, ATTEMPT).unwrap();
         assert_eq!(log.lines().count(), 100);
+    }
+
+    #[test]
+    fn unsaved_output_is_a_failure_with_the_store_code() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WorkflowStore::new(dir.path().to_path_buf());
+        // A file where the attempt directory belongs makes every write fail.
+        let run_dir = dir.path().join(".mdium").join("runs").join(ROOT);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(run_dir.join(TASK), "not a directory").unwrap();
+        let (runner, tx) = FakeRunner::new();
+        tx.send(completed("answer")).unwrap();
+
+        let (end, _) = run(&runner, &store, &request(&dir), &CancelToken::default());
+
+        assert!(
+            matches!(&end, AttemptEnd::Failed { code, .. } if code == "STORE_IO_FAILED"),
+            "{end:?}"
+        );
+        assert_eq!(runner.calls().last().unwrap(), "close");
+    }
+
+    #[test]
+    fn cancel_before_start_never_starts_the_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WorkflowStore::new(dir.path().to_path_buf());
+        let (runner, _tx) = FakeRunner::new();
+        let cancel = CancelToken::default();
+        cancel.cancel(CancelReason::Shutdown);
+
+        let (end, _) = run(&runner, &store, &request(&dir), &cancel);
+
+        assert_eq!(end, AttemptEnd::Cancelled(CancelReason::Shutdown));
+        assert_eq!(runner.calls(), vec!["close"]);
+    }
+
+    #[test]
+    fn cancel_while_starting_never_sends_the_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WorkflowStore::new(dir.path().to_path_buf());
+        let (mut runner, _tx) = FakeRunner::new();
+        let cancel = CancelToken::default();
+        runner.cancel_on_start = Some(cancel.clone());
+
+        let (end, _) = run(&runner, &store, &request(&dir), &cancel);
+
+        assert_eq!(end, AttemptEnd::Cancelled(CancelReason::Shutdown));
+        assert_eq!(runner.calls(), vec!["start", "close"]);
+    }
+
+    #[test]
+    fn cancel_error_ends_the_attempt_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WorkflowStore::new(dir.path().to_path_buf());
+        let (mut runner, _tx) = FakeRunner::new();
+        runner.cancel_error = true;
+        let cancel = CancelToken::default();
+        let canceller = {
+            let cancel = cancel.clone();
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(20));
+                cancel.cancel(CancelReason::User);
+            })
+        };
+
+        let started = Instant::now();
+        let (end, _) = run(&runner, &store, &request(&dir), &cancel);
+        canceller.join().unwrap();
+
+        assert_eq!(end, AttemptEnd::Cancelled(CancelReason::User));
+        // Well below the 10 s grace period.
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(
+            runner.calls(),
+            vec!["start", "send:do the stage", "cancel", "close"]
+        );
+    }
+
+    #[test]
+    fn missing_turn_cancelled_ends_after_the_grace_period() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WorkflowStore::new(dir.path().to_path_buf());
+        // The runner never answers the cancel.
+        let (runner, _tx) = FakeRunner::new();
+        let mut req = request(&dir);
+        req.timeout = Duration::from_millis(50);
+
+        let started = Instant::now();
+        let (end, _) = run_with_grace(
+            &runner,
+            &store,
+            &req,
+            &CancelToken::default(),
+            Duration::from_millis(100),
+        );
+
+        assert_eq!(end, AttemptEnd::TimedOut);
+        assert!(started.elapsed() >= Duration::from_millis(150));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(
+            runner.calls(),
+            vec!["start", "send:do the stage", "cancel", "close"]
+        );
+    }
+
+    #[test]
+    fn no_progress_is_forwarded_after_the_turn_is_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WorkflowStore::new(dir.path().to_path_buf());
+        let late = json!({ "type": "assistant_message", "text": "late" });
+        let (runner, tx) = FakeRunner::replying_to_cancel_with(vec![
+            RunnerEvent::Event(late),
+            RunnerEvent::TurnCancelled,
+        ]);
+        for text in ["first", "throttled"] {
+            let event = json!({ "type": "assistant_message", "text": text });
+            tx.send(RunnerEvent::Event(event)).unwrap();
+        }
+        let mut req = request(&dir);
+        // Shorter than the progress interval, so "throttled" is still pending.
+        req.timeout = Duration::from_millis(100);
+
+        let (end, updates) = run(&runner, &store, &req, &CancelToken::default());
+
+        assert_eq!(end, AttemptEnd::TimedOut);
+        assert_eq!(
+            updates,
+            vec![ProgressUpdate {
+                kind: "message",
+                text: "first".to_string()
+            }]
+        );
     }
 }
