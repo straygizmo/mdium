@@ -19,11 +19,30 @@ pub struct PromptInput<'a> {
     pub task_body: Option<&'a str>,
     /// Latest design stage output (passed to the review stage).
     pub design: Option<&'a str>,
+    /// What the task's previous attempt left for this one (an approved
+    /// plan, a plan to revise, or a question the user answered).
+    pub previous: Option<&'a PreviousAttempt>,
     /// Answer to a question or a revision instruction.
     pub user_input: Option<&'a str>,
     /// Diff to review, already capped by [`cap_diff`].
     pub review_diff: Option<&'a str>,
     pub project_instructions: Option<&'a str>,
+}
+
+/// Context carried over from the task's previous attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PreviousAttempt {
+    /// The plan the user approved; the execute attempt carries it out.
+    ApprovedPlan(String),
+    /// The plan the user asked to revise (the instruction is the user
+    /// input).
+    PlanToRevise(String),
+    /// The question the previous attempt asked (the answer is the user
+    /// input) and that attempt's output body.
+    Question {
+        question: Option<String>,
+        output: String,
+    },
 }
 
 /// Maximum size of a diff embedded in a prompt.
@@ -90,7 +109,7 @@ The options considered and their trade-offs.
 /// are omitted; the order is fixed.
 pub fn build_prompt(input: &PromptInput) -> String {
     let stage_heading = format!("## Your stage: {}", role_name(input.stage.role));
-    let sections: [(&str, Option<String>); 10] = [
+    let sections: [(&str, Option<String>); 11] = [
         (
             "# Task",
             non_empty(Some(input.root_title)).map(collapse_whitespace),
@@ -101,6 +120,10 @@ pub fn build_prompt(input: &PromptInput) -> String {
             data_block(input.task_body),
         ),
         ("## Design", data_block(input.design)),
+        (
+            "## Previous attempt",
+            input.previous.and_then(previous_block),
+        ),
         (
             "## Additional instructions from the user",
             data_block(input.user_input),
@@ -244,6 +267,42 @@ pub fn render_design_doc_path(
     (!is_invalid_design_doc_path(&path)).then_some(path)
 }
 
+/// The body of the "Previous attempt" section: per part a heading, one
+/// guiding sentence and a data block. `None` when every part is empty.
+fn previous_block(previous: &PreviousAttempt) -> Option<String> {
+    let parts: Vec<(&str, &str, Option<&str>)> = match previous {
+        PreviousAttempt::ApprovedPlan(plan) => vec![(
+            "### Approved plan",
+            "The user approved this plan. Carry it out.",
+            Some(plan.as_str()),
+        )],
+        PreviousAttempt::PlanToRevise(plan) => vec![(
+            "### Plan to revise",
+            "Revise this plan according to the additional instructions from the user.",
+            Some(plan.as_str()),
+        )],
+        PreviousAttempt::Question { question, output } => vec![
+            (
+                "### Your question",
+                "You asked the user this question; the answer is in the additional instructions from the user.",
+                question.as_deref(),
+            ),
+            (
+                "### Your previous output",
+                "Your output from the attempt that asked the question.",
+                Some(output.as_str()),
+            ),
+        ],
+    };
+    let blocks: Vec<String> = parts
+        .into_iter()
+        .filter_map(|(heading, lead, text)| {
+            data_block(text).map(|block| format!("{heading}\n\n{lead}\n\n{block}"))
+        })
+        .collect();
+    (!blocks.is_empty()).then(|| blocks.join("\n\n"))
+}
+
 /// `Some(text)` unless it is missing or whitespace-only.
 fn non_empty(text: Option<&str>) -> Option<&str> {
     text.filter(|t| !t.trim().is_empty())
@@ -329,6 +388,7 @@ mod tests {
             root_body: "ROOT BODY",
             task_body: Some("TASK BODY"),
             design: Some("DESIGN DOC"),
+            previous: None,
             user_input: Some("USER INPUT"),
             review_diff: Some("DIFF TEXT"),
             project_instructions: Some("PROJECT RULES"),
@@ -390,6 +450,7 @@ mod tests {
             root_body: "B",
             task_body: None,
             design: None,
+            previous: None,
             user_input: Some("   "),
             review_diff: Some(""),
             project_instructions: None,
@@ -460,6 +521,80 @@ DESIGN DOC
                 }
             }
         }
+    }
+
+    #[test]
+    fn previous_attempt_section_sits_between_design_and_user_input() {
+        let s = stage(Role::Implement);
+        let previous = PreviousAttempt::ApprovedPlan("1. PLAN STEP".to_string());
+        let mut input = full_input(&s);
+        input.mode = AttemptMode::Execute;
+        input.previous = Some(&previous);
+        let prompt = build_prompt(&input);
+        let order = positions(
+            &prompt,
+            &[
+                "DESIGN DOC",
+                "## Previous attempt",
+                "### Approved plan",
+                "The user approved this plan. Carry it out.",
+                "```text\n1. PLAN STEP\n```",
+                "## Additional instructions from the user",
+            ],
+        );
+        let mut sorted = order.clone();
+        sorted.sort_unstable();
+        assert_eq!(order, sorted, "{prompt}");
+        assert_eq!(prompt.matches(DATA_NOTE).count(), 5, "{prompt}");
+    }
+
+    #[test]
+    fn plan_to_revise_and_answered_question_are_rendered() {
+        let s = stage(Role::Implement);
+        let revise = PreviousAttempt::PlanToRevise("OLD PLAN".to_string());
+        let mut input = full_input(&s);
+        input.mode = AttemptMode::Plan;
+        input.previous = Some(&revise);
+        let prompt = build_prompt(&input);
+        assert!(prompt.contains("### Plan to revise"), "{prompt}");
+        assert!(prompt.contains("```text\nOLD PLAN\n```"), "{prompt}");
+        assert!(!prompt.contains("### Approved plan"));
+
+        let question = PreviousAttempt::Question {
+            question: Some("SQLite or JSON?".to_string()),
+            output: "OPTIONS CONSIDERED".to_string(),
+        };
+        input.mode = AttemptMode::Single;
+        input.previous = Some(&question);
+        let prompt = build_prompt(&input);
+        let order = positions(
+            &prompt,
+            &[
+                "## Previous attempt",
+                "### Your question",
+                "```text\nSQLite or JSON?\n```",
+                "### Your previous output",
+                "```text\nOPTIONS CONSIDERED\n```",
+                "## Additional instructions from the user",
+            ],
+        );
+        let mut sorted = order.clone();
+        sorted.sort_unstable();
+        assert_eq!(order, sorted, "{prompt}");
+
+        // A question without text keeps only the output part; a section
+        // with nothing in it is omitted.
+        let bare = PreviousAttempt::Question {
+            question: None,
+            output: "OUT".to_string(),
+        };
+        input.previous = Some(&bare);
+        let prompt = build_prompt(&input);
+        assert!(!prompt.contains("### Your question"));
+        assert!(prompt.contains("### Your previous output"));
+        let empty = PreviousAttempt::ApprovedPlan("  ".to_string());
+        input.previous = Some(&empty);
+        assert!(!build_prompt(&input).contains("## Previous attempt"));
     }
 
     #[test]

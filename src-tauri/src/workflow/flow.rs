@@ -21,7 +21,7 @@ use crate::workflow::model::{
 use crate::workflow::outcome::{parse_outcome, StageOutcomeKind};
 use crate::workflow::prompt::{
     build_prompt, cap_diff, project_instructions, render_design_doc_path, screening_hash,
-    screening_text, PromptInput,
+    screening_text, PreviousAttempt, PromptInput,
 };
 use crate::workflow::runner_client::RunnerPermission;
 use crate::workflow::screening::screen;
@@ -277,11 +277,14 @@ pub fn begin_attempt(
     } else {
         None
     };
-    let design = if role == Role::Review {
-        latest_design_body(store, &run)
-    } else {
-        None
+    // The review always gets the design; an implement task only on a
+    // review re-entry (a first implement task has it as its own input).
+    let design = match role {
+        Role::Review => latest_design_body(store, &run),
+        Role::Implement if parent_is_review(store, &task) => latest_design_body(store, &run),
+        _ => None,
     };
+    let previous = previous_attempt(store, &run, task_id, mode, user_input.is_some());
     let worktree_path = PathBuf::from(&worktree.path);
     let instructions = if stage.provider == Provider::Opencode {
         project_instructions(&worktree_path)
@@ -295,6 +298,7 @@ pub fn begin_attempt(
         root_body: &root.body,
         task_body,
         design: design.as_deref(),
+        previous: previous.as_ref(),
         user_input,
         review_diff: review_diff.as_deref(),
         project_instructions: instructions.as_deref(),
@@ -515,6 +519,65 @@ fn latest_design_body(store: &WorkflowStore, run: &WorkflowRun) -> Option<String
         .rev()
         .filter(|a| a.task_id == design_task.meta.id)
         .find_map(|a| attempt_output_body(store, run, a))
+}
+
+/// True when `task` was created by a review re-entry (its parent is a
+/// review task).
+fn parent_is_review(store: &WorkflowStore, task: &Task) -> bool {
+    task.meta
+        .parent_id
+        .as_deref()
+        .and_then(|parent| store.get_task(parent).ok())
+        .is_some_and(|parent| parent.meta.role == Some(Role::Review))
+}
+
+/// What the task's earlier attempts hand to the attempt about to start:
+/// the question and output of the latest attempt when it asked a question
+/// the user has now answered; otherwise, for an execute attempt, the
+/// approved plan, and for a plan attempt with a revision instruction, the
+/// plan to revise (both the output body of the task's latest completed
+/// plan attempt).
+fn previous_attempt(
+    store: &WorkflowStore,
+    run: &WorkflowRun,
+    task_id: &str,
+    mode: AttemptMode,
+    has_user_input: bool,
+) -> Option<PreviousAttempt> {
+    let mut attempts = run.attempts.iter().rev().filter(|a| a.task_id == task_id);
+    let latest = attempts.clone().next()?;
+    if has_user_input && latest.outcome.as_deref() == Some("awaiting_user") {
+        let raw = store
+            .read_attempt_output(&run.root_task_id, task_id, &latest.attempt_id)
+            .ok()?;
+        // The same question `decide` showed the user.
+        return Some(match parse_outcome(&raw) {
+            Ok(outcome) => PreviousAttempt::Question {
+                question: outcome.question.or(outcome.reason),
+                output: outcome.body,
+            },
+            Err(_) => PreviousAttempt::Question {
+                question: None,
+                output: raw,
+            },
+        });
+    }
+    let wants_plan = match mode {
+        AttemptMode::Execute => true,
+        AttemptMode::Plan => has_user_input,
+        AttemptMode::Single => false,
+    };
+    if !wants_plan {
+        return None;
+    }
+    let plan = attempts
+        .find(|a| a.mode == AttemptMode::Plan && a.outcome.as_deref() == Some("completed"))
+        .and_then(|a| attempt_output_body(store, run, a))?;
+    Some(if mode == AttemptMode::Execute {
+        PreviousAttempt::ApprovedPlan(plan)
+    } else {
+        PreviousAttempt::PlanToRevise(plan)
+    })
 }
 
 /// An attempt's output body (parsed, else raw), or `None` if unreadable.
@@ -1552,6 +1615,8 @@ mod tests {
         let replan = env.started(&implement.meta.id);
         assert_eq!(replan.mode, AttemptMode::Plan);
         assert!(replan.request.prompt.contains("Also update the docs."));
+        assert!(replan.request.prompt.contains("### Plan to revise"));
+        assert!(replan.request.prompt.contains("1. do it"));
         assert_eq!(env.task(&implement.meta.id).meta.user_input, None);
         assert_eq!(
             env.last_attempt(&root.meta.id).user_input.as_deref(),
@@ -1568,6 +1633,8 @@ mod tests {
         assert_eq!(execute.mode, AttemptMode::Execute);
         assert_eq!(execute.request.permission, RunnerPermission::FullAccess);
         assert!(!execute.request.prompt.contains("## Plan mode"));
+        assert!(execute.request.prompt.contains("### Approved plan"));
+        assert!(execute.request.prompt.contains("1. do it and docs"));
         assert!(!env.task(&implement.meta.id).meta.plan_approved);
         assert_eq!(env.last_attempt(&root.meta.id).mode, AttemptMode::Execute);
     }
@@ -1758,6 +1825,52 @@ mod tests {
             task.meta.awaiting.unwrap().question.as_deref(),
             Some("Need a name.")
         );
+    }
+
+    #[test]
+    fn an_answered_question_carries_the_question_and_output_forward() {
+        let env = Env::new();
+        let root = env.root_task("A", "a");
+        let planned = env.started(&root.meta.id);
+        env.complete(
+            &planned,
+            "---\noutcome: awaiting_user\nreason: Unclear.\nquestion: SQLite or JSON?\n---\nTrade-offs listed.",
+        );
+        env.to_inbox(&root.meta.id, |meta| {
+            meta.awaiting = None;
+            meta.user_input = Some("Use SQLite.".to_string());
+        });
+        let answered = env.started(&root.meta.id);
+        let prompt = &answered.request.prompt;
+        assert!(prompt.contains("## Previous attempt"), "{prompt}");
+        assert!(prompt.contains("SQLite or JSON?"), "{prompt}");
+        assert!(prompt.contains("Trade-offs listed."), "{prompt}");
+        assert!(prompt.contains("Use SQLite."), "{prompt}");
+
+        // A plain retry after a timeout carries nothing over.
+        env.finish(&answered, AttemptEnd::TimedOut);
+        env.to_inbox(&root.meta.id, |_| {});
+        let retried = env.started(&root.meta.id);
+        assert!(!retried.request.prompt.contains("## Previous attempt"));
+    }
+
+    #[test]
+    fn an_implement_reentry_gets_the_latest_design() {
+        let env = Env::with(|w| w.review_return_to = Role::Implement);
+        let root = env.root_task("A", "a");
+        let implement2 = through_reentry(&env, &root);
+        assert_eq!(implement2.meta.role, Some(Role::Implement));
+        let prompt = env.started(&implement2.meta.id).request.prompt;
+        assert!(prompt.contains("## Design\n"), "{prompt}");
+        assert!(prompt.contains("the plan"), "{prompt}");
+        assert!(prompt.contains("fix it"), "{prompt}");
+
+        // The first implement task gets the design as its own input only.
+        let env = Env::new();
+        let root = env.root_task("A", "a");
+        let implement = through_design(&env, &root);
+        let prompt = env.started(&implement.meta.id).request.prompt;
+        assert!(!prompt.contains("## Design\n"), "{prompt}");
     }
 
     #[test]
