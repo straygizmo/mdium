@@ -68,6 +68,9 @@ export function TaskDetailModal() {
   const activeRoot = useWorkflowStore((s) => s.activeRoot);
   const project = useWorkflowStore((s) => (s.activeRoot ? s.projects[s.activeRoot] : undefined));
   const openTask = useWorkflowStore((s) => s.openTask);
+  const progress = useWorkflowStore((s) =>
+    s.activeRoot && s.selectedTaskId ? s.projects[s.activeRoot]?.progress[s.selectedTaskId] : undefined,
+  );
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
 
@@ -178,6 +181,14 @@ export function TaskDetailModal() {
             ×
           </button>
         </header>
+        {progress && (storeTask ?? task)?.meta.status === "running" && (
+          <p className="workflow-detail__progress" data-section="progress" aria-live="polite">
+            <span className="workflow-detail__progress-label">{t("detail.progress")}</span>
+            <span className="workflow-detail__progress-text" title={progress.text}>
+              {progress.text}
+            </span>
+          </p>
+        )}
         <div className="workflow-detail__content">{content}</div>
         {detail && <TaskActions key={detail.task.meta.id} task={detail.task} />}
       </div>

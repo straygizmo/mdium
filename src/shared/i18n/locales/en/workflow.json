@@ -47,7 +47,8 @@
     "transitionValue": "from {{from}} to {{to}}",
     "log": "Log (latest lines)",
     "truncated": "This text is too long; only the first {{size}} KB is shown.",
-    "noLog": "No log output."
+    "noLog": "No log output.",
+    "progress": "Current activity"
   },
   "actions": {
     "label": "Task actions",

@@ -47,7 +47,8 @@
     "transitionValue": "{{from}} から {{to}} へ",
     "log": "ログ (最新の行)",
     "truncated": "テキストが長すぎるため、先頭の {{size}} KB のみ表示しています。",
-    "noLog": "ログ出力はありません。"
+    "noLog": "ログ出力はありません。",
+    "progress": "現在の作業"
   },
   "actions": {
     "label": "タスクの操作",

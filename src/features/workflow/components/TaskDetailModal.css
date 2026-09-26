@@ -64,6 +64,28 @@
   color: var(--text);
 }
 
+.workflow-detail__progress {
+  display: flex;
+  gap: 8px;
+  margin: 0;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.workflow-detail__progress-label {
+  flex-shrink: 0;
+  font-weight: 600;
+}
+
+.workflow-detail__progress-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .workflow-detail__content {
   flex: 1;
   min-height: 0;

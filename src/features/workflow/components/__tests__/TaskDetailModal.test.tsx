@@ -441,6 +441,31 @@ describe("TaskDetailModal", () => {
     expect(useWorkflowStore.getState().selectedTaskId).toBeNull();
   });
 
+  it("shows the latest progress line of a running task and updates it live", async () => {
+    const running = task("t2", { ...current.meta, status: "running", attention: null });
+    const withProgress = (text: string): ProjectState => ({
+      ...project([rootTask, running], [runOf()]),
+      progress: { t2: { text, kind: "tool", at: 1 } },
+    });
+    useWorkflowStore.setState({ projects: { [ROOT]: withProgress("<b>editing</b> a.ts") } });
+    api.taskDetail.mockResolvedValue(detail({ task: running }));
+    await render();
+    const progress = () => container.querySelector<HTMLElement>('[data-section="progress"]');
+    expect(progress()!.textContent).toContain("<b>editing</b> a.ts");
+    expect(progress()!.querySelector("b")).toBeNull();
+    await act(async () => useWorkflowStore.setState({ projects: { [ROOT]: withProgress("running tests") } }));
+    expect(progress()!.textContent).toContain("running tests");
+    expect(api.taskDetail).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows no progress line for a task that is not running", async () => {
+    useWorkflowStore.setState({
+      projects: { [ROOT]: { ...project([rootTask, current], [runOf()]), progress: { t2: { text: "old", kind: "message", at: 1 } } } },
+    });
+    await render();
+    expect(container.querySelector('[data-section="progress"]')).toBeNull();
+  });
+
   it("shows a load error inside the modal", async () => {
     api.taskDetail.mockRejectedValue({ code: "TASK_NOT_FOUND", message: "gone" });
     await render();
