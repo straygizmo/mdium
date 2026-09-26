@@ -23,6 +23,7 @@
     "newTask": "新しいタスク",
     "saveFailed": "ワークフローを保存できませんでした。",
     "addFailed": "ワークフローを追加できませんでした。",
+    "runCountFailed": "進行中のフロー実行の件数を確認できませんでした。",
     "warnings": "読み込み時の警告 ({{count}})",
     "filters": "フィルター",
     "filterWorkflow": "ワークフロー",

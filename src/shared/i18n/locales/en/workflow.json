@@ -23,6 +23,7 @@
     "newTask": "New task",
     "saveFailed": "The workflows could not be saved.",
     "addFailed": "The workflow could not be added.",
+    "runCountFailed": "The number of runs in progress could not be checked.",
     "warnings": "Load warnings ({{count}})",
     "filters": "Filters",
     "filterWorkflow": "Workflow",

@@ -139,6 +139,24 @@ describe("WorkflowPanel", () => {
       ["wf2", true],
       ["wf3", false],
     ]);
+    // Every other field is written back unchanged.
+    expect(file.workflows).toEqual([{ ...workflows[0], enabled: true }, workflows[1], workflows[2]]);
+    expect(file.workflows[0].stages).toEqual(workflows[0].stages);
+    expect(file.workflows[0].maxConcurrentRuns).toBe(1);
+  });
+
+  it("runs one operation at a time", async () => {
+    let resolveEnable!: (v: boolean) => void;
+    const confirmEnable = vi.fn(() => new Promise<boolean>((r) => (resolveEnable = r)));
+    await render({ confirmEnable });
+    const input = row("wf1")!.querySelector<HTMLInputElement>("input[data-switch]")!;
+    await act(async () => {
+      input.click();
+      input.click();
+    });
+    await act(async () => resolveEnable(true));
+    expect(confirmEnable).toHaveBeenCalledTimes(1);
+    expect(api.saveWorkflows).toHaveBeenCalledTimes(1);
   });
 
   it("does not save when the enable confirmation is declined", async () => {
@@ -166,6 +184,27 @@ describe("WorkflowPanel", () => {
     expect(text).toContain(i18n.t("workflow:panel.activeRuns", { count: 2 }));
     const saved = api.saveWorkflows.mock.calls[0][1].workflows as Workflow[];
     expect(saved.find((w) => w.id === "wf2")?.archived).toBe(true);
+  });
+
+  it("fetches the run count without reloading the lists", async () => {
+    dialogs.showConfirm.mockResolvedValue(false);
+    await render();
+    const loads = api.listWorkflows.mock.calls.length;
+    await act(async () => button(row("wf1")!, i18n.t("workflow:panel.archive"))!.click());
+    expect(api.activeRunCount).toHaveBeenCalledTimes(1);
+    expect(api.listWorkflows.mock.calls.length).toBe(loads);
+  });
+
+  it("shows a run count failure and does not ask for confirmation", async () => {
+    api.activeRunCount.mockRejectedValue({ code: "STORE_IO_FAILED", message: "" });
+    await render();
+    await act(async () => button(row("wf1")!, i18n.t("workflow:panel.archive"))!.click());
+    expect(dialogs.showConfirm).not.toHaveBeenCalled();
+    expect(dialogs.showMessage).toHaveBeenCalledWith(i18n.t("workflow:codes.STORE_IO_FAILED"), {
+      title: i18n.t("workflow:panel.runCountFailed"),
+      kind: "error",
+    });
+    expect(api.saveWorkflows).not.toHaveBeenCalled();
   });
 
   it("omits the run count note when no run is in progress and keeps the file on cancel", async () => {
@@ -249,6 +288,20 @@ describe("WorkflowPanel", () => {
 
     await act(async () => button(container, i18n.t("workflow:panel.viewMatrix"))!.click());
     expect(useWorkflowStore.getState().filters.view).toBe("matrix");
+  });
+
+  it("lists archived workflows in the filter only when they are shown and resets a hidden selection", async () => {
+    useWorkflowStore.getState().setFilters({ showArchived: true, workflowId: "wf3" });
+    await render();
+    const workflowSelect = container.querySelector<HTMLSelectElement>(".workflow-panel__workflow-filter")!;
+    const options = () => [...workflowSelect.options].map((o) => o.value);
+    expect(options()).toEqual(["", "wf1", "wf2", "wf3"]);
+    expect(useWorkflowStore.getState().filters.workflowId).toBe("wf3");
+
+    const archived = container.querySelector<HTMLInputElement>('input[name="showArchived"]')!;
+    await act(async () => archived.click());
+    expect(options()).toEqual(["", "wf1", "wf2"]);
+    expect(useWorkflowStore.getState().filters.workflowId).toBeNull();
   });
 
   it("shows the new task and edit buttons only when their handlers are given", async () => {

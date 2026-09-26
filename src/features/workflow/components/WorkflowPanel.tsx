@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useTabStore } from "@/stores/tab-store";
-import { showConfirm, showPrompt } from "@/stores/dialog-store";
+import { showConfirm, showMessage, showPrompt } from "@/stores/dialog-store";
 import type { Provider, StoreWarning, Workflow, WorkflowInput } from "@/shared/types/workflow";
-import { formatCode } from "../lib/format";
+import { formatCode, formatCommandError } from "../lib/format";
 import { workflowApi } from "../lib/workflow-api";
 import { useWorkflowStore } from "../workflow-store";
 import "./WorkflowPanel.css";
@@ -43,10 +43,23 @@ export function WorkflowPanel({ onCreateTask, onEditWorkflow, confirmEnable = al
   const setFilters = useWorkflowStore((s) => s.setFilters);
   const [provider, setProvider] = useState<Provider>("codex");
   const [busy, setBusy] = useState(false);
+  /** Synchronous guard: only one workflow operation runs at a time. */
+  const busyRef = useRef(false);
 
   useEffect(() => {
     void useWorkflowStore.getState().activate(activeFolderPath);
   }, [activeFolderPath]);
+
+  const workflows = project?.workflows ?? [];
+  /** Workflows listed in the panel and in the workflow filter. */
+  const visibleWorkflows = workflows.filter((w) => filters.showArchived || !w.archived);
+  const filterMissing =
+    !!project?.loaded && filters.workflowId !== null && !visibleWorkflows.some((w) => w.id === filters.workflowId);
+
+  // Keep the workflow filter valid: fall back to "all" when its workflow is no longer listed.
+  useEffect(() => {
+    if (filterMissing) setFilters({ workflowId: null });
+  }, [filterMissing, setFilters]);
 
   if (!activeFolderPath) {
     return (
@@ -56,38 +69,47 @@ export function WorkflowPanel({ onCreateTask, onEditWorkflow, confirmEnable = al
     );
   }
 
-  const workflows = project?.workflows ?? [];
-  const visibleWorkflows = workflows.filter((w) => filters.showArchived || !w.archived);
   const warnings = [...(project?.workflowWarnings ?? []), ...(project?.taskWarnings ?? [])];
 
   /** Runs one workflow operation at a time so saves never start from a stale list. */
   const withBusy = async (fn: () => Promise<unknown>) => {
-    if (busy) return;
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     try {
       await fn();
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   };
 
-  /** Saves the latest loaded workflows with `change` applied (null removes the workflow). */
-  const saveChange = (id: string, change: Partial<Workflow> | null) =>
+  /**
+   * Saves the latest loaded workflows with the patch `change(latest)` returns
+   * applied to the workflow (null removes it).
+   */
+  const saveChange = (id: string, change: (latest: Workflow) => Partial<Workflow> | null) =>
     useWorkflowStore.getState().run(t("panel.saveFailed"), (root) => {
       const current = useWorkflowStore.getState().projects[root]?.workflows ?? [];
       const next: WorkflowInput[] = current.flatMap((w) => {
         if (w.id !== id) return [w];
-        return change ? [{ ...w, ...change }] : [];
+        const patch = change(w);
+        return patch ? [{ ...w, ...patch }] : [];
       });
       return workflowApi.saveWorkflows(root, { schemaVersion: WORKFLOWS_SCHEMA_VERSION, workflows: next });
     });
 
-  /** Confirmation text, with the number of runs in progress when there are any. */
+  /** Confirmation text, with the number of runs in progress when there are any; null on failure. */
   const confirmText = async (workflow: Workflow, key: "panel.archiveConfirm" | "panel.deleteConfirm") => {
-    const count = await useWorkflowStore
-      .getState()
-      .run(t("panel.saveFailed"), (root) => workflowApi.activeRunCount(root, workflow.id));
-    if (count === undefined) return null;
+    const root = useWorkflowStore.getState().activeRoot;
+    if (!root) return null;
+    let count: number;
+    try {
+      count = await workflowApi.activeRunCount(root, workflow.id);
+    } catch (err) {
+      void showMessage(formatCommandError(err), { title: t("panel.runCountFailed"), kind: "error" });
+      return null;
+    }
     const text = t(key, { name: workflow.name });
     return count > 0 ? `${text}\n${t("panel.activeRuns", { count })}` : text;
   };
@@ -95,23 +117,23 @@ export function WorkflowPanel({ onCreateTask, onEditWorkflow, confirmEnable = al
   const toggleEnabled = (workflow: Workflow) =>
     withBusy(async () => {
       if (!workflow.enabled && !(await confirmEnable(workflow))) return;
-      await saveChange(workflow.id, { enabled: !workflow.enabled });
+      await saveChange(workflow.id, (latest) => ({ enabled: !latest.enabled }));
     });
 
   const archive = (workflow: Workflow) =>
     withBusy(async () => {
       const text = await confirmText(workflow, "panel.archiveConfirm");
       if (text === null || !(await showConfirm(text, { kind: "warning" }))) return;
-      await saveChange(workflow.id, { archived: true });
+      await saveChange(workflow.id, () => ({ archived: true }));
     });
 
-  const restore = (workflow: Workflow) => withBusy(() => saveChange(workflow.id, { archived: false }));
+  const restore = (workflow: Workflow) => withBusy(() => saveChange(workflow.id, () => ({ archived: false })));
 
   const remove = (workflow: Workflow) =>
     withBusy(async () => {
       const text = await confirmText(workflow, "panel.deleteConfirm");
       if (text === null || !(await showConfirm(text, { kind: "warning" }))) return;
-      await saveChange(workflow.id, null);
+      await saveChange(workflow.id, () => null);
     });
 
   const addStandard = () =>
@@ -248,7 +270,7 @@ export function WorkflowPanel({ onCreateTask, onEditWorkflow, confirmEnable = al
                 onChange={(e) => setFilters({ workflowId: e.target.value || null })}
               >
                 <option value="">{t("panel.filterAll")}</option>
-                {workflows.map((w) => (
+                {visibleWorkflows.map((w) => (
                   <option key={w.id} value={w.id}>
                     {w.name}
                   </option>
