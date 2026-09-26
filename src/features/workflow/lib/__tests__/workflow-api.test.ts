@@ -78,9 +78,9 @@ const cases: Case[] = [
   ],
   [
     "mergeRun",
-    () => workflowApi.mergeRun(ROOT, "r1", ["a.txt"], true),
+    () => workflowApi.mergeRun(ROOT, "r1", ["a.txt"], true, "abc123"),
     "workflow_merge_run",
-    { projectRoot: ROOT, rootTaskId: "r1", acknowledgedPaths: ["a.txt"], acknowledgeIntegrity: true },
+    { projectRoot: ROOT, rootTaskId: "r1", acknowledgedPaths: ["a.txt"], acknowledgeIntegrity: true, expectedHead: "abc123" },
   ],
   [
     "acknowledgeIntegrity",

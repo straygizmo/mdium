@@ -60,6 +60,8 @@ const ACK_REQUIRED_CHANGES: &[&str] = &[
     INTEGRITY_BASELINE_MISSING,
 ];
 
+/// The branch tip moved since the preview the user reviewed.
+pub const WORKFLOW_MERGE_HEAD_CHANGED: &str = "WORKFLOW_MERGE_HEAD_CHANGED";
 /// The merge-review paths changed since the preview the user acknowledged.
 pub const WORKFLOW_MERGE_REVIEW_CHANGED: &str = "WORKFLOW_MERGE_REVIEW_CHANGED";
 /// The user's repository changed since the run's integrity baseline and
@@ -216,6 +218,9 @@ pub struct MergePreview {
     pub branch: String,
     pub base_branch: String,
     pub base_commit: String,
+    /// The branch tip the preview shows (empty while there are
+    /// `integrity_changes`); pass it to [`merge_run`] as `expected_head`.
+    pub head_commit: String,
     pub commits: Vec<CommitSummary>,
     /// The branch diff, capped.
     pub diff: String,
@@ -888,19 +893,21 @@ pub fn merge_preview(
     let (run, info) = awaiting_merge(&store, root_task_id)?;
     let (integrity_changes, _) = integrity_state(store.project_root(), &run, &info)?;
     let base = orch.worktree_base();
-    let (commits, diff, review_paths) = if integrity_changes.is_empty() {
+    let (head_commit, commits, diff, review_paths) = if integrity_changes.is_empty() {
         (
+            gitops::branch_head_in(base, store.project_root(), &info)?,
             gitops::commits_since_base_in(base, &info)?,
             cap_diff(&gitops::diff_against_base_in(base, &info)?),
             integrity::changed_paths_matching_in(base, &info, MERGE_REVIEW_PATTERNS)?,
         )
     } else {
-        (Vec::new(), String::new(), Vec::new())
+        (String::new(), Vec::new(), String::new(), Vec::new())
     };
     Ok(MergePreview {
         branch: info.branch,
         base_branch: info.base_branch,
         base_commit: info.base_commit,
+        head_commit,
         commits,
         diff,
         review_paths,
@@ -914,12 +921,15 @@ pub fn merge_preview(
 /// `acknowledge_integrity` (the acknowledged state then becomes the
 /// baseline, also if the merge is refused afterwards), and
 /// `acknowledged_paths` must be exactly the current merge-review paths.
+/// With `expected_head` (the previewed `head_commit`) the merge is refused
+/// when the branch tip moved since the preview.
 pub fn merge_run(
     orch: &Arc<Orchestrator>,
     project_root: &Path,
     root_task_id: &str,
     acknowledged_paths: &[String],
     acknowledge_integrity: bool,
+    expected_head: Option<&str>,
 ) -> Result<WorkflowRun, ActionError> {
     let store = orch.store(project_root);
     let mut rebaselined = None;
@@ -932,6 +942,7 @@ pub fn merge_run(
             root_task_id,
             acknowledged_paths,
             acknowledge_integrity,
+            expected_head,
             &mut rebaselined,
         )
     };
@@ -961,6 +972,7 @@ fn merge_locked(
     root_task_id: &str,
     acknowledged_paths: &[String],
     acknowledge_integrity: bool,
+    expected_head: Option<&str>,
     rebaselined: &mut Option<WorkflowRun>,
 ) -> Result<WorkflowRun, ActionError> {
     let base = orch.worktree_base();
@@ -972,6 +984,11 @@ fn merge_locked(
         }
         store_acknowledged_baseline(guard, store, &mut run, now)?;
         *rebaselined = Some(run.clone());
+    }
+    if let Some(expected) = expected_head {
+        if gitops::branch_head_in(base, store.project_root(), &info)? != expected {
+            return Err(ActionError::InvalidState(WORKFLOW_MERGE_HEAD_CHANGED));
+        }
     }
     // Sorted and unique.
     let current = integrity::changed_paths_matching_in(base, &info, MERGE_REVIEW_PATTERNS)?;
@@ -2086,7 +2103,8 @@ mod tests {
                 env.root(),
                 &id,
                 &["AGENTS.md".to_string()],
-                false
+                false,
+                None
             )),
             WORKFLOW_MERGE_REVIEW_CHANGED
         );
@@ -2099,14 +2117,21 @@ mod tests {
             ".github/workflows/ci.yml".to_string(),
         ];
         assert_eq!(
-            code(merge_run(&env.orch, env.root(), &id, &acknowledged, false)),
+            code(merge_run(
+                &env.orch,
+                env.root(),
+                &id,
+                &acknowledged,
+                false,
+                None
+            )),
             "GIT_DIRTY_WORKTREE"
         );
         assert_eq!(env.run(&id).status, RunStatus::AwaitingMerge);
         env.fx.run(&["checkout", "--", "a.txt"]);
 
         // The same set in another order is accepted.
-        let merged = merge_run(&env.orch, env.root(), &id, &acknowledged, false).unwrap();
+        let merged = merge_run(&env.orch, env.root(), &id, &acknowledged, false, None).unwrap();
         assert_eq!(merged.status, RunStatus::Merged);
         assert_eq!(env.run(&id).status, RunStatus::Merged);
         assert_eq!(
@@ -2118,7 +2143,14 @@ mod tests {
         assert!(env.root().join("AGENTS.md").exists());
         assert!(env.sink.events().contains(&format!("run {id} Merged")));
         assert_eq!(
-            code(merge_run(&env.orch, env.root(), &id, &acknowledged, false)),
+            code(merge_run(
+                &env.orch,
+                env.root(),
+                &id,
+                &acknowledged,
+                false,
+                None
+            )),
             WORKFLOW_RUN_NOT_AWAITING_MERGE
         );
         env.wait_idle();
@@ -2142,6 +2174,7 @@ mod tests {
         assert!(preview.commits.is_empty());
         assert!(preview.diff.is_empty());
         assert!(preview.review_paths.is_empty());
+        assert!(preview.head_commit.is_empty());
 
         let acknowledged = vec![
             ".github/workflows/ci.yml".to_string(),
@@ -2149,7 +2182,14 @@ mod tests {
         ];
         let before = env.run(&id);
         assert_eq!(
-            code(merge_run(&env.orch, env.root(), &id, &acknowledged, false)),
+            code(merge_run(
+                &env.orch,
+                env.root(),
+                &id,
+                &acknowledged,
+                false,
+                None
+            )),
             WORKFLOW_MERGE_INTEGRITY_CHANGED
         );
         assert_eq!(env.run(&id), before);
@@ -2158,7 +2198,7 @@ mod tests {
         // acknowledged state is the new baseline and is reported.
         let events = env.sink.events().len();
         assert_eq!(
-            code(merge_run(&env.orch, env.root(), &id, &[], true)),
+            code(merge_run(&env.orch, env.root(), &id, &[], true, None)),
             WORKFLOW_MERGE_REVIEW_CHANGED
         );
         let run = env.run(&id);
@@ -2174,8 +2214,58 @@ mod tests {
         let preview = merge_preview(&env.orch, env.root(), &id).unwrap();
         assert!(preview.integrity_changes.is_empty());
         assert_eq!(preview.review_paths, acknowledged);
-        let merged = merge_run(&env.orch, env.root(), &id, &acknowledged, false).unwrap();
+        let merged = merge_run(&env.orch, env.root(), &id, &acknowledged, false, None).unwrap();
         assert_eq!(merged.status, RunStatus::Merged);
+        env.wait_idle();
+    }
+
+    #[test]
+    fn merge_is_refused_when_the_branch_moved_after_the_preview() {
+        let env = Env::new();
+        let (root, info) = env.awaiting_merge();
+        let id = root.meta.id.clone();
+        let preview = merge_preview(&env.orch, env.root(), &id).unwrap();
+        let tip = gitops::git(Path::new(&info.path), &["rev-parse", "HEAD"]).unwrap();
+        assert_eq!(preview.head_commit, tip.trim());
+
+        // A new commit on the branch after the preview.
+        let wt = Path::new(&info.path);
+        write_file(
+            wt, "late.txt", "late
+",
+        );
+        gitops::git(wt, &["add", "late.txt"]).unwrap();
+        gitops::git(wt, &["commit", "-m", "late work"]).unwrap();
+
+        let before = env.run(&id);
+        assert_eq!(
+            code(merge_run(
+                &env.orch,
+                env.root(),
+                &id,
+                &preview.review_paths,
+                false,
+                Some(&preview.head_commit)
+            )),
+            WORKFLOW_MERGE_HEAD_CHANGED
+        );
+        assert_eq!(env.run(&id), before);
+        assert!(!env.root().join("late.txt").exists());
+
+        // The new preview pins the new tip and merges.
+        let preview = merge_preview(&env.orch, env.root(), &id).unwrap();
+        assert_ne!(preview.head_commit, tip.trim());
+        let merged = merge_run(
+            &env.orch,
+            env.root(),
+            &id,
+            &preview.review_paths,
+            false,
+            Some(&preview.head_commit),
+        )
+        .unwrap();
+        assert_eq!(merged.status, RunStatus::Merged);
+        assert!(env.root().join("late.txt").exists());
         env.wait_idle();
     }
 
@@ -2232,7 +2322,7 @@ mod tests {
             ".github/workflows/ci.yml".to_string(),
             "AGENTS.md".to_string(),
         ];
-        merge_run(&env.orch, env.root(), &id, &acknowledged, false).unwrap();
+        merge_run(&env.orch, env.root(), &id, &acknowledged, false, None).unwrap();
         assert_eq!(
             code(acknowledge_integrity(&env.orch, env.root(), &id)),
             WORKFLOW_RUN_NOT_AWAITING_MERGE
@@ -2259,7 +2349,15 @@ mod tests {
         );
         assert!(preview.diff.contains("ci.yml"));
 
-        let merged = merge_run(&env.orch, env.root(), &id, &preview.review_paths, false).unwrap();
+        let merged = merge_run(
+            &env.orch,
+            env.root(),
+            &id,
+            &preview.review_paths,
+            false,
+            None,
+        )
+        .unwrap();
         assert_eq!(merged.status, RunStatus::Merged);
         let log = env.fx.run(&["log", "--format=%s", "main"]);
         assert!(log.contains("user commit"));
@@ -2433,7 +2531,7 @@ mod tests {
         let paths = merge_preview(&env.orch, env.root(), &id)
             .unwrap()
             .review_paths;
-        merge_run(&env.orch, env.root(), &id, &paths, false).unwrap();
+        merge_run(&env.orch, env.root(), &id, &paths, false, None).unwrap();
 
         let run = discard_run(&env.orch, env.root(), &id).unwrap();
         assert_eq!(run.status, RunStatus::Merged);

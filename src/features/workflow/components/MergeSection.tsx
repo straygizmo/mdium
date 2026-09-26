@@ -12,6 +12,9 @@ import "./MergeSection.css";
 /** Lines of the branch diff rendered in the preview; the rest is cut off with a note. */
 const MAX_DIFF_LINES = 5000;
 
+/** The branch moved after the preview: the preview is reloaded without an error. */
+const HEAD_CHANGED = "WORKFLOW_MERGE_HEAD_CHANGED";
+
 /** Refusals after which the preview no longer matches the repository. */
 const STALE_PREVIEW_CODES: ReadonlySet<string> = new Set([
   "WORKFLOW_MERGE_REVIEW_CHANGED",
@@ -63,13 +66,20 @@ export function MergeSection({ run }: { run: WorkflowRun }) {
     }
   };
 
-  /** Runs `workflow_merge_run` through the store; a refusal against a stale preview reloads it. */
-  const merge = async (paths: string[]) => {
+  /**
+   * Runs `workflow_merge_run` for the previewed branch tip through the store;
+   * a refusal against a stale preview reloads it (silently when the branch moved).
+   */
+  const merge = async (target: MergePreview) => {
     let stale = false;
     const merged = await useWorkflowStore.getState().run(t("merge.failed"), async (root) => {
       try {
-        return await workflowApi.mergeRun(root, rootTaskId, paths, false);
+        return await workflowApi.mergeRun(root, rootTaskId, target.reviewPaths, false, target.headCommit);
       } catch (err) {
+        if (isCommandError(err) && err.code === HEAD_CHANGED) {
+          stale = true;
+          return null;
+        }
         if (isCommandError(err) && STALE_PREVIEW_CODES.has(err.code)) stale = true;
         throw err;
       }
@@ -87,7 +97,7 @@ export function MergeSection({ run }: { run: WorkflowRun }) {
       t("merge.mergeConfirm", { branch: target.branch, baseBranch: target.baseBranch }),
       { kind: "warning" },
     );
-    if (confirmed) await withBusy(() => merge(target.reviewPaths));
+    if (confirmed) await withBusy(() => merge(target));
   };
 
   const onRecheck = async () => {
@@ -218,7 +228,7 @@ export function MergeSection({ run }: { run: WorkflowRun }) {
       )}
 
       <div className="workflow-merge__buttons">
-        {awaitingMerge && (
+        {awaitingMerge && !mergedHere && (
           <button
             type="button"
             className="workflow-merge__btn"

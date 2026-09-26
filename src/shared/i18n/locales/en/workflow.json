@@ -245,6 +245,7 @@
     "WORKFLOW_RUN_IN_PROGRESS": "The run is still in progress or awaiting a merge.",
     "WORKFLOW_INTEGRITY_CHANGED": "There are unacknowledged repository changes. Review them first.",
     "WORKFLOW_INTEGRITY_ACK_REQUIRED": "Acknowledge the git configuration or hooks changes before retrying.",
+    "WORKFLOW_MERGE_HEAD_CHANGED": "The branch changed after the preview. Review the new preview.",
     "WORKFLOW_MERGE_REVIEW_CHANGED": "The list of changed configuration files no longer matches what you reviewed.",
     "WORKFLOW_MERGE_INTEGRITY_CHANGED": "Shared git configuration or hooks changed and have not been acknowledged.",
     "WORKFLOW_AGENT_CONFIG_CHECK_FAILED": "The agent configuration files could not be checked.",

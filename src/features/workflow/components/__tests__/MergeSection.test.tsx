@@ -61,6 +61,7 @@ function preview(patch: Partial<MergePreview> = {}): MergePreview {
     branch: "mdium/t1",
     baseBranch: "main",
     baseCommit: "0123456789abcdef",
+    headCommit: "fedcba9876543210",
     commits: [{ hash: "abcdef0123456789", subject: "agent work" }],
     diff: "diff --git a/AGENTS.md b/AGENTS.md\n--- a/AGENTS.md\n+++ b/AGENTS.md\n@@ -1 +1 @@\n-old line\n+new line\n",
     reviewPaths: [".github/workflows/ci.yml", "AGENTS.md"],
@@ -159,7 +160,7 @@ describe("MergeSection", () => {
       i18n.t("workflow:merge.mergeConfirm", { branch: "mdium/t1", baseBranch: "main" }),
       expect.anything(),
     );
-    expect(api.mergeRun).toHaveBeenCalledWith(ROOT, "t1", [".github/workflows/ci.yml", "AGENTS.md"], false);
+    expect(api.mergeRun).toHaveBeenCalledWith(ROOT, "t1", [".github/workflows/ci.yml", "AGENTS.md"], false, "fedcba9876543210");
     expect(container.textContent).toContain(i18n.t("workflow:merge.done"));
     expect(showMessage).not.toHaveBeenCalled();
   });
@@ -179,7 +180,7 @@ describe("MergeSection", () => {
     await showPreview();
     expect(button("merge")!.disabled).toBe(false);
     await click(button("merge"));
-    expect(api.mergeRun).toHaveBeenCalledWith(ROOT, "t1", [], false);
+    expect(api.mergeRun).toHaveBeenCalledWith(ROOT, "t1", [], false, "fedcba9876543210");
   });
 
   const integrityPreview = () =>
@@ -263,6 +264,43 @@ describe("MergeSection", () => {
     expect(api.mergePreview).toHaveBeenCalledTimes(2);
     expect(pathBoxes()).toHaveLength(2);
     expect(button("merge")!.disabled).toBe(true);
+  });
+
+  it("silently reloads the preview when the branch moved after it", async () => {
+    api.mergePreview
+      .mockResolvedValueOnce(preview())
+      .mockResolvedValueOnce(preview({ headCommit: "1111111111111111" }));
+    api.mergeRun.mockRejectedValueOnce({ code: "WORKFLOW_MERGE_HEAD_CHANGED", message: "" });
+    await render(runOf("awaiting_merge"));
+    await showPreview();
+    for (const box of pathBoxes()) await click(box);
+    await click(button("merge"));
+    expect(showMessage).not.toHaveBeenCalled();
+    expect(api.mergePreview).toHaveBeenCalledTimes(2);
+    // The ticks were for the old preview.
+    expect(pathBoxes().every((b) => !b.checked)).toBe(true);
+    expect(button("merge")!.disabled).toBe(true);
+    expect(container.textContent).not.toContain(i18n.t("workflow:merge.done"));
+
+    for (const box of pathBoxes()) await click(box);
+    await click(button("merge"));
+    expect(api.mergeRun).toHaveBeenLastCalledWith(
+      ROOT,
+      "t1",
+      [".github/workflows/ci.yml", "AGENTS.md"],
+      false,
+      "1111111111111111",
+    );
+    expect(container.textContent).toContain(i18n.t("workflow:merge.done"));
+  });
+
+  it("hides the preview button after a merge", async () => {
+    api.mergePreview.mockResolvedValue(preview({ reviewPaths: [] }));
+    await render(runOf("awaiting_merge"));
+    await showPreview();
+    await click(button("merge"));
+    expect(container.textContent).toContain(i18n.t("workflow:merge.done"));
+    expect(button("preview")).toBeNull();
   });
 
   it("shows preview errors", async () => {

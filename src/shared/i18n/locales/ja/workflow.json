@@ -245,6 +245,7 @@
     "WORKFLOW_RUN_IN_PROGRESS": "フロー実行が進行中、または取込み待ちです。",
     "WORKFLOW_INTEGRITY_CHANGED": "未確認のリポジトリの変化があります。先に確認してください。",
     "WORKFLOW_INTEGRITY_ACK_REQUIRED": "再試行する前に、git 設定や hooks の変化を確認してください。",
+    "WORKFLOW_MERGE_HEAD_CHANGED": "プレビューの後にブランチが変更されました。新しいプレビューを確認してください。",
     "WORKFLOW_MERGE_REVIEW_CHANGED": "確認済みの設定ファイルの変更一覧が、現在の一覧と一致しません。",
     "WORKFLOW_MERGE_INTEGRITY_CHANGED": "共有される git 設定や hooks が変化しており、まだ確認されていません。",
     "WORKFLOW_AGENT_CONFIG_CHECK_FAILED": "エージェント設定ファイルを検査できませんでした。",

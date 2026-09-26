@@ -598,6 +598,7 @@ pub async fn workflow_merge_run(
     root_task_id: String,
     acknowledged_paths: Vec<String>,
     acknowledge_integrity: bool,
+    expected_head: Option<String>,
 ) -> Result<WorkflowRun, CommandError> {
     with_project(state, project_root, move |orch, root| {
         actions::merge_run(
@@ -606,6 +607,7 @@ pub async fn workflow_merge_run(
             &root_task_id,
             &acknowledged_paths,
             acknowledge_integrity,
+            expected_head.as_deref(),
         )
     })
     .await

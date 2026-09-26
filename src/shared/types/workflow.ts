@@ -273,6 +273,8 @@ export interface MergePreview {
   branch: string;
   baseBranch: string;
   baseCommit: string;
+  /** Branch tip shown by the preview (empty while there are `integrityChanges`); pass it to the merge. */
+  headCommit: string;
   commits: CommitSummary[];
   /** The branch diff, capped. */
   diff: string;

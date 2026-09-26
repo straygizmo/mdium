@@ -737,6 +737,22 @@ fn checkout_git_raw(repo: &Path, args: &[&str]) -> Result<GitOutput, GitError> {
     run_git_raw(repo, &worktree_args(args))
 }
 
+/// The commit the worktree branch (`refs/heads/<branch>`) points to in the
+/// user's repository: the commit a merge would bring in.
+pub(crate) fn branch_head_in(
+    base_dir: &Path,
+    repo_root: &Path,
+    info: &WorktreeInfo,
+) -> Result<String, GitError> {
+    validate_info(base_dir, Some(repo_root), info)?;
+    let reference = format!("refs/heads/{}^{{commit}}", info.branch);
+    Ok(
+        checkout_git(repo_root, &["rev-parse", "--verify", "--quiet", &reference])?
+            .trim()
+            .to_string(),
+    )
+}
+
 /// Merges the worktree branch into the base branch of the user's checkout
 /// with `--no-ff`, returning the merge commit hash. Refuses unless the
 /// checkout is on `base_branch` (`GIT_NOT_ON_BASE_BRANCH`) and has no

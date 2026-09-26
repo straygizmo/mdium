@@ -94,8 +94,20 @@ export const workflowApi = {
     call<Task>("workflow_answer_question", { projectRoot, taskId, answer }),
   mergePreview: (projectRoot: string, rootTaskId: string) =>
     call<MergePreview>("workflow_merge_preview", { projectRoot, rootTaskId }),
-  mergeRun: (projectRoot: string, rootTaskId: string, acknowledgedPaths: string[], acknowledgeIntegrity: boolean) =>
-    call<WorkflowRun>("workflow_merge_run", { projectRoot, rootTaskId, acknowledgedPaths, acknowledgeIntegrity }),
+  mergeRun: (
+    projectRoot: string,
+    rootTaskId: string,
+    acknowledgedPaths: string[],
+    acknowledgeIntegrity: boolean,
+    expectedHead: string | null,
+  ) =>
+    call<WorkflowRun>("workflow_merge_run", {
+      projectRoot,
+      rootTaskId,
+      acknowledgedPaths,
+      acknowledgeIntegrity,
+      expectedHead,
+    }),
   acknowledgeIntegrity: (projectRoot: string, rootTaskId: string) =>
     call<WorkflowRun>("workflow_acknowledge_integrity", { projectRoot, rootTaskId }),
   discardRun: (projectRoot: string, rootTaskId: string) =>
