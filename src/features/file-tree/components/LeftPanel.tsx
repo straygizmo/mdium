@@ -11,6 +11,7 @@ import { RagPanel } from "@/features/rag/components/RagPanel";
 import { AgentChatPanel } from "@/features/agent-chat/components/AgentChatPanel";
 import { GitPanel } from "@/features/git/components/GitPanel";
 import { ReplacementPanel } from "@/features/replacement/components/ReplacementPanel";
+import { WorkflowPanel } from "@/features/workflow/components/WorkflowPanel";
 import { useGitStore } from "@/stores/git-store";
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 import { useChatUIStore } from "@/features/opencode-config/hooks/useOpencodeChat";
@@ -163,6 +164,17 @@ export function LeftPanel({
               <rect x="8" y="6" width="8" height="12" />
             </svg>
           </button>
+          <button
+            className={`left-panel__activity-btn ${leftPanel === "workflow" ? "left-panel__activity-btn--active" : ""}`}
+            onClick={() => { setLeftPanel("workflow"); setFolderLeftPanel("workflow"); }}
+            title={t("title", { ns: "workflow" })}
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="5" rx="1" />
+              <rect x="3" y="10" width="18" height="5" rx="1" />
+              <rect x="3" y="17" width="18" height="4" rx="1" />
+            </svg>
+          </button>
         </div>
         <div className="left-panel__activity-bar-bottom">
           {activeFolderPath && (
@@ -227,6 +239,7 @@ export function LeftPanel({
             )}
             {leftPanel === "git" && t("sourceControl", { ns: "git" }).toUpperCase()}
             {leftPanel === "replacement" && t("title", { ns: "replacement" }).toUpperCase()}
+            {leftPanel === "workflow" && t("title", { ns: "workflow" })}
           </span>
           {leftPanel === "folder" && !!activeFolderPath && (
             <div className="left-panel__section-header-actions">
@@ -385,6 +398,7 @@ export function LeftPanel({
         )}
         {leftPanel === "git" && <GitPanel />}
         {leftPanel === "replacement" && <ReplacementPanel />}
+        {leftPanel === "workflow" && <WorkflowPanel />}
       </div>
       {showBatchConvert && (
         <BatchConvertModal

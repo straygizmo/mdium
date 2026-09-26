@@ -5,6 +5,7 @@ describe("normalizeLeftPanel", () => {
   it("keeps known panels", () => {
     expect(normalizeLeftPanel("git")).toBe("git");
     expect(normalizeLeftPanel("opencode-config")).toBe("opencode-config");
+    expect(normalizeLeftPanel("workflow")).toBe("workflow");
   });
 
   it("maps the retired Claude panel to AGENT CHAT", () => {

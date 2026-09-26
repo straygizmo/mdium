@@ -1,0 +1,267 @@
+// @vitest-environment happy-dom
+import { act } from "react";
+import { createRoot } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Stage, Workflow } from "@/shared/types/workflow";
+
+const api = vi.hoisted(() => ({
+  attach: vi.fn(),
+  listWorkflows: vi.fn(),
+  listTasks: vi.fn(),
+  listRuns: vi.fn(),
+  saveWorkflows: vi.fn(),
+  addStandard: vi.fn(),
+  activeRunCount: vi.fn(),
+}));
+const dialogs = vi.hoisted(() => ({
+  showMessage: vi.fn(),
+  showConfirm: vi.fn(),
+  showPrompt: vi.fn(),
+}));
+vi.mock("../../lib/workflow-api", () => ({ workflowApi: api, subscribeWorkflowEvents: vi.fn() }));
+vi.mock("@/stores/dialog-store", () => dialogs);
+
+import i18n from "@/shared/i18n";
+import { useTabStore } from "@/stores/tab-store";
+import { useWorkflowStore } from "../../workflow-store";
+import { WorkflowPanel } from "../WorkflowPanel";
+
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+const ROOT = "C:\\proj";
+
+function stage(role: Stage["role"], provider: Stage["provider"]): Stage {
+  return {
+    id: role,
+    role,
+    name: role,
+    prompt: "",
+    completionCriteria: "",
+    provider,
+    model: null,
+    requiresApproval: false,
+    timeoutMinutes: 60,
+  };
+}
+
+function workflow(id: string, patch: Partial<Workflow> = {}): Workflow {
+  return {
+    id,
+    name: `Flow ${id}`,
+    enabled: false,
+    archived: false,
+    stages: [stage("design", "codex"), stage("implement", "codex"), stage("review", "claude")],
+    reviewReturnTo: "design",
+    maxReentryCount: 5,
+    maxConcurrentRuns: 1,
+    designDocPath: null,
+    issueTracking: "off",
+    ...patch,
+  };
+}
+
+const initialStore = useWorkflowStore.getState();
+
+describe("WorkflowPanel", () => {
+  let root: ReturnType<typeof createRoot>;
+  let container: HTMLDivElement;
+  let workflows: Workflow[];
+
+  beforeEach(async () => {
+    await i18n.changeLanguage("en");
+    vi.clearAllMocks();
+    useWorkflowStore.setState(initialStore, true);
+    workflows = [workflow("wf1"), workflow("wf2", { enabled: true }), workflow("wf3", { archived: true })];
+    api.attach.mockImplementation(async () => ROOT);
+    api.listWorkflows.mockImplementation(async () => ({ workflows, warnings: [] }));
+    api.listTasks.mockResolvedValue({ tasks: [], warnings: [] });
+    api.listRuns.mockResolvedValue({ runs: [], warnings: [] });
+    api.saveWorkflows.mockResolvedValue(undefined);
+    api.activeRunCount.mockResolvedValue(0);
+    useTabStore.setState({ activeFolderPath: "C:/proj" });
+    container = document.createElement("div");
+    root = createRoot(container);
+  });
+
+  afterEach(async () => {
+    await act(async () => root.unmount());
+    useTabStore.setState({ activeFolderPath: null });
+  });
+
+  async function render(props: Parameters<typeof WorkflowPanel>[0] = {}) {
+    await act(async () => root.render(<WorkflowPanel {...props} />));
+  }
+
+  function row(id: string) {
+    return container.querySelector<HTMLElement>(`[data-workflow-id="${id}"]`);
+  }
+
+  function button(scope: ParentNode, label: string) {
+    return [...scope.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === label);
+  }
+
+  it("asks for a folder when none is open", async () => {
+    useTabStore.setState({ activeFolderPath: null });
+    await render();
+    expect(container.textContent).toContain(i18n.t("workflow:noFolder"));
+    expect(api.attach).not.toHaveBeenCalled();
+  });
+
+  it("activates the folder and lists the workflows with their stage providers", async () => {
+    await render();
+    expect(api.attach).toHaveBeenCalledWith("C:/proj");
+    expect(row("wf1")?.textContent).toContain("Flow wf1");
+    expect(row("wf1")?.textContent).toContain("Codex / Codex / Claude");
+    expect(row("wf2")?.querySelector<HTMLInputElement>("input[data-switch]")?.checked).toBe(true);
+    // Archived workflows are hidden unless the archived filter is on.
+    expect(row("wf3")).toBeNull();
+  });
+
+  it("shows the attach error", async () => {
+    api.attach.mockRejectedValue({ code: "WORKFLOW_PROJECT_INVALID", message: "" });
+    await render();
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      i18n.t("workflow:codes.WORKFLOW_PROJECT_INVALID"),
+    );
+  });
+
+  it("saves the flipped enabled flag after the enable confirmation", async () => {
+    const confirmEnable = vi.fn(async () => true);
+    await render({ confirmEnable });
+    await act(async () => row("wf1")!.querySelector<HTMLInputElement>("input[data-switch]")!.click());
+    expect(confirmEnable).toHaveBeenCalledWith(expect.objectContaining({ id: "wf1" }));
+    expect(api.saveWorkflows).toHaveBeenCalledTimes(1);
+    const [root, file] = api.saveWorkflows.mock.calls[0];
+    expect(root).toBe(ROOT);
+    expect(file.schemaVersion).toBe(1);
+    expect(file.workflows.map((w: Workflow) => [w.id, w.enabled])).toEqual([
+      ["wf1", true],
+      ["wf2", true],
+      ["wf3", false],
+    ]);
+  });
+
+  it("does not save when the enable confirmation is declined", async () => {
+    await render({ confirmEnable: async () => false });
+    await act(async () => row("wf1")!.querySelector<HTMLInputElement>("input[data-switch]")!.click());
+    expect(api.saveWorkflows).not.toHaveBeenCalled();
+  });
+
+  it("disables without the enable confirmation", async () => {
+    const confirmEnable = vi.fn(async () => true);
+    await render({ confirmEnable });
+    await act(async () => row("wf2")!.querySelector<HTMLInputElement>("input[data-switch]")!.click());
+    expect(confirmEnable).not.toHaveBeenCalled();
+    expect(api.saveWorkflows.mock.calls[0][1].workflows[1].enabled).toBe(false);
+  });
+
+  it("confirms archiving with the number of runs in progress", async () => {
+    api.activeRunCount.mockResolvedValue(2);
+    dialogs.showConfirm.mockResolvedValue(true);
+    await render();
+    await act(async () => button(row("wf2")!, i18n.t("workflow:panel.archive"))!.click());
+    expect(api.activeRunCount).toHaveBeenCalledWith(ROOT, "wf2");
+    const text = dialogs.showConfirm.mock.calls[0][0] as string;
+    expect(text).toContain(i18n.t("workflow:panel.archiveConfirm", { name: "Flow wf2" }));
+    expect(text).toContain(i18n.t("workflow:panel.activeRuns", { count: 2 }));
+    const saved = api.saveWorkflows.mock.calls[0][1].workflows as Workflow[];
+    expect(saved.find((w) => w.id === "wf2")?.archived).toBe(true);
+  });
+
+  it("omits the run count note when no run is in progress and keeps the file on cancel", async () => {
+    dialogs.showConfirm.mockResolvedValue(false);
+    await render();
+    await act(async () => button(row("wf1")!, i18n.t("workflow:panel.archive"))!.click());
+    const text = dialogs.showConfirm.mock.calls[0][0] as string;
+    expect(text).not.toContain(i18n.t("workflow:panel.activeRuns", { count: 0 }));
+    expect(api.saveWorkflows).not.toHaveBeenCalled();
+  });
+
+  it("deletes an archived workflow after confirmation", async () => {
+    dialogs.showConfirm.mockResolvedValue(true);
+    useWorkflowStore.getState().setFilters({ showArchived: true });
+    await render();
+    await act(async () => button(row("wf3")!, i18n.t("workflow:panel.delete"))!.click());
+    expect(dialogs.showConfirm.mock.calls[0][0]).toContain(
+      i18n.t("workflow:panel.deleteConfirm", { name: "Flow wf3" }),
+    );
+    const saved = api.saveWorkflows.mock.calls[0][1].workflows as Workflow[];
+    expect(saved.map((w) => w.id)).toEqual(["wf1", "wf2"]);
+  });
+
+  it("adds the standard workflow with the prompted name and the chosen provider", async () => {
+    dialogs.showPrompt.mockResolvedValue("My flow");
+    api.addStandard.mockResolvedValue(workflow("wf4"));
+    await render();
+    const select = container.querySelector<HTMLSelectElement>(".workflow-panel__provider-select")!;
+    expect(select.value).toBe("codex");
+    await act(async () => {
+      select.value = "copilot";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await act(async () => button(container, i18n.t("workflow:panel.addStandard"))!.click());
+    expect(dialogs.showPrompt.mock.calls[0][1]).toEqual(
+      expect.objectContaining({ defaultValue: i18n.t("workflow:template.standardName") }),
+    );
+    expect(api.addStandard).toHaveBeenCalledWith(ROOT, "My flow", "copilot");
+  });
+
+  it("renders load warnings with the file and the localized message", async () => {
+    api.listWorkflows.mockImplementation(async () => ({
+      workflows,
+      warnings: [{ file: "workflows.json", message: "STORE_CORRUPT: bad" }],
+    }));
+    api.listTasks.mockResolvedValue({
+      tasks: [],
+      warnings: [{ file: "tasks/x.md", message: "BRAND_NEW_CODE" }],
+    });
+    await render();
+    const warnings = container.querySelector(".workflow-panel__warnings")!;
+    expect(warnings.textContent).toContain("workflows.json");
+    expect(warnings.textContent).toContain(i18n.t("workflow:codes.STORE_CORRUPT"));
+    expect(warnings.textContent).toContain("bad");
+    expect(warnings.textContent).toContain("tasks/x.md");
+    expect(warnings.textContent).toContain("BRAND_NEW_CODE");
+  });
+
+  it("updates the store filters", async () => {
+    await render();
+    const workflowSelect = container.querySelector<HTMLSelectElement>(".workflow-panel__workflow-filter")!;
+    await act(async () => {
+      workflowSelect.value = "wf2";
+      workflowSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(useWorkflowStore.getState().filters.workflowId).toBe("wf2");
+    await act(async () => {
+      workflowSelect.value = "";
+      workflowSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(useWorkflowStore.getState().filters.workflowId).toBeNull();
+
+    const archived = container.querySelector<HTMLInputElement>('input[name="showArchived"]')!;
+    await act(async () => archived.click());
+    expect(useWorkflowStore.getState().filters.showArchived).toBe(true);
+    expect(row("wf3")).not.toBeNull();
+
+    const cancelled = container.querySelector<HTMLInputElement>('input[name="showCancelled"]')!;
+    await act(async () => cancelled.click());
+    expect(useWorkflowStore.getState().filters.showCancelled).toBe(true);
+
+    await act(async () => button(container, i18n.t("workflow:panel.viewMatrix"))!.click());
+    expect(useWorkflowStore.getState().filters.view).toBe("matrix");
+  });
+
+  it("shows the new task and edit buttons only when their handlers are given", async () => {
+    await render();
+    expect(button(container, i18n.t("workflow:panel.newTask"))).toBeUndefined();
+    expect(button(row("wf1")!, i18n.t("workflow:panel.edit"))).toBeUndefined();
+
+    const onCreateTask = vi.fn();
+    const onEditWorkflow = vi.fn();
+    await render({ onCreateTask, onEditWorkflow });
+    await act(async () => button(container, i18n.t("workflow:panel.newTask"))!.click());
+    expect(onCreateTask).toHaveBeenCalled();
+    await act(async () => button(row("wf1")!, i18n.t("workflow:panel.edit"))!.click());
+    expect(onEditWorkflow).toHaveBeenCalledWith(expect.objectContaining({ id: "wf1" }));
+  });
+});

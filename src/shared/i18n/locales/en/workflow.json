@@ -1,5 +1,38 @@
 {
   "title": "WORKFLOWS",
+  "noFolder": "Open a folder to use workflows.",
+  "loading": "Loading…",
+  "template": {
+    "standardName": "Standard workflow"
+  },
+  "panel": {
+    "workflows": "Workflows",
+    "empty": "No workflows yet.",
+    "enabled": "Enabled",
+    "archived": "Archived",
+    "edit": "Edit",
+    "archive": "Archive",
+    "restore": "Restore",
+    "delete": "Delete",
+    "archiveConfirm": "Archive the workflow \"{{name}}\"? No new tasks can be started with it.",
+    "deleteConfirm": "Delete the workflow \"{{name}}\"? This cannot be undone.",
+    "activeRuns": "Runs in progress: {{count}}. They will continue with their snapshot.",
+    "addStandard": "Add standard workflow",
+    "addStandardPrompt": "Name of the new workflow",
+    "provider": "Provider",
+    "newTask": "New task",
+    "saveFailed": "The workflows could not be saved.",
+    "addFailed": "The workflow could not be added.",
+    "warnings": "Load warnings ({{count}})",
+    "filters": "Filters",
+    "filterWorkflow": "Workflow",
+    "filterAll": "All workflows",
+    "showArchived": "Show archived",
+    "showCancelled": "Show cancelled",
+    "view": "View",
+    "viewKanban": "Kanban",
+    "viewMatrix": "Matrix"
+  },
   "status": {
     "inbox": "Inbox",
     "running": "Running",

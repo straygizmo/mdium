@@ -25,6 +25,8 @@ import { getThemeById } from "@/shared/themes";
 import { Toolbar } from "./components/Toolbar";
 import { FolderTabBar, TabBar } from "./components/TabBar";
 import { StatusBar } from "./components/StatusBar";
+import { MainArea } from "./components/MainArea";
+import { startWorkflowEventBridge } from "@/features/workflow/workflow-store";
 import { LeftPanel } from "@/features/file-tree/components/LeftPanel";
 import { EditorPanel } from "@/features/editor/components/EditorPanel";
 import { PreviewPanel } from "@/features/preview/components/PreviewPanel";
@@ -55,6 +57,21 @@ export function App() {
   const { t } = useTranslation();
   // Serve RAG search requests from the opencode rag_search tool.
   useRagBridge();
+  // Keep workflow lists and progress in sync with orchestrator events.
+  useEffect(() => {
+    let disposed = false;
+    let release: (() => void) | null = null;
+    startWorkflowEventBridge()
+      .then((r) => {
+        if (disposed) r();
+        else release = r;
+      })
+      .catch((err) => console.error("[workflow] event bridge failed", err));
+    return () => {
+      disposed = true;
+      release?.();
+    };
+  }, []);
   const initializeTheme = useSettingsStore((s) => s.initializeTheme);
   const activeTab = useTabStore((s) => s.getActiveTab());
   const openTab = useTabStore((s) => s.openTab);
@@ -1194,98 +1211,100 @@ export function App() {
         <div className="app__workspace">
           <TabBar />
           <div className="app__editor-area" ref={editorAreaRef}>
-            {showSearch && (
-              <SearchReplace
-                onClose={() => setShowSearch(false)}
-              />
-            )}
-
-            {activeTab ? (
-              activeTab.isDiffTab ? (
-                <GitDiffViewer />
-              ) : activeTab.mindmapFileType && activeTab.binaryData ? (
-                <MindmapEditor
-                  ref={mindmapEditorRef}
-                  fileData={activeTab.binaryData}
-                  fileType={activeTab.mindmapFileType}
-                  filePath={activeTab.filePath}
-                  theme={themeType}
-                  onSave={handleMindmapSave}
-                  onDirtyChange={handleMindmapDirtyChange}
+            <MainArea>
+              {showSearch && (
+                <SearchReplace
+                  onClose={() => setShowSearch(false)}
                 />
-              ) : activeTab.imageFileType && activeTab.imageBlobUrl ? (
-                <div className="app__image-area">
-                  <ImageCanvas
-                    ref={imageCanvasRef}
-                    imageSrc={activeTab.imageBlobUrl}
-                    canvasJson={activeTab.imageCanvasJson}
-                    onCanvasModified={handleImageCanvasModified}
-                    imageFileType={activeTab.imageFileType}
-                    onImageReplaced={(url) => {
-                      if (activeTab) useTabStore.getState().updateImageBlobUrl(activeTab.id, url);
-                    }}
+              )}
+
+              {activeTab ? (
+                activeTab.isDiffTab ? (
+                  <GitDiffViewer />
+                ) : activeTab.mindmapFileType && activeTab.binaryData ? (
+                  <MindmapEditor
+                    ref={mindmapEditorRef}
+                    fileData={activeTab.binaryData}
+                    fileType={activeTab.mindmapFileType}
+                    filePath={activeTab.filePath}
+                    theme={themeType}
+                    onSave={handleMindmapSave}
+                    onDirtyChange={handleMindmapDirtyChange}
                   />
-                </div>
-              ) : activeTab.isCodeFile ? (
-                <CodeEditorPanel />
-              ) : activeTab.officeFileType ? (
-                <div className="app__preview-pane">
-                  <PreviewPanel
-                    previewRef={previewRef}
-                    onOpenFile={handleFileSelect}
-                    onRefreshFileTree={loadFileTree}
-                  />
-                </div>
-              ) : (
-                <>
-                  {editorVisible && (
-                    <div className="app__editor-pane" style={{ flex: `0 0 ${editorRatio}%` }}>
-                      {activeTab.csvFileType
-                        ? <CodeEditorPanel />
-                        : <EditorPanel editorRef={editorRef} />}
-                    </div>
-                  )}
-                  {editorVisible && (
-                    <div
-                      className="app__divider"
-                      onMouseDown={handleEditorDividerMouseDown}
+                ) : activeTab.imageFileType && activeTab.imageBlobUrl ? (
+                  <div className="app__image-area">
+                    <ImageCanvas
+                      ref={imageCanvasRef}
+                      imageSrc={activeTab.imageBlobUrl}
+                      canvasJson={activeTab.imageCanvasJson}
+                      onCanvasModified={handleImageCanvasModified}
+                      imageFileType={activeTab.imageFileType}
+                      onImageReplaced={(url) => {
+                        if (activeTab) useTabStore.getState().updateImageBlobUrl(activeTab.id, url);
+                      }}
                     />
-                  )}
-                  <div className="app__preview-pane" style={editorVisible ? { flex: 1 } : undefined}>
+                  </div>
+                ) : activeTab.isCodeFile ? (
+                  <CodeEditorPanel />
+                ) : activeTab.officeFileType ? (
+                  <div className="app__preview-pane">
                     <PreviewPanel
                       previewRef={previewRef}
                       onOpenFile={handleFileSelect}
                       onRefreshFileTree={loadFileTree}
-                      onJumpToLine={handleJumpToEditorLine}
                     />
                   </div>
-                </>
-              )
-            ) : activeFolderPath ? (
-              <div className="app__welcome">
-                <img src={appIconUrl} alt="MDium" className="app__welcome-icon" />
-                <h1 className="app__welcome-title">MDium</h1>
-                <div className="app__welcome-actions">
-                  <button className="app__welcome-btn" onClick={handleNewFile}>
-                    {t("createNewMdFile")}
-                  </button>
+                ) : (
+                  <>
+                    {editorVisible && (
+                      <div className="app__editor-pane" style={{ flex: `0 0 ${editorRatio}%` }}>
+                        {activeTab.csvFileType
+                          ? <CodeEditorPanel />
+                          : <EditorPanel editorRef={editorRef} />}
+                      </div>
+                    )}
+                    {editorVisible && (
+                      <div
+                        className="app__divider"
+                        onMouseDown={handleEditorDividerMouseDown}
+                      />
+                    )}
+                    <div className="app__preview-pane" style={editorVisible ? { flex: 1 } : undefined}>
+                      <PreviewPanel
+                        previewRef={previewRef}
+                        onOpenFile={handleFileSelect}
+                        onRefreshFileTree={loadFileTree}
+                        onJumpToLine={handleJumpToEditorLine}
+                      />
+                    </div>
+                  </>
+                )
+              ) : activeFolderPath ? (
+                <div className="app__welcome">
+                  <img src={appIconUrl} alt="MDium" className="app__welcome-icon" />
+                  <h1 className="app__welcome-title">MDium</h1>
+                  <div className="app__welcome-actions">
+                    <button className="app__welcome-btn" onClick={handleNewFile}>
+                      {t("createNewMdFile")}
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ) : (
-              <div className="app__welcome">
-                <img src={appIconUrl} alt="MDium" className="app__welcome-icon" />
-                <h1 className="app__welcome-title">MDium</h1>
-                <p className="app__welcome-sub">{t("noFolderOpen")}</p>
-                <div className="app__welcome-actions">
-                  <button className="app__welcome-btn" onClick={handleOpenFolder}>
-                    {t("openFolder")}
-                  </button>
-                  <button className="app__welcome-btn" onClick={() => setShowCloneDialog(true)}>
-                    {t("cloneRepository")}
-                  </button>
+              ) : (
+                <div className="app__welcome">
+                  <img src={appIconUrl} alt="MDium" className="app__welcome-icon" />
+                  <h1 className="app__welcome-title">MDium</h1>
+                  <p className="app__welcome-sub">{t("noFolderOpen")}</p>
+                  <div className="app__welcome-actions">
+                    <button className="app__welcome-btn" onClick={handleOpenFolder}>
+                      {t("openFolder")}
+                    </button>
+                    <button className="app__welcome-btn" onClick={() => setShowCloneDialog(true)}>
+                      {t("cloneRepository")}
+                    </button>
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
+            </MainArea>
           </div>
           {(bottomTerminalVisible || terminalSessions.length > 0) && (
             <>

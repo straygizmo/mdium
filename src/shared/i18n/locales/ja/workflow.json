@@ -1,5 +1,38 @@
 {
   "title": "WORKFLOWS",
+  "noFolder": "ワークフローを使うにはフォルダーを開いてください。",
+  "loading": "読み込み中…",
+  "template": {
+    "standardName": "標準ワークフロー"
+  },
+  "panel": {
+    "workflows": "ワークフロー",
+    "empty": "ワークフローはまだありません。",
+    "enabled": "有効",
+    "archived": "アーカイブ済み",
+    "edit": "編集",
+    "archive": "アーカイブ",
+    "restore": "元に戻す",
+    "delete": "削除",
+    "archiveConfirm": "ワークフロー「{{name}}」をアーカイブしますか？ 新しいタスクは開始できなくなります。",
+    "deleteConfirm": "ワークフロー「{{name}}」を削除しますか？ この操作は元に戻せません。",
+    "activeRuns": "進行中のフロー実行: {{count}} 件。これらはスナップショットで最後まで実行されます。",
+    "addStandard": "標準ワークフローを追加",
+    "addStandardPrompt": "新しいワークフローの名前",
+    "provider": "プロバイダー",
+    "newTask": "新しいタスク",
+    "saveFailed": "ワークフローを保存できませんでした。",
+    "addFailed": "ワークフローを追加できませんでした。",
+    "warnings": "読み込み時の警告 ({{count}})",
+    "filters": "フィルター",
+    "filterWorkflow": "ワークフロー",
+    "filterAll": "すべてのワークフロー",
+    "showArchived": "アーカイブ済みを表示",
+    "showCancelled": "中止済みを表示",
+    "view": "表示",
+    "viewKanban": "カンバン",
+    "viewMatrix": "マトリクス"
+  },
   "status": {
     "inbox": "受信箱",
     "running": "実行中",
