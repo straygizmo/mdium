@@ -141,8 +141,8 @@ fn non_blank(value: Option<serde_yaml_ng::Value>) -> Result<Option<String>, Outc
 /// opener's marker exactly, and is only treated as the outer closer when the
 /// remainder holds an odd number of fence lines (inner code blocks pair up;
 /// an even count means the outer closer is missing). Any other text is
-/// returned unchanged.
-fn strip_wrapping_fence(text: &str) -> &str {
+/// returned unchanged. Also used by the intake output parser.
+pub(crate) fn strip_wrapping_fence(text: &str) -> &str {
     let (first, rest) = split_line(text);
     let first = first.trim_end();
     let Some(fence_char) = first.chars().next().filter(|c| *c == '`' || *c == '~') else {

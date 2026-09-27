@@ -25,6 +25,8 @@ pub mod gitops;
 #[allow(dead_code)]
 pub mod integrity;
 #[allow(dead_code)]
+pub mod intake;
+#[allow(dead_code)]
 pub mod issue_sync;
 pub mod model;
 pub mod orchestrator;
