@@ -1,9 +1,12 @@
 import { randomBytes } from "node:crypto";
+import { basename } from "node:path";
+import { pathToFileURL } from "node:url";
 import { createOpencodeClient } from "@opencode-ai/sdk/client";
 import type { AgentEvent, AgentPermission, Availability } from "../../src/shared/types/agent-runner";
 import type { AdapterSession, ProviderAdapter, SessionCallbacks, SessionOptions } from "./adapter";
 import { runCommand, type CommandRunner } from "./availability";
 import { startOpencodeServer } from "./opencode-server";
+import { imageMimeType } from "./protocol";
 import {
   opencodeDecision,
   opencodeServerConfig,
@@ -13,6 +16,15 @@ import {
   type OpencodePaths,
   type OpencodePermissionLike,
 } from "./permissions";
+
+/*
+ * Images: the prompt's `parts` accept SDK `FilePartInput`s, so each image of a turn is sent
+ * after the text part as `{ type: "file", mime, filename, url }` with a `file://` URL; the
+ * server reads the file and hands it to the model as an image.
+ */
+
+/** Prompt parts this adapter sends (subset of the SDK `TextPartInput | FilePartInput`). */
+type OpencodePromptPart = { type: "text"; text: string } | { type: "file"; mime: string; filename: string; url: string };
 
 /*
  * Configuration hardening of the dedicated opencode server.
@@ -73,7 +85,7 @@ export interface OpencodeClientLike {
     promptAsync(
       options: {
         path: { id: string };
-        body: { agent: string; model?: { providerID: string; modelID: string }; parts: Array<{ type: "text"; text: string }> };
+        body: { agent: string; model?: { providerID: string; modelID: string }; parts: OpencodePromptPart[] };
       } & DirectoryQuery,
     ): Promise<OpencodeResult>;
     abort(options: { path: { id: string } } & DirectoryQuery): Promise<OpencodeResult>;
@@ -428,7 +440,18 @@ class OpencodeSession implements AdapterSession {
     return { directory: this.options.workingDirectory };
   }
 
-  runTurn(text: string, signal: AbortSignal): Promise<string> {
+  runTurn(text: string, signal: AbortSignal, images: readonly string[] = []): Promise<string> {
+    const parts: OpencodePromptPart[] = [
+      { type: "text", text },
+      ...images.map(
+        (file): OpencodePromptPart => ({
+          type: "file",
+          mime: imageMimeType(file) ?? "application/octet-stream",
+          filename: basename(file),
+          url: pathToFileURL(file).href,
+        }),
+      ),
+    ];
     return new Promise<string>((resolve, reject) => {
       if (signal.aborted) return reject(abortError());
       const model = this.options.model ? parseModel(this.options.model) : undefined;
@@ -475,7 +498,7 @@ class OpencodeSession implements AdapterSession {
           .promptAsync({
             path: { id: this.id },
             query: this.query,
-            body: { agent: this.agent, ...(model ? { model } : {}), parts: [{ type: "text", text }] },
+            body: { agent: this.agent, ...(model ? { model } : {}), parts },
           })
           .then((result) => {
             if (result?.error) turn.fail(new Error(`OPENCODE_FAILED: ${errorText(result.error)}`));

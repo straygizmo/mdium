@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { RunnerCore } from "../runner-core";
 import type { AdapterSession, ProviderAdapter, SessionCallbacks } from "../adapter";
 import type { RunnerOutbound } from "../../../src/shared/types/agent-runner";
@@ -574,5 +577,72 @@ describe("RunnerCore", () => {
     await flush();
     expect(t.sent).toContainEqual({ type: "turn_failed", sessionId: "s1", message: "GUARD_BLOCKED" });
     expect(t.sent.some((m) => m.type === "turn_cancelled")).toBe(false);
+  });
+});
+
+describe("RunnerCore send images", () => {
+  let dir: string;
+  let root: string;
+  let inside: string;
+  let outside: string;
+
+  beforeAll(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "runner-core-images-"));
+    root = path.join(dir, "project");
+    fs.mkdirSync(path.join(root, "drafts"), { recursive: true });
+    inside = path.join(root, "drafts", "shot.png");
+    outside = path.join(dir, "outside.png");
+    fs.writeFileSync(inside, "png");
+    fs.writeFileSync(outside, "png");
+  });
+  afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const startIn = (t: ReturnType<typeof setup>, guard: boolean) =>
+    t.line({
+      type: "start_session",
+      requestId: "r1",
+      sessionId: "s1",
+      provider: "codex",
+      workingDirectory: guard ? path.join(root, "drafts") : root,
+      permission: "read-only",
+      ...(guard ? { guard: { workspaceRoot: root } } : {}),
+    });
+
+  it("passes validated images to the adapter turn", async () => {
+    const t = setup();
+    await startIn(t, true);
+    await t.line({ type: "send", sessionId: "s1", text: "look", images: [inside] });
+    expect(t.session.runTurn).toHaveBeenCalledWith("look", expect.any(AbortSignal), [inside]);
+  });
+
+  it("passes no images when the send has none", async () => {
+    const t = setup();
+    await startIn(t, true);
+    await t.line({ type: "send", sessionId: "s1", text: "look" });
+    expect(t.session.runTurn).toHaveBeenCalledWith("look", expect.any(AbortSignal), []);
+  });
+
+  it("rejects images outside the guard workspace root", async () => {
+    const t = setup();
+    await startIn(t, true);
+    await t.line({ type: "send", sessionId: "s1", text: "look", images: [outside] });
+    expect(t.sent.at(-1)).toEqual({ type: "error", sessionId: "s1", message: "INVALID_IMAGES" });
+    expect(t.session.runTurn).not.toHaveBeenCalled();
+  });
+
+  it("rejects images outside the working directory of an unguarded session", async () => {
+    const t = setup();
+    await startIn(t, false);
+    await t.line({ type: "send", sessionId: "s1", text: "look", images: [outside] });
+    expect(t.sent.at(-1)).toEqual({ type: "error", sessionId: "s1", message: "INVALID_IMAGES" });
+    expect(t.session.runTurn).not.toHaveBeenCalled();
+  });
+
+  it("reports a malformed image list as a session error", async () => {
+    const t = setup();
+    await startIn(t, true);
+    await t.line({ type: "send", sessionId: "s1", text: "look", images: ["relative.png"] });
+    expect(t.sent.at(-1)).toEqual({ type: "error", sessionId: "s1", message: "INVALID_IMAGES" });
+    expect(t.session.runTurn).not.toHaveBeenCalled();
   });
 });

@@ -28,8 +28,11 @@ export interface SessionCallbacks {
 export interface AdapterSession {
   /** Provider-native id, known after the first turn for Codex. */
   nativeSessionId(): string | undefined;
-  /** Run one turn; resolves with the final assistant text. Rejects on failure; aborting `signal` cancels. */
-  runTurn(text: string, signal: AbortSignal): Promise<string>;
+  /**
+   * Run one turn; resolves with the final assistant text. Rejects on failure; aborting `signal` cancels.
+   * `images` are validated absolute image paths inside the session's workspace root.
+   */
+  runTurn(text: string, signal: AbortSignal, images?: readonly string[]): Promise<string>;
   close(): Promise<void>;
 }
 export interface ProviderAdapter {

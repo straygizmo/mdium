@@ -37,7 +37,8 @@ pub trait RunnerApi: Send + Sync {
         params: StartSessionParams,
         timeout: Duration,
     ) -> Result<(Receiver<RunnerEvent>, Option<String>), RunnerError>;
-    fn send(&self, session_id: &str, text: &str) -> Result<(), RunnerError>;
+    /// Starts a turn; `images` are absolute image paths inside the session's workspace root.
+    fn send(&self, session_id: &str, text: &str, images: &[String]) -> Result<(), RunnerError>;
     fn cancel(&self, session_id: &str) -> Result<(), RunnerError>;
     fn respond_permission(
         &self,
@@ -218,8 +219,8 @@ impl RunnerApi for RunnerHost {
         self.client()?.start_session(params, timeout)
     }
 
-    fn send(&self, session_id: &str, text: &str) -> Result<(), RunnerError> {
-        self.session_client()?.send(session_id, text)
+    fn send(&self, session_id: &str, text: &str, images: &[String]) -> Result<(), RunnerError> {
+        self.session_client()?.send(session_id, text, images)
     }
 
     fn cancel(&self, session_id: &str) -> Result<(), RunnerError> {
@@ -379,7 +380,7 @@ mod tests {
         );
         assert_eq!(s.spawns.load(Ordering::SeqCst), 1);
         probe(&host).unwrap();
-        host.send("s", "one").unwrap();
+        host.send("s", "one", &[]).unwrap();
         host.cancel("s").unwrap();
         host.respond_permission("s", "p", true).unwrap();
         host.close_session("s").unwrap();
@@ -410,7 +411,7 @@ mod tests {
     fn session_calls_never_spawn() {
         let (host, s) = host(Mode::Ready, WAIT);
         // No runner yet.
-        assert_eq!(host.send("s", "x"), Err(RunnerError::Exited));
+        assert_eq!(host.send("s", "x", &[]), Err(RunnerError::Exited));
         assert_eq!(host.cancel("s"), Err(RunnerError::Exited));
         assert_eq!(
             host.respond_permission("s", "p", false),
@@ -423,7 +424,7 @@ mod tests {
         probe(&host).unwrap();
         let (first, _) = spawned(&s, 0);
         first.handle_exit();
-        assert_eq!(host.send("s", "x"), Err(RunnerError::Exited));
+        assert_eq!(host.send("s", "x", &[]), Err(RunnerError::Exited));
         assert_eq!(host.cancel("s"), Err(RunnerError::Exited));
         assert_eq!(
             host.respond_permission("s", "p", true),
@@ -495,7 +496,7 @@ mod tests {
         let (client, t) = spawned(&s, 0);
         assert!(t.killed.load(Ordering::SeqCst));
         assert!(!client.is_alive());
-        assert_eq!(host.send("s", "y"), Err(RunnerError::Exited));
+        assert_eq!(host.send("s", "y", &[]), Err(RunnerError::Exited));
         assert_eq!(probe(&host), Err(RunnerError::Exited));
         assert_eq!(
             host.start_session(params("s"), WAIT).unwrap_err(),

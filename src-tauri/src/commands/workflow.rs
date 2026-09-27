@@ -206,7 +206,7 @@ impl RunnerApi for MissingRunner {
         Err(runner_missing())
     }
 
-    fn send(&self, _session_id: &str, _text: &str) -> Result<(), RunnerError> {
+    fn send(&self, _session_id: &str, _text: &str, _images: &[String]) -> Result<(), RunnerError> {
         Err(runner_missing())
     }
 

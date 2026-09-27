@@ -1,3 +1,5 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { AgentPermission, RunnerInbound, RunnerProvider } from "../../src/shared/types/agent-runner";
 
 const PROVIDERS: readonly RunnerProvider[] = ["codex", "copilot", "opencode", "claude"];
@@ -25,6 +27,81 @@ function guard(value: unknown): { workspaceRoot: string } | undefined {
   // The guard resolves relative paths against the root, so it must not depend on the runner's cwd.
   if (!isAbsolutePath(workspaceRoot)) throw new Error("Invalid guard.workspaceRoot");
   return { workspaceRoot };
+}
+
+/** An invalid inbound line that belongs to a session, so the error can be routed to it. */
+export class InboundError extends Error {
+  constructor(message: string, readonly sessionId?: string) {
+    super(message);
+    this.name = "InboundError";
+  }
+}
+
+/** Most images one turn may carry. */
+export const MAX_IMAGES = 10;
+const IMAGE_MIME_TYPES: Record<string, "image/png" | "image/jpeg" | "image/gif" | "image/webp"> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+};
+
+/** Mime type of an image path by extension; undefined for unsupported extensions. */
+export function imageMimeType(file: string): "image/png" | "image/jpeg" | "image/gif" | "image/webp" | undefined {
+  const dot = file.lastIndexOf(".");
+  return dot < 0 ? undefined : IMAGE_MIME_TYPES[file.slice(dot).toLowerCase()];
+}
+
+function isImageFile(file: string): boolean {
+  try {
+    return fs.statSync(file).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Validate a send's image list: at most MAX_IMAGES non-empty absolute paths of existing
+ * regular files with an image extension. Returns undefined for a missing or empty list.
+ */
+function images(value: unknown, sessionId: string): string[] | undefined {
+  if (value === undefined) return undefined;
+  const valid =
+    Array.isArray(value) &&
+    value.length <= MAX_IMAGES &&
+    value.every(
+      (file) => typeof file === "string" && file.trim() !== "" && isAbsolutePath(file) && imageMimeType(file) !== undefined && isImageFile(file),
+    );
+  if (!valid) throw new InboundError("INVALID_IMAGES", sessionId);
+  return value.length > 0 ? (value as string[]) : undefined;
+}
+
+/** True when `child` is `root` itself or lies below it (both already resolved). */
+function isInside(child: string, root: string): boolean {
+  const relative = path.relative(root, child);
+  const escapes = relative === ".." || relative.startsWith(`..${path.sep}`);
+  return !escapes && !path.isAbsolute(relative);
+}
+
+/**
+ * True when every image resolves (symlinks followed) to a location inside `root`.
+ * An unresolvable root or image counts as outside.
+ */
+export function imagesWithinRoot(files: readonly string[], root: string): boolean {
+  let resolvedRoot: string;
+  try {
+    resolvedRoot = fs.realpathSync.native(root);
+  } catch {
+    return false;
+  }
+  return files.every((file) => {
+    try {
+      return isInside(fs.realpathSync.native(file), resolvedRoot);
+    } catch {
+      return false;
+    }
+  });
 }
 
 /** Parse and validate one inbound JSON line. Throws on any invalid shape. */
@@ -67,9 +144,12 @@ export function parseInbound(line: string): RunnerInbound {
         ...(parsedGuard ? { guard: parsedGuard } : {}),
       };
     }
-    case "send":
+    case "send": {
+      const sessionId = str(m.sessionId, "sessionId");
       if (typeof m.text !== "string") throw new Error("Invalid text");
-      return { type: "send", sessionId: str(m.sessionId, "sessionId"), text: m.text };
+      const parsedImages = images(m.images, sessionId);
+      return { type: "send", sessionId, text: m.text, ...(parsedImages ? { images: parsedImages } : {}) };
+    }
     case "cancel":
       return { type: "cancel", sessionId: str(m.sessionId, "sessionId") };
     case "respond_permission":

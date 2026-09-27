@@ -1253,7 +1253,12 @@ mod tests {
             Ok((rx, None))
         }
 
-        fn send(&self, session_id: &str, _text: &str) -> Result<(), RunnerError> {
+        fn send(
+            &self,
+            session_id: &str,
+            _text: &str,
+            _images: &[String],
+        ) -> Result<(), RunnerError> {
             let _ = self.waiting.lock().unwrap().send(session_id.to_string());
             Ok(())
         }

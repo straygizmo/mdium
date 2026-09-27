@@ -6,7 +6,7 @@ import { checkToolRequest } from "../guard";
 function fakeCodex(events: unknown[], threadId = "thread-1") {
   const startThread = vi.fn();
   const resumeThread = vi.fn();
-  const runStreamed = vi.fn(async (_input: string, opts?: { signal?: AbortSignal }) => ({
+  const runStreamed = vi.fn(async (_input: unknown, opts?: { signal?: AbortSignal }) => ({
     events: (async function* () {
       for (const e of events) {
         if (opts?.signal?.aborted) throw Object.assign(new Error("aborted"), { name: "AbortError" });
@@ -255,5 +255,31 @@ describe("CodexAdapter", () => {
     );
     await expect(session.runTurn("x", controller.signal)).rejects.toMatchObject({ name: "AbortError" });
     expect(events).toEqual([]);
+  });
+});
+
+describe("CodexAdapter images", () => {
+  it("sends text plus local_image items when the turn has images", async () => {
+    const fake = fakeCodex([{ type: "item.completed", item: { id: "m1", type: "agent_message", text: "Seen." } }]);
+    const session = await adapter(fake.createCodex).startSession(
+      { workingDirectory: "C:/w", permission: "read-only", guarded: false },
+      callbacks([]),
+    );
+    await expect(session.runTurn("look", new AbortController().signal, ["C:/w/a.png", "C:/w/b.jpg"])).resolves.toBe("Seen.");
+    expect(fake.runStreamed.mock.calls[0][0]).toEqual([
+      { type: "text", text: "look" },
+      { type: "local_image", path: "C:/w/a.png" },
+      { type: "local_image", path: "C:/w/b.jpg" },
+    ]);
+  });
+
+  it("sends plain text when the turn has no images", async () => {
+    const fake = fakeCodex([]);
+    const session = await adapter(fake.createCodex).startSession(
+      { workingDirectory: "C:/w", permission: "read-only", guarded: false },
+      callbacks([]),
+    );
+    await session.runTurn("look", new AbortController().signal, []);
+    expect(fake.runStreamed.mock.calls[0][0]).toBe("look");
   });
 });

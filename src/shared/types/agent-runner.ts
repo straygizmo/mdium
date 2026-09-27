@@ -78,7 +78,13 @@ export type RunnerInbound =
       /** Enable the runtime safety guard; paths outside workspaceRoot are blocked. */
       guard?: { workspaceRoot: string };
     }
-  | { type: "send"; sessionId: string; text: string }
+  | {
+      type: "send";
+      sessionId: string;
+      text: string;
+      /** Absolute paths of image files inside the session's workspace root (at most 10). */
+      images?: string[];
+    }
   | { type: "cancel"; sessionId: string }
   | { type: "respond_permission"; sessionId: string; permissionId: string; allow: boolean }
   | { type: "list_sessions"; requestId: string; provider: RunnerProvider; workingDirectory: string }

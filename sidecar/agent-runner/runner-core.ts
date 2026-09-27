@@ -3,7 +3,7 @@ import * as os from "node:os";
 import type { Availability, RunnerInbound, RunnerOutbound, RunnerProvider, ToolRequest } from "../../src/shared/types/agent-runner";
 import type { AdapterSession, ProviderAdapter } from "./adapter";
 import { checkToolRequest } from "./guard";
-import { parseInbound } from "./protocol";
+import { InboundError, imagesWithinRoot, parseInbound } from "./protocol";
 
 interface ActiveTurn {
   controller: AbortController;
@@ -19,6 +19,8 @@ interface ActiveTurn {
 
 interface SessionEntry {
   session: AdapterSession;
+  /** Images of a turn must resolve inside this directory: the guard root, else the working directory. */
+  imageRoot: string;
   timeoutMs?: number;
   turn?: ActiveTurn;
   permissions: Map<string, (allow: boolean) => void>;
@@ -107,7 +109,8 @@ export class RunnerCore {
     try {
       msg = parseInbound(line);
     } catch (error) {
-      this.deps.send({ type: "error", message: message(error) });
+      const sessionId = error instanceof InboundError ? error.sessionId : undefined;
+      this.deps.send({ type: "error", ...(sessionId ? { sessionId } : {}), message: message(error) });
       return;
     }
     switch (msg.type) {
@@ -129,7 +132,7 @@ export class RunnerCore {
       case "start_session":
         return this.startSession(msg);
       case "send":
-        return this.send(msg.sessionId, msg.text);
+        return this.send(msg.sessionId, msg.text, msg.images ?? []);
       case "cancel": {
         const entry = this.sessions.get(msg.sessionId);
         if (entry?.turn) {
@@ -250,7 +253,13 @@ export class RunnerCore {
         return;
       }
       const nativeSessionId = session.nativeSessionId();
-      entry = { session, timeoutMs: msg.timeoutMs, permissions, closed: false };
+      entry = {
+        session,
+        imageRoot: msg.guard?.workspaceRoot ?? msg.workingDirectory,
+        timeoutMs: msg.timeoutMs,
+        permissions,
+        closed: false,
+      };
       this.sessions.set(msg.sessionId, entry);
       this.deps.send({ type: "session_started", ...ids, ...(nativeSessionId ? { nativeSessionId } : {}) });
     } catch (error) {
@@ -259,7 +268,7 @@ export class RunnerCore {
     }
   }
 
-  private async send(sessionId: string, text: string): Promise<void> {
+  private async send(sessionId: string, text: string, images: string[]): Promise<void> {
     const entry = this.sessions.get(sessionId);
     if (!entry) {
       this.deps.send({ type: "error", sessionId, message: "NO_SESSION" });
@@ -267,6 +276,10 @@ export class RunnerCore {
     }
     if (entry.turn) {
       this.deps.send({ type: "error", sessionId, message: "TURN_IN_PROGRESS" });
+      return;
+    }
+    if (images.length > 0 && !imagesWithinRoot(images, entry.imageRoot)) {
+      this.deps.send({ type: "error", sessionId, message: "INVALID_IMAGES" });
       return;
     }
     const turn: ActiveTurn = {
@@ -287,7 +300,7 @@ export class RunnerCore {
     entry.turn = turn;
     // Run the turn without blocking the line handler so cancel/permission lines are processed.
     void entry.session
-      .runTurn(text, turn.controller.signal)
+      .runTurn(text, turn.controller.signal, images)
       .then((finalResponse) => {
         // The session may have been closed (close_session) while this turn
         // was still resolving, e.g. if the adapter's runTurn does not itself

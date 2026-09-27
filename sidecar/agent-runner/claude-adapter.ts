@@ -1,9 +1,19 @@
+import { readFile, stat } from "node:fs/promises";
 import { query as sdkQuery, type HookCallback, type Options, type PermissionResult, type SyncHookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentEvent, Availability } from "../../src/shared/types/agent-runner";
 import { resolveClaudeExecutable, type ResolvedClaude } from "../resolve-claude";
 import type { AdapterSession, ProviderAdapter, SessionCallbacks, SessionOptions } from "./adapter";
 import { runCommand, type CommandRunner } from "./availability";
 import { claudeDecision, claudeDisallowedTools, claudeHookDecision, toolRequestFromClaude } from "./permissions";
+import { imageMimeType } from "./protocol";
+
+/*
+ * Images: a turn with images is sent as a streamed prompt holding one SDK user message whose
+ * content is a base64 `image` block per image followed by the text block. Images larger than
+ * MAX_IMAGE_BYTES (or unreadable) are skipped and named, with the reason, in a note appended
+ * to the text.
+ * A turn without images is sent as a plain string prompt.
+ */
 
 /** The subset of the SDK `Options` this adapter sets. */
 export type ClaudeQueryOptions = Pick<
@@ -27,8 +37,22 @@ export type ClaudeQueryOptions = Pick<
   canUseTool?: (toolName: string, input: Record<string, unknown>) => Promise<PermissionResult>;
 };
 
+type ImageBlock = {
+  type: "image";
+  source: { type: "base64"; media_type: "image/png" | "image/jpeg" | "image/gif" | "image/webp"; data: string };
+};
+type PromptBlock = ImageBlock | { type: "text"; text: string };
+
+/** Structural subset of the SDK `SDKUserMessage` sent as a streamed prompt. */
+export type ClaudeUserMessage = {
+  type: "user";
+  session_id: string;
+  parent_tool_use_id: null;
+  message: { role: "user"; content: PromptBlock[] };
+};
+
 /** Structural subset of the SDK `query` function. */
-export type QueryFn = (params: { prompt: string; options: ClaudeQueryOptions }) => AsyncIterable<unknown>;
+export type QueryFn = (params: { prompt: string | AsyncIterable<ClaudeUserMessage>; options: ClaudeQueryOptions }) => AsyncIterable<unknown>;
 
 export interface ClaudeAdapterDeps {
   query?: QueryFn;
@@ -48,6 +72,43 @@ type ClaudeMessage = {
   is_error?: boolean;
   errors?: string[];
 };
+
+/** Largest image sent inline; larger images are skipped with a note. */
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
+/** Read one image as a base64 block, or the reason it is skipped. */
+async function imageBlock(file: string): Promise<ImageBlock | string> {
+  const tooLarge = "larger than 5 MiB";
+  const mediaType = imageMimeType(file);
+  if (!mediaType) return "unsupported type";
+  try {
+    if ((await stat(file)).size > MAX_IMAGE_BYTES) return tooLarge;
+    const data = await readFile(file);
+    if (data.length > MAX_IMAGE_BYTES) return tooLarge;
+    return { type: "image", source: { type: "base64", media_type: mediaType, data: data.toString("base64") } };
+  } catch {
+    return "unreadable";
+  }
+}
+
+/** The prompt of a turn: the plain text, or one user message with image blocks when there are images. */
+async function buildPrompt(text: string, images: readonly string[]): Promise<string | AsyncIterable<ClaudeUserMessage>> {
+  if (images.length === 0) return text;
+  const content: PromptBlock[] = [];
+  let notes = "";
+  for (const file of images) {
+    const block = await imageBlock(file);
+    if (typeof block === "string") notes += `
+
+[Image skipped (${block}): ${file}]`;
+    else content.push(block);
+  }
+  content.push({ type: "text", text: `${text}${notes}` });
+  const message: ClaudeUserMessage = { type: "user", session_id: "", parent_tool_use_id: null, message: { role: "user", content } };
+  return (async function* () {
+    yield message;
+  })();
+}
 
 const GUARD_BLOCKED_MESSAGE = "Blocked by MDium safety guard";
 const NOT_PERMITTED_MESSAGE = "Not permitted in this stage";
@@ -117,7 +178,9 @@ class ClaudeSession implements AdapterSession {
     return allow ? { behavior: "allow", updatedInput: input } : { behavior: "deny", message: NOT_PERMITTED_MESSAGE };
   };
 
-  async runTurn(text: string, signal: AbortSignal): Promise<string> {
+  async runTurn(text: string, signal: AbortSignal, images: readonly string[] = []): Promise<string> {
+    if (signal.aborted) throw abortError();
+    const prompt = await buildPrompt(text, images);
     if (signal.aborted) throw abortError();
     const controller = new AbortController();
     this.controller = controller;
@@ -157,7 +220,7 @@ class ClaudeSession implements AdapterSession {
       ...(restricted ? { strictMcpConfig: true } : {}),
     };
 
-    const iterator = this.query({ prompt: text, options })[Symbol.asyncIterator]();
+    const iterator = this.query({ prompt, options })[Symbol.asyncIterator]();
     // Tool calls the main agent announced, so a result without a start can still be reported.
     const startedToolIds = new Set<string>();
     const emit = (e: AgentEvent) => this.callbacks.onEvent(e);

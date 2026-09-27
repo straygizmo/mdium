@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { OpencodeAdapter, startDedicatedServer, type OpencodeClientLike, type OpencodeClientOptions } from "../opencode-adapter";
 import { opencodeServerConfig } from "../permissions";
@@ -104,7 +105,7 @@ async function prompted(fake: ReturnType<typeof fakeClient>) {
   await vi.waitFor(() => expect(fake.client.session.promptAsync).toHaveBeenCalled());
 }
 
-type PromptBody = { agent: string; model?: { providerID: string; modelID: string }; parts: Array<{ type: string; text: string }> };
+type PromptBody = { agent: string; model?: { providerID: string; modelID: string }; parts: Array<{ type: string; text?: string }> };
 const promptBody = (fake: ReturnType<typeof fakeClient>, call = 0) =>
   (fake.client.session.promptAsync.mock.calls[call][0] as { body: PromptBody }).body;
 
@@ -628,5 +629,21 @@ describe("startDedicatedServer", () => {
     const start = vi.fn().mockRejectedValue(new Error("Timeout waiting for server to start after 20000ms"));
     await expect(startDedicatedServer(config, start)).rejects.toThrow("Timeout");
     expect(start).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("OpencodeAdapter images", () => {
+  it("adds a file part per image after the text part", async () => {
+    const { adapter, fake } = setup();
+    const session = await adapter.startSession(baseOptions, callbacks([]));
+    const image = path.resolve("C:/work/drafts/shot.jpg");
+    const turn = session.runTurn("look", new AbortController().signal, [image]);
+    await prompted(fake);
+    expect(promptBody(fake).parts).toEqual([
+      { type: "text", text: "look" },
+      { type: "file", mime: "image/jpeg", filename: "shot.jpg", url: pathToFileURL(image).href },
+    ]);
+    fake.queue.push(message("msg_a", "assistant"), textPart("prt_1", "msg_a", "Seen"), idle());
+    await expect(turn).resolves.toBe("Seen");
   });
 });

@@ -907,7 +907,12 @@ mod tests {
             Ok((rx, None))
         }
 
-        fn send(&self, session_id: &str, _text: &str) -> Result<(), RunnerError> {
+        fn send(
+            &self,
+            session_id: &str,
+            _text: &str,
+            _images: &[String],
+        ) -> Result<(), RunnerError> {
             let (tx, params, script) = {
                 let mut sessions = self.sessions.lock().unwrap();
                 let session = sessions.get_mut(session_id).ok_or(RunnerError::Exited)?;

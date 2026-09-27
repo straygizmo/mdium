@@ -493,9 +493,15 @@ impl RunnerClient {
     }
 
     /// Starts a turn; its outcome arrives on the session's event stream.
-    pub fn send(&self, session_id: &str, text: &str) -> Result<(), RunnerError> {
+    /// `images` are absolute image paths inside the session's workspace root; the
+    /// field is sent only when non-empty.
+    pub fn send(&self, session_id: &str, text: &str, images: &[String]) -> Result<(), RunnerError> {
         self.ensure_alive()?;
-        self.write(&json!({ "type": "send", "sessionId": session_id, "text": text }))
+        let mut msg = json!({ "type": "send", "sessionId": session_id, "text": text });
+        if !images.is_empty() {
+            msg["images"] = json!(images);
+        }
+        self.write(&msg)
     }
 
     pub fn cancel(&self, session_id: &str) -> Result<(), RunnerError> {
@@ -921,7 +927,7 @@ mod tests {
     fn session_commands_write_protocol_lines() {
         let (client, _t, rx) = setup();
         let _s = start(&client, &rx, "s");
-        client.send("s", "do it").unwrap();
+        client.send("s", "do it", &[]).unwrap();
         client.cancel("s").unwrap();
         client.respond_permission("s", "p1", true).unwrap();
         assert_eq!(
@@ -933,6 +939,25 @@ mod tests {
             next_msg(&rx),
             json!({ "type": "respond_permission", "sessionId": "s", "permissionId": "p1", "allow": true })
         );
+    }
+
+    #[test]
+    fn send_serializes_images_only_when_present() {
+        let (client, _t, rx) = setup();
+        let _s = start(&client, &rx, "s");
+        let images = vec!["C:/p/a.png".to_string(), "C:/p/b.jpg".to_string()];
+        client.send("s", "look", &images).unwrap();
+        assert_eq!(
+            next_msg(&rx),
+            json!({ "type": "send", "sessionId": "s", "text": "look", "images": ["C:/p/a.png", "C:/p/b.jpg"] })
+        );
+        client.send("s", "plain", &[]).unwrap();
+        let msg = next_msg(&rx);
+        assert_eq!(
+            msg,
+            json!({ "type": "send", "sessionId": "s", "text": "plain" })
+        );
+        assert!(msg.get("images").is_none());
     }
 
     #[test]
@@ -969,7 +994,7 @@ mod tests {
         assert_eq!(err, RunnerError::Transport("broken pipe".to_string()));
         assert!(client.state.lock().unwrap().pending.is_empty());
         assert_eq!(
-            client.send("s", "x").unwrap_err().code(),
+            client.send("s", "x", &[]).unwrap_err().code(),
             "RUNNER_TRANSPORT_ERROR"
         );
     }
@@ -1000,7 +1025,7 @@ mod tests {
             client.start_session(params("t"), WAIT).unwrap_err(),
             RunnerError::Exited
         );
-        assert_eq!(client.send("s", "x"), Err(RunnerError::Exited));
+        assert_eq!(client.send("s", "x", &[]), Err(RunnerError::Exited));
         assert_eq!(client.cancel("s"), Err(RunnerError::Exited));
         assert_eq!(
             client.respond_permission("s", "p", false),

@@ -250,7 +250,7 @@ fn drive(
     if let Some(reason) = cancel.reason() {
         return AttemptEnd::Cancelled(reason);
     }
-    if let Err(e) = runner.send(&req.session_id, &req.prompt) {
+    if let Err(e) = runner.send(&req.session_id, &req.prompt, &[]) {
         return failed(&e);
     }
 
@@ -560,7 +560,12 @@ mod tests {
             Ok((self.rx.lock().unwrap().take().unwrap(), None))
         }
 
-        fn send(&self, _session_id: &str, text: &str) -> Result<(), RunnerError> {
+        fn send(
+            &self,
+            _session_id: &str,
+            text: &str,
+            _images: &[String],
+        ) -> Result<(), RunnerError> {
             self.record(format!("send:{text}"));
             Ok(())
         }

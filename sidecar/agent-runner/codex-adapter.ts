@@ -5,6 +5,12 @@ import { codexSandbox } from "./permissions";
 import { resolveCodexPath } from "./resolve-cli";
 import { probeCodex } from "./availability";
 
+/*
+ * Images: a turn with images is sent as SDK `UserInput[]` — the text item followed by one
+ * `{ type: "local_image", path }` item per image; the Codex CLI reads the files itself.
+ * A turn without images is sent as a plain string.
+ */
+
 type CodexItem = {
   id: string;
   type: string;
@@ -22,9 +28,12 @@ type CodexEvent =
   | { type: "error"; message: string }
   | { type: string };
 
+/** Structural copy of the SDK `UserInput`. */
+type CodexInput = { type: "text"; text: string } | { type: "local_image"; path: string };
+
 interface CodexThreadLike {
   readonly id: string | null;
-  runStreamed(input: string, options?: { signal?: AbortSignal }): Promise<{ events: AsyncIterable<unknown> }>;
+  runStreamed(input: string | CodexInput[], options?: { signal?: AbortSignal }): Promise<{ events: AsyncIterable<unknown> }>;
 }
 interface CodexThreadOptionsLike {
   workingDirectory: string;
@@ -63,8 +72,10 @@ class CodexSession implements AdapterSession {
     return this.thread.id ?? undefined;
   }
 
-  async runTurn(text: string, signal: AbortSignal): Promise<string> {
-    const { events } = await this.thread.runStreamed(text, { signal });
+  async runTurn(text: string, signal: AbortSignal, images: readonly string[] = []): Promise<string> {
+    const input: string | CodexInput[] =
+      images.length > 0 ? [{ type: "text", text }, ...images.map((path): CodexInput => ({ type: "local_image", path }))] : text;
+    const { events } = await this.thread.runStreamed(input, { signal });
     let finalResponse = "";
     // Some tool items (e.g. file_change) are single-shot: the SDK emits only
     // "item.completed" for them, with no preceding "item.started". Track which

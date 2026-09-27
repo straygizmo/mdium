@@ -450,3 +450,24 @@ describe("CopilotAdapter", () => {
     await expect(s.runTurn("hi", new AbortController().signal)).rejects.toThrow("send failed");
   });
 });
+
+describe("CopilotAdapter images", () => {
+  it("sends images as file attachments", async () => {
+    const session = fakeSession([{ type: "assistant.message", data: { content: "Seen" } }, { type: "session.idle", data: {} }]);
+    const { client } = fakeClient(session);
+    const s = await make(client).startSession(opts, cbs());
+    await expect(s.runTurn("look", new AbortController().signal, ["C:/w/drafts/shot.png"])).resolves.toBe("Seen");
+    expect(session.send).toHaveBeenCalledWith({
+      prompt: "look",
+      attachments: [{ type: "file", path: "C:/w/drafts/shot.png", displayName: "shot.png" }],
+    });
+  });
+
+  it("sends only the prompt without images", async () => {
+    const session = fakeSession([{ type: "session.idle", data: {} }]);
+    const { client } = fakeClient(session);
+    const s = await make(client).startSession(opts, cbs());
+    await s.runTurn("look", new AbortController().signal, []);
+    expect(session.send).toHaveBeenCalledWith({ prompt: "look" });
+  });
+});

@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { ClaudeAdapter, type ClaudeQueryOptions, type QueryFn } from "../claude-adapter";
 import type { AgentEvent, ToolRequest } from "../../../src/shared/types/agent-runner";
 import type { SessionCallbacks, SessionOptions } from "../adapter";
@@ -8,7 +11,7 @@ type Script = unknown[] | ((options: ClaudeQueryOptions) => AsyncIterable<unknow
 
 /** Fake SDK `query`: each call plays the next script and records its params. */
 function fakeQuery(...scripts: Script[]) {
-  const calls: Array<{ prompt: string; options: ClaudeQueryOptions }> = [];
+  const calls: Array<Parameters<QueryFn>[0]> = [];
   const query: QueryFn = (params) => {
     calls.push(params);
     const script = scripts[calls.length - 1] ?? [];
@@ -393,5 +396,71 @@ describe("ClaudeAdapter", () => {
       const b = new ClaudeAdapter({ query: fakeQuery().query, resolve: async () => ({ executablePath: "C:/c/claude.exe" }), run: garbage });
       await expect(b.probe()).resolves.toEqual({ kind: "error", detail: "version" });
     });
+  });
+});
+
+describe("ClaudeAdapter images", () => {
+  let dir: string;
+  let png: string;
+  let webp: string;
+  let big: string;
+
+  beforeAll(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-images-"));
+    png = path.join(dir, "shot.png");
+    webp = path.join(dir, "pic.webp");
+    big = path.join(dir, "huge.jpg");
+    fs.writeFileSync(png, Buffer.from([1, 2, 3]));
+    fs.writeFileSync(webp, Buffer.from([4, 5]));
+    fs.writeFileSync(big, Buffer.alloc(5 * 1024 * 1024 + 1));
+  });
+  afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  /** Drain a streamed prompt into its messages. */
+  async function drain(prompt: string | AsyncIterable<unknown>): Promise<unknown[]> {
+    if (typeof prompt === "string") return [prompt];
+    const messages: unknown[] = [];
+    for await (const message of prompt) messages.push(message);
+    return messages;
+  }
+
+  it("sends a user message with base64 image blocks and the text", async () => {
+    const fake = fakeQuery([success("ok")]);
+    const session = await adapter(fake.query).startSession(baseOptions, callbacks([]));
+    await expect(session.runTurn("look", new AbortController().signal, [png, webp])).resolves.toBe("ok");
+    expect(await drain(fake.calls[0].prompt)).toEqual([
+      {
+        type: "user",
+        session_id: "",
+        parent_tool_use_id: null,
+        message: {
+          role: "user",
+          content: [
+            { type: "image", source: { type: "base64", media_type: "image/png", data: Buffer.from([1, 2, 3]).toString("base64") } },
+            { type: "image", source: { type: "base64", media_type: "image/webp", data: Buffer.from([4, 5]).toString("base64") } },
+            { type: "text", text: "look" },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it("skips images larger than 5 MiB with a note in the text", async () => {
+    const fake = fakeQuery([success("ok")]);
+    const session = await adapter(fake.query).startSession(baseOptions, callbacks([]));
+    await session.runTurn("look", new AbortController().signal, [big]);
+    const [message] = (await drain(fake.calls[0].prompt)) as Array<{ message: { content: unknown[] } }>;
+    expect(message.message.content).toEqual([
+      { type: "text", text: `look
+
+[Image skipped (larger than 5 MiB): ${big}]` },
+    ]);
+  });
+
+  it("keeps a plain string prompt without images", async () => {
+    const fake = fakeQuery([success("ok")]);
+    const session = await adapter(fake.query).startSession(baseOptions, callbacks([]));
+    await session.runTurn("look", new AbortController().signal, []);
+    expect(fake.calls[0].prompt).toBe("look");
   });
 });

@@ -1,9 +1,21 @@
+import { basename } from "node:path";
 import { CopilotClient, RuntimeConnection } from "@github/copilot-sdk";
 import type { AgentSessionSummary, Availability, ToolRequest } from "../../src/shared/types/agent-runner";
 import type { AdapterSession, ProviderAdapter, SessionCallbacks, SessionOptions } from "./adapter";
 import { copilotDecision, toolRequestFromCopilot } from "./permissions";
 import { resolveCopilotPath } from "./resolve-cli";
 import { MINIMUM_COPILOT_VERSION, isAtLeast } from "./availability";
+
+/*
+ * Images: the SDK's `MessageOptions.attachments` accepts `{ type: "file", path, displayName }`,
+ * so each image of a turn is attached as a file (the CLI reads it); the prompt text is unchanged.
+ */
+
+/** Subset of the SDK `MessageOptions` this adapter sends. */
+type CopilotMessageOptions = {
+  prompt: string;
+  attachments?: Array<{ type: "file"; path: string; displayName?: string }>;
+};
 
 // Sub-agent instance identifier. Absent for events from the root/main agent.
 type CopilotEvent = { type: string; data?: unknown; agentId?: string };
@@ -19,7 +31,7 @@ interface CopilotSessionConfigLike {
 export interface CopilotSessionLike {
   readonly sessionId: string;
   on(handler: (event: CopilotEvent) => void): () => void;
-  send(options: { prompt: string }): Promise<string>;
+  send(options: CopilotMessageOptions): Promise<string>;
   abort(): Promise<void>;
   disconnect(): Promise<void>;
 }
@@ -73,7 +85,7 @@ class CopilotAgentSession implements AdapterSession {
     return this.session.sessionId;
   }
 
-  runTurn(text: string, signal: AbortSignal): Promise<string> {
+  runTurn(text: string, signal: AbortSignal, images: readonly string[] = []): Promise<string> {
     return new Promise<string>((resolve, reject) => {
       if (signal.aborted) return reject(abortError());
       const messages: string[] = [];
@@ -183,7 +195,11 @@ class CopilotAgentSession implements AdapterSession {
       });
       signal.addEventListener("abort", onAbort);
       livenessTimer = setInterval(() => void checkLiveness(), LIVENESS_INTERVAL_MS);
-      this.session.send({ prompt: text }).catch((error: unknown) => finish(() => reject(error)));
+      const message: CopilotMessageOptions =
+        images.length > 0
+          ? { prompt: text, attachments: images.map((path) => ({ type: "file", path, displayName: basename(path) })) }
+          : { prompt: text };
+      this.session.send(message).catch((error: unknown) => finish(() => reject(error)));
     });
   }
 
