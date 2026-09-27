@@ -13,11 +13,12 @@ use crate::workflow::gitops::run_git_raw;
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{Read, Write};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
 
 /// The CLI is not on `PATH`.
 pub const FORGE_NOT_INSTALLED: &str = "FORGE_NOT_INSTALLED";
@@ -27,6 +28,13 @@ pub const FORGE_NOT_AUTHENTICATED: &str = "FORGE_NOT_AUTHENTICATED";
 pub const FORGE_COMMAND_FAILED: &str = "FORGE_COMMAND_FAILED";
 /// The CLI succeeded but its output was not the expected JSON.
 pub const FORGE_BAD_RESPONSE: &str = "FORGE_BAD_RESPONSE";
+/// The CLI did not finish before its deadline and was killed.
+pub const FORGE_TIMEOUT: &str = "FORGE_TIMEOUT";
+
+/// Deadline for an API call (`gh api` / `glab api`).
+const API_TIMEOUT: Duration = Duration::from_secs(60);
+/// Deadline for `--version` and `auth status` probes.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Maximum number of characters of CLI stderr kept in an error.
 const MAX_STDERR_CHARS: usize = 500;
@@ -76,6 +84,8 @@ pub enum ForgeError {
         stderr: String,
     },
     BadResponse(String),
+    /// The CLI was killed after exceeding its deadline.
+    Timeout,
 }
 
 impl ForgeError {
@@ -86,6 +96,7 @@ impl ForgeError {
             ForgeError::NotAuthenticated => FORGE_NOT_AUTHENTICATED,
             ForgeError::CommandFailed { .. } => FORGE_COMMAND_FAILED,
             ForgeError::BadResponse(_) => FORGE_BAD_RESPONSE,
+            ForgeError::Timeout => FORGE_TIMEOUT,
         }
     }
 
@@ -101,7 +112,9 @@ impl ForgeError {
 impl std::fmt::Display for ForgeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ForgeError::NotInstalled | ForgeError::NotAuthenticated => f.write_str(self.code()),
+            ForgeError::NotInstalled | ForgeError::NotAuthenticated | ForgeError::Timeout => {
+                f.write_str(self.code())
+            }
             ForgeError::CommandFailed { code, stderr } => {
                 write!(f, "{} (exit {code}): {stderr}", self.code())
             }
@@ -187,7 +200,8 @@ fn normalize_repo_path(raw: &str) -> Option<String> {
 /// Parses a git remote URL into `(host, path)`.
 ///
 /// Supported forms: `http(s)://[user[:pass]@]host[:port]/path[.git][/]`
-/// (the host keeps a web port), `ssh://[user@]host[:port]/path` (the SSH
+/// (the host keeps a non-default web port; `:443` / `:80` are dropped),
+/// `ssh://[user@]host[:port]/path` (the SSH
 /// port is dropped: it says nothing about the web host) and scp-like
 /// `[user@]host:path`. The host is lowercased; the path loses `.git` and
 /// surrounding slashes and must have at least two segments. Anything else
@@ -198,12 +212,14 @@ pub fn parse_remote_url(url: &str) -> Option<(String, String)> {
         return None;
     }
     let lower = url.to_ascii_lowercase();
-    let (rest, keep_port) = if lower.starts_with("https://") {
-        (&url["https://".len()..], true)
+    // `web_port`: the scheme's default port when the port is part of the
+    // web host (http/https), `None` when it is not (ssh).
+    let (rest, web_port) = if lower.starts_with("https://") {
+        (&url["https://".len()..], Some(443))
     } else if lower.starts_with("http://") {
-        (&url["http://".len()..], true)
+        (&url["http://".len()..], Some(80))
     } else if lower.starts_with("ssh://") {
-        (&url["ssh://".len()..], false)
+        (&url["ssh://".len()..], None)
     } else if url.contains("://") {
         return None;
     } else {
@@ -220,16 +236,23 @@ pub fn parse_remote_url(url: &str) -> Option<(String, String)> {
     if !valid_host_name(&host) {
         return None;
     }
-    if let Some(port) = port {
-        if port.is_empty() || !port.chars().all(|c| c.is_ascii_digit()) {
-            return None;
-        }
-    }
-    let host = match (keep_port, port) {
-        (true, Some(port)) => format!("{host}:{port}"),
+    let port = match port {
+        Some(port) => Some(parse_port(port)?),
+        None => None,
+    };
+    let host = match (web_port, port) {
+        (Some(default), Some(port)) if port != default => format!("{host}:{port}"),
         _ => host,
     };
     Some((host, normalize_repo_path(path)?))
+}
+
+/// Parses a decimal TCP port in `1..=65535`.
+fn parse_port(port: &str) -> Option<u16> {
+    if port.is_empty() || port.len() > 5 || !port.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    port.parse::<u16>().ok().filter(|p| *p != 0)
 }
 
 /// Parses scp-like `[user@]host:path`. A one-letter host is rejected so a
@@ -244,42 +267,73 @@ fn parse_scp_like(url: &str) -> Option<(String, String)> {
     Some((host, normalize_repo_path(path)?))
 }
 
-/// Resolves the forge for an already-parsed origin: `github.com` ⇒ GitHub,
+/// A detected forge repository, plus whether detection itself already
+/// confirmed the CLI is logged in (self-hosted hosts are resolved by an
+/// auth probe, which [`probe`] then does not repeat).
+struct Detected {
+    repo: ForgeRepo,
+    auth_confirmed: bool,
+}
+
+/// Resolves the forge for an origin URL: `github.com` ⇒ GitHub,
 /// `gitlab.com` ⇒ GitLab, any other host ⇒ whichever CLI is logged in to it
-/// (GitHub first), else `None`. GitHub paths must be exactly `owner/repo`.
-pub fn detect_from_url(url: &str, cli: &dyn ForgeCli) -> Option<ForgeRepo> {
+/// (GitHub first, skipped for nested paths GitHub cannot have), else `None`.
+/// GitHub paths must be exactly `owner/repo`.
+fn resolve(url: &str, cli: &dyn ForgeCli) -> Option<Detected> {
     let (host, path) = parse_remote_url(url)?;
-    let kind = match host.as_str() {
-        "github.com" => ForgeKind::GitHub,
-        "gitlab.com" => ForgeKind::GitLab,
-        _ if cli.is_authenticated(ForgeKind::GitHub, &host) => ForgeKind::GitHub,
-        _ if cli.is_authenticated(ForgeKind::GitLab, &host) => ForgeKind::GitLab,
+    let nested = path.split('/').count() > 2;
+    let (kind, auth_confirmed) = match host.as_str() {
+        "github.com" => (ForgeKind::GitHub, false),
+        "gitlab.com" => (ForgeKind::GitLab, false),
+        _ if !nested && cli.is_authenticated(ForgeKind::GitHub, &host) => (ForgeKind::GitHub, true),
+        _ if cli.is_authenticated(ForgeKind::GitLab, &host) => (ForgeKind::GitLab, true),
         _ => return None,
     };
-    if kind == ForgeKind::GitHub && path.split('/').count() != 2 {
+    if kind == ForgeKind::GitHub && nested {
         return None;
     }
-    Some(ForgeRepo { kind, host, path })
+    Some(Detected {
+        repo: ForgeRepo { kind, host, path },
+        auth_confirmed,
+    })
+}
+
+/// Resolves the forge for an origin URL (see [`detect`]).
+pub fn detect_from_url(url: &str, cli: &dyn ForgeCli) -> Option<ForgeRepo> {
+    resolve(url, cli).map(|detected| detected.repo)
+}
+
+/// Reads `origin` and resolves it; see [`detect`].
+fn detect_origin(repo_root: &Path, cli: &dyn ForgeCli) -> Result<Option<Detected>, ForgeError> {
+    let output = run_git_raw(repo_root, &["remote", "get-url", "origin"])
+        .map_err(|err| ForgeError::command_failed(-1, &err.to_string()))?;
+    if !output.success {
+        return Ok(None);
+    }
+    Ok(resolve(output.stdout.trim(), cli))
 }
 
 /// Detects the forge repository behind `repo_root`'s `origin` remote.
 /// No `origin` (or not a git repository, or not a forge URL) is `Ok(None)`;
 /// only failing to run git at all is an error.
 pub fn detect(repo_root: &Path, cli: &dyn ForgeCli) -> Result<Option<ForgeRepo>, ForgeError> {
-    let output = run_git_raw(repo_root, &["remote", "get-url", "origin"])
-        .map_err(|err| ForgeError::command_failed(-1, &err.to_string()))?;
-    if !output.success {
-        return Ok(None);
-    }
-    Ok(detect_from_url(output.stdout.trim(), cli))
+    Ok(detect_origin(repo_root, cli)?.map(|detected| detected.repo))
 }
 
 /// Detects the forge and checks its CLI, never failing: a detection error
-/// reads as "no forge".
+/// reads as "no forge". An auth probe already made during detection is
+/// reused, not repeated.
 pub fn probe(repo_root: &Path, cli: &dyn ForgeCli) -> ForgeProbe {
-    let repo = detect(repo_root, cli).ok().flatten();
-    match repo {
-        Some(repo) => {
+    match detect_origin(repo_root, cli).ok().flatten() {
+        Some(Detected {
+            repo,
+            auth_confirmed: true,
+        }) => ForgeProbe {
+            repo: Some(repo),
+            cli_available: true,
+            authenticated: true,
+        },
+        Some(Detected { repo, .. }) => {
             let cli_available = cli.available(repo.kind);
             let authenticated = cli_available && cli.is_authenticated(repo.kind, &repo.host);
             ForgeProbe {
@@ -315,7 +369,7 @@ const PER_PAGE: u32 = 100;
 /// the whole JSON request body.
 #[derive(Debug, Clone, Copy)]
 pub enum ForgeOp<'a> {
-    AuthStatus { host: &'a str },
+    AuthStatus,
     CreateIssue { title: &'a str, body_file: &'a Path },
     ListComments { number: u64 },
     AddComment { number: u64, body_file: &'a Path },
@@ -331,7 +385,7 @@ fn program(kind: ForgeKind) -> &'static str {
 }
 
 /// Builds the CLI arguments (after the program name) for `op` on `repo`.
-/// `repo` is ignored for [`ForgeOp::AuthStatus`] except for its kind.
+/// [`ForgeOp::AuthStatus`] uses only the repo's kind and host.
 ///
 /// GitHub (`gh api`): `-f` raw-string fields (never `-F`, which would turn a
 /// title like `true` or `42` into a non-string), bodies via `-F body=@file`.
@@ -345,7 +399,7 @@ pub fn build_args(repo: &ForgeRepo, op: &ForgeOp) -> Vec<String> {
         ForgeKind::GitHub => {
             let base = format!("repos/{}/issues", repo.path);
             match op {
-                ForgeOp::AuthStatus { host } => push(&["auth", "status", "--hostname", host]),
+                ForgeOp::AuthStatus => push(&["auth", "status", "--hostname", host]),
                 ForgeOp::CreateIssue { title, body_file } => push(&[
                     "api",
                     "--hostname",
@@ -394,7 +448,7 @@ pub fn build_args(repo: &ForgeRepo, op: &ForgeOp) -> Vec<String> {
             let base = format!("projects/{project}/issues");
             const JSON: [&str; 2] = ["--header", "Content-Type: application/json"];
             match op {
-                ForgeOp::AuthStatus { host } => push(&["auth", "status", "--hostname", host]),
+                ForgeOp::AuthStatus => push(&["auth", "status", "--hostname", host]),
                 ForgeOp::CreateIssue { body_file, .. } => {
                     push(&["api", "--hostname", host, "--method", "POST", &base]);
                     push(&JSON);
@@ -453,9 +507,15 @@ pub fn with_temp_body<R>(
     f: impl FnOnce(&Path) -> Result<R, ForgeError>,
 ) -> Result<R, ForgeError> {
     let path = std::env::temp_dir().join(format!("mdium-forge-{}.txt", new_id()));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // Bodies may be private; keep them readable by the user only.
+        options.mode(0o600);
+    }
+    let mut file = options
         .open(&path)
         .map_err(|err| ForgeError::command_failed(-1, &format!("temp body file: {err}")))?;
     let guard = TempFileGuard(path);
@@ -493,14 +553,16 @@ pub fn parse_issue(kind: ForgeKind, stdout: &str) -> Result<IssueRefData, ForgeE
 
 /// Parses a (possibly paginated) comments/notes listing: one or more JSON
 /// arrays back to back (how `--paginate` prints pages), each element an
-/// object with a string `body`.
+/// object with a string `body`. No page at all is a bad response.
 pub fn parse_comments(stdout: &str) -> Result<Vec<Comment>, ForgeError> {
     let mut comments = Vec::new();
+    let mut pages = 0usize;
     for page in serde_json::Deserializer::from_str(stdout).into_iter::<serde_json::Value>() {
         let page = page.map_err(|err| ForgeError::BadResponse(format!("comments json: {err}")))?;
         let items = page
             .as_array()
             .ok_or_else(|| ForgeError::BadResponse("comments page is not an array".into()))?;
+        pages += 1;
         for item in items {
             let body = item
                 .get("body")
@@ -511,45 +573,122 @@ pub fn parse_comments(stdout: &str) -> Result<Vec<Comment>, ForgeError> {
             });
         }
     }
+    if pages == 0 {
+        return Err(ForgeError::BadResponse("empty comments response".into()));
+    }
     Ok(comments)
+}
+
+/// Maps a non-zero CLI exit to an error: `gh`'s exit code 4 ("authentication
+/// required") or an auth-looking stderr (HTTP 401, "authentication", "not
+/// logged in") is `NotAuthenticated`, anything else `CommandFailed`.
+pub fn classify_failure(code: i32, stderr: &str) -> ForgeError {
+    let lower = stderr.to_ascii_lowercase();
+    if code == 4
+        || lower.contains("401")
+        || lower.contains("authentication")
+        || lower.contains("not logged in")
+    {
+        ForgeError::NotAuthenticated
+    } else {
+        ForgeError::command_failed(code, stderr)
+    }
+}
+
+/// Kills `child` and, on Windows, its whole process tree, then reaps it.
+fn kill_tree(child: &mut Child) {
+    #[cfg(target_os = "windows")]
+    {
+        let mut taskkill = Command::new("taskkill");
+        taskkill
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(0x08000000); // CREATE_NO_WINDOW
+        let _ = taskkill.status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// Reads a child's pipe to the end on a helper thread.
+fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut buf);
+        }
+        buf
+    })
+}
+
+/// Runs `cmd` (stdin closed, no console window) and returns its stdout.
+/// Output is drained on helper threads so a chatty child cannot block;
+/// past `timeout` the process tree is killed and the result is `Timeout`.
+/// A missing program is `NotInstalled`; a non-zero exit goes through
+/// [`classify_failure`].
+pub fn run_command(mut cmd: Command, timeout: Duration) -> Result<String, ForgeError> {
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    let mut child = cmd.spawn().map_err(|err| {
+        if err.kind() == std::io::ErrorKind::NotFound {
+            ForgeError::NotInstalled
+        } else {
+            ForgeError::command_failed(-1, &err.to_string())
+        }
+    })?;
+    let stdout = drain(child.stdout.take());
+    let stderr = drain(child.stderr.take());
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() >= deadline => {
+                // The drain threads end once the killed tree closes its pipes.
+                kill_tree(&mut child);
+                return Err(ForgeError::Timeout);
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(err) => {
+                kill_tree(&mut child);
+                return Err(ForgeError::command_failed(-1, &err.to_string()));
+            }
+        }
+    };
+    let stdout = stdout.join().unwrap_or_default();
+    let stderr = stderr.join().unwrap_or_default();
+    if status.success() {
+        Ok(String::from_utf8_lossy(&stdout).into_owned())
+    } else {
+        Err(classify_failure(
+            status.code().unwrap_or(-1),
+            &String::from_utf8_lossy(&stderr),
+        ))
+    }
 }
 
 /// The real client: shells out to `gh` / `glab`.
 pub struct CliForge;
 
 impl CliForge {
-    /// Runs the forge CLI with `args` and returns stdout. A missing program
-    /// is `NotInstalled`; a non-zero exit is `CommandFailed`.
-    fn run(kind: ForgeKind, args: &[String]) -> Result<String, ForgeError> {
+    /// Runs the forge CLI with `args` under `timeout` (see [`run_command`]).
+    fn run(kind: ForgeKind, args: &[String], timeout: Duration) -> Result<String, ForgeError> {
         let mut cmd = Command::new(program(kind));
         cmd.args(args)
-            .stdin(Stdio::null())
             // Never block on an interactive prompt.
             .env("GH_PROMPT_DISABLED", "1")
             .env("NO_PROMPT", "1");
-        #[cfg(target_os = "windows")]
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        let output = cmd.output().map_err(|err| {
-            if err.kind() == std::io::ErrorKind::NotFound {
-                ForgeError::NotInstalled
-            } else {
-                ForgeError::command_failed(-1, &err.to_string())
-            }
-        })?;
-        if output.status.success() {
-            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-        } else {
-            Err(ForgeError::command_failed(
-                output.status.code().unwrap_or(-1),
-                &String::from_utf8_lossy(&output.stderr),
-            ))
-        }
+        run_command(cmd, timeout)
     }
 }
 
 impl ForgeCli for CliForge {
     fn available(&self, kind: ForgeKind) -> bool {
-        CliForge::run(kind, &["--version".to_string()]).is_ok()
+        CliForge::run(kind, &["--version".to_string()], PROBE_TIMEOUT).is_ok()
     }
 
     fn is_authenticated(&self, kind: ForgeKind, host: &str) -> bool {
@@ -558,7 +697,12 @@ impl ForgeCli for CliForge {
             host: host.to_string(),
             path: String::new(),
         };
-        CliForge::run(kind, &build_args(&repo, &ForgeOp::AuthStatus { host })).is_ok()
+        CliForge::run(
+            kind,
+            &build_args(&repo, &ForgeOp::AuthStatus),
+            PROBE_TIMEOUT,
+        )
+        .is_ok()
     }
 
     fn create_issue(
@@ -577,6 +721,7 @@ impl ForgeCli for CliForge {
             CliForge::run(
                 repo.kind,
                 &build_args(repo, &ForgeOp::CreateIssue { title, body_file }),
+                API_TIMEOUT,
             )
         })?;
         parse_issue(repo.kind, &stdout)
@@ -586,6 +731,7 @@ impl ForgeCli for CliForge {
         let stdout = CliForge::run(
             repo.kind,
             &build_args(repo, &ForgeOp::ListComments { number }),
+            API_TIMEOUT,
         )?;
         parse_comments(&stdout)
     }
@@ -599,6 +745,7 @@ impl ForgeCli for CliForge {
             CliForge::run(
                 repo.kind,
                 &build_args(repo, &ForgeOp::AddComment { number, body_file }),
+                API_TIMEOUT,
             )
         })?;
         Ok(())
@@ -608,6 +755,7 @@ impl ForgeCli for CliForge {
         CliForge::run(
             repo.kind,
             &build_args(repo, &ForgeOp::CloseIssue { number }),
+            API_TIMEOUT,
         )?;
         Ok(())
     }
@@ -884,7 +1032,17 @@ mod tests {
                 some("git.example.com", "team/my_app-1.x"),
             ),
             ("  https://github.com/o/r.git\n", some("github.com", "o/r")),
+            // Default web ports are dropped; other ports are kept.
+            ("https://github.com:443/o/r.git", some("github.com", "o/r")),
+            ("http://git.corp:80/a/b", some("git.corp", "a/b")),
+            ("https://git.corp:80/a/b", some("git.corp:80", "a/b")),
+            ("http://git.corp:443/a/b", some("git.corp:443", "a/b")),
+            ("ssh://git@git.corp:65535/a/b", some("git.corp", "a/b")),
             // Invalid.
+            ("https://git.corp:0/a/b", None),
+            ("https://git.corp:65536/a/b", None),
+            ("https://git.corp:/a/b", None),
+            ("ssh://git@git.corp:70000/a/b", None),
             ("", None),
             ("https://github.com", None),
             ("https://github.com/", None),
@@ -946,8 +1104,8 @@ mod tests {
             Some(repo(ForgeKind::GitHub, "ghe.corp", "o/r"))
         );
         assert_eq!(
-            detect_from_url("git@gl.corp:g/s/p.git", &fake),
-            Some(repo(ForgeKind::GitLab, "gl.corp", "g/s/p"))
+            detect_from_url("git@gl.corp:g/p.git", &fake),
+            Some(repo(ForgeKind::GitLab, "gl.corp", "g/p"))
         );
         assert_eq!(
             fake.calls(),
@@ -958,6 +1116,46 @@ mod tests {
             ]
         );
         assert_eq!(detect_from_url("https://unknown.corp/o/r", &fake), None);
+    }
+
+    #[test]
+    fn detect_from_url_nested_path_skips_the_github_probe() {
+        let fake = FakeForge::new();
+        fake.set_authenticated(ForgeKind::GitHub, "git.corp", true);
+        fake.set_authenticated(ForgeKind::GitLab, "git.corp", true);
+        assert_eq!(
+            detect_from_url("https://git.corp/g/sub/p.git", &fake),
+            Some(repo(ForgeKind::GitLab, "git.corp", "g/sub/p"))
+        );
+        assert_eq!(
+            fake.calls(),
+            vec![ForgeCall::IsAuthenticated(
+                ForgeKind::GitLab,
+                "git.corp".into()
+            )]
+        );
+    }
+
+    #[test]
+    fn probe_reuses_the_detection_auth_probe() {
+        let hosted = temp_repo(Some("git@git.corp:team/app.git"));
+        let fake = FakeForge::new();
+        fake.set_authenticated(ForgeKind::GitLab, "git.corp", true);
+        assert_eq!(
+            probe(hosted.path(), &fake),
+            ForgeProbe {
+                repo: Some(repo(ForgeKind::GitLab, "git.corp", "team/app")),
+                cli_available: true,
+                authenticated: true,
+            }
+        );
+        assert_eq!(
+            fake.calls(),
+            vec![
+                ForgeCall::IsAuthenticated(ForgeKind::GitHub, "git.corp".into()),
+                ForgeCall::IsAuthenticated(ForgeKind::GitLab, "git.corp".into()),
+            ]
+        );
     }
 
     /// Creates a temp git repository, optionally with an `origin` remote.
@@ -1085,7 +1283,7 @@ mod tests {
         let r = repo(ForgeKind::GitHub, "ghe.corp", "o/r");
         let file = Path::new("/tmp/body.txt");
         assert_eq!(
-            strs(&build_args(&r, &ForgeOp::AuthStatus { host: "ghe.corp" })),
+            strs(&build_args(&r, &ForgeOp::AuthStatus)),
             ["auth", "status", "--hostname", "ghe.corp"]
         );
         assert_eq!(
@@ -1161,7 +1359,7 @@ mod tests {
         let file = Path::new("/tmp/body.json");
         let file_str = file.display().to_string();
         assert_eq!(
-            strs(&build_args(&r, &ForgeOp::AuthStatus { host: "gitlab.com" })),
+            strs(&build_args(&r, &ForgeOp::AuthStatus)),
             ["auth", "status", "--hostname", "gitlab.com"]
         );
         assert_eq!(
@@ -1308,8 +1506,16 @@ mod tests {
             .collect();
         assert_eq!(bodies, ["a", "b", "c"]);
         assert_eq!(parse_comments("[]").unwrap(), vec![]);
-        assert_eq!(parse_comments("").unwrap(), vec![]);
-        for bad in ["{}", "[{\"id\":1}]", "[1]", "[{\"body\":1}]", "[{"] {
+        for bad in [
+            "",
+            "  
+",
+            "{}",
+            "[{\"id\":1}]",
+            "[1]",
+            "[{\"body\":1}]",
+            "[{",
+        ] {
             assert_eq!(
                 parse_comments(bad).unwrap_err().code(),
                 FORGE_BAD_RESPONSE,
@@ -1344,6 +1550,94 @@ mod tests {
             value,
             json!({ "code": "FORGE_BAD_RESPONSE", "message": "FORGE_BAD_RESPONSE: x" })
         );
+    }
+
+    #[test]
+    fn auth_failures_are_not_authenticated() {
+        assert_eq!(classify_failure(4, ""), ForgeError::NotAuthenticated);
+        assert_eq!(
+            classify_failure(1, "HTTP 401: Bad credentials"),
+            ForgeError::NotAuthenticated
+        );
+        assert_eq!(
+            classify_failure(1, "error: Authentication required"),
+            ForgeError::NotAuthenticated
+        );
+        assert_eq!(
+            classify_failure(1, "You are not logged in to any GitLab hosts"),
+            ForgeError::NotAuthenticated
+        );
+        assert_eq!(
+            classify_failure(1, "HTTP 404: Not Found"),
+            ForgeError::command_failed(1, "HTTP 404: Not Found")
+        );
+        assert_eq!(ForgeError::Timeout.code(), "FORGE_TIMEOUT");
+    }
+
+    /// A shell command line for the test platform.
+    fn shell(script: &str) -> Command {
+        if cfg!(windows) {
+            let mut cmd = Command::new("cmd");
+            cmd.args(["/C", script]);
+            cmd
+        } else {
+            let mut cmd = Command::new("sh");
+            cmd.args(["-c", script]);
+            cmd
+        }
+    }
+
+    #[test]
+    fn run_command_returns_stdout_and_classifies_failures() {
+        let out = run_command(shell("echo hello"), Duration::from_secs(20)).unwrap();
+        assert_eq!(out.trim(), "hello");
+        let err =
+            run_command(shell("echo nope 1>&2 && exit 3"), Duration::from_secs(20)).unwrap_err();
+        match err {
+            ForgeError::CommandFailed { code, stderr } => {
+                assert_eq!(code, 3);
+                assert_eq!(stderr, "nope");
+            }
+            other => panic!("{other:?}"),
+        }
+        let missing = Command::new("mdium-no-such-forge-cli-0b1c");
+        assert_eq!(
+            run_command(missing, Duration::from_secs(5)).unwrap_err(),
+            ForgeError::NotInstalled
+        );
+    }
+
+    #[test]
+    fn run_command_kills_a_command_past_its_deadline() {
+        let cmd = if cfg!(windows) {
+            let mut cmd = Command::new("ping");
+            cmd.args(["-n", "30", "127.0.0.1"]);
+            cmd
+        } else {
+            let mut cmd = Command::new("sleep");
+            cmd.arg("30");
+            cmd
+        };
+        let started = Instant::now();
+        let err = run_command(cmd, Duration::from_millis(300)).unwrap_err();
+        assert_eq!(err, ForgeError::Timeout);
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn temp_body_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        with_temp_body("x", |path| {
+            let mode = std::fs::metadata(path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
