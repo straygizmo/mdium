@@ -11,14 +11,23 @@
 //!   no reserved Windows names, no control characters, bounded length), and
 //!   a `meta.json` read back from disk is rejected unless its stored name is
 //!   already in sanitized form;
-//! - sources are read without following symlinks or reparse points and must
-//!   be regular files of at most [`MAX_ATTACHMENT_BYTES`];
-//! - written and resolved paths must stay under the attachments root after
-//!   canonicalization;
+//! - sources must be regular files of at most [`MAX_ATTACHMENT_BYTES`];
+//!   symlinks and junctions are rejected, never followed (see
+//!   [`open_regular_no_follow`] for how Windows reparse points are told
+//!   apart);
+//! - every directory from `.mdium/` down to an entry must be a real
+//!   directory (not a symlink or junction); missing ones are created one
+//!   component at a time and re-checked, and the result must also stay
+//!   under the attachments root after canonicalization;
 //! - `meta.json` is written last, so a directory without it is an
 //!   incomplete entry that listings ignore;
 //! - a committed attachment is never rewritten: committing a draft whose id
 //!   is already committed with the same sha256 keeps the existing copy.
+//!
+//! Concurrency: these functions do no locking of their own. Callers must
+//! serialize draft adds/removals and commits for a project under the
+//! `ProjectGuard` (the per-draft/per-task count limits and commit
+//! idempotence rely on it); reads need no lock.
 
 use crate::workflow::fsutil::{self, InvalidId, MdiumPaths};
 use serde::{Deserialize, Serialize};
@@ -63,8 +72,11 @@ pub enum AttachmentError {
     TooLarge,
     /// The per-task (or per-intake) count limit would be exceeded.
     TooMany,
-    /// A resolved path is not under the attachments root.
+    /// A resolved path is not under the attachments root, or a directory
+    /// on the way to it is a symlink or junction.
     OutsideRoot,
+    /// The requested attachment does not exist.
+    NotFound,
     Io(String),
     /// Stored metadata or content is malformed or inconsistent.
     Corrupt(String),
@@ -78,6 +90,7 @@ impl AttachmentError {
             AttachmentError::TooLarge => "ATTACHMENT_TOO_LARGE",
             AttachmentError::TooMany => "ATTACHMENT_TOO_MANY",
             AttachmentError::OutsideRoot => "ATTACHMENT_OUTSIDE_ROOT",
+            AttachmentError::NotFound => "ATTACHMENT_NOT_FOUND",
             AttachmentError::Io(_) => "ATTACHMENT_IO",
             AttachmentError::Corrupt(_) => "ATTACHMENT_CORRUPT",
         }
@@ -105,7 +118,9 @@ impl From<InvalidId> for AttachmentError {
 
 /// Turns a user- or agent-supplied file name into a safe stored name:
 /// only the last path component (either separator) is kept, control
-/// characters are removed, characters invalid on Windows become `_`,
+/// and bidirectional formatting characters are removed (they can disguise
+/// an extension, e.g. `evil\u{202e}gnp.exe`), characters invalid on
+/// Windows become `_`,
 /// leading whitespace and trailing dots/whitespace are trimmed, the result
 /// is at most [`MAX_NAME_CHARS`] characters (keeping a short extension),
 /// and reserved Windows device names (`CON`, `LPT1.txt`, ...) as well as
@@ -115,7 +130,7 @@ pub fn sanitize_file_name(name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or("");
     let cleaned: String = base
         .chars()
-        .filter(|c| !c.is_control())
+        .filter(|c| !c.is_control() && !is_bidi_control(*c))
         .map(|c| {
             if matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*') {
                 '_'
@@ -169,6 +184,12 @@ fn truncate_keeping_extension(name: &str, max: usize) -> String {
     name.chars().take(max).collect()
 }
 
+/// Unicode bidirectional formatting characters: LRM/RLM, the embeddings
+/// and overrides (U+202A..U+202E) and the isolates (U+2066..U+2069).
+fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+}
+
 /// True for names Windows treats as devices whatever the extension
 /// (`CON`, `con.txt`, `COM1.log`, `CON .txt`), and for the metadata file
 /// name, which is reserved inside an attachment directory.
@@ -193,7 +214,7 @@ fn is_reserved_name(name: &str) -> bool {
     let rest: Vec<char> = chars.collect();
     (prefix == "COM" || prefix == "LPT")
         && rest.len() == 1
-        && matches!(rest[0], '1'..='9' | '\u{b9}' | '\u{b2}' | '\u{b3}')
+        && matches!(rest[0], '0'..='9' | '\u{b9}' | '\u{b2}' | '\u{b3}')
 }
 
 /// MIME type from the file extension (case-insensitive); unknown
@@ -321,21 +342,20 @@ pub fn list_attachments(
 }
 
 /// The absolute, canonical path of a committed attachment's content,
-/// verified to be a regular file under the attachments root.
+/// verified to be a regular file under the attachments root whose size and
+/// sha256 match its metadata. A missing attachment is `NotFound`.
 pub fn attachment_file(
     paths: &MdiumPaths,
     root_task_id: &str,
     attachment_id: &str,
 ) -> Result<PathBuf, AttachmentError> {
     let dir = paths.attachment_dir(root_task_id, attachment_id)?;
-    let meta = read_meta(&dir, attachment_id)?
-        .ok_or_else(|| AttachmentError::Io(format!("{}: attachment not found", dir.display())))?;
-    let file = dir.join(&meta.stored_name);
-    let file_meta = std::fs::symlink_metadata(&file).map_err(io_error(&file))?;
-    if !file_meta.file_type().is_file() {
-        return Err(AttachmentError::NotAFile);
+    if !walk_real_dirs(paths, &dir, false)? {
+        return Err(AttachmentError::NotFound);
     }
-    let canonical = ensure_under_root(paths, &file)?;
+    let meta = read_meta(&dir, attachment_id)?.ok_or(AttachmentError::NotFound)?;
+    read_content(&dir, &meta)?;
+    let canonical = ensure_under_root(paths, &dir.join(&meta.stored_name))?;
     Ok(simplify_verbatim(canonical))
 }
 
@@ -378,7 +398,7 @@ fn write_entry(
     meta: &AttachmentMeta,
     bytes: &[u8],
 ) -> Result<(), AttachmentError> {
-    std::fs::create_dir_all(dir).map_err(io_error(dir))?;
+    walk_real_dirs(paths, dir, true)?;
     ensure_under_root(paths, dir)?;
     let content = dir.join(&meta.stored_name);
     fsutil::atomic_write(&content, bytes).map_err(io_error(&content))?;
@@ -391,10 +411,8 @@ fn write_entry(
 /// Complete entries (valid id directory with a valid `meta.json`) directly
 /// under `dir`, sorted by creation time then id. A missing `dir` is empty.
 fn list_entries(paths: &MdiumPaths, dir: &Path) -> Result<Vec<AttachmentMeta>, AttachmentError> {
-    match std::fs::symlink_metadata(dir) {
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(err) => return Err(io_error(dir)(err)),
-        Ok(_) => {}
+    if !walk_real_dirs(paths, dir, false)? {
+        return Ok(Vec::new());
     }
     ensure_under_root(paths, dir)?;
     let mut metas = Vec::new();
@@ -472,38 +490,80 @@ fn read_content(dir: &Path, meta: &AttachmentMeta) -> Result<Vec<u8>, Attachment
     Ok(bytes)
 }
 
-/// Opens `path` for reading without following a final symlink or reparse
-/// point and verifies through the opened handle that it is a regular file,
-/// so a path swapped after the `symlink_metadata` check fails closed.
+/// Opens `path` for reading if it is a regular file, never following a
+/// final symlink or junction; a path swapped after the `symlink_metadata`
+/// pre-check fails closed.
+///
+/// Unix: `O_NOFOLLOW` (plus `O_NONBLOCK` so a FIFO cannot block), then the
+/// opened handle must be a regular file.
+///
+/// Windows: only *name-surrogate* reparse points (symlinks, junctions:
+/// reparse tag bit `0x2000_0000`) are links. Other reparse points such as
+/// OneDrive/cloud placeholders or deduplicated files are ordinary files and
+/// must be read through a normal open so their filter driver supplies the
+/// content. std's `FileType` reports `is_symlink()` exactly for
+/// name-surrogate tags, reading the tag from the handle
+/// (`GetFileInformationByHandleEx(FileAttributeTagInfo)`), so:
+/// 1. the entry itself is opened with `FILE_FLAG_OPEN_REPARSE_POINT` and a
+///    share mode without `FILE_SHARE_DELETE` (it cannot be renamed, deleted
+///    or replaced while held), and must be a regular file (no
+///    name-surrogate tag);
+/// 2. the path is opened again normally for reading (hydrating cloud
+///    files); that handle must be a regular file too;
+/// 3. both handles must agree on creation time, last write time and size,
+///    which catches a parent directory re-pointed between the two opens.
 fn open_regular_no_follow(path: &Path) -> Result<File, AttachmentError> {
     let pre = std::fs::symlink_metadata(path).map_err(io_error(path))?;
     if !pre.file_type().is_file() {
         return Err(AttachmentError::NotAFile);
     }
-    let mut options = std::fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(crate::workflow::checks::open_flags::FLAGS);
+    open_regular_platform(path)
+}
+
+#[cfg(unix)]
+fn open_regular_platform(path: &Path) -> Result<File, AttachmentError> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(crate::workflow::checks::open_flags::FLAGS)
+        .open(path)
+        .map_err(io_error(path))?;
+    if !file.metadata().map_err(io_error(path))?.is_file() {
+        return Err(AttachmentError::NotAFile);
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        /// Open a reparse point itself instead of its target.
-        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    Ok(file)
+}
+
+#[cfg(windows)]
+fn open_regular_platform(path: &Path) -> Result<File, AttachmentError> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    /// Open a reparse point itself instead of its target.
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    /// `FILE_SHARE_READ | FILE_SHARE_WRITE`: no `FILE_SHARE_DELETE`.
+    const SHARE_READ_WRITE: u32 = 0x1 | 0x2;
+
+    let pin = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(SHARE_READ_WRITE)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .map_err(io_error(path))?;
+    let pinned = pin.metadata().map_err(io_error(path))?;
+    if !pinned.file_type().is_file() {
+        return Err(AttachmentError::NotAFile);
     }
-    let file = options.open(path).map_err(io_error(path))?;
-    let meta = file.metadata().map_err(io_error(path))?;
-    let regular = meta.is_file();
-    #[cfg(windows)]
-    let regular = {
-        use std::os::windows::fs::MetadataExt;
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-        regular && meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
-    };
-    if !regular {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .open(path)
+        .map_err(io_error(path))?;
+    let opened = file.metadata().map_err(io_error(path))?;
+    if !opened.file_type().is_file() {
+        return Err(AttachmentError::NotAFile);
+    }
+    let same = pinned.creation_time() == opened.creation_time()
+        && pinned.last_write_time() == opened.last_write_time()
+        && pinned.file_size() == opened.file_size();
+    if !same {
         return Err(AttachmentError::NotAFile);
     }
     Ok(file)
@@ -535,10 +595,54 @@ fn remove_tree(paths: &MdiumPaths, dir: &Path) -> Result<(), AttachmentError> {
         Err(err) => return Err(io_error(dir)(err)),
         Ok(_) => {}
     }
-    if let Some(parent) = dir.parent() {
-        ensure_under_root(paths, parent)?;
+    let parent = dir.parent().ok_or(AttachmentError::OutsideRoot)?;
+    if !walk_real_dirs(paths, parent, false)? {
+        return Ok(());
     }
+    ensure_under_root(paths, parent)?;
     std::fs::remove_dir_all(dir).map_err(io_error(dir))
+}
+
+/// Walks from `.mdium/` down to `dir` one component at a time; every
+/// existing component must be a real directory (a symlink or junction is
+/// `OutsideRoot`). With `create`, a missing component is created with
+/// `create_dir` and re-checked; without it, a missing component returns
+/// `Ok(false)`. `dir` must lie under `.mdium/` lexically.
+fn walk_real_dirs(paths: &MdiumPaths, dir: &Path, create: bool) -> Result<bool, AttachmentError> {
+    let rel = dir
+        .strip_prefix(paths.root())
+        .map_err(|_| AttachmentError::OutsideRoot)?;
+    let mut current = paths.root().to_path_buf();
+    let mut components = rel.components();
+    loop {
+        match std::fs::symlink_metadata(&current) {
+            Ok(meta) => {
+                if !meta.file_type().is_dir() {
+                    return Err(AttachmentError::OutsideRoot);
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                if !create {
+                    return Ok(false);
+                }
+                match std::fs::create_dir(&current) {
+                    Ok(()) => {}
+                    Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(err) => return Err(io_error(&current)(err)),
+                }
+                let meta = std::fs::symlink_metadata(&current).map_err(io_error(&current))?;
+                if !meta.file_type().is_dir() {
+                    return Err(AttachmentError::OutsideRoot);
+                }
+            }
+            Err(err) => return Err(io_error(&current)(err)),
+        }
+        match components.next() {
+            None => return Ok(true),
+            Some(std::path::Component::Normal(name)) => current.push(name),
+            Some(_) => return Err(AttachmentError::OutsideRoot),
+        }
+    }
 }
 
 /// Canonicalizes `path` and verifies it lies under the canonical
@@ -594,15 +698,19 @@ mod tests {
 
     fn setup() -> (tempfile::TempDir, MdiumPaths) {
         let dir = tempfile::tempdir().unwrap();
+        // The project root always exists; `.mdium/` below it may not.
+        std::fs::create_dir(dir.path().join("project")).unwrap();
         let paths = MdiumPaths::new(dir.path().join("project"));
         (dir, paths)
     }
 
-    fn sha256_hex(bytes: &[u8]) -> String {
-        Sha256::digest(bytes)
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect()
+    /// Makes `link` a directory symlink (on Windows, a junction) to
+    /// `target`.
+    fn link_dir(target: &Path, link: &Path) {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, link).unwrap();
+        #[cfg(windows)]
+        junction::create(target, link).unwrap();
     }
 
     /// Recursively collects (relative path, content) of every file under
@@ -660,6 +768,10 @@ mod tests {
         assert_eq!(sanitize_file_name("CON .txt"), "_CON .txt");
         assert_eq!(sanitize_file_name("console.txt"), "console.txt");
         assert_eq!(sanitize_file_name("COM10"), "COM10");
+        assert_eq!(sanitize_file_name("COM0"), "_COM0");
+        assert_eq!(sanitize_file_name("lpt0.txt"), "_lpt0.txt");
+        assert_eq!(sanitize_file_name("COM\u{b9}"), "_COM\u{b9}");
+        assert_eq!(sanitize_file_name("LPT\u{b3}.log"), "_LPT\u{b3}.log");
         // The metadata file name is reserved inside an attachment directory.
         assert_eq!(sanitize_file_name("meta.json"), "_meta.json");
         assert_eq!(sanitize_file_name("META.JSON"), "_META.JSON");
@@ -670,6 +782,15 @@ mod tests {
         assert_eq!(sanitize_file_name("a\u{0}b\nc\u{7f}.txt"), "abc.txt");
         assert_eq!(sanitize_file_name("  report.pdf. . "), "report.pdf");
         assert_eq!(sanitize_file_name("\u{1}\u{2}"), "attachment");
+    }
+
+    #[test]
+    fn sanitize_removes_bidi_controls() {
+        assert_eq!(sanitize_file_name("evil\u{202e}gnp.exe"), "evilgnp.exe");
+        assert_eq!(
+            sanitize_file_name("\u{200e}a\u{2066}b\u{2069}\u{200f}\u{202a}.txt"),
+            "ab.txt"
+        );
     }
 
     #[test]
@@ -1033,9 +1154,87 @@ mod tests {
         let (_dir, paths) = setup();
         assert!(matches!(
             attachment_file(&paths, ROOT, "4444444444444444"),
-            Err(AttachmentError::Io(_))
+            Err(AttachmentError::NotFound)
         ));
         assert!(list_attachments(&paths, ROOT).unwrap().is_empty());
+    }
+
+    #[test]
+    fn attachment_file_verifies_content_against_meta() {
+        let (_dir, paths) = setup();
+        let meta = add_draft_from_bytes(&paths, INTAKE, "a.txt", b"alpha").unwrap();
+        commit_drafts(&paths, INTAKE, ROOT).unwrap();
+        let content = paths.attachment_dir(ROOT, &meta.id).unwrap().join("a.txt");
+
+        // Same size, different bytes.
+        std::fs::write(&content, b"alphA").unwrap();
+        assert!(matches!(
+            attachment_file(&paths, ROOT, &meta.id),
+            Err(AttachmentError::Corrupt(_))
+        ));
+        // Different size.
+        std::fs::write(&content, b"alpha!").unwrap();
+        assert!(matches!(
+            attachment_file(&paths, ROOT, &meta.id),
+            Err(AttachmentError::Corrupt(_))
+        ));
+    }
+
+    #[test]
+    fn linked_attachments_root_is_rejected() {
+        let (dir, paths) = setup();
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::create_dir_all(paths.root()).unwrap();
+        link_dir(&outside, &paths.attachments_root());
+
+        assert_eq!(
+            add_draft_from_bytes(&paths, INTAKE, "a.txt", b"alpha"),
+            Err(AttachmentError::OutsideRoot)
+        );
+        assert_eq!(
+            list_drafts(&paths, INTAKE),
+            Err(AttachmentError::OutsideRoot)
+        );
+        assert!(std::fs::read_dir(&outside).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn linked_mdium_dir_is_rejected() {
+        let (dir, paths) = setup();
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::create_dir_all(paths.root().parent().unwrap()).unwrap();
+        link_dir(&outside, paths.root());
+
+        assert_eq!(
+            add_draft_from_bytes(&paths, INTAKE, "a.txt", b"alpha"),
+            Err(AttachmentError::OutsideRoot)
+        );
+        assert!(std::fs::read_dir(&outside).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn linked_task_dir_is_rejected() {
+        let (dir, paths) = setup();
+        let meta = add_draft_from_bytes(&paths, INTAKE, "a.txt", b"alpha").unwrap();
+        commit_drafts(&paths, INTAKE, ROOT).unwrap();
+
+        // Replace the task dir with a link to a copy of itself elsewhere.
+        let task_dir = paths.task_attachments_dir(ROOT).unwrap();
+        let outside = dir.path().join("outside");
+        copy_tree(&task_dir, &outside);
+        std::fs::remove_dir_all(&task_dir).unwrap();
+        link_dir(&outside, &task_dir);
+
+        assert_eq!(
+            list_attachments(&paths, ROOT),
+            Err(AttachmentError::OutsideRoot)
+        );
+        assert_eq!(
+            attachment_file(&paths, ROOT, &meta.id),
+            Err(AttachmentError::OutsideRoot)
+        );
     }
 
     #[test]
@@ -1054,6 +1253,7 @@ mod tests {
     fn error_codes_are_stable() {
         assert_eq!(AttachmentError::InvalidId.code(), "ATTACHMENT_INVALID_ID");
         assert_eq!(AttachmentError::NotAFile.code(), "ATTACHMENT_NOT_A_FILE");
+        assert_eq!(AttachmentError::NotFound.code(), "ATTACHMENT_NOT_FOUND");
         assert_eq!(AttachmentError::TooLarge.code(), "ATTACHMENT_TOO_LARGE");
         assert_eq!(AttachmentError::TooMany.code(), "ATTACHMENT_TOO_MANY");
         assert_eq!(
