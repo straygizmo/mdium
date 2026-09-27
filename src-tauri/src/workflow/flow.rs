@@ -8,20 +8,23 @@
 //! runner session itself runs between [`begin_attempt`] and
 //! [`finish_attempt`] without the guard.
 
+use crate::workflow::attachments;
 use crate::workflow::attempt::{AttemptEnd, AttemptRequest};
 use crate::workflow::checks::CheckResult;
 use crate::workflow::errors::to_attention;
-use crate::workflow::fsutil::{self, new_id};
+use crate::workflow::forge::{ForgeCli, ForgeError, ForgeRepo};
+use crate::workflow::fsutil::{self, new_id, MdiumPaths};
 use crate::workflow::gitops::{self, GIT_INVALID_WORKTREE_INFO};
+use crate::workflow::issue_sync::{self, EntryKind, PostOutcome};
 use crate::workflow::model::{
     AttemptMode, AttemptRecord, AttentionReason, AwaitingInfo, AwaitingKind, HistoryEntry,
-    PendingTransition, Provider, Role, RunStatus, Stage, Task, TaskMeta, TaskStatus, Workflow,
-    WorkflowRun, WorktreeInfo,
+    IssueRef, IssueTracking, PendingTransition, Provider, Role, RunStatus, Stage, Task, TaskMeta,
+    TaskStatus, Workflow, WorkflowRun, WorktreeInfo,
 };
-use crate::workflow::outcome::{parse_outcome, StageOutcomeKind};
+use crate::workflow::outcome::{parse_outcome, StageOutcome, StageOutcomeKind};
 use crate::workflow::prompt::{
     build_prompt, cap_diff, project_instructions, render_design_doc_path, screening_hash,
-    screening_text, PreviousAttempt, PromptInput,
+    screening_text, AttachmentView, PreviousAttempt, PromptInput,
 };
 use crate::workflow::runner_client::RunnerPermission;
 use crate::workflow::screening::screen;
@@ -47,6 +50,9 @@ const WORKFLOW_DESIGN_DOC_UNSAFE_PATH: &str = "WORKFLOW_DESIGN_DOC_UNSAFE_PATH";
 const WORKFLOW_INVALID_DESIGN_DOC_PATH: &str = "WORKFLOW_INVALID_DESIGN_DOC_PATH";
 /// Code used when the runner process exited mid-attempt.
 const RUNNER_EXITED: &str = "RUNNER_EXITED";
+/// Attention code of a completed stage whose Issue entry could not be
+/// posted (params `code`, `message`, `entry`).
+pub const ATTENTION_ISSUE_SYNC_FAILED: &str = "ATTENTION_ISSUE_SYNC_FAILED";
 
 /// An attempt that [`begin_attempt`] recorded and that is ready to run.
 #[derive(Debug, Clone)]
@@ -77,6 +83,10 @@ pub enum BeginResult {
 pub struct FinishInput {
     pub end: AttemptEnd,
     pub check: CheckResult,
+    /// Why posting the stage's Issue entry failed. The entry is posted
+    /// before the finish; when it failed, a stage that would complete moves
+    /// to attention (`ATTENTION_ISSUE_SYNC_FAILED`) instead.
+    pub issue_sync_error: Option<ForgeError>,
 }
 
 /// What [`finish_attempt`] changed.
@@ -242,7 +252,7 @@ pub fn begin_attempt(
                 created_at: now.clone(),
                 updated_at: now,
                 acknowledged_agent_config: Vec::new(),
-                issue: None,
+                issue: task.meta.issue.clone(),
                 issue_closed: false,
                 issue_close_error: None,
             };
@@ -308,6 +318,7 @@ pub fn begin_attempt(
     } else {
         None
     };
+    let attachments = root_attachments(project_root, &run.root_task_id);
     let prompt = build_prompt(&PromptInput {
         stage: &stage,
         mode,
@@ -319,6 +330,7 @@ pub fn begin_attempt(
         user_input,
         review_diff: review_diff.as_deref(),
         project_instructions: instructions.as_deref(),
+        attachments: &attachments,
     });
 
     // 5. Start: running, consume one-shot inputs, record the attempt.
@@ -565,6 +577,41 @@ fn design_doc_failed(code: &str) -> AttentionReason {
     to_attention("ATTENTION_DESIGN_DOC_FAILED", [("code", code)])
 }
 
+/// The committed attachments of root task `root_id` as listed in stage
+/// prompts, with absolute verified paths. An attachment that cannot be
+/// verified is left out (and logged).
+fn root_attachments(project_root: &Path, root_id: &str) -> Vec<AttachmentView> {
+    let paths = MdiumPaths::new(project_root);
+    let metas = match attachments::list_attachments(&paths, root_id) {
+        Ok(metas) => metas,
+        Err(err) => {
+            eprintln!("[workflow] listing the attachments of task {root_id} failed: {err}");
+            return Vec::new();
+        }
+    };
+    metas
+        .into_iter()
+        .filter_map(
+            |meta| match attachments::attachment_file(&paths, root_id, &meta.id) {
+                Ok(path) => Some(AttachmentView {
+                    id: meta.id,
+                    name: meta.stored_name,
+                    mime: meta.mime,
+                    size: meta.size,
+                    path: path.display().to_string(),
+                }),
+                Err(err) => {
+                    eprintln!(
+                        "[workflow] attachment {} of task {root_id} left out: {err}",
+                        meta.id
+                    );
+                    None
+                }
+            },
+        )
+        .collect()
+}
+
 /// The design passed to the review stage: the output body (parsed, else
 /// raw) of the latest attempt with a readable output of the run's most
 /// recent completed design task. A design task that did not complete (for
@@ -682,18 +729,44 @@ enum Action {
     Keep,
     Attention(AttentionReason),
     AwaitUser(AwaitingInfo),
-    /// Review re-entry to `review_return_to` with the findings.
-    Reentry {
-        findings: String,
-    },
-    /// Advance to the next stage with `body` (writing the design doc first
-    /// when leaving the design stage).
-    Advance {
-        to: Role,
-        body: String,
-    },
-    /// The review passed: the task and the run are done.
-    Complete,
+    /// The stage completed or the review returned findings (see
+    /// [`complete_stage`]).
+    Stage(StageResult),
+    /// The stage would complete, but its Issue entry could not be posted.
+    IssueSyncFailed(AttentionReason, EntryKind),
+}
+
+/// A stage result that moves the flow on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StageResult {
+    /// The stage completed with this output body.
+    Completed(String),
+    /// The review returned these findings for rework.
+    Returned(String),
+}
+
+impl StageResult {
+    /// The output body or the findings.
+    pub fn body(&self) -> &str {
+        match self {
+            StageResult::Completed(body) | StageResult::Returned(body) => body,
+        }
+    }
+}
+
+/// The stage result of a parsed outcome: a completed outcome (not of a
+/// plan attempt, which waits for approval instead), or the findings of a
+/// review reporting attention. `None` for anything else.
+pub fn stage_result(role: Role, mode: AttemptMode, outcome: &StageOutcome) -> Option<StageResult> {
+    match outcome.kind {
+        StageOutcomeKind::Completed if mode != AttemptMode::Plan => {
+            Some(StageResult::Completed(outcome.body.clone()))
+        }
+        StageOutcomeKind::Attention if role == Role::Review => {
+            Some(StageResult::Returned(outcome.body.clone()))
+        }
+        _ => None,
+    }
 }
 
 /// Decides the attempt's recorded outcome and the task action from how the
@@ -740,52 +813,40 @@ fn decide(planned: &PlannedAttempt, input: &FinishInput) -> (&'static str, Actio
                     [("code", err.code())],
                 )),
             ),
-            Ok(outcome) => match outcome.kind {
-                StageOutcomeKind::AwaitingUser => (
-                    "awaiting_user",
-                    Action::AwaitUser(AwaitingInfo {
-                        kind: AwaitingKind::Question,
-                        question: outcome.question.or(outcome.reason),
-                    }),
-                ),
-                StageOutcomeKind::Attention if planned.stage.role == Role::Review => (
-                    "attention",
-                    Action::Reentry {
-                        findings: outcome.body,
-                    },
-                ),
-                StageOutcomeKind::Attention => (
-                    "attention",
-                    Action::Attention(to_attention(
-                        "ATTENTION_STAGE_REPORTED",
-                        [("reason", outcome.reason.unwrap_or_default())],
-                    )),
-                ),
-                StageOutcomeKind::Completed if planned.mode == AttemptMode::Plan => (
-                    "completed",
-                    Action::AwaitUser(AwaitingInfo {
-                        kind: AwaitingKind::PlanApproval,
-                        question: None,
-                    }),
-                ),
-                StageOutcomeKind::Completed => match planned.stage.role {
-                    Role::Design => (
-                        "completed",
-                        Action::Advance {
-                            to: Role::Implement,
-                            body: outcome.body,
-                        },
+            Ok(outcome) => {
+                if let Some(result) = stage_result(planned.stage.role, planned.mode, &outcome) {
+                    let recorded = match result {
+                        StageResult::Completed(_) => "completed",
+                        StageResult::Returned(_) => "attention",
+                    };
+                    return (recorded, Action::Stage(result));
+                }
+                match outcome.kind {
+                    StageOutcomeKind::AwaitingUser => (
+                        "awaiting_user",
+                        Action::AwaitUser(AwaitingInfo {
+                            kind: AwaitingKind::Question,
+                            question: outcome.question.or(outcome.reason),
+                        }),
                     ),
-                    Role::Implement => (
-                        "completed",
-                        Action::Advance {
-                            to: Role::Review,
-                            body: outcome.body,
-                        },
+                    StageOutcomeKind::Attention => (
+                        "attention",
+                        Action::Attention(to_attention(
+                            "ATTENTION_STAGE_REPORTED",
+                            [("reason", outcome.reason.unwrap_or_default())],
+                        )),
                     ),
-                    Role::Review => ("completed", Action::Complete),
-                },
-            },
+                    // Only a plan attempt's completion is left: it waits for
+                    // the user's approval.
+                    StageOutcomeKind::Completed => (
+                        "completed",
+                        Action::AwaitUser(AwaitingInfo {
+                            kind: AwaitingKind::PlanApproval,
+                            question: None,
+                        }),
+                    ),
+                }
+            }
         },
     }
 }
@@ -802,7 +863,11 @@ pub fn finish_attempt(
 ) -> Result<FinishSummary, FlowError> {
     let root_id = planned.run.root_task_id.clone();
     let task_id = planned.request.task_id.clone();
-    let (mut outcome, action) = decide(planned, &input);
+    let (mut outcome, mut action) = decide(planned, &input);
+    if let (Action::Stage(_), Some(err)) = (&action, &input.issue_sync_error) {
+        let entry = entry_kind(planned.stage.role);
+        action = Action::IssueSyncFailed(issue_sync_failed(err, entry), entry);
+    }
 
     let mut run = store.get_run(&root_id)?;
     advance_baseline(&mut run, &input.check);
@@ -919,45 +984,219 @@ fn apply_action(
             None,
             Some(info),
         )?]),
-        Action::Reentry { findings } => {
-            if run.reentry_count >= run.workflow.max_reentry_count {
-                let count = run.reentry_count.to_string();
-                return attention(to_attention("ATTENTION_REENTRY_LIMIT", [("count", count)]));
-            }
-            run.reentry_count += 1;
-            let to = run.workflow.review_return_to;
-            let body = format!("{REVIEW_FINDINGS_PREFIX}{findings}");
-            let child = advance(guard, store, run, task, to, &body)?;
-            Ok(vec![store.get_task(id)?, child])
-        }
-        Action::Advance { to, body } => {
-            if planned.stage.role == Role::Design {
-                if let Some(template) = run.workflow.design_doc_path.clone() {
-                    if let Err(code) =
-                        write_design_doc(store, &planned.worktree_base, run, &template, &body)
-                    {
-                        *outcome = "attention";
-                        return attention(design_doc_failed(&code));
-                    }
+        Action::Stage(result) => {
+            match complete_stage(guard, store, task, run, result, &planned.worktree_base) {
+                Ok(changed) => Ok(changed),
+                Err(StageError::Attention(reason)) => {
+                    *outcome = "attention";
+                    attention(reason)
                 }
+                Err(StageError::Flow(err)) => Err(err),
             }
-            let child = advance(guard, store, run, task, to, &body)?;
-            Ok(vec![store.get_task(id)?, child])
         }
-        Action::Complete => {
-            let done = move_task(
+        Action::IssueSyncFailed(reason, entry) => {
+            let mut parked = move_task(
                 guard,
                 store,
                 id,
                 TaskStatus::Running,
-                TaskStatus::Completed,
-                None,
+                TaskStatus::Attention,
+                Some(reason),
                 None,
             )?;
-            run.status = RunStatus::AwaitingMerge;
-            Ok(vec![done])
+            parked.meta.pending_issue_entry = Some(entry.as_str().to_string());
+            Ok(vec![store.put_task(guard, &parked)?])
         }
     }
+}
+
+/// Why [`complete_stage`] did not complete the stage.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StageError {
+    /// The stage needs the user (the design document could not be saved,
+    /// or the review re-entry limit is reached); the task was not changed.
+    Attention(AttentionReason),
+    Flow(FlowError),
+}
+
+impl From<FlowError> for StageError {
+    fn from(err: FlowError) -> Self {
+        StageError::Flow(err)
+    }
+}
+
+impl From<StoreError> for StageError {
+    fn from(err: StoreError) -> Self {
+        StageError::Flow(err.into())
+    }
+}
+
+impl From<TransitionError> for StageError {
+    fn from(err: TransitionError) -> Self {
+        StageError::Flow(err.into())
+    }
+}
+
+/// Completes `task`'s stage with `result`, from the task's current status
+/// (running after an attempt, attention after a failed Issue sync): returned
+/// review findings re-enter `review_return_to` (up to the re-entry limit); a
+/// completed design writes and commits the design document (when the
+/// workflow has a `designDocPath`) and advances to implement; a completed
+/// implement advances to review; a completed review completes the task and
+/// sets the run AwaitingMerge. `worktree_base` is the base dir the run's
+/// worktree was created under. Returns the tasks written.
+pub fn complete_stage(
+    guard: &ProjectGuard,
+    store: &WorkflowStore,
+    task: &Task,
+    run: &mut WorkflowRun,
+    result: StageResult,
+    worktree_base: &Path,
+) -> Result<Vec<Task>, StageError> {
+    let id = task.meta.id.as_str();
+    let role = task.meta.role.unwrap_or(Role::Design);
+    let (to, body) = match result {
+        StageResult::Returned(findings) => {
+            if run.reentry_count >= run.workflow.max_reentry_count {
+                let count = run.reentry_count.to_string();
+                return Err(StageError::Attention(to_attention(
+                    "ATTENTION_REENTRY_LIMIT",
+                    [("count", count)],
+                )));
+            }
+            run.reentry_count += 1;
+            (
+                run.workflow.review_return_to,
+                format!("{REVIEW_FINDINGS_PREFIX}{findings}"),
+            )
+        }
+        StageResult::Completed(body) => match role {
+            Role::Design => {
+                if let Some(template) = run.workflow.design_doc_path.clone() {
+                    write_design_doc(store, worktree_base, run, &template, &body)
+                        .map_err(|code| StageError::Attention(design_doc_failed(&code)))?;
+                }
+                (Role::Implement, body)
+            }
+            Role::Implement => (Role::Review, body),
+            Role::Review => {
+                let done = move_task(
+                    guard,
+                    store,
+                    id,
+                    task.meta.status,
+                    TaskStatus::Completed,
+                    None,
+                    None,
+                )?;
+                run.status = RunStatus::AwaitingMerge;
+                *run = store.put_run(guard, run)?;
+                return Ok(vec![done]);
+            }
+        },
+    };
+    let child = advance(guard, store, run, task, to, &body)?;
+    Ok(vec![store.get_task(id)?, child])
+}
+
+/// The Issue entry kind a stage role records.
+pub fn entry_kind(role: Role) -> EntryKind {
+    match role {
+        Role::Design => EntryKind::Design,
+        Role::Implement => EntryKind::Implement,
+        Role::Review => EntryKind::Review,
+    }
+}
+
+/// The attention reason of a failed Issue sync of an `entry` entry.
+fn issue_sync_failed(err: &ForgeError, entry: EntryKind) -> AttentionReason {
+    to_attention(
+        ATTENTION_ISSUE_SYNC_FAILED,
+        [
+            ("code", err.code().to_string()),
+            (
+                "message",
+                truncate_chars(&err.to_string(), MESSAGE_MAX_CHARS),
+            ),
+            ("entry", entry.as_str().to_string()),
+        ],
+    )
+}
+
+/// The Issue a run syncs its stage results to: its Issue, when the run's
+/// workflow tracks Issues automatically.
+pub fn tracked_issue(run: &WorkflowRun) -> Option<&IssueRef> {
+    match run.workflow.issue_tracking {
+        IssueTracking::Auto => run.issue.as_ref(),
+        IssueTracking::Off => None,
+    }
+}
+
+/// The forge repository an Issue lives in.
+pub fn issue_repo(issue: &IssueRef) -> ForgeRepo {
+    ForgeRepo {
+        kind: issue.kind,
+        host: issue.host.clone(),
+        path: issue.path.clone(),
+    }
+}
+
+/// One stage result as an Issue entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StageEntry {
+    pub kind: EntryKind,
+    /// `<taskId>-<attemptId>` of the attempt that produced the result.
+    pub id: String,
+    pub body: String,
+}
+
+/// Builds the Issue entry of attempt `attempt_id` of task `task_id` (of
+/// stage `role`) that ended with `result`. An implement entry lists the
+/// branch and its commits since the base, read by git in the run's
+/// worktree (under `worktree_base`); a failure to read them is reported as
+/// a failed forge command (exit code -1), so the sync fails visibly.
+pub fn stage_entry(
+    worktree_base: &Path,
+    run: &WorkflowRun,
+    task_id: &str,
+    attempt_id: &str,
+    role: Role,
+    result: &StageResult,
+) -> Result<StageEntry, ForgeError> {
+    let kind = entry_kind(role);
+    let id = issue_sync::entry_id(task_id, attempt_id);
+    let body = match (role, result) {
+        (Role::Design, result) => issue_sync::design_body(result.body(), &id),
+        (Role::Implement, result) => {
+            let info = run
+                .worktree
+                .as_ref()
+                .ok_or_else(|| ForgeError::command_failed(-1, GIT_INVALID_WORKTREE_INFO))?;
+            let commits = gitops::commits_since_base_in(worktree_base, info)
+                .map_err(|err| ForgeError::command_failed(-1, &err.to_string()))?;
+            issue_sync::implement_body(result.body(), &info.branch, &commits, &id)
+        }
+        (Role::Review, StageResult::Returned(findings)) => {
+            issue_sync::review_body(findings, true, &id)
+        }
+        (Role::Review, StageResult::Completed(body)) => issue_sync::review_body(body, false, &id),
+    };
+    Ok(StageEntry { kind, id, body })
+}
+
+/// Posts `entry` to `issue` unless a comment carrying its marker exists.
+pub fn post_stage_entry(
+    forge: &dyn ForgeCli,
+    issue: &IssueRef,
+    entry: &StageEntry,
+) -> Result<PostOutcome, ForgeError> {
+    issue_sync::post_entry(
+        forge,
+        &issue_repo(issue),
+        issue.number,
+        &entry.body,
+        &entry.id,
+    )
 }
 
 /// Transitions a task and sets `awaiting` to `awaiting` in the same
@@ -1370,6 +1609,7 @@ mod tests {
     use super::*;
     use crate::workflow::attempt::CancelReason;
     use crate::workflow::checks;
+    use crate::workflow::forge::ForgeKind;
     use crate::workflow::gitops::test_support::Fixture;
     use crate::workflow::template::standard_workflow;
 
@@ -1463,14 +1703,21 @@ mod tests {
             end: AttemptEnd,
             reason: Option<AttentionReason>,
         ) -> FinishSummary {
-            let guard = self.store.lock();
-            let input = FinishInput {
-                end,
-                check: CheckResult {
-                    after: None,
-                    reason,
+            self.finish_input(
+                planned,
+                FinishInput {
+                    end,
+                    check: CheckResult {
+                        after: None,
+                        reason,
+                    },
+                    issue_sync_error: None,
                 },
-            };
+            )
+        }
+
+        fn finish_input(&self, planned: &PlannedAttempt, input: FinishInput) -> FinishSummary {
+            let guard = self.store.lock();
             finish_attempt(&guard, &self.store, planned, input).unwrap()
         }
 
@@ -1871,6 +2118,7 @@ mod tests {
                 after: Some(snapshot.clone()),
                 reason: None,
             },
+            issue_sync_error: None,
         };
         finish_attempt(&guard, &env.store, &planned, input).unwrap();
         drop(guard);
@@ -1901,6 +2149,7 @@ mod tests {
                 after: Some(snapshot.clone()),
                 reason: Some(reason.clone()),
             },
+            issue_sync_error: None,
         };
         let summary = finish_attempt(&guard, &env.store, &planned, input).unwrap();
         drop(guard);
@@ -2775,5 +3024,351 @@ question: Sure?
             env.last_attempt(&b.meta.id).outcome.as_deref(),
             Some("interrupted")
         );
+    }
+
+    fn sample_issue() -> IssueRef {
+        IssueRef {
+            kind: ForgeKind::GitHub,
+            host: "github.com".to_string(),
+            path: "owner/repo".to_string(),
+            number: 7,
+            url: "https://github.com/owner/repo/issues/7".to_string(),
+        }
+    }
+
+    /// Saves `text` as the attempt output and finishes the attempt as
+    /// completed with it, reporting `sync_error` as the Issue sync result.
+    fn complete_with_sync_error(
+        env: &Env,
+        planned: &PlannedAttempt,
+        text: &str,
+        sync_error: ForgeError,
+    ) -> FinishSummary {
+        let req = &planned.request;
+        env.store
+            .write_attempt_output(&req.root_task_id, &req.task_id, &req.attempt_id, text)
+            .unwrap();
+        env.finish_input(
+            planned,
+            FinishInput {
+                end: AttemptEnd::Completed {
+                    final_response: text.to_string(),
+                },
+                check: CheckResult {
+                    after: None,
+                    reason: None,
+                },
+                issue_sync_error: Some(sync_error),
+            },
+        )
+    }
+
+    #[test]
+    fn a_new_run_copies_the_root_task_issue() {
+        let env = Env::new();
+        let root = env.root_task("A", "a");
+        env.edit_inbox(&root.meta.id, |meta| meta.issue = Some(sample_issue()));
+        env.started(&root.meta.id);
+        assert_eq!(env.run(&root.meta.id).issue, Some(sample_issue()));
+
+        let plain = env.root_task("B", "b");
+        env.started(&plain.meta.id);
+        assert_eq!(env.run(&plain.meta.id).issue, None);
+    }
+
+    #[test]
+    fn every_stage_prompt_lists_the_root_task_attachments() {
+        let env = Env::new();
+        let root = env.root_task("A", "a");
+        let paths = MdiumPaths::new(env.store.project_root());
+        let intake = new_id();
+        attachments::add_draft_from_bytes(&paths, &intake, "spec.txt", b"spec").unwrap();
+        let committed = attachments::commit_drafts(&paths, &intake, &root.meta.id).unwrap();
+        let file = attachments::attachment_file(&paths, &root.meta.id, &committed[0].id).unwrap();
+        assert!(file.is_absolute());
+        let listed = format!(
+            "- `{}` (spec.txt, {}, 4 bytes)",
+            file.display(),
+            committed[0].mime
+        );
+
+        let design = env.started(&root.meta.id);
+        assert!(design.request.prompt.contains("## Attachments"));
+        assert!(
+            design.request.prompt.contains(&listed),
+            "{}",
+            design.request.prompt
+        );
+        let implement = through_design_of(&env, design);
+        let planned = env.started(&implement.meta.id);
+        assert!(planned.request.prompt.contains(&listed));
+
+        // A root task without attachments gets no section.
+        let other = env.root_task("B", "b");
+        let started = env.started(&other.meta.id);
+        assert!(!started.request.prompt.contains("## Attachments"));
+    }
+
+    /// Completes a started design attempt and returns the implement child.
+    fn through_design_of(env: &Env, design: PlannedAttempt) -> Task {
+        let summary = env.complete(&design, &completed("# Design\nthe plan"));
+        summary.changed_tasks.last().unwrap().clone()
+    }
+
+    #[test]
+    fn an_issue_sync_failure_parks_the_stage_without_advancing() {
+        let env = Env::with(|w| w.design_doc_path = Some("docs/{slug}.md".into()));
+        let root = env.root_task("Add Login", "req");
+        let planned = env.started(&root.meta.id);
+        let summary = complete_with_sync_error(
+            &env,
+            &planned,
+            &completed("# Design"),
+            ForgeError::command_failed(1, "boom"),
+        );
+
+        let task = env.task(&root.meta.id);
+        assert_eq!(task.meta.status, TaskStatus::Attention);
+        assert_eq!(attention_code(&task), ATTENTION_ISSUE_SYNC_FAILED);
+        assert_eq!(param(&task, "code"), "FORGE_COMMAND_FAILED");
+        assert_eq!(
+            param(&task, "message"),
+            "FORGE_COMMAND_FAILED (exit 1): boom"
+        );
+        assert_eq!(param(&task, "entry"), "design");
+        assert_eq!(task.meta.pending_issue_entry.as_deref(), Some("design"));
+        assert_eq!(env.tasks().len(), 1, "no child task");
+        assert!(!planned.request.worktree.join("docs/add-login.md").exists());
+        let run = env.run(&root.meta.id);
+        assert_eq!(run.current_task_id, root.meta.id);
+        assert_eq!(run.pending_transition, None);
+        assert_eq!(run.status, RunStatus::Active);
+        assert_eq!(
+            env.last_attempt(&root.meta.id).outcome.as_deref(),
+            Some("completed")
+        );
+        assert_eq!(summary.changed_tasks, vec![task]);
+    }
+
+    #[test]
+    fn an_issue_sync_failure_message_is_capped() {
+        let env = Env::new();
+        let root = env.root_task("A", "a");
+        let planned = env.started(&root.meta.id);
+        complete_with_sync_error(
+            &env,
+            &planned,
+            &completed("# Design"),
+            ForgeError::BadResponse("x".repeat(400)),
+        );
+        let task = env.task(&root.meta.id);
+        assert_eq!(param(&task, "message").chars().count(), MESSAGE_MAX_CHARS);
+    }
+
+    #[test]
+    fn an_issue_sync_error_never_masks_a_stage_that_did_not_complete() {
+        let env = Env::new();
+        let root = env.root_task("A", "a");
+        let planned = env.started(&root.meta.id);
+        env.finish_input(
+            &planned,
+            FinishInput {
+                end: AttemptEnd::TimedOut,
+                check: CheckResult {
+                    after: None,
+                    reason: None,
+                },
+                issue_sync_error: Some(ForgeError::Timeout),
+            },
+        );
+        let task = env.task(&root.meta.id);
+        assert_eq!(attention_code(&task), "ATTENTION_TIMEOUT");
+        assert_eq!(task.meta.pending_issue_entry, None);
+    }
+
+    #[test]
+    fn complete_stage_advances_an_attention_task_and_writes_the_design_doc() {
+        let env = Env::with(|w| w.design_doc_path = Some("docs/{slug}.md".into()));
+        let root = env.root_task("Add Login", "req");
+        let planned = env.started(&root.meta.id);
+        complete_with_sync_error(&env, &planned, &completed("# Design"), ForgeError::Timeout);
+
+        let guard = env.store.lock();
+        let task = env.task(&root.meta.id);
+        let mut run = env.run(&root.meta.id);
+        let changed = complete_stage(
+            &guard,
+            &env.store,
+            &task,
+            &mut run,
+            StageResult::Completed("# Design".to_string()),
+            env.fx.base(),
+        )
+        .unwrap();
+        drop(guard);
+
+        assert_eq!(changed.len(), 2);
+        assert_eq!(env.task(&root.meta.id).meta.status, TaskStatus::Completed);
+        let child = &changed[1];
+        assert_eq!(child.meta.role, Some(Role::Implement));
+        assert_eq!(child.body, "# Design");
+        assert_eq!(env.run(&root.meta.id).current_task_id, child.meta.id);
+        let doc = planned.request.worktree.join("docs/add-login.md");
+        assert_eq!(std::fs::read_to_string(doc).unwrap(), "# Design");
+    }
+
+    #[test]
+    fn complete_stage_of_returned_findings_respects_the_reentry_limit() {
+        let env = Env::with(|w| w.max_reentry_count = 1);
+        let root = env.root_task("A", "a");
+        let implement = through_design(&env, &root);
+        let planned = env.started(&implement.meta.id);
+        let review = env.complete(&planned, &completed("Implemented."));
+        let review = review.changed_tasks.last().unwrap().clone();
+        let planned = env.started(&review.meta.id);
+        let findings = "---\noutcome: attention\nreason: issues\n---\n\nFix X.";
+        complete_with_sync_error(&env, &planned, findings, ForgeError::Timeout);
+        let task = env.task(&review.meta.id);
+        assert_eq!(param(&task, "entry"), "review");
+
+        let guard = env.store.lock();
+        let mut run = env.run(&root.meta.id);
+        run.reentry_count = 1;
+        let err = complete_stage(
+            &guard,
+            &env.store,
+            &task,
+            &mut run,
+            StageResult::Returned("Fix X.".to_string()),
+            env.fx.base(),
+        )
+        .unwrap_err();
+        let StageError::Attention(reason) = err else {
+            panic!("expected attention, got {err:?}");
+        };
+        assert_eq!(reason.code, "ATTENTION_REENTRY_LIMIT");
+
+        run.reentry_count = 0;
+        let changed = complete_stage(
+            &guard,
+            &env.store,
+            &task,
+            &mut run,
+            StageResult::Returned("Fix X.".to_string()),
+            env.fx.base(),
+        )
+        .unwrap();
+        drop(guard);
+        let child = changed.last().unwrap();
+        assert_eq!(child.meta.role, Some(env.workflow().review_return_to));
+        assert_eq!(child.body, format!("{REVIEW_FINDINGS_PREFIX}Fix X."));
+        assert_eq!(env.run(&root.meta.id).reentry_count, 1);
+    }
+
+    #[test]
+    fn stage_entries_carry_the_marker_and_the_implement_commits() {
+        let env = Env::new();
+        let root = env.root_task("A", "a");
+        let implement = through_design(&env, &root);
+        let run = env.run(&root.meta.id);
+        let info = run.worktree.clone().unwrap();
+        let wt = Path::new(&info.path);
+        gitops::test_support::write_file(wt, "feature.txt", "new\n");
+        gitops::git(wt, &["add", "feature.txt"]).unwrap();
+        gitops::git(wt, &["commit", "-m", "add feature"]).unwrap();
+        let attempt = "fedcba9876543210";
+
+        let entry = stage_entry(
+            env.fx.base(),
+            &run,
+            &implement.meta.id,
+            attempt,
+            Role::Implement,
+            &StageResult::Completed("Did it.".to_string()),
+        )
+        .unwrap();
+        assert_eq!(entry.kind, EntryKind::Implement);
+        assert_eq!(entry.id, issue_sync::entry_id(&implement.meta.id, attempt));
+        assert!(entry.body.starts_with("## Implementation"));
+        assert!(entry.body.contains(&format!("`{}`", info.branch)));
+        assert!(entry.body.contains("add feature"));
+        assert!(entry.body.contains("Did it."));
+        assert!(entry.body.ends_with(&issue_sync::marker(&entry.id)));
+
+        let design = stage_entry(
+            env.fx.base(),
+            &run,
+            &root.meta.id,
+            attempt,
+            Role::Design,
+            &StageResult::Completed("The design.".to_string()),
+        )
+        .unwrap();
+        assert_eq!(design.kind, EntryKind::Design);
+        assert!(design.body.starts_with("## Design"));
+
+        let returned = stage_entry(
+            env.fx.base(),
+            &run,
+            &implement.meta.id,
+            attempt,
+            Role::Review,
+            &StageResult::Returned("Fix X.".to_string()),
+        )
+        .unwrap();
+        assert_eq!(returned.kind, EntryKind::Review);
+        assert!(returned
+            .body
+            .contains("Result: findings returned for rework."));
+        assert!(returned.body.contains("Fix X."));
+    }
+
+    #[test]
+    fn only_auto_tracked_runs_with_an_issue_are_synced() {
+        let env = Env::new();
+        let root = env.root_task("A", "a");
+        env.started(&root.meta.id);
+        let mut run = env.run(&root.meta.id);
+        run.workflow.issue_tracking = IssueTracking::Auto;
+        assert_eq!(tracked_issue(&run), None);
+        run.issue = Some(sample_issue());
+        assert_eq!(tracked_issue(&run), Some(&sample_issue()));
+        run.workflow.issue_tracking = IssueTracking::Off;
+        assert_eq!(tracked_issue(&run), None);
+        assert_eq!(
+            issue_repo(&sample_issue()),
+            ForgeRepo {
+                kind: ForgeKind::GitHub,
+                host: "github.com".to_string(),
+                path: "owner/repo".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn stage_results_follow_the_role_mode_and_outcome() {
+        let outcome = |text: &str| parse_outcome(text).unwrap();
+        let done = outcome(&completed("B"));
+        let found = outcome("---\noutcome: attention\nreason: r\n---\n\nF");
+        let asked = outcome("---\noutcome: awaiting_user\nreason: r\n---\n\nQ");
+        let single = AttemptMode::Single;
+        assert_eq!(
+            stage_result(Role::Design, single, &done),
+            Some(StageResult::Completed("B".to_string()))
+        );
+        assert_eq!(
+            stage_result(Role::Implement, AttemptMode::Execute, &done),
+            Some(StageResult::Completed("B".to_string()))
+        );
+        assert_eq!(
+            stage_result(Role::Implement, AttemptMode::Plan, &done),
+            None
+        );
+        assert_eq!(
+            stage_result(Role::Review, single, &found),
+            Some(StageResult::Returned("F".to_string()))
+        );
+        assert_eq!(stage_result(Role::Design, single, &found), None);
+        assert_eq!(stage_result(Role::Review, single, &asked), None);
     }
 }

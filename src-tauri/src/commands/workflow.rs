@@ -17,6 +17,7 @@ use crate::workflow::actions::{
     self, ActionError, MergePreview, NewTask, RetryOptions, TaskDetail,
 };
 use crate::workflow::attempt::ProgressUpdate;
+use crate::workflow::forge::CliForge;
 use crate::workflow::gitops;
 use crate::workflow::model::{
     Provider, RunStatus, Task, TaskStatus, Workflow, WorkflowRun, WorkflowsFile,
@@ -263,7 +264,12 @@ pub fn create_state(app: &AppHandle) -> WorkflowState {
             }
         };
     let sink = Arc::new(TauriSink { app: app.clone() });
-    Orchestrator::new(runner, sink, gitops::default_worktree_base())
+    Orchestrator::new(
+        runner,
+        sink,
+        Arc::new(CliForge),
+        gitops::default_worktree_base(),
+    )
 }
 
 /// One provider's probe result (`{"kind":"error","detail":<code>}` when

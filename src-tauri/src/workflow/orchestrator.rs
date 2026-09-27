@@ -15,10 +15,12 @@ use crate::workflow::attempt::{
 use crate::workflow::checks::{self, CheckResult};
 use crate::workflow::errors::to_attention;
 use crate::workflow::flow::{
-    begin_attempt, finish_attempt, park_unfinished, recover, BeginResult, FinishInput,
-    PlannedAttempt,
+    self, begin_attempt, finish_attempt, park_unfinished, recover, BeginResult, FinishInput,
+    PlannedAttempt, StageResult,
 };
+use crate::workflow::forge::{ForgeCli, ForgeError};
 use crate::workflow::model::{RunStatus, Task, TaskStatus, Workflow, WorkflowRun};
+use crate::workflow::outcome::parse_outcome;
 use crate::workflow::runner_host::RunnerApi;
 use crate::workflow::state::{normalize_root, project_key};
 use crate::workflow::store::{StoreError, WorkflowStore};
@@ -141,6 +143,8 @@ impl Inner {
 pub struct Orchestrator {
     runner: Arc<dyn RunnerApi>,
     sink: Arc<dyn EventSink>,
+    /// Posts stage results to Issues and closes them after a merge.
+    forge: Arc<dyn ForgeCli>,
     worktree_base: PathBuf,
     inner: Mutex<Inner>,
     /// Notified whenever an attempt or a dispatch thread ends.
@@ -151,11 +155,13 @@ impl Orchestrator {
     pub fn new(
         runner: Arc<dyn RunnerApi>,
         sink: Arc<dyn EventSink>,
+        forge: Arc<dyn ForgeCli>,
         worktree_base: PathBuf,
     ) -> Arc<Self> {
         Arc::new(Orchestrator {
             runner,
             sink,
+            forge,
             worktree_base,
             inner: Mutex::new(Inner::default()),
             idle: Condvar::new(),
@@ -270,6 +276,10 @@ impl Orchestrator {
 
     pub fn runner(&self) -> &Arc<dyn RunnerApi> {
         &self.runner
+    }
+
+    pub fn forge(&self) -> &Arc<dyn ForgeCli> {
+        &self.forge
     }
 
     /// Base dir the runs' worktrees are created under.
@@ -519,13 +529,14 @@ impl Orchestrator {
                     after: None,
                     reason: None,
                 },
+                issue_sync_error: None,
             };
             self.finish(&WorkflowStore::new(root.to_path_buf()), &planned, input);
         }
     }
 
     /// The body of an attempt thread: integrity baseline, the runner
-    /// session, the post-attempt checks, and the finish.
+    /// session, the post-attempt checks, the Issue sync, and the finish.
     fn attempt_thread(&self, root: &Path, planned: &PlannedAttempt, cancel: &CancelToken) {
         let store = WorkflowStore::new(root.to_path_buf());
         let req = &planned.request;
@@ -545,6 +556,7 @@ impl Orchestrator {
             Err(payload) => FinishInput {
                 end: panicked(payload),
                 check: panicked_check(),
+                issue_sync_error: None,
             },
             // No session is started without a baseline (or with an
             // unacknowledged git config or hooks change).
@@ -557,6 +569,7 @@ impl Orchestrator {
                     after: None,
                     reason: Some(reason),
                 },
+                issue_sync_error: None,
             },
             Ok(Ok(before)) => {
                 let progress = |update: ProgressUpdate| {
@@ -594,10 +607,74 @@ impl Orchestrator {
                     )
                 }))
                 .unwrap_or_else(|_| panicked_check());
-                FinishInput { end, check }
+                FinishInput {
+                    end,
+                    check,
+                    issue_sync_error: None,
+                }
             }
         };
-        self.finish(&store, planned, input);
+        let issue_sync_error = catch_unwind(AssertUnwindSafe(|| {
+            self.sync_issue(&store, planned, &input)
+        }))
+        .unwrap_or_else(|_| Some(ForgeError::command_failed(-1, WORKFLOW_ATTEMPT_PANICKED)));
+        self.finish(
+            &store,
+            planned,
+            FinishInput {
+                issue_sync_error,
+                ..input
+            },
+        );
+    }
+
+    /// Posts the stage result of an attempt that passed its checks to the
+    /// run's Issue (when the run tracks one), without the project guard and
+    /// before the finish applies the result. Only a result that moves the
+    /// flow on is posted: a completed stage (not a plan attempt) or review
+    /// findings that will be returned (re-entry limit not reached), and only
+    /// while the task is still running. Returns why the post failed.
+    fn sync_issue(
+        &self,
+        store: &WorkflowStore,
+        planned: &PlannedAttempt,
+        input: &FinishInput,
+    ) -> Option<ForgeError> {
+        if input.check.reason.is_some() {
+            return None;
+        }
+        let AttemptEnd::Completed { final_response } = &input.end else {
+            return None;
+        };
+        let issue = flow::tracked_issue(&planned.run)?;
+        let outcome = parse_outcome(final_response).ok()?;
+        let role = planned.stage.role;
+        let result = flow::stage_result(role, planned.mode, &outcome)?;
+        let req = &planned.request;
+        match store.get_task(&req.task_id) {
+            Ok(task) if task.meta.status == TaskStatus::Running => {}
+            _ => return None,
+        }
+        let run = store
+            .get_run(&req.root_task_id)
+            .unwrap_or_else(|_| planned.run.clone());
+        if matches!(result, StageResult::Returned(_))
+            && run.reentry_count >= run.workflow.max_reentry_count
+        {
+            return None;
+        }
+        let entry = match flow::stage_entry(
+            &planned.worktree_base,
+            &run,
+            &req.task_id,
+            &req.attempt_id,
+            role,
+            &result,
+        ) {
+            Ok(entry) => entry,
+            Err(err) => return Some(err),
+        };
+        flow::post_stage_entry(self.forge.as_ref(), issue, &entry).err()
     }
 
     /// Applies an attempt's end under the project guard and reports it.
@@ -771,10 +848,13 @@ impl Drop for Registration {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workflow::forge::{FakeForge, FakeOp, ForgeCall, ForgeError, ForgeKind};
     use crate::workflow::fsutil::{self, new_id};
     use crate::workflow::gitops::{self, test_support::Fixture};
+    use crate::workflow::issue_sync;
     use crate::workflow::model::{
-        Provider, Role, RunStatus, TaskMeta, TaskStatus, Workflow, WorkflowsFile,
+        IssueRef, IssueTracking, Provider, Role, RunStatus, TaskMeta, TaskStatus, Workflow,
+        WorkflowsFile,
     };
     use crate::workflow::runner_client::{
         RunnerError, RunnerEvent, RunnerPermission, StartSessionParams,
@@ -1052,15 +1132,21 @@ mod tests {
         runner: Arc<FakeRunner>,
         waiting: Receiver<String>,
         sink: Arc<RecordingSink>,
+        forge: Arc<FakeForge>,
         orch: Arc<Orchestrator>,
     }
 
     impl Env {
         fn new() -> Self {
+            Self::with(|_| {})
+        }
+
+        fn with(edit: impl FnOnce(&mut Workflow)) -> Self {
             let fx = Fixture::new();
             let store = WorkflowStore::new(fx.root().to_path_buf());
             let mut workflow = standard_workflow("Standard", Provider::Codex);
             workflow.enabled = true;
+            edit(&mut workflow);
             store
                 .save_workflows(&WorkflowsFile {
                     schema_version: 1,
@@ -1069,7 +1155,13 @@ mod tests {
                 .unwrap();
             let (runner, waiting) = FakeRunner::new();
             let sink = Arc::new(RecordingSink::default());
-            let orch = Orchestrator::new(runner.clone(), sink.clone(), fx.base().to_path_buf());
+            let forge = Arc::new(FakeForge::new());
+            let orch = Orchestrator::new(
+                runner.clone(),
+                sink.clone(),
+                forge.clone(),
+                fx.base().to_path_buf(),
+            );
             orch.attach_project(fx.root());
             Env {
                 fx,
@@ -1077,6 +1169,7 @@ mod tests {
                 runner,
                 waiting,
                 sink,
+                forge,
                 orch,
             }
         }
@@ -1158,6 +1251,7 @@ mod tests {
                     after: None,
                     reason: None,
                 },
+                issue_sync_error: None,
             };
             let summary = finish_attempt(&guard, &self.store, &planned, input).unwrap();
             let child = summary.changed_tasks.last().unwrap().clone();
@@ -1598,7 +1692,12 @@ mod tests {
         // The next start (a new orchestrator) interrupts the running task.
         let (runner, _waiting) = FakeRunner::new();
         let sink = Arc::new(RecordingSink::default());
-        let next = Orchestrator::new(runner.clone(), sink.clone(), env.fx.base().to_path_buf());
+        let next = Orchestrator::new(
+            runner.clone(),
+            sink.clone(),
+            Arc::new(FakeForge::new()),
+            env.fx.base().to_path_buf(),
+        );
         assert!(next.attach(env.fx.root()).1);
         let task = env.task(&id);
         assert_eq!(task.meta.status, TaskStatus::Attention);
@@ -1744,5 +1843,278 @@ mod tests {
     #[test]
     fn shutdown_waits_for_the_cancel_grace_and_the_finish() {
         assert!(SHUTDOWN_WAIT >= CANCEL_GRACE + Duration::from_secs(2));
+    }
+
+    const ISSUE: u64 = 7;
+
+    fn issue_ref() -> IssueRef {
+        IssueRef {
+            kind: ForgeKind::GitHub,
+            host: "github.com".to_string(),
+            path: "owner/repo".to_string(),
+            number: ISSUE,
+            url: "https://github.com/owner/repo/issues/7".to_string(),
+        }
+    }
+
+    /// An environment whose workflow tracks Issues automatically.
+    fn tracked_env(edit: impl FnOnce(&mut Workflow)) -> Env {
+        Env::with(|workflow| {
+            workflow.issue_tracking = IssueTracking::Auto;
+            edit(workflow);
+        })
+    }
+
+    /// Creates an inbox root task linked to Issue #7.
+    fn tracked_root(env: &Env) -> Task {
+        let root = env.root_task("Feature", "Build it.");
+        let mut task = env.task(&root.meta.id);
+        task.meta.issue = Some(issue_ref());
+        env.store.put_task(&env.store.lock(), &task).unwrap()
+    }
+
+    /// The comment bodies of Issue #7.
+    fn comment_bodies(env: &Env) -> Vec<String> {
+        env.forge
+            .comments(ISSUE)
+            .into_iter()
+            .map(|comment| comment.body)
+            .collect()
+    }
+
+    /// The entry id of the `index`-th attempt of `root_id`'s run.
+    fn entry_of(env: &Env, root_id: &str, index: usize) -> String {
+        let attempt = env.run(root_id).attempts[index].clone();
+        issue_sync::entry_id(&attempt.task_id, &attempt.attempt_id)
+    }
+
+    /// Runs the design stage of a tracked root task with the forge's
+    /// comment listing failing, so the stage ends in
+    /// `ATTENTION_ISSUE_SYNC_FAILED`.
+    fn design_with_failed_sync(env: &Env, op: FakeOp) -> Task {
+        env.forge.set_failure(op, Some(ForgeError::Timeout));
+        env.runner
+            .script(Script::complete(&completed("# Design\nthe plan")));
+        let root = tracked_root(env);
+        env.kick();
+        env.wait_idle();
+        let task = env.task(&root.meta.id);
+        assert_eq!(task.meta.status, TaskStatus::Attention);
+        assert_eq!(attention_code(&task), "ATTENTION_ISSUE_SYNC_FAILED");
+        let params = &task.meta.attention.as_ref().unwrap().params;
+        assert_eq!(params["code"], "FORGE_TIMEOUT");
+        assert_eq!(params["entry"], "design");
+        assert_eq!(task.meta.pending_issue_entry.as_deref(), Some("design"));
+        assert_eq!(env.tasks().len(), 1, "no child task");
+        env.forge.set_failure(op, None);
+        env.forge.clear_calls();
+        task
+    }
+
+    #[test]
+    fn a_completed_design_posts_one_issue_entry_before_the_implement_stage_starts() {
+        let env = tracked_env(|_| {});
+        let forge = env.forge.clone();
+        let seen = Arc::new(Mutex::new(None));
+        let seen_in_hook = seen.clone();
+        env.runner
+            .script(Script::complete(&completed("# Design\nthe plan")));
+        env.runner.script(Script::complete_after(
+            move |_| *seen_in_hook.lock().unwrap() = Some(forge.comments(ISSUE).len()),
+            &attention("stop here"),
+        ));
+        let root = tracked_root(&env);
+
+        env.kick();
+        env.wait_idle();
+
+        assert_eq!(*seen.lock().unwrap(), Some(1), "posted before implement");
+        let bodies = comment_bodies(&env);
+        assert_eq!(bodies.len(), 1);
+        let entry = entry_of(&env, &root.meta.id, 0);
+        assert!(bodies[0].starts_with("## Design"), "{}", bodies[0]);
+        assert!(bodies[0].contains("the plan"));
+        assert!(bodies[0].ends_with(&issue_sync::marker(&entry)));
+        assert_eq!(
+            env.forge.calls(),
+            [
+                ForgeCall::ListComments(ISSUE),
+                ForgeCall::AddComment {
+                    number: ISSUE,
+                    body: bodies[0].clone()
+                }
+            ]
+        );
+        assert_eq!(env.task(&root.meta.id).meta.status, TaskStatus::Completed);
+        assert_eq!(env.runner.starts().len(), 2);
+    }
+
+    #[test]
+    fn a_post_that_already_landed_is_not_repeated_and_the_retry_advances() {
+        let env = tracked_env(|_| {});
+        let root = design_with_failed_sync(&env, FakeOp::ListComments);
+        let id = root.meta.id.clone();
+        // The comment landed before the failure was reported (as after a
+        // crash or a timeout between posting and advancing).
+        let entry = entry_of(&env, &id, 0);
+        let landed = issue_sync::design_body("# Design\nthe plan", &entry);
+        env.forge.set_comments(ISSUE, &[&landed]);
+
+        crate::workflow::actions::retry_issue_sync(&env.orch, env.fx.root(), &id).unwrap();
+        env.wait_idle();
+
+        assert_eq!(env.forge.calls(), [ForgeCall::ListComments(ISSUE)]);
+        assert_eq!(comment_bodies(&env), [landed]);
+        let task = env.task(&id);
+        assert_eq!(task.meta.status, TaskStatus::Completed);
+        assert_eq!(task.meta.pending_issue_entry, None);
+        let tasks = env.tasks();
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks[1].meta.role, Some(Role::Implement));
+    }
+
+    #[test]
+    fn a_failed_sync_commits_no_design_doc_until_the_retry_posts_and_advances() {
+        let env = tracked_env(|w| w.design_doc_path = Some("docs/{slug}-design.md".into()));
+        let root = design_with_failed_sync(&env, FakeOp::AddComment);
+        let id = root.meta.id.clone();
+        let info = env.run(&id).worktree.unwrap();
+        let wt = Path::new(&info.path);
+        let doc = wt.join("docs/feature-design.md");
+        assert!(!doc.exists(), "no design doc before the sync");
+        let log = gitops::git(wt, &["log", "--format=%s"]).unwrap();
+        assert!(!log.contains("docs: design for"), "{log}");
+
+        // A retry that fails again leaves everything as it was.
+        env.forge
+            .set_failure(FakeOp::AddComment, Some(ForgeError::NotAuthenticated));
+        let err =
+            crate::workflow::actions::retry_issue_sync(&env.orch, env.fx.root(), &id).unwrap_err();
+        assert_eq!(err.code(), "FORGE_NOT_AUTHENTICATED");
+        assert_eq!(env.tasks().len(), 1);
+        assert!(!doc.exists());
+        env.forge.set_failure(FakeOp::AddComment, None);
+
+        crate::workflow::actions::retry_issue_sync(&env.orch, env.fx.root(), &id).unwrap();
+        env.wait_idle();
+
+        let bodies = comment_bodies(&env);
+        assert_eq!(bodies.len(), 1);
+        assert!(bodies[0].ends_with(&issue_sync::marker(&entry_of(&env, &id, 0))));
+        assert_eq!(std::fs::read_to_string(&doc).unwrap(), "# Design\nthe plan");
+        let log = gitops::git(wt, &["log", "--format=%s"]).unwrap();
+        assert!(log.contains("docs: design for Feature"), "{log}");
+        let task = env.task(&id);
+        assert_eq!(task.meta.status, TaskStatus::Completed);
+        assert_eq!(task.meta.pending_issue_entry, None);
+        assert_eq!(env.tasks().len(), 2);
+    }
+
+    #[test]
+    fn skipping_the_sync_advances_without_any_forge_call() {
+        let env = tracked_env(|_| {});
+        let root = design_with_failed_sync(&env, FakeOp::ListComments);
+        let id = root.meta.id.clone();
+
+        crate::workflow::actions::skip_issue_sync(&env.orch, env.fx.root(), &id).unwrap();
+        env.wait_idle();
+
+        // The implement attempt (unscripted: attention) posts nothing.
+        assert!(env.forge.calls().is_empty(), "{:?}", env.forge.calls());
+        assert!(env.forge.comments(ISSUE).is_empty());
+        let task = env.task(&id);
+        assert_eq!(task.meta.status, TaskStatus::Completed);
+        assert_eq!(task.meta.pending_issue_entry, None);
+        let tasks = env.tasks();
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks[1].meta.role, Some(Role::Implement));
+    }
+
+    #[test]
+    fn returned_review_findings_post_a_returned_entry_then_re_enter() {
+        let env = tracked_env(|_| {});
+        env.runner
+            .script(Script::complete(&completed("# Design\nthe plan")));
+        env.runner.script(Script::complete_after(
+            |params| {
+                let wt = Path::new(&params.working_directory);
+                gitops::test_support::write_file(wt, "feature.txt", "brand new line\n");
+                gitops::git(wt, &["add", "feature.txt"]).unwrap();
+                gitops::git(wt, &["commit", "-m", "add feature"]).unwrap();
+            },
+            &completed("Implemented feature.txt"),
+        ));
+        env.runner.script(Script::complete(
+            "---\noutcome: attention\nreason: issues found\n---\n\nFix X.",
+        ));
+        let root = tracked_root(&env);
+
+        env.kick();
+        env.wait_idle();
+
+        let run = env.run(&root.meta.id);
+        assert_eq!(run.reentry_count, 1);
+        let tasks = env.tasks();
+        assert_eq!(tasks.len(), 4);
+        assert_eq!(tasks[2].meta.status, TaskStatus::Completed);
+        assert_eq!(tasks[3].meta.role, Some(run.workflow.review_return_to));
+        assert!(tasks[3].body.contains("Fix X."));
+
+        let bodies = comment_bodies(&env);
+        assert_eq!(bodies.len(), 3, "{bodies:?}");
+        let info = run.worktree.clone().unwrap();
+        assert!(bodies[1].starts_with("## Implementation"));
+        assert!(bodies[1].contains(&format!("`{}`", info.branch)));
+        assert!(bodies[1].contains("add feature"));
+        assert!(bodies[1].ends_with(&issue_sync::marker(&entry_of(&env, &root.meta.id, 1))));
+        assert!(bodies[2].starts_with("## Review"));
+        assert!(bodies[2].contains("Result: findings returned for rework."));
+        assert!(bodies[2].contains("Fix X."));
+        assert!(bodies[2].ends_with(&issue_sync::marker(&entry_of(&env, &root.meta.id, 2))));
+    }
+
+    #[test]
+    fn runs_without_auto_tracking_or_an_issue_make_no_forge_calls() {
+        for tracking in [IssueTracking::Off, IssueTracking::Auto] {
+            let env = Env::with(|w| w.issue_tracking = tracking);
+            env.runner.script(Script::complete(&completed("# Design")));
+            env.runner
+                .script(Script::complete(&completed("Implemented.")));
+            env.runner
+                .script(Script::complete(&completed("Looks good.")));
+            // Off: linked to an Issue; Auto: no Issue.
+            let root = if tracking == IssueTracking::Off {
+                tracked_root(&env)
+            } else {
+                env.root_task("Feature", "Build it.")
+            };
+
+            env.kick();
+            env.wait_idle();
+
+            assert_eq!(env.run(&root.meta.id).status, RunStatus::AwaitingMerge);
+            assert!(env.forge.calls().is_empty(), "{tracking:?}");
+        }
+    }
+
+    #[test]
+    fn an_approved_review_posts_an_approved_entry() {
+        let env = tracked_env(|_| {});
+        env.runner.script(Script::complete(&completed("# Design")));
+        env.runner
+            .script(Script::complete(&completed("Implemented.")));
+        env.runner
+            .script(Script::complete(&completed("Looks good.")));
+        let root = tracked_root(&env);
+
+        env.kick();
+        env.wait_idle();
+
+        assert_eq!(env.run(&root.meta.id).status, RunStatus::AwaitingMerge);
+        let bodies = comment_bodies(&env);
+        assert_eq!(bodies.len(), 3);
+        assert!(bodies[1].contains("No commits"));
+        assert!(bodies[2].contains("Result: Approved."));
+        assert!(bodies[2].contains("Looks good."));
     }
 }

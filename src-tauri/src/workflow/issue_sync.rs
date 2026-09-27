@@ -100,10 +100,10 @@ pub fn implement_body(
 }
 
 /// Entry for a review stage; `returned` means the findings were sent back
-/// to implementation.
+/// for rework (to the design or implement stage).
 pub fn review_body(review_markdown: &str, returned: bool, entry: &str) -> String {
     let result = if returned {
-        "Result: findings returned to implementation."
+        "Result: findings returned for rework."
     } else {
         "Result: Approved."
     };

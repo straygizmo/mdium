@@ -11,14 +11,17 @@
 
 use crate::workflow::attempt::CancelReason;
 use crate::workflow::checks;
-use crate::workflow::flow::{self, FlowError};
+use crate::workflow::flow::{
+    self, FlowError, StageError, StageResult, ATTENTION_ISSUE_SYNC_FAILED,
+};
+use crate::workflow::forge::ForgeError;
 use crate::workflow::fsutil::{self, new_id};
 use crate::workflow::gitops::{self, CommitSummary, GitError};
 use crate::workflow::integrity::{
     self, IntegrityChange, IntegrityError, IntegritySnapshot, MERGE_REVIEW_PATTERNS,
 };
 use crate::workflow::model::{
-    AttemptRecord, AwaitingKind, HistoryEntry, Provider, Role, RunStatus, Task, TaskMeta,
+    AttemptRecord, AwaitingKind, HistoryEntry, IssueRef, Provider, Role, RunStatus, Task, TaskMeta,
     TaskStatus, Workflow, WorkflowRun, WorkflowsFile, WorktreeInfo,
 };
 use crate::workflow::orchestrator::Orchestrator;
@@ -102,6 +105,23 @@ pub const WORKFLOW_DESIGN_DOC_FAILED: &str = "WORKFLOW_DESIGN_DOC_FAILED";
 /// `workflows.json` has entries that do not load; rewriting it would drop
 /// them.
 pub const WORKFLOWS_HAVE_WARNINGS: &str = "WORKFLOWS_HAVE_WARNINGS";
+/// The task does not need attention for a failed Issue sync.
+// Not exposed as a command yet.
+#[allow(dead_code)]
+pub const ISSUE_SYNC_NOT_PENDING: &str = "ISSUE_SYNC_NOT_PENDING";
+/// The output of the attempt whose Issue sync failed is missing or no
+/// longer a stage result.
+// Not exposed as a command yet.
+#[allow(dead_code)]
+pub const ISSUE_SYNC_OUTPUT_INVALID: &str = "ISSUE_SYNC_OUTPUT_INVALID";
+/// The run has no Issue, or its workflow does not track Issues.
+// Not exposed as a command yet.
+#[allow(dead_code)]
+pub const ISSUE_NOT_TRACKED: &str = "ISSUE_NOT_TRACKED";
+/// The run's Issue is only closed once the run is merged.
+// Not exposed as a command yet.
+#[allow(dead_code)]
+pub const ISSUE_RUN_NOT_MERGED: &str = "ISSUE_RUN_NOT_MERGED";
 
 /// Why a user operation failed.
 #[derive(Debug, Clone, PartialEq)]
@@ -110,6 +130,8 @@ pub enum ActionError {
     Store(StoreError),
     Git(GitError),
     Integrity(IntegrityError),
+    /// An Issue operation on the forge failed.
+    Forge(ForgeError),
     /// The task or run is not in a state that allows the operation; the
     /// value is the machine code.
     InvalidState(&'static str),
@@ -123,6 +145,7 @@ impl ActionError {
             ActionError::Store(err) => err.code(),
             ActionError::Git(err) => err.code(),
             ActionError::Integrity(err) => err.code(),
+            ActionError::Forge(err) => err.code(),
             ActionError::InvalidState(code) => code,
         }
     }
@@ -135,6 +158,7 @@ impl std::fmt::Display for ActionError {
             ActionError::Store(err) => err.fmt(f),
             ActionError::Git(err) => err.fmt(f),
             ActionError::Integrity(err) => err.fmt(f),
+            ActionError::Forge(err) => err.fmt(f),
             ActionError::InvalidState(code) => f.write_str(code),
         }
     }
@@ -169,6 +193,12 @@ impl From<GitError> for ActionError {
 impl From<IntegrityError> for ActionError {
     fn from(err: IntegrityError) -> Self {
         ActionError::Integrity(err)
+    }
+}
+
+impl From<ForgeError> for ActionError {
+    fn from(err: ForgeError) -> Self {
+        ActionError::Forge(err)
     }
 }
 
@@ -543,18 +573,7 @@ pub fn mark_complete(
         if run.current_task_id != task_id {
             return Err(ActionError::InvalidState(WORKFLOW_TASK_NOT_CURRENT));
         }
-        // Completing a stage by hand must not carry an unacknowledged git
-        // config or hooks change past the stage, whatever its role.
-        if let Some(info) = &run.worktree {
-            let now = integrity::snapshot_with_worktree(
-                store.project_root(),
-                Some(&info.base_branch),
-                Some(info),
-            )?;
-            if !checks::config_changes(&run, &now).is_empty() {
-                return Err(ActionError::InvalidState(WORKFLOW_INTEGRITY_CHANGED));
-            }
-        }
+        refuse_config_changes(&store, &run)?;
         let next = match task.meta.role.unwrap_or(Role::Design) {
             Role::Design => Some(Role::Implement),
             Role::Implement => Some(Role::Review),
@@ -589,6 +608,213 @@ pub fn mark_complete(
     emit(orch, &store, &changed, Some(&run));
     orch.kick(project_root);
     Ok(done)
+}
+
+/// Refuses (`WORKFLOW_INTEGRITY_CHANGED`) while the user's repository has a
+/// git config or hooks change the run did not acknowledge: completing a
+/// stage outside an attempt must not carry one past the stage, whatever its
+/// role.
+fn refuse_config_changes(store: &WorkflowStore, run: &WorkflowRun) -> Result<(), ActionError> {
+    if let Some(info) = &run.worktree {
+        let now = integrity::snapshot_with_worktree(
+            store.project_root(),
+            Some(&info.base_branch),
+            Some(info),
+        )?;
+        if !checks::config_changes(run, &now).is_empty() {
+            return Err(ActionError::InvalidState(WORKFLOW_INTEGRITY_CHANGED));
+        }
+    }
+    Ok(())
+}
+
+/// A task whose stage completed but whose Issue sync failed, with what is
+/// needed to finish it.
+struct PendingSync {
+    task: Task,
+    run: WorkflowRun,
+    role: Role,
+    /// The attempt whose result awaits the sync (the task's latest).
+    attempt_id: String,
+    result: StageResult,
+}
+
+/// Loads task `task_id` awaiting an Issue sync (`ATTENTION_ISSUE_SYNC_FAILED`)
+/// as the current task of its Active run, re-parses its latest attempt
+/// output, and runs the integrity checks of completing a stage by hand
+/// ([`mark_complete`]'s): no unacknowledged git config or hooks change, and
+/// no change needing acknowledgement before MDium runs git in the worktree
+/// (to commit the design document, or with `lists_commits` to list an
+/// implement entry's commits).
+fn pending_sync(
+    store: &WorkflowStore,
+    task_id: &str,
+    lists_commits: bool,
+) -> Result<PendingSync, ActionError> {
+    let task = store.get_task(task_id)?;
+    if task.meta.status != TaskStatus::Attention {
+        return Err(conflict(task.meta.status));
+    }
+    if task
+        .meta
+        .attention
+        .as_ref()
+        .map(|reason| reason.code.as_str())
+        != Some(ATTENTION_ISSUE_SYNC_FAILED)
+    {
+        return Err(ActionError::InvalidState(ISSUE_SYNC_NOT_PENDING));
+    }
+    let run = store.get_run(&task.meta.root_id)?;
+    if run.status != RunStatus::Active {
+        return Err(ActionError::InvalidState(WORKFLOW_RUN_NOT_ACTIVE));
+    }
+    if run.current_task_id != task_id {
+        return Err(ActionError::InvalidState(WORKFLOW_TASK_NOT_CURRENT));
+    }
+    let role = task.meta.role.unwrap_or(Role::Design);
+    refuse_config_changes(store, &run)?;
+    let runs_git = match role {
+        Role::Design => run.workflow.design_doc_path.is_some(),
+        Role::Implement => lists_commits,
+        Role::Review => false,
+    };
+    if runs_git {
+        let info = run
+            .worktree
+            .as_ref()
+            .ok_or(ActionError::InvalidState(WORKFLOW_RUN_NO_WORKTREE))?;
+        let (changes, _) = integrity_state(store.project_root(), &run, info)?;
+        if !changes.is_empty() {
+            return Err(ActionError::InvalidState(WORKFLOW_INTEGRITY_CHANGED));
+        }
+    }
+    let invalid = || ActionError::InvalidState(ISSUE_SYNC_OUTPUT_INVALID);
+    let attempt = task_attempts(&run, task_id).next().ok_or_else(invalid)?;
+    let raw = store.read_attempt_output(&run.root_task_id, task_id, &attempt.attempt_id)?;
+    let outcome = parse_outcome(&raw).map_err(|_| invalid())?;
+    let result = flow::stage_result(role, attempt.mode, &outcome).ok_or_else(invalid)?;
+    let attempt_id = attempt.attempt_id.clone();
+    Ok(PendingSync {
+        task,
+        run,
+        role,
+        attempt_id,
+        result,
+    })
+}
+
+/// Posts the Issue entry of a task whose Issue sync failed (a comment that
+/// already carries the entry's marker counts as posted, so an entry that
+/// landed before the failure is never posted twice), then completes its
+/// stage as the attempt would have. If the post fails, nothing changes.
+// Not exposed as a command yet.
+#[allow(dead_code)]
+pub fn retry_issue_sync(
+    orch: &Arc<Orchestrator>,
+    project_root: &Path,
+    task_id: &str,
+) -> Result<Task, ActionError> {
+    resolve_issue_sync(orch, project_root, task_id, true)
+}
+
+/// Completes the stage of a task whose Issue sync failed without posting
+/// its Issue entry.
+// Not exposed as a command yet.
+#[allow(dead_code)]
+pub fn skip_issue_sync(
+    orch: &Arc<Orchestrator>,
+    project_root: &Path,
+    task_id: &str,
+) -> Result<Task, ActionError> {
+    resolve_issue_sync(orch, project_root, task_id, false)
+}
+
+/// [`retry_issue_sync`] (`post`) or [`skip_issue_sync`]. The entry is built
+/// under the guard, posted without it, and the stage is completed under the
+/// guard again after the checks are repeated. When the stage cannot
+/// complete (e.g. the design document cannot be saved), the task stays in
+/// attention with that reason instead. Either way the pending entry is
+/// cleared.
+fn resolve_issue_sync(
+    orch: &Arc<Orchestrator>,
+    project_root: &Path,
+    task_id: &str,
+    post: bool,
+) -> Result<Task, ActionError> {
+    let store = orch.store(project_root);
+    if post {
+        let entry = {
+            let _guard = store.lock();
+            let pending = pending_sync(&store, task_id, true)?;
+            match flow::tracked_issue(&pending.run).cloned() {
+                Some(issue) => {
+                    let entry = flow::stage_entry(
+                        orch.worktree_base(),
+                        &pending.run,
+                        task_id,
+                        &pending.attempt_id,
+                        pending.role,
+                        &pending.result,
+                    )?;
+                    Some((issue, entry))
+                }
+                None => None,
+            }
+        };
+        if let Some((issue, entry)) = entry {
+            flow::post_stage_entry(orch.forge().as_ref(), &issue, &entry)?;
+        }
+    }
+    let (task, changed, run) = {
+        let guard = store.lock();
+        let PendingSync {
+            task,
+            mut run,
+            result,
+            ..
+        } = pending_sync(&store, task_id, false)?;
+        let clear_pending = |mut task: Task| -> Result<Task, ActionError> {
+            if task.meta.pending_issue_entry.is_none() {
+                return Ok(task);
+            }
+            task.meta.pending_issue_entry = None;
+            Ok(store.put_task(&guard, &task)?)
+        };
+        match flow::complete_stage(
+            &guard,
+            &store,
+            &task,
+            &mut run,
+            result,
+            orch.worktree_base(),
+        ) {
+            Ok(changed) => {
+                let done = clear_pending(store.get_task(task_id)?)?;
+                let changed: Vec<Task> = changed
+                    .into_iter()
+                    .map(|t| {
+                        if t.meta.id == task_id {
+                            done.clone()
+                        } else {
+                            t
+                        }
+                    })
+                    .collect();
+                (done, changed, run)
+            }
+            Err(StageError::Attention(reason)) => {
+                let mut parked = store.get_task(task_id)?;
+                parked.meta.attention = Some(reason);
+                parked.meta.pending_issue_entry = None;
+                let parked = store.put_task(&guard, &parked)?;
+                (parked.clone(), vec![parked], run)
+            }
+            Err(StageError::Flow(err)) => return Err(err.into()),
+        }
+    };
+    emit(orch, &store, &changed, Some(&run));
+    orch.kick(project_root);
+    Ok(task)
 }
 
 /// Writes and commits the design document of a design task completed by
@@ -951,6 +1177,21 @@ pub fn merge_run(
     match merged {
         Ok(run) => {
             emit(orch, &store, &[], Some(&run));
+            let run = match flow::tracked_issue(&run).cloned() {
+                Some(issue) if !run.issue_closed => {
+                    // The merge stands whatever happens to the Issue.
+                    match close_issue(orch, &store, root_task_id, &issue) {
+                        Ok((run, _)) => run,
+                        Err(err) => {
+                            eprintln!(
+                                "[workflow] recording the Issue close of run {root_task_id} failed: {err}"
+                            );
+                            run
+                        }
+                    }
+                }
+                _ => run,
+            };
             orch.kick(project_root);
             Ok(run)
         }
@@ -1003,6 +1244,61 @@ fn merge_locked(
     gitops::merge_into_base_in(base, store.project_root(), &info)?;
     run.status = RunStatus::Merged;
     Ok(store.put_run(guard, &run)?)
+}
+
+/// Closes `issue` on the forge (outside the guard), then records the result
+/// on run `root_task_id` (`issue_closed`, or the failure's code as
+/// `issue_close_error`) and reports the run. Returns the run as stored and
+/// the close failure, if any.
+fn close_issue(
+    orch: &Orchestrator,
+    store: &WorkflowStore,
+    root_task_id: &str,
+    issue: &IssueRef,
+) -> Result<(WorkflowRun, Option<ForgeError>), ActionError> {
+    let closed = orch
+        .forge()
+        .close_issue(&flow::issue_repo(issue), issue.number);
+    let run = {
+        let guard = store.lock();
+        let mut run = store.get_run(root_task_id)?;
+        match &closed {
+            Ok(()) => {
+                run.issue_closed = true;
+                run.issue_close_error = None;
+            }
+            Err(err) => run.issue_close_error = Some(err.code().to_string()),
+        }
+        store.put_run(&guard, &run)?
+    };
+    emit(orch, store, &[], Some(&run));
+    Ok((run, closed.err()))
+}
+
+/// Closes the Issue of a merged run whose earlier close failed. An Issue
+/// already closed is left alone.
+// Not exposed as a command yet.
+#[allow(dead_code)]
+pub fn retry_issue_close(
+    orch: &Arc<Orchestrator>,
+    project_root: &Path,
+    root_task_id: &str,
+) -> Result<WorkflowRun, ActionError> {
+    let store = orch.store(project_root);
+    let run = store.get_run(root_task_id)?;
+    if run.status != RunStatus::Merged {
+        return Err(ActionError::InvalidState(ISSUE_RUN_NOT_MERGED));
+    }
+    let Some(issue) = flow::tracked_issue(&run).cloned() else {
+        return Err(ActionError::InvalidState(ISSUE_NOT_TRACKED));
+    };
+    if run.issue_closed {
+        return Ok(run);
+    }
+    match close_issue(orch, &store, root_task_id, &issue)? {
+        (_, Some(err)) => Err(err.into()),
+        (run, None) => Ok(run),
+    }
 }
 
 /// Stores `now` as the run's acknowledged integrity baseline.
@@ -1201,9 +1497,11 @@ mod tests {
     use crate::workflow::flow::{
         begin_attempt, finish_attempt, BeginResult, FinishInput, FinishSummary, PlannedAttempt,
     };
+    use crate::workflow::forge::{FakeForge, FakeOp, ForgeCall, ForgeError, ForgeKind};
     use crate::workflow::fsutil::MdiumPaths;
     use crate::workflow::gitops::test_support::{write_file, Fixture};
     use crate::workflow::model::AwaitingInfo;
+    use crate::workflow::model::{IssueRef, IssueTracking};
     use crate::workflow::orchestrator::EventSink;
     use crate::workflow::runner_client::{RunnerError, RunnerEvent, StartSessionParams};
     use crate::workflow::runner_host::RunnerApi;
@@ -1361,6 +1659,7 @@ mod tests {
         runner: Arc<FakeRunner>,
         waiting: Receiver<String>,
         sink: Arc<RecordingSink>,
+        forge: Arc<FakeForge>,
         orch: Arc<Orchestrator>,
     }
 
@@ -1375,7 +1674,13 @@ mod tests {
                 waiting: Mutex::new(tx),
             });
             let sink = Arc::new(RecordingSink::default());
-            let orch = Orchestrator::new(runner.clone(), sink.clone(), fx.base().to_path_buf());
+            let forge = Arc::new(FakeForge::new());
+            let orch = Orchestrator::new(
+                runner.clone(),
+                sink.clone(),
+                forge.clone(),
+                fx.base().to_path_buf(),
+            );
             orch.attach_project(fx.root());
             let store = orch.store(fx.root());
             let mut workflow = standard_workflow("Standard", Provider::Codex);
@@ -1392,6 +1697,7 @@ mod tests {
                 runner,
                 waiting,
                 sink,
+                forge,
                 orch,
             }
         }
@@ -1472,6 +1778,7 @@ mod tests {
                     after: Some(after),
                     reason: None,
                 },
+                issue_sync_error: None,
             };
             finish_attempt(&guard, &self.store, planned, input).unwrap()
         }
@@ -1839,6 +2146,7 @@ mod tests {
                     [("items", items)],
                 )),
             },
+            issue_sync_error: None,
         };
         finish_attempt(&guard, &env.store, &planned, input).unwrap();
         id
@@ -2667,5 +2975,227 @@ mod tests {
             results[3].1,
             json!({ "kind": "error", "detail": "AGENT_RUNNER_MISSING" })
         );
+    }
+
+    const ISSUE: u64 = 7;
+
+    fn issue_ref() -> IssueRef {
+        IssueRef {
+            kind: ForgeKind::GitHub,
+            host: "github.com".to_string(),
+            path: "owner/repo".to_string(),
+            number: ISSUE,
+            url: "https://github.com/owner/repo/issues/7".to_string(),
+        }
+    }
+
+    /// Links the run of `root_id` to Issue #7 with `tracking`.
+    fn link_issue(env: &Env, root_id: &str, tracking: IssueTracking) {
+        let mut run = env.run(root_id);
+        run.issue = Some(issue_ref());
+        run.workflow.issue_tracking = tracking;
+        env.store.put_run(&env.store.lock(), &run).unwrap();
+    }
+
+    fn review_paths() -> Vec<String> {
+        vec![
+            ".github/workflows/ci.yml".to_string(),
+            "AGENTS.md".to_string(),
+        ]
+    }
+
+    /// Runs the design stage of a new root task linked to Issue #7 to a
+    /// completed outcome whose Issue sync failed. Returns the root id.
+    fn design_with_failed_sync(env: &Env) -> String {
+        let root = env.root_task();
+        let id = root.meta.id.clone();
+        let planned = env.begin(&id);
+        link_issue(env, &id, IssueTracking::Auto);
+        let req = &planned.request;
+        let text = completed("the design body");
+        env.store
+            .write_attempt_output(&req.root_task_id, &req.task_id, &req.attempt_id, &text)
+            .unwrap();
+        let after = checks::baseline(&planned.repo_root, &planned.run).unwrap();
+        let input = FinishInput {
+            end: AttemptEnd::Completed {
+                final_response: text,
+            },
+            check: CheckResult {
+                after: Some(after),
+                reason: None,
+            },
+            issue_sync_error: Some(ForgeError::Timeout),
+        };
+        finish_attempt(&env.store.lock(), &env.store, &planned, input).unwrap();
+        assert_eq!(
+            attention_code(&env.task(&id)),
+            "ATTENTION_ISSUE_SYNC_FAILED"
+        );
+        id
+    }
+
+    #[test]
+    fn merging_a_tracked_run_closes_its_issue() {
+        let env = Env::new();
+        let (root, _info) = env.awaiting_merge();
+        let id = root.meta.id.clone();
+        link_issue(&env, &id, IssueTracking::Auto);
+
+        let merged = merge_run(&env.orch, env.root(), &id, &review_paths(), false, None).unwrap();
+        assert_eq!(merged.status, RunStatus::Merged);
+        assert!(merged.issue_closed);
+        assert_eq!(merged.issue_close_error, None);
+        assert_eq!(env.run(&id), merged);
+        assert_eq!(env.forge.calls(), [ForgeCall::CloseIssue(ISSUE)]);
+        assert_eq!(env.forge.closed(), [ISSUE]);
+
+        // A closed Issue is not closed again.
+        env.forge.clear_calls();
+        let run = retry_issue_close(&env.orch, env.root(), &id).unwrap();
+        assert!(run.issue_closed);
+        assert!(env.forge.calls().is_empty());
+        env.wait_idle();
+    }
+
+    #[test]
+    fn a_failed_close_keeps_the_merge_and_can_be_retried() {
+        let env = Env::new();
+        let (root, _info) = env.awaiting_merge();
+        let id = root.meta.id.clone();
+        link_issue(&env, &id, IssueTracking::Auto);
+        env.forge
+            .set_failure(FakeOp::CloseIssue, Some(ForgeError::Timeout));
+
+        let merged = merge_run(&env.orch, env.root(), &id, &review_paths(), false, None).unwrap();
+        assert_eq!(merged.status, RunStatus::Merged);
+        assert!(!merged.issue_closed);
+        assert_eq!(merged.issue_close_error.as_deref(), Some("FORGE_TIMEOUT"));
+        assert_eq!(env.run(&id), merged);
+        assert_eq!(
+            env.fx
+                .run(&["rev-list", "--merges", "--count", "main"])
+                .trim(),
+            "1"
+        );
+
+        assert_eq!(
+            code(retry_issue_close(&env.orch, env.root(), &id)),
+            "FORGE_TIMEOUT"
+        );
+        assert_eq!(
+            env.run(&id).issue_close_error.as_deref(),
+            Some("FORGE_TIMEOUT")
+        );
+
+        env.forge.set_failure(FakeOp::CloseIssue, None);
+        let run = retry_issue_close(&env.orch, env.root(), &id).unwrap();
+        assert!(run.issue_closed);
+        assert_eq!(run.issue_close_error, None);
+        assert_eq!(env.run(&id), run);
+        assert_eq!(env.forge.closed(), [ISSUE]);
+        assert!(
+            env.sink
+                .events()
+                .iter()
+                .filter(|event| *event == &format!("run {id} Merged"))
+                .count()
+                >= 3
+        );
+        env.wait_idle();
+    }
+
+    #[test]
+    fn merging_an_untracked_run_makes_no_forge_call() {
+        let env = Env::new();
+        let (root, _info) = env.awaiting_merge();
+        let id = root.meta.id.clone();
+        link_issue(&env, &id, IssueTracking::Off);
+
+        let merged = merge_run(&env.orch, env.root(), &id, &review_paths(), false, None).unwrap();
+        assert_eq!(merged.status, RunStatus::Merged);
+        assert!(!merged.issue_closed);
+        assert!(env.forge.calls().is_empty());
+        assert_eq!(
+            code(retry_issue_close(&env.orch, env.root(), &id)),
+            ISSUE_NOT_TRACKED
+        );
+        env.wait_idle();
+    }
+
+    #[test]
+    fn retrying_a_close_requires_a_merged_run() {
+        let env = Env::new();
+        let (root, _info) = env.awaiting_merge();
+        let id = root.meta.id.clone();
+        link_issue(&env, &id, IssueTracking::Auto);
+        assert_eq!(
+            code(retry_issue_close(&env.orch, env.root(), &id)),
+            ISSUE_RUN_NOT_MERGED
+        );
+        assert!(env.forge.calls().is_empty());
+    }
+
+    #[test]
+    fn issue_sync_actions_require_a_pending_sync() {
+        let env = Env::new();
+        let root = env.root_task();
+        let id = root.meta.id.clone();
+        env.stage(&id, failed());
+        let before = env.raw(&id);
+        assert_eq!(
+            code(retry_issue_sync(&env.orch, env.root(), &id)),
+            ISSUE_SYNC_NOT_PENDING
+        );
+        assert_eq!(
+            code(skip_issue_sync(&env.orch, env.root(), &id)),
+            ISSUE_SYNC_NOT_PENDING
+        );
+        assert_eq!(env.raw(&id), before);
+
+        let inbox = env.plain(TaskStatus::Inbox, None);
+        assert_eq!(
+            code(retry_issue_sync(&env.orch, env.root(), &inbox.meta.id)),
+            "TRANSITION_CONFLICT"
+        );
+        assert!(env.forge.calls().is_empty());
+    }
+
+    #[test]
+    fn issue_sync_actions_refuse_after_a_hooks_change() {
+        let env = Env::new();
+        let id = design_with_failed_sync(&env);
+        write_file(env.root(), ".git/hooks/pre-commit", "#!/bin/sh\n");
+
+        let before = env.raw(&id);
+        assert_eq!(
+            code(retry_issue_sync(&env.orch, env.root(), &id)),
+            WORKFLOW_INTEGRITY_CHANGED
+        );
+        assert_eq!(
+            code(skip_issue_sync(&env.orch, env.root(), &id)),
+            WORKFLOW_INTEGRITY_CHANGED
+        );
+        assert_eq!(env.raw(&id), before);
+        assert!(env.forge.calls().is_empty());
+        assert_eq!(env.tasks().len(), 1);
+    }
+
+    #[test]
+    fn a_design_doc_failure_after_the_sync_replaces_the_attention_reason() {
+        let env = Env::new();
+        with_design_doc(&env);
+        let id = design_with_failed_sync(&env);
+        let info = env.run(&id).worktree.unwrap();
+        // A directory where the design document goes: it cannot be written.
+        std::fs::create_dir_all(Path::new(&info.path).join("docs/design.md")).unwrap();
+
+        let task = retry_issue_sync(&env.orch, env.root(), &id).unwrap();
+        assert_eq!(task.meta.status, TaskStatus::Attention);
+        assert_eq!(attention_code(&task), "ATTENTION_DESIGN_DOC_FAILED");
+        assert_eq!(task.meta.pending_issue_entry, None);
+        assert_eq!(env.task(&id), task);
+        assert_eq!(env.forge.comments(ISSUE).len(), 1);
+        assert_eq!(env.tasks().len(), 1);
     }
 }

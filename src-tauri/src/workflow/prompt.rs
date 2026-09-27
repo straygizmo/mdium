@@ -27,6 +27,20 @@ pub struct PromptInput<'a> {
     /// Diff to review, already capped by [`cap_diff`].
     pub review_diff: Option<&'a str>,
     pub project_instructions: Option<&'a str>,
+    /// The root task's committed attachments (every stage gets them).
+    pub attachments: &'a [AttachmentView],
+}
+
+/// A committed attachment as listed in a prompt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachmentView {
+    pub id: String,
+    /// The sanitized stored file name.
+    pub name: String,
+    pub mime: String,
+    pub size: u64,
+    /// Absolute path of the attachment's content.
+    pub path: String,
 }
 
 /// Context carried over from the task's previous attempt.
@@ -109,12 +123,13 @@ The options considered and their trade-offs.
 /// are omitted; the order is fixed.
 pub fn build_prompt(input: &PromptInput) -> String {
     let stage_heading = format!("## Your stage: {}", role_name(input.stage.role));
-    let sections: [(&str, Option<String>); 11] = [
+    let sections: [(&str, Option<String>); 12] = [
         (
             "# Task",
             non_empty(Some(input.root_title)).map(collapse_whitespace),
         ),
         ("## Requirement", data_block(Some(input.root_body))),
+        ("## Attachments", attachments_block(input.attachments)),
         (
             "## Input from the previous stage",
             data_block(input.task_body),
@@ -303,6 +318,30 @@ fn previous_block(previous: &PreviousAttempt) -> Option<String> {
     (!blocks.is_empty()).then(|| blocks.join("\n\n"))
 }
 
+/// The body of the "Attachments" section: one line per attachment with its
+/// absolute path, name, type and size. `None` when there are none.
+fn attachments_block(attachments: &[AttachmentView]) -> Option<String> {
+    if attachments.is_empty() {
+        return None;
+    }
+    let lines: Vec<String> = attachments
+        .iter()
+        .map(|a| {
+            format!(
+                "- `{}` ({}, {}, {} bytes)",
+                a.path,
+                collapse_whitespace(&a.name),
+                a.mime,
+                a.size
+            )
+        })
+        .collect();
+    Some(format!(
+        "The user attached these files to the task. Read these files if they are relevant.\n\n{}",
+        lines.join("\n")
+    ))
+}
+
 /// `Some(text)` unless it is missing or whitespace-only.
 fn non_empty(text: Option<&str>) -> Option<&str> {
     text.filter(|t| !t.trim().is_empty())
@@ -392,6 +431,7 @@ mod tests {
             user_input: Some("USER INPUT"),
             review_diff: Some("DIFF TEXT"),
             project_instructions: Some("PROJECT RULES"),
+            attachments: &[],
         }
     }
 
@@ -441,6 +481,50 @@ mod tests {
     }
 
     #[test]
+    fn attachments_are_listed_with_absolute_paths_after_the_requirement() {
+        let s = stage(Role::Implement);
+        let attachments = [
+            AttachmentView {
+                id: "0123456789abcdef".to_string(),
+                name: "spec.pdf".to_string(),
+                mime: "application/pdf".to_string(),
+                size: 2048,
+                path: "C:/project/.mdium/task-attachments/r/0123456789abcdef/spec.pdf".to_string(),
+            },
+            AttachmentView {
+                id: "fedcba9876543210".to_string(),
+                name: "screen.png".to_string(),
+                mime: "image/png".to_string(),
+                size: 10,
+                path: "/abs/screen.png".to_string(),
+            },
+        ];
+        let input = PromptInput {
+            attachments: &attachments,
+            ..full_input(&s)
+        };
+        let prompt = build_prompt(&input);
+        let order = positions(
+            &prompt,
+            &[
+                "## Requirement",
+                "## Attachments",
+                "Read these files if they are relevant",
+                "- `C:/project/.mdium/task-attachments/r/0123456789abcdef/spec.pdf` (spec.pdf, application/pdf, 2048 bytes)",
+                "- `/abs/screen.png` (screen.png, image/png, 10 bytes)",
+                "## Input from the previous stage",
+            ],
+        );
+        let mut sorted = order.clone();
+        sorted.sort_unstable();
+        assert_eq!(order, sorted, "{prompt}");
+
+        // No attachments: no section.
+        let prompt = build_prompt(&full_input(&s));
+        assert!(!prompt.contains("## Attachments"), "{prompt}");
+    }
+
+    #[test]
     fn empty_sections_are_omitted() {
         let s = stage(Role::Design);
         let input = PromptInput {
@@ -454,6 +538,7 @@ mod tests {
             user_input: Some("   "),
             review_diff: Some(""),
             project_instructions: None,
+            attachments: &[],
         };
         let prompt = build_prompt(&input);
         for heading in [
