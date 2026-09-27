@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { InboundError, imageMimeType, imagesWithinRoot, parseInbound } from "../protocol";
+import { imageMimeType, imagesWithinRoot, parseInbound } from "../protocol";
 
 const start = {
   type: "start_session",
@@ -62,33 +62,13 @@ describe("parseInbound", () => {
   });
 });
 
+
 describe("parseInbound send images", () => {
-  let dir: string;
-  let png: string;
-  let jpg: string;
   const send = (images: unknown) => JSON.stringify({ type: "send", sessionId: "s1", text: "hi", images });
-  const invalid = (line: string) => {
-    try {
-      parseInbound(line);
-    } catch (error) {
-      return error;
-    }
-    throw new Error("expected parseInbound to throw");
-  };
 
-  beforeAll(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), "runner-images-"));
-    png = path.join(dir, "shot.png");
-    jpg = path.join(dir, "photo.JPEG");
-    fs.writeFileSync(png, "png");
-    fs.writeFileSync(jpg, "jpg");
-    fs.writeFileSync(path.join(dir, "notes.txt"), "txt");
-    fs.mkdirSync(path.join(dir, "folder.png"));
-  });
-  afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
-
-  it("accepts existing absolute image files", () => {
-    expect(parseInbound(send([png, jpg]))).toEqual({ type: "send", sessionId: "s1", text: "hi", images: [png, jpg] });
+  it("accepts local absolute image paths without touching the file system", () => {
+    const images = ["C:\\p\\missing.png", "c:/p/photo.JPEG", "/home/me/a.webp"];
+    expect(parseInbound(send(images))).toEqual({ type: "send", sessionId: "s1", text: "hi", images });
   });
 
   it("omits an empty or missing image list", () => {
@@ -96,24 +76,26 @@ describe("parseInbound send images", () => {
     expect(parseInbound(JSON.stringify({ type: "send", sessionId: "s1", text: "hi" }))).toEqual({ type: "send", sessionId: "s1", text: "hi" });
   });
 
-  it.each([
-    ["too many images", () => Array.from({ length: 11 }, () => png)],
-    ["a relative path", () => ["shot.png"]],
-    ["a missing file", () => [path.join(dir, "missing.png")]],
-    ["a wrong extension", () => [path.join(dir, "notes.txt")]],
-    ["a directory", () => [path.join(dir, "folder.png")]],
-    ["an empty path", () => [""]],
-    ["a non-string entry", () => [3]],
-    ["a non-array value", () => png],
-  ])("rejects %s with INVALID_IMAGES for the session", (_name, images) => {
-    const error = invalid(send(images()));
-    expect(error).toBeInstanceOf(InboundError);
-    expect(error).toMatchObject({ message: "INVALID_IMAGES", sessionId: "s1" });
+  it("accepts exactly ten images", () => {
+    const ten = Array.from({ length: 10 }, () => "C:/p/a.png");
+    expect(parseInbound(send(ten))).toMatchObject({ images: ten });
   });
 
-  it("accepts exactly ten images", () => {
-    const ten = Array.from({ length: 10 }, () => png);
-    expect(parseInbound(send(ten))).toMatchObject({ images: ten });
+  it.each([
+    ["too many images", Array.from({ length: 11 }, () => "C:/p/a.png")],
+    ["a relative path", ["shot.png"]],
+    ["a drive-relative path", ["C:shot.png"]],
+    ["a UNC path", ["\\\\server\\share\\a.png"]],
+    ["a forward-slash UNC path", ["//server/share/a.png"]],
+    ["a device path", ["\\\\?\\C:\\p\\a.png"]],
+    ["a forward-slash device path", ["//?/C:/p/a.png"]],
+    ["a dot device path", ["\\\\.\\C:\\p\\a.png"]],
+    ["a wrong extension", ["C:/p/notes.txt"]],
+    ["an empty path", [""]],
+    ["a non-string entry", [3]],
+    ["a non-array value", "C:/p/a.png"],
+  ])("marks %s as invalid images instead of throwing", (_name, images) => {
+    expect(parseInbound(send(images))).toEqual({ type: "send", sessionId: "s1", text: "hi", invalidImages: true });
   });
 
   it("maps image extensions to mime types", () => {
@@ -122,24 +104,70 @@ describe("parseInbound send images", () => {
     expect(imageMimeType("/a/b.jpeg")).toBe("image/jpeg");
     expect(imageMimeType("/a/b.gif")).toBe("image/gif");
     expect(imageMimeType("/a/b.webp")).toBe("image/webp");
+    expect(imageMimeType("/a/b.exe")).toBeUndefined();
+  });
+});
+
+describe("imagesWithinRoot", () => {
+  let dir: string;
+  let root: string;
+  let png: string;
+  let outsideDir: string;
+
+  beforeAll(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "runner-images-"));
+    root = path.join(dir, "root");
+    outsideDir = path.join(dir, "outside");
+    fs.mkdirSync(path.join(root, "folder.png"), { recursive: true });
+    fs.mkdirSync(outsideDir);
+    png = path.join(root, "shot.png");
+    fs.writeFileSync(png, "png");
+    fs.writeFileSync(path.join(root, "notes.txt"), "txt");
+    fs.writeFileSync(path.join(outsideDir, "secret.png"), "png");
+  });
+  afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  it("returns the resolved paths of image files inside the root", () => {
+    expect(imagesWithinRoot([png], root)).toEqual([fs.realpathSync.native(png)]);
   });
 
-  it("checks that images resolve inside a root", () => {
-    expect(imagesWithinRoot([png, jpg], dir)).toBe(true);
-    expect(imagesWithinRoot([png], path.join(dir, "folder.png"))).toBe(false);
-    expect(imagesWithinRoot([png], path.join(dir, "no-such-root"))).toBe(false);
+  it.each([
+    ["a file outside the root", () => path.join(outsideDir, "secret.png")],
+    ["a missing file", () => path.join(root, "missing.png")],
+    ["a directory", () => path.join(root, "folder.png")],
+  ])("rejects %s", (_name, file) => {
+    expect(imagesWithinRoot([file()], root)).toBeUndefined();
   });
 
-  it("rejects a symlink inside the root that points outside it", (ctx) => {
-    const root = path.join(dir, "root");
-    fs.mkdirSync(root, { recursive: true });
+  it("rejects everything when the root cannot be resolved", () => {
+    expect(imagesWithinRoot([png], path.join(dir, "no-such-root"))).toBeUndefined();
+  });
+
+  it("rejects an image reached through a junction that leaves the root", () => {
+    const junction = path.join(root, "linked");
+    // Junctions need no privilege on Windows; elsewhere the type is ignored and a directory symlink is made.
+    fs.symlinkSync(outsideDir, junction, "junction");
+    expect(imagesWithinRoot([path.join(junction, "secret.png")], root)).toBeUndefined();
+  });
+
+  it("rejects a file symlink inside the root that points outside it", (ctx) => {
     const link = path.join(root, "link.png");
     try {
-      fs.symlinkSync(png, link, "file");
+      fs.symlinkSync(path.join(outsideDir, "secret.png"), link, "file");
     } catch {
-      // Creating symlinks needs a privilege on Windows; nothing to check without one.
+      // Creating file symlinks needs a privilege on Windows; nothing to check without one.
       ctx.skip();
     }
-    expect(imagesWithinRoot([link], root)).toBe(false);
+    expect(imagesWithinRoot([link], root)).toBeUndefined();
+  });
+
+  it("rejects a link whose target is not an image", (ctx) => {
+    const link = path.join(root, "renamed.png");
+    try {
+      fs.symlinkSync(path.join(root, "notes.txt"), link, "file");
+    } catch {
+      ctx.skip();
+    }
+    expect(imagesWithinRoot([link], root)).toBeUndefined();
   });
 });

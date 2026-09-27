@@ -457,6 +457,30 @@ describe("ClaudeAdapter images", () => {
     ]);
   });
 
+  it("skips images beyond 20 MiB in total per turn", async () => {
+    const parts = Array.from({ length: 5 }, (_, i) => path.join(dir, `part${i}.png`));
+    for (const file of parts) fs.writeFileSync(file, Buffer.alloc(4.5 * 1024 * 1024));
+    const fake = fakeQuery([success("ok")]);
+    const session = await adapter(fake.query).startSession(baseOptions, callbacks([]));
+    await session.runTurn("look", new AbortController().signal, parts);
+    const [message] = (await drain(fake.calls[0].prompt)) as Array<{ message: { content: Array<{ type: string; text?: string }> } }>;
+    const content = message.message.content;
+    expect(content.filter((block) => block.type === "image")).toHaveLength(4);
+    expect(content.at(-1)).toEqual({
+      type: "text",
+      text: `look\n\n[Image skipped (over 20 MiB of images in this turn): ${parts[4]}]`,
+    });
+  });
+
+  it("notes an unreadable image", async () => {
+    const missing = path.join(dir, "gone.png");
+    const fake = fakeQuery([success("ok")]);
+    const session = await adapter(fake.query).startSession(baseOptions, callbacks([]));
+    await session.runTurn("look", new AbortController().signal, [missing]);
+    const [message] = (await drain(fake.calls[0].prompt)) as Array<{ message: { content: unknown[] } }>;
+    expect(message.message.content).toEqual([{ type: "text", text: `look\n\n[Image skipped (unreadable): ${missing}]` }]);
+  });
+
   it("keeps a plain string prompt without images", async () => {
     const fake = fakeQuery([success("ok")]);
     const session = await adapter(fake.query).startSession(baseOptions, callbacks([]));

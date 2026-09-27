@@ -612,7 +612,8 @@ describe("RunnerCore send images", () => {
     const t = setup();
     await startIn(t, true);
     await t.line({ type: "send", sessionId: "s1", text: "look", images: [inside] });
-    expect(t.session.runTurn).toHaveBeenCalledWith("look", expect.any(AbortSignal), [inside]);
+    // The adapter receives the resolved path, so a link cannot be swapped after the check.
+    expect(t.session.runTurn).toHaveBeenCalledWith("look", expect.any(AbortSignal), [fs.realpathSync.native(inside)]);
   });
 
   it("passes no images when the send has none", async () => {
@@ -644,5 +645,23 @@ describe("RunnerCore send images", () => {
     await t.line({ type: "send", sessionId: "s1", text: "look", images: ["relative.png"] });
     expect(t.sent.at(-1)).toEqual({ type: "error", sessionId: "s1", message: "INVALID_IMAGES" });
     expect(t.session.runTurn).not.toHaveBeenCalled();
+  });
+
+  it("does not fail a running turn over a malformed image list", async () => {
+    const t = setup();
+    await startIn(t, true);
+    await t.line({ type: "send", sessionId: "s1", text: "first" });
+    await t.line({ type: "send", sessionId: "s1", text: "second", images: ["//server/share/a.png"] });
+    expect(t.sent.at(-1)).toEqual({ type: "error", sessionId: "s1", message: "TURN_IN_PROGRESS" });
+    t.finishTurn("done");
+    await flush();
+    expect(t.sent).toContainEqual({ type: "turn_completed", sessionId: "s1", finalResponse: "done", nativeSessionId: "native-1" });
+    expect(t.sent.some((m) => m.type === "error" && m.message === "INVALID_IMAGES")).toBe(false);
+  });
+
+  it("reports a malformed image list of an unknown session as NO_SESSION", async () => {
+    const t = setup();
+    await t.line({ type: "send", sessionId: "nope", text: "x", images: ["relative.png"] });
+    expect(t.sent.at(-1)).toEqual({ type: "error", sessionId: "nope", message: "NO_SESSION" });
   });
 });

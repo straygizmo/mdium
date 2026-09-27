@@ -446,7 +446,8 @@ class OpencodeSession implements AdapterSession {
       ...images.map(
         (file): OpencodePromptPart => ({
           type: "file",
-          mime: imageMimeType(file) ?? "application/octet-stream",
+          // The extension was checked by RunnerCore, so the mime type is known.
+          mime: imageMimeType(file)!,
           filename: basename(file),
           url: pathToFileURL(file).href,
         }),

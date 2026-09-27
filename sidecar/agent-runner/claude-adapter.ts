@@ -5,13 +5,13 @@ import { resolveClaudeExecutable, type ResolvedClaude } from "../resolve-claude"
 import type { AdapterSession, ProviderAdapter, SessionCallbacks, SessionOptions } from "./adapter";
 import { runCommand, type CommandRunner } from "./availability";
 import { claudeDecision, claudeDisallowedTools, claudeHookDecision, toolRequestFromClaude } from "./permissions";
-import { imageMimeType } from "./protocol";
+import { imageMimeType, type ImageMimeType } from "./protocol";
 
 /*
  * Images: a turn with images is sent as a streamed prompt holding one SDK user message whose
  * content is a base64 `image` block per image followed by the text block. Images larger than
- * MAX_IMAGE_BYTES (or unreadable) are skipped and named, with the reason, in a note appended
- * to the text.
+ * MAX_IMAGE_BYTES, unreadable images, and images beyond MAX_TURN_IMAGE_BYTES in total are
+ * skipped and named, with the reason, in a note appended to the text.
  * A turn without images is sent as a plain string prompt.
  */
 
@@ -37,10 +37,7 @@ export type ClaudeQueryOptions = Pick<
   canUseTool?: (toolName: string, input: Record<string, unknown>) => Promise<PermissionResult>;
 };
 
-type ImageBlock = {
-  type: "image";
-  source: { type: "base64"; media_type: "image/png" | "image/jpeg" | "image/gif" | "image/webp"; data: string };
-};
+type ImageBlock = { type: "image"; source: { type: "base64"; media_type: ImageMimeType; data: string } };
 type PromptBlock = ImageBlock | { type: "text"; text: string };
 
 /** Structural subset of the SDK `SDKUserMessage` sent as a streamed prompt. */
@@ -75,33 +72,42 @@ type ClaudeMessage = {
 
 /** Largest image sent inline; larger images are skipped with a note. */
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+/** Largest total of inline image bytes per turn; images beyond it are skipped with a note. */
+const MAX_TURN_IMAGE_BYTES = 20 * 1024 * 1024;
 
-/** Read one image as a base64 block, or the reason it is skipped. */
-async function imageBlock(file: string): Promise<ImageBlock | string> {
-  const tooLarge = "larger than 5 MiB";
-  const mediaType = imageMimeType(file);
-  if (!mediaType) return "unsupported type";
-  try {
-    if ((await stat(file)).size > MAX_IMAGE_BYTES) return tooLarge;
-    const data = await readFile(file);
-    if (data.length > MAX_IMAGE_BYTES) return tooLarge;
-    return { type: "image", source: { type: "base64", media_type: mediaType, data: data.toString("base64") } };
-  } catch {
-    return "unreadable";
-  }
+/** Note appended to the prompt text for an image that is not sent. */
+function skipNote(reason: string, file: string): string {
+  return `\n\n[Image skipped (${reason}): ${file}]`;
 }
 
-/** The prompt of a turn: the plain text, or one user message with image blocks when there are images. */
+/**
+ * The prompt of a turn: the plain text, or one user message with image blocks when there are
+ * images. The paths come from RunnerCore, already resolved and checked to be image files.
+ */
 async function buildPrompt(text: string, images: readonly string[]): Promise<string | AsyncIterable<ClaudeUserMessage>> {
   if (images.length === 0) return text;
   const content: PromptBlock[] = [];
   let notes = "";
+  let total = 0;
   for (const file of images) {
-    const block = await imageBlock(file);
-    if (typeof block === "string") notes += `
-
-[Image skipped (${block}): ${file}]`;
-    else content.push(block);
+    let data: Buffer;
+    try {
+      if ((await stat(file)).size > MAX_IMAGE_BYTES) {
+        notes += skipNote("larger than 5 MiB", file);
+        continue;
+      }
+      data = await readFile(file);
+    } catch {
+      notes += skipNote("unreadable", file);
+      continue;
+    }
+    if (total + data.length > MAX_TURN_IMAGE_BYTES) {
+      notes += skipNote("over 20 MiB of images in this turn", file);
+      continue;
+    }
+    total += data.length;
+    // The extension was checked by RunnerCore, so the mime type is known.
+    content.push({ type: "image", source: { type: "base64", media_type: imageMimeType(file)!, data: data.toString("base64") } });
   }
   content.push({ type: "text", text: `${text}${notes}` });
   const message: ClaudeUserMessage = { type: "user", session_id: "", parent_tool_use_id: null, message: { role: "user", content } };

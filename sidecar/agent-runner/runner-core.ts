@@ -3,7 +3,7 @@ import * as os from "node:os";
 import type { Availability, RunnerInbound, RunnerOutbound, RunnerProvider, ToolRequest } from "../../src/shared/types/agent-runner";
 import type { AdapterSession, ProviderAdapter } from "./adapter";
 import { checkToolRequest } from "./guard";
-import { InboundError, imagesWithinRoot, parseInbound } from "./protocol";
+import { imagesWithinRoot, parseInbound, type ParsedInbound, type ParsedSend } from "./protocol";
 
 interface ActiveTurn {
   controller: AbortController;
@@ -105,12 +105,11 @@ export class RunnerCore {
   }
 
   async handleLine(line: string): Promise<void> {
-    let msg: RunnerInbound;
+    let msg: ParsedInbound;
     try {
       msg = parseInbound(line);
     } catch (error) {
-      const sessionId = error instanceof InboundError ? error.sessionId : undefined;
-      this.deps.send({ type: "error", ...(sessionId ? { sessionId } : {}), message: message(error) });
+      this.deps.send({ type: "error", message: message(error) });
       return;
     }
     switch (msg.type) {
@@ -132,7 +131,7 @@ export class RunnerCore {
       case "start_session":
         return this.startSession(msg);
       case "send":
-        return this.send(msg.sessionId, msg.text, msg.images ?? []);
+        return this.send(msg);
       case "cancel": {
         const entry = this.sessions.get(msg.sessionId);
         if (entry?.turn) {
@@ -268,7 +267,7 @@ export class RunnerCore {
     }
   }
 
-  private async send(sessionId: string, text: string, images: string[]): Promise<void> {
+  private async send({ sessionId, text, images: requested = [], invalidImages }: ParsedSend): Promise<void> {
     const entry = this.sessions.get(sessionId);
     if (!entry) {
       this.deps.send({ type: "error", sessionId, message: "NO_SESSION" });
@@ -278,7 +277,9 @@ export class RunnerCore {
       this.deps.send({ type: "error", sessionId, message: "TURN_IN_PROGRESS" });
       return;
     }
-    if (images.length > 0 && !imagesWithinRoot(images, entry.imageRoot)) {
+    // Rejected only after the session and turn checks, so a bad send cannot fail a running turn.
+    const images = invalidImages ? undefined : requested.length > 0 ? imagesWithinRoot(requested, entry.imageRoot) : [];
+    if (!images) {
       this.deps.send({ type: "error", sessionId, message: "INVALID_IMAGES" });
       return;
     }

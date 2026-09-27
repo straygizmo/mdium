@@ -29,17 +29,10 @@ function guard(value: unknown): { workspaceRoot: string } | undefined {
   return { workspaceRoot };
 }
 
-/** An invalid inbound line that belongs to a session, so the error can be routed to it. */
-export class InboundError extends Error {
-  constructor(message: string, readonly sessionId?: string) {
-    super(message);
-    this.name = "InboundError";
-  }
-}
-
 /** Most images one turn may carry. */
 export const MAX_IMAGES = 10;
-const IMAGE_MIME_TYPES: Record<string, "image/png" | "image/jpeg" | "image/gif" | "image/webp"> = {
+export type ImageMimeType = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+const IMAGE_MIME_TYPES: Record<string, ImageMimeType> = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
@@ -48,32 +41,37 @@ const IMAGE_MIME_TYPES: Record<string, "image/png" | "image/jpeg" | "image/gif" 
 };
 
 /** Mime type of an image path by extension; undefined for unsupported extensions. */
-export function imageMimeType(file: string): "image/png" | "image/jpeg" | "image/gif" | "image/webp" | undefined {
+export function imageMimeType(file: string): ImageMimeType | undefined {
   const dot = file.lastIndexOf(".");
   return dot < 0 ? undefined : IMAGE_MIME_TYPES[file.slice(dot).toLowerCase()];
 }
 
-function isImageFile(file: string): boolean {
-  try {
-    return fs.statSync(file).isFile();
-  } catch {
-    return false;
-  }
+/**
+ * A drive-absolute Windows path or a posix absolute path. UNC and device paths
+ * (`\\server\share`, `\\?\`, `//?/`, `\\.\`) are rejected, so no image path makes the
+ * runner touch the network or a raw device.
+ */
+function isLocalAbsolutePath(value: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(value) || /^\/(?![\\/])/.test(value);
 }
 
+/** A send as parsed: images that failed the shape check are reported by RunnerCore. */
+export type ParsedSend = Extract<RunnerInbound, { type: "send" }> & { invalidImages?: true };
+export type ParsedInbound = Exclude<RunnerInbound, { type: "send" }> | ParsedSend;
+
 /**
- * Validate a send's image list: at most MAX_IMAGES non-empty absolute paths of existing
- * regular files with an image extension. Returns undefined for a missing or empty list.
+ * Shape check of a send's image list, without touching the file system: at most
+ * MAX_IMAGES non-empty local absolute paths with an image extension. Returns undefined
+ * for a missing or empty list and "invalid" otherwise; the file checks run in RunnerCore
+ * (imagesWithinRoot) once the session is known.
  */
-function images(value: unknown, sessionId: string): string[] | undefined {
+function images(value: unknown): string[] | "invalid" | undefined {
   if (value === undefined) return undefined;
   const valid =
     Array.isArray(value) &&
     value.length <= MAX_IMAGES &&
-    value.every(
-      (file) => typeof file === "string" && file.trim() !== "" && isAbsolutePath(file) && imageMimeType(file) !== undefined && isImageFile(file),
-    );
-  if (!valid) throw new InboundError("INVALID_IMAGES", sessionId);
+    value.every((file) => typeof file === "string" && file.trim() !== "" && isLocalAbsolutePath(file) && imageMimeType(file) !== undefined);
+  if (!valid) return "invalid";
   return value.length > 0 ? (value as string[]) : undefined;
 }
 
@@ -85,27 +83,36 @@ function isInside(child: string, root: string): boolean {
 }
 
 /**
- * True when every image resolves (symlinks followed) to a location inside `root`.
- * An unresolvable root or image counts as outside.
+ * Resolve every image (symlinks and junctions followed) and check that it lies inside
+ * `root`, still has an image extension, and is a regular file. Returns the resolved paths,
+ * which are what the adapters read, so a link cannot be swapped after the check; undefined
+ * when any image fails or the root cannot be resolved. The root check runs before the
+ * file is stat-ed. A hard link cannot be told apart from a regular file: a hard link inside
+ * the root to a file elsewhere on the same volume passes, which is acceptable because
+ * creating one already needs write access inside the root.
  */
-export function imagesWithinRoot(files: readonly string[], root: string): boolean {
+export function imagesWithinRoot(files: readonly string[], root: string): string[] | undefined {
   let resolvedRoot: string;
   try {
     resolvedRoot = fs.realpathSync.native(root);
   } catch {
-    return false;
+    return undefined;
   }
-  return files.every((file) => {
+  const resolved: string[] = [];
+  for (const file of files) {
     try {
-      return isInside(fs.realpathSync.native(file), resolvedRoot);
+      const real = fs.realpathSync.native(file);
+      if (!isInside(real, resolvedRoot) || imageMimeType(real) === undefined || !fs.statSync(real).isFile()) return undefined;
+      resolved.push(real);
     } catch {
-      return false;
+      return undefined;
     }
-  });
+  }
+  return resolved;
 }
 
 /** Parse and validate one inbound JSON line. Throws on any invalid shape. */
-export function parseInbound(line: string): RunnerInbound {
+export function parseInbound(line: string): ParsedInbound {
   let parsed: unknown;
   try {
     parsed = JSON.parse(line);
@@ -147,7 +154,8 @@ export function parseInbound(line: string): RunnerInbound {
     case "send": {
       const sessionId = str(m.sessionId, "sessionId");
       if (typeof m.text !== "string") throw new Error("Invalid text");
-      const parsedImages = images(m.images, sessionId);
+      const parsedImages = images(m.images);
+      if (parsedImages === "invalid") return { type: "send", sessionId, text: m.text, invalidImages: true };
       return { type: "send", sessionId, text: m.text, ...(parsedImages ? { images: parsedImages } : {}) };
     }
     case "cancel":
