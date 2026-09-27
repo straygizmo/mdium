@@ -287,6 +287,49 @@ impl MdiumPaths {
             .join(format!("{attempt_id}.log")))
     }
 
+    /// `.mdium/task-attachments/`: committed attachments and drafts.
+    pub fn attachments_root(&self) -> PathBuf {
+        self.root.join("task-attachments")
+    }
+
+    /// `.mdium/task-attachments/<rootTaskId>/`: all committed attachments
+    /// of one root task.
+    pub fn task_attachments_dir(&self, root_id: &str) -> Result<PathBuf, InvalidId> {
+        validate_id(root_id)?;
+        Ok(self.attachments_root().join(root_id))
+    }
+
+    /// `.mdium/task-attachments/<rootTaskId>/<attachmentId>/`.
+    pub fn attachment_dir(&self, root_id: &str, attachment_id: &str) -> Result<PathBuf, InvalidId> {
+        validate_id(attachment_id)?;
+        Ok(self.task_attachments_dir(root_id)?.join(attachment_id))
+    }
+
+    /// `.mdium/task-attachments/_drafts/<intakeId>/`: the drafts of one
+    /// intake session. `_drafts` can never collide with a root task id,
+    /// which is always 16 hex characters.
+    pub fn drafts_dir(&self, intake_id: &str) -> Result<PathBuf, InvalidId> {
+        validate_id(intake_id)?;
+        Ok(self.attachments_root().join("_drafts").join(intake_id))
+    }
+
+    /// `.mdium/task-attachments/_drafts/<intakeId>/<draftId>/`.
+    pub fn draft_dir(&self, intake_id: &str, draft_id: &str) -> Result<PathBuf, InvalidId> {
+        validate_id(draft_id)?;
+        Ok(self.drafts_dir(intake_id)?.join(draft_id))
+    }
+
+    /// `.mdium/intakes/`.
+    pub fn intakes_dir(&self) -> PathBuf {
+        self.root.join("intakes")
+    }
+
+    /// `.mdium/intakes/<intakeId>.json`.
+    pub fn intake_file(&self, intake_id: &str) -> Result<PathBuf, InvalidId> {
+        validate_id(intake_id)?;
+        Ok(self.intakes_dir().join(format!("{intake_id}.json")))
+    }
+
     /// `.mdium/runs/<rootId>/<taskId>/`, validating all three ids that will
     /// ultimately be used (root, task, and — via the caller — attempt).
     fn attempt_dir(&self, root_id: &str, task_id: &str) -> Result<PathBuf, InvalidId> {
@@ -465,6 +508,47 @@ mod tests {
             paths.attempt_log(root_id, task_id, attempt_id).unwrap(),
             Path::new("project/.mdium/runs/aaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbb/cccccccccccccccc.log")
         );
+    }
+
+    #[test]
+    fn mdium_paths_builds_attachment_and_intake_layout() {
+        let paths = MdiumPaths::new(PathBuf::from("project"));
+        let a = "aaaaaaaaaaaaaaaa";
+        let b = "bbbbbbbbbbbbbbbb";
+
+        assert_eq!(
+            paths.attachments_root(),
+            Path::new("project/.mdium/task-attachments")
+        );
+        assert_eq!(
+            paths.task_attachments_dir(a).unwrap(),
+            Path::new("project/.mdium/task-attachments/aaaaaaaaaaaaaaaa")
+        );
+        assert_eq!(
+            paths.attachment_dir(a, b).unwrap(),
+            Path::new("project/.mdium/task-attachments/aaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbb")
+        );
+        assert_eq!(
+            paths.drafts_dir(a).unwrap(),
+            Path::new("project/.mdium/task-attachments/_drafts/aaaaaaaaaaaaaaaa")
+        );
+        assert_eq!(
+            paths.draft_dir(a, b).unwrap(),
+            Path::new("project/.mdium/task-attachments/_drafts/aaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbb")
+        );
+        assert_eq!(paths.intakes_dir(), Path::new("project/.mdium/intakes"));
+        assert_eq!(
+            paths.intake_file(a).unwrap(),
+            Path::new("project/.mdium/intakes/aaaaaaaaaaaaaaaa.json")
+        );
+
+        assert!(paths.task_attachments_dir("../x").is_err());
+        assert!(paths.attachment_dir("../x", b).is_err());
+        assert!(paths.attachment_dir(a, "..").is_err());
+        assert!(paths.drafts_dir("_drafts").is_err());
+        assert!(paths.draft_dir(a, "../../x").is_err());
+        assert!(paths.draft_dir("../x", b).is_err());
+        assert!(paths.intake_file("../x").is_err());
     }
 
     #[test]

@@ -318,7 +318,7 @@ fn hash_link(path: &Path, depth: usize) -> Result<String, HashError> {
 /// per platform, since the crate has no `libc` dependency; on other Unix
 /// targets only the post-open regular-file check applies.
 #[cfg(unix)]
-mod open_flags {
+pub(crate) mod open_flags {
     #[cfg(all(
         any(target_os = "linux", target_os = "android"),
         any(target_arch = "x86", target_arch = "x86_64", target_arch = "riscv64")

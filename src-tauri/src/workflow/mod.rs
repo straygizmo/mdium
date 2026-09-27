@@ -7,6 +7,8 @@
 //! tests or kept for later callers.
 
 pub mod actions;
+#[allow(dead_code)]
+pub mod attachments;
 pub mod attempt;
 #[allow(dead_code)]
 pub mod checks;
