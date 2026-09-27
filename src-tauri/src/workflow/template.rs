@@ -185,18 +185,25 @@ Your final response must start with a YAML frontmatter block, followed by a Mark
 To ask a question:
 - `type: question`
 - `question:` the single question to ask, in one sentence.
-- `options:` optional list of at most 6 short answer choices.
+- `options:` optional list of at most 6 short answer choices. Quote each choice.
 - The body gives brief context for the question: what you found and why it matters.
 
 To propose the requirement document:
 - `type: proposal`
 - `title:` a short title of at most 100 characters.
-- `doc_updates:` optional list of documentation updates. Each entry has `path` (a repository-relative path with forward slashes to a documentation file such as `CONTEXT.md`) and `content` (the complete new content of that file). Never name files under `.git` or `.mdium`, and never name source code or configuration files.
+- `doc_updates:` optional list of documentation updates. Each entry has `path` and `content` (the complete new content of that file).
 - The body is the full requirement document with the sections listed above.
 
-Do not wrap the whole response in a code fence. Examples:
+Rules for `doc_updates` paths (anything else is rejected):
+- A repository-relative path with forward slashes, without `.` or `..` components, for example `CONTEXT.md` or `docs/glossary.md`.
+- The file extension is one of: .md, .markdown, .mdx, .txt, .rst, .adoc.
+- Never under `.git` or `.mdium`.
+- Never an agent instruction or configuration file or directory: `AGENTS.md`, `CLAUDE.md`, `.claude/`, `.codex/`, `.copilot/`, `.opencode/`, `opencode.json`, `opencode.jsonc`, `.mcp.json`, `.vscode/settings.json`, `.vscode/tasks.json`, `.vscode/mcp.json`.
+- Never CI, hook or environment configuration: `.github/`, `.husky/`, `.githooks/`, `.devcontainer/`, `.gitmodules`.
 
-```markdown
+Do not wrap the response in a code fence. The two examples below are each shown between an `[example start]` line and an `[example end]` line; those two marker lines are not part of the response.
+
+[example start]
 ---
 type: question
 question: Should the export include archived items?
@@ -207,9 +214,9 @@ options:
 ---
 
 The export code in `src/export.rs` currently skips archived items.
-```
+[example end]
 
-```markdown
+[example start]
 ---
 type: proposal
 title: Export archived items on request
@@ -224,7 +231,7 @@ doc_updates:
 ## Goal
 
 The full requirement document.
-```"###;
+[example end]"###;
 
 /// Builds a new builtin "standard" workflow named `name` (the caller passes
 /// the localized name) whose three stages all use `provider`. It starts

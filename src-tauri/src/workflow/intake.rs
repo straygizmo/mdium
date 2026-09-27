@@ -15,6 +15,7 @@ use crate::workflow::attachments::{self, AttachmentError, AttachmentMeta};
 use crate::workflow::attempt::{CancelToken, CANCEL_GRACE};
 use crate::workflow::frontmatter::{split_frontmatter, strip_bom, DelimiterMatch};
 use crate::workflow::fsutil::{self, MdiumPaths};
+use crate::workflow::integrity::{path_matches, MERGE_REVIEW_PATTERNS};
 use crate::workflow::model::{
     DocUpdateProposal, FinalizeState, IntakeKind, IntakeMessage, IntakeProposal, IntakeQuestion,
     IntakeSession, IntakeStatus, Provider,
@@ -81,6 +82,10 @@ pub const INTAKE_TURN_FAILED: &str = "INTAKE_TURN_FAILED";
 pub const INTAKE_TURN_TIMEOUT: &str = "INTAKE_TURN_TIMEOUT";
 pub const INTAKE_TURN_CANCELLED: &str = "INTAKE_TURN_CANCELLED";
 pub const INTAKE_GUARD_BLOCKED: &str = "INTAKE_GUARD_BLOCKED";
+/// Reason codes of doc updates rejected when proposed.
+pub const INTAKE_DOC_PATH_INVALID: &str = "INTAKE_DOC_PATH_INVALID";
+pub const INTAKE_DOC_PATH_PROTECTED: &str = "INTAKE_DOC_PATH_PROTECTED";
+pub const INTAKE_DOC_TOO_LARGE: &str = "INTAKE_DOC_TOO_LARGE";
 
 /// Message roles.
 const ROLE_USER: &str = "user";
@@ -284,7 +289,9 @@ pub fn save_session(
 }
 
 /// Marks an active session abandoned and deletes its drafts. Abandoning an
-/// abandoned session is a no-op; a finalizing or finished one is refused.
+/// abandoned session only retries the draft cleanup (a previous attempt may
+/// have failed after the status was saved); a finalizing or finished one is
+/// refused.
 pub fn abandon_session(
     store: &WorkflowStore,
     guard: &ProjectGuard,
@@ -293,14 +300,15 @@ pub fn abandon_session(
     check_guard(store, guard)?;
     let mut session = get_session(store, id)?;
     match session.status {
-        IntakeStatus::Abandoned => return Ok(session),
-        IntakeStatus::Active => {}
+        IntakeStatus::Abandoned => {}
+        IntakeStatus::Active => {
+            session.status = IntakeStatus::Abandoned;
+            session = save_session(store, guard, &session)?;
+        }
         IntakeStatus::Finalizing | IntakeStatus::Done => {
             return Err(IntakeError::InvalidState(INTAKE_NOT_ACTIVE))
         }
     }
-    session.status = IntakeStatus::Abandoned;
-    let session = save_session(store, guard, &session)?;
     let paths = mdium_paths(store);
     for draft in attachments::list_drafts(&paths, id)? {
         attachments::remove_draft(&paths, id, &draft.id)?;
@@ -364,8 +372,11 @@ pub fn add_user_message(
 /// `Ok`, so the turn can be retried.
 ///
 /// The project lock is held only to load and to save, never while the
-/// agent works. If the session stopped being active meanwhile, the reply
-/// is dropped and the session returned as it is.
+/// agent works. The reply belongs to the user message it answered: if the
+/// session stopped being active meanwhile, or that message is no longer the
+/// newest non-error message (the user sent another one), the reply is
+/// dropped and the session returned as it is (the newer message stays
+/// pending).
 pub fn run_turn(
     runner: &dyn RunnerApi,
     store: &WorkflowStore,
@@ -387,7 +398,10 @@ pub fn run_turn(
 
     let guard = store.lock();
     let mut session = get_session(store, id)?;
-    if session.status != IntakeStatus::Active {
+    if session.status != IntakeStatus::Active
+        || pending_message(&session).map(|message| message.id.as_str())
+            != Some(turn.message_id.as_str())
+    {
         return Ok(session);
     }
     record_turn(&mut session, result);
@@ -429,7 +443,8 @@ pub fn apply_doc_update(
         return Err(IntakeError::InvalidState(INTAKE_DOC_UPDATE_NOT_PENDING));
     }
     if accept {
-        let rel = normalize_doc_path(&doc.path)?;
+        let rel = check_doc_path(&doc.path)
+            .map_err(|reason| IntakeError::InvalidPath(format!("{:?}: {reason}", doc.path)))?;
         if doc.content.len() > MAX_DOC_UPDATE_BYTES {
             return Err(IntakeError::TooLarge);
         }
@@ -444,6 +459,8 @@ pub fn apply_doc_update(
 
 /// Everything a turn needs once the lock is released.
 struct PreparedTurn {
+    /// The user message this turn answers.
+    message_id: String,
     provider: Provider,
     model: Option<String>,
     project_root: String,
@@ -524,13 +541,8 @@ fn prepare_turn(
     store: &WorkflowStore,
     session: &IntakeSession,
 ) -> Result<PreparedTurn, IntakeError> {
-    let latest = session
-        .messages
-        .iter()
-        .rev()
-        .find(|message| message.role != ROLE_ERROR)
-        .filter(|message| message.role == ROLE_USER)
-        .ok_or(IntakeError::InvalidState(INTAKE_NO_PENDING_MESSAGE))?;
+    let latest =
+        pending_message(session).ok_or(IntakeError::InvalidState(INTAKE_NO_PENDING_MESSAGE))?;
     let project_root = store
         .project_root()
         .to_str()
@@ -559,12 +571,24 @@ fn prepare_turn(
 
     let prompt = build_prompt(session, &paths, &drafts)?;
     Ok(PreparedTurn {
+        message_id: latest.id.clone(),
         provider: session.provider,
         model: session.model.clone(),
         project_root,
         prompt,
         images,
     })
+}
+
+/// The user message awaiting a reply: the newest message that is not an
+/// error, if it is the user's.
+fn pending_message(session: &IntakeSession) -> Option<&IntakeMessage> {
+    session
+        .messages
+        .iter()
+        .rev()
+        .find(|message| message.role != ROLE_ERROR)
+        .filter(|message| message.role == ROLE_USER)
 }
 
 fn draft_file(
@@ -799,20 +823,9 @@ fn record_turn(session: &mut IntakeSession, result: Result<String, String>) {
             let text = format!("# {}\n\n{}", proposal.title, proposal.body);
             // A new proposal supersedes undecided doc updates.
             session.doc_updates.retain(|doc| doc.status != DOC_PENDING);
-            for (path, content) in doc_updates {
-                let (path, status) = match normalize_doc_path(&path) {
-                    Ok(normalized) if content.len() <= MAX_DOC_UPDATE_BYTES => {
-                        (normalized, DOC_PENDING)
-                    }
-                    _ => (path, DOC_REJECTED),
-                };
-                session.doc_updates.push(DocUpdateProposal {
-                    id: fsutil::new_id(),
-                    path,
-                    content,
-                    status: status.to_string(),
-                });
-            }
+            session
+                .doc_updates
+                .extend(proposed_doc_updates(doc_updates));
             session.last_question = None;
             session.proposal = Some(proposal);
             (ROLE_ASSISTANT, text)
@@ -826,6 +839,45 @@ fn record_turn(session: &mut IntakeSession, result: Result<String, String>) {
         draft_ids: Vec::new(),
         at: fsutil::now(),
     });
+}
+
+/// Turns the doc updates of one proposal into records. The same path named
+/// twice keeps only the last entry. An update that fails the path checks or
+/// the size limit is recorded as rejected, without its content, with the
+/// reason code.
+fn proposed_doc_updates(updates: Vec<(String, String)>) -> Vec<DocUpdateProposal> {
+    let mut records: Vec<(String, DocUpdateProposal)> = Vec::new();
+    for (path, content) in updates {
+        let checked = check_doc_path(&path).and_then(|normalized| {
+            if content.len() <= MAX_DOC_UPDATE_BYTES {
+                Ok(normalized)
+            } else {
+                Err(INTAKE_DOC_TOO_LARGE)
+            }
+        });
+        let record = match checked {
+            Ok(normalized) => DocUpdateProposal {
+                id: fsutil::new_id(),
+                path: normalized,
+                content,
+                status: DOC_PENDING.to_string(),
+                reason: None,
+            },
+            Err(reason) => DocUpdateProposal {
+                id: fsutil::new_id(),
+                path,
+                content: String::new(),
+                status: DOC_REJECTED.to_string(),
+                reason: Some(reason.to_string()),
+            },
+        };
+        // Paths are compared case-insensitively: Windows and macOS treat
+        // `Docs/A.md` and `docs/a.md` as one file.
+        let key = record.path.replace('\\', "/").to_lowercase();
+        records.retain(|(existing, _)| *existing != key);
+        records.push((key, record));
+    }
+    records.into_iter().map(|(_, record)| record).collect()
 }
 
 /// The transcript text of a question: its context, the question and the
@@ -871,7 +923,7 @@ fn parse_reply(text: &str) -> Result<(IntakeReply, String), IntakeError> {
                 Some(YamlValue::Sequence(items)) => {
                     let mut options = Vec::new();
                     for item in items {
-                        if let Some(option) = scalar_text(Some(item))? {
+                        if let Some(option) = option_text(item) {
                             options.push(option.chars().take(MAX_OPTION_CHARS).collect());
                         }
                     }
@@ -932,6 +984,23 @@ fn parse_reply(text: &str) -> Result<(IntakeReply, String), IntakeError> {
     }
 }
 
+/// One answer option: a scalar, or a single-key mapping such as the
+/// `Yes: always` an unquoted `- Yes: always` item parses to (rendered back
+/// as `key: value`). Anything else is skipped.
+fn option_text(item: &YamlValue) -> Option<String> {
+    match item {
+        YamlValue::Mapping(map) if map.len() == 1 => {
+            let (key, value) = map.iter().next()?;
+            let key = scalar_text(Some(key)).ok()??;
+            match scalar_text(Some(value)).ok()? {
+                Some(value) => Some(format!("{key}: {value}")),
+                None => Some(key),
+            }
+        }
+        other => scalar_text(Some(other)).ok()?,
+    }
+}
+
 /// A scalar frontmatter value as trimmed text (numbers and bools
 /// stringified); missing, `null` or blank is `None`, anything else is a
 /// contract error.
@@ -985,59 +1054,130 @@ fn normalize_doc_path(path: &str) -> Result<String, IntakeError> {
     Ok(components.join("/"))
 }
 
-/// Resolves a normalized doc path under `project_root` for writing. Every
-/// directory on the way must be a real directory (a symlink or junction is
-/// refused); missing ones are created one at a time and re-checked. The
-/// parent must canonicalize inside the project and outside `.git` and
-/// `.mdium` (this also catches aliases such as 8.3 short names), and an
-/// existing target must be a regular file.
+/// [`normalize_doc_path`] plus the protected-path check: agent instructions
+/// and configuration, CI, hooks and similar files (the integrity check's
+/// merge-review paths) are never written by an intake. Returns the
+/// normalized path or the reason code.
+fn check_doc_path(path: &str) -> Result<String, &'static str> {
+    let normalized = normalize_doc_path(path).map_err(|_| INTAKE_DOC_PATH_INVALID)?;
+    if MERGE_REVIEW_PATTERNS
+        .iter()
+        .any(|pattern| path_matches(&normalized, pattern))
+    {
+        return Err(INTAKE_DOC_PATH_PROTECTED);
+    }
+    Ok(normalized)
+}
+
+/// Resolves a normalized doc path under `project_root` for writing.
+///
+/// Nothing is created until the destination is known to be safe:
+/// 1. the existing directories on the way are walked without following
+///    links (a symlink or junction is refused);
+/// 2. the deepest existing one (or the target, if it exists) is
+///    canonicalized: it must lie inside the project and outside `.git` and
+///    `.mdium`, and the real project-relative path (canonical names, which
+///    resolves aliases such as 8.3 short names, plus the missing
+///    components) must pass [`check_doc_path`] again, so an alias can reach
+///    neither a protected file nor a non-documentation file;
+/// 3. only then are the missing directories created one at a time, each
+///    re-checked to be a real directory, and the final parent re-checked.
+///
+/// An existing target must be a regular file.
 fn resolve_doc_target(project_root: &Path, rel: &str) -> Result<PathBuf, IntakeError> {
     let invalid = |why: &str| IntakeError::InvalidPath(format!("{rel:?}: {why}"));
     let io = |err: std::io::Error| IntakeError::Store(StoreError::from(err));
+    let not_real_dir = "a path component is not a real directory";
     let components: Vec<&str> = rel.split('/').collect();
     let (file_name, dirs) = components.split_last().ok_or_else(|| invalid("empty"))?;
+    let root = std::fs::canonicalize(project_root).map_err(io)?;
 
+    // 1. The existing part of the path, without creating anything.
     let mut dir = project_root.to_path_buf();
+    let mut existing = 0;
     for component in dirs {
-        dir.push(component);
-        match std::fs::symlink_metadata(&dir) {
-            Ok(meta) if meta.file_type().is_dir() => {}
-            Ok(_) => return Err(invalid("a path component is not a real directory")),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                match std::fs::create_dir(&dir) {
-                    Ok(()) => {}
-                    Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
-                    Err(err) => return Err(io(err)),
-                }
-                let meta = std::fs::symlink_metadata(&dir).map_err(io)?;
-                if !meta.file_type().is_dir() {
-                    return Err(invalid("a path component is not a real directory"));
-                }
+        let next = dir.join(component);
+        match std::fs::symlink_metadata(&next) {
+            Ok(meta) if meta.file_type().is_dir() => {
+                dir = next;
+                existing += 1;
             }
+            Ok(_) => return Err(invalid(not_real_dir)),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => break,
             Err(err) => return Err(io(err)),
         }
     }
+    let missing = &dirs[existing..];
+    let target_exists = missing.is_empty()
+        && match std::fs::symlink_metadata(dir.join(file_name)) {
+            Ok(meta) if meta.file_type().is_file() => true,
+            Ok(_) => return Err(invalid("the target is not a regular file")),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
+            Err(err) => return Err(io(err)),
+        };
 
-    let root = std::fs::canonicalize(project_root).map_err(io)?;
+    // 2. Where the existing part really is.
+    let ancestor = std::fs::canonicalize(&dir).map_err(io)?;
+    check_real_location(project_root, &root, &ancestor).map_err(|why| invalid(why))?;
+    let real = if target_exists {
+        std::fs::canonicalize(dir.join(file_name)).map_err(io)?
+    } else {
+        ancestor
+    };
+    let mut real_rel: Vec<String> = Vec::new();
+    for component in real
+        .strip_prefix(&root)
+        .map_err(|_| invalid("outside the project"))?
+        .components()
+    {
+        let name = component
+            .as_os_str()
+            .to_str()
+            .ok_or_else(|| invalid("not valid UTF-8"))?;
+        real_rel.push(name.to_string());
+    }
+    if !target_exists {
+        real_rel.extend(missing.iter().map(|name| name.to_string()));
+        real_rel.push(file_name.to_string());
+    }
+    check_doc_path(&real_rel.join("/")).map_err(|reason| invalid(reason))?;
+
+    // 3. Create what is missing.
+    for component in missing {
+        dir.push(component);
+        match std::fs::create_dir(&dir) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(err) => return Err(io(err)),
+        }
+        let meta = std::fs::symlink_metadata(&dir).map_err(io)?;
+        if !meta.file_type().is_dir() {
+            return Err(invalid(not_real_dir));
+        }
+    }
     let parent = std::fs::canonicalize(&dir).map_err(io)?;
-    if !parent.starts_with(&root) {
-        return Err(invalid("outside the project"));
+    check_real_location(project_root, &root, &parent).map_err(|why| invalid(why))?;
+    Ok(dir.join(file_name))
+}
+
+/// Checks a canonical path lies inside the canonical project root `root`
+/// and outside the project's (canonical) `.git` and `.mdium`.
+fn check_real_location(
+    project_root: &Path,
+    root: &Path,
+    canonical: &Path,
+) -> Result<(), &'static str> {
+    if !canonical.starts_with(root) {
+        return Err("outside the project");
     }
     for reserved in RESERVED_DIRS {
         if let Ok(reserved) = std::fs::canonicalize(project_root.join(reserved)) {
-            if parent.starts_with(&reserved) {
-                return Err(invalid("reserved directory"));
+            if canonical.starts_with(&reserved) {
+                return Err("reserved directory");
             }
         }
     }
-
-    let target = dir.join(file_name);
-    match std::fs::symlink_metadata(&target) {
-        Ok(meta) if meta.file_type().is_file() => Ok(target),
-        Ok(_) => Err(invalid("the target is not a regular file")),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(target),
-        Err(err) => Err(io(err)),
-    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1095,6 +1235,8 @@ mod tests {
         rx: Mutex<Option<Receiver<RunnerEvent>>>,
         start_error: Option<RunnerError>,
         project_root: PathBuf,
+        /// Runs inside `start_session` (while the turn is in flight).
+        on_start: Option<Box<dyn Fn() + Send + Sync>>,
     }
 
     impl FakeRunner {
@@ -1108,6 +1250,7 @@ mod tests {
                 rx: Mutex::new(Some(rx)),
                 start_error: None,
                 project_root: store.project_root().to_path_buf(),
+                on_start: None,
             }
         }
 
@@ -1137,6 +1280,9 @@ mod tests {
             drop(crate::workflow::state::ProjectLocks::lock(
                 &self.project_root,
             ));
+            if let Some(hook) = &self.on_start {
+                hook();
+            }
             let mut seen = self.seen.lock().unwrap();
             seen.calls.push("start".to_string());
             seen.params = Some(params);
@@ -1764,8 +1910,111 @@ mod tests {
         say(&store, &session.id, "hi", &[]);
         let runner = FakeRunner::replying(&store, &proposal_with_doc("../../outside.md"));
         let updated = run(&runner, &store, &session.id);
-        assert_eq!(updated.doc_updates[0].status, "rejected");
+        let doc = &updated.doc_updates[0];
+        assert_eq!(doc.status, "rejected");
+        assert_eq!(doc.reason.as_deref(), Some(INTAKE_DOC_PATH_INVALID));
+        assert_eq!(doc.content, "");
         assert!(updated.proposal.is_some());
+    }
+
+    #[test]
+    fn agent_instruction_and_config_paths_are_rejected_when_proposed() {
+        for path in [
+            "CLAUDE.md",
+            "AGENTS.md",
+            "docs/AGENTS.md",
+            ".github/workflows/notes.md",
+            ".github/copilot-instructions.md",
+            ".claude/commands/x.md",
+            ".codex/notes.md",
+            ".husky/readme.md",
+            ".devcontainer/README.md",
+        ] {
+            let proposals = proposed_doc_updates(vec![(path.to_string(), "x".to_string())]);
+            assert_eq!(proposals.len(), 1);
+            assert_eq!(proposals[0].status, "rejected", "{path}");
+            assert_eq!(
+                proposals[0].reason.as_deref(),
+                Some(INTAKE_DOC_PATH_PROTECTED),
+                "{path}"
+            );
+            assert_eq!(proposals[0].content, "");
+        }
+        let too_big = "x".repeat(MAX_DOC_UPDATE_BYTES + 1);
+        let proposals = proposed_doc_updates(vec![("docs/a.md".to_string(), too_big)]);
+        assert_eq!(proposals[0].reason.as_deref(), Some(INTAKE_DOC_TOO_LARGE));
+        assert_eq!(proposals[0].content, "");
+    }
+
+    #[test]
+    fn a_proposal_naming_a_path_twice_keeps_the_last_entry() {
+        let proposals = proposed_doc_updates(vec![
+            ("docs/a.md".to_string(), "first".to_string()),
+            ("CONTEXT.md".to_string(), "context".to_string()),
+            ("docs\\A.md".to_string(), "second".to_string()),
+        ]);
+        let entries: Vec<(&str, &str, &str)> = proposals
+            .iter()
+            .map(|d| (d.path.as_str(), d.content.as_str(), d.status.as_str()))
+            .collect();
+        assert_eq!(
+            entries,
+            vec![
+                ("CONTEXT.md", "context", "pending"),
+                ("docs/A.md", "second", "pending"),
+            ]
+        );
+    }
+
+    #[test]
+    fn protected_paths_are_refused_when_applied() {
+        let (_dir, store) = setup();
+        for path in ["CLAUDE.md", ".github/notes.md"] {
+            let (session, doc_id) = session_proposing(&store, path);
+            let guard = store.lock();
+            let err = apply_doc_update(&store, &guard, &session.id, &doc_id, true).unwrap_err();
+            assert_eq!(err.code(), "INTAKE_INVALID_PATH", "{path}");
+        }
+        assert!(!store.project_root().join("CLAUDE.md").exists());
+        assert!(!store.project_root().join(".github").exists());
+    }
+
+    #[test]
+    fn a_reply_to_a_superseded_message_is_dropped() {
+        let (_dir, store) = setup();
+        let session = new_session(&store, IntakeKind::Feature);
+        say(&store, &session.id, "first", &[]);
+        let mut runner = FakeRunner::replying(&store, QUESTION);
+        let root = store.project_root().to_path_buf();
+        let id = session.id.clone();
+        // The user sends another message while the turn is in flight.
+        runner.on_start = Some(Box::new(move || {
+            let store = WorkflowStore::new(root.clone());
+            say(&store, &id, "second", &[]);
+        }));
+
+        let updated = run(&runner, &store, &session.id);
+
+        let texts: Vec<(&str, &str)> = updated
+            .messages
+            .iter()
+            .map(|m| (m.role.as_str(), m.text.as_str()))
+            .collect();
+        assert_eq!(texts, vec![("user", "first"), ("user", "second")]);
+        assert_eq!(updated.last_question, None);
+        assert_eq!(get_session(&store, &session.id).unwrap(), updated);
+        // The newer message is still pending and gets its own turn.
+        let next = run(&FakeRunner::replying(&store, QUESTION), &store, &session.id);
+        assert_eq!(next.messages.last().unwrap().role, "assistant");
+    }
+
+    #[test]
+    fn options_accept_single_key_mappings_and_skip_other_values() {
+        let text = "---\ntype: question\nquestion: Pick\noptions:\n  - Yes: always\n  - [nested]\n  - No\n  - {a: 1, b: 2}\n  - 3\n---\n";
+        let IntakeReply::Question(question) = parse_intake_output(text).unwrap() else {
+            panic!("expected a question");
+        };
+        assert_eq!(question.options, vec!["Yes: always", "No", "3"]);
     }
 
     // ---- doc updates ----------------------------------------------------
@@ -1905,11 +2154,54 @@ mod tests {
         if !root.join("GIT~1").is_dir() {
             return;
         }
-        let (session, doc_id) = session_proposing(&store, "GIT~1/x.md");
+        for path in ["GIT~1/x.md", "GIT~1/newdir/deeper/x.md"] {
+            let (session, doc_id) = session_proposing(&store, path);
+            let guard = store.lock();
+            let err = apply_doc_update(&store, &guard, &session.id, &doc_id, true).unwrap_err();
+            assert_eq!(err.code(), "INTAKE_INVALID_PATH", "{path}");
+        }
+        assert!(!root.join(".git").join("x.md").exists());
+        // Nothing was created inside `.git` before the path was refused.
+        assert!(!root.join(".git").join("newdir").exists());
+    }
+
+    #[test]
+    fn an_existing_target_is_checked_by_its_real_name() {
+        let (_dir, store) = setup();
+        let root = store.project_root().to_path_buf();
+        std::fs::write(root.join("notes.txtx"), "original").unwrap();
+        // Only meaningful where the volume generates 8.3 short names: the
+        // short name looks like a documentation file, the real one is not.
+        if !root.join("NOTES~1.TXT").is_file() {
+            return;
+        }
+        let (session, doc_id) = session_proposing(&store, "NOTES~1.TXT");
         let guard = store.lock();
         let err = apply_doc_update(&store, &guard, &session.id, &doc_id, true).unwrap_err();
         assert_eq!(err.code(), "INTAKE_INVALID_PATH");
-        assert!(!root.join(".git").join("x.md").exists());
+        assert_eq!(
+            std::fs::read_to_string(root.join("notes.txtx")).unwrap(),
+            "original"
+        );
+    }
+
+    #[test]
+    fn abandoning_again_retries_the_draft_cleanup() {
+        let (_dir, store) = setup();
+        let session = new_session(&store, IntakeKind::Bug);
+        attachments::add_draft_from_bytes(&paths(&store), &session.id, "a.png", b"png").unwrap();
+        // A previous abandon saved the status but failed to remove drafts.
+        let mut abandoned = get_session(&store, &session.id).unwrap();
+        abandoned.status = IntakeStatus::Abandoned;
+        let guard = store.lock();
+        save_session(&store, &guard, &abandoned).unwrap();
+
+        let again = abandon_session(&store, &guard, &session.id).unwrap();
+
+        assert_eq!(again.status, IntakeStatus::Abandoned);
+        assert!(attachments::list_drafts(&paths(&store), &session.id)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

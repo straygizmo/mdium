@@ -616,7 +616,7 @@ fn fold_case(s: &str) -> String {
 /// directory, or one of that directory's ancestors, belongs: such an entry
 /// replaces the directory (e.g. a `.claude` symlink or junction pointing
 /// elsewhere). See [`fold_case`] for separator and case handling.
-fn path_matches(path: &str, pattern: &str) -> bool {
+pub(crate) fn path_matches(path: &str, pattern: &str) -> bool {
     let path = fold_case(path);
     let pattern = fold_case(pattern);
     let is_dir = path.ends_with('/');

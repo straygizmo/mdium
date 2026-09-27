@@ -415,6 +415,10 @@ pub struct DocUpdateProposal {
     pub content: String,
     /// `pending` | `applied` | `rejected`.
     pub status: String,
+    /// Why the update was rejected when it was proposed (an `INTAKE_*`
+    /// code); `None` for updates the user decided.
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 // Consumed by the intake module (not wired up yet).
@@ -1051,6 +1055,7 @@ mod tests {
                 path: "docs/a.md".to_string(),
                 content: "new".to_string(),
                 status: "pending".to_string(),
+                reason: None,
             }],
             finalize: FinalizeState {
                 stage: FinalizeStage::AttachmentsCommitted,
