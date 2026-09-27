@@ -330,6 +330,8 @@ mod tests {
             plan_approved: false,
             user_input: None,
             screening_ack: None,
+            issue: None,
+            pending_issue_entry: None,
         };
         store.create_task(&store.lock(), meta, "body\n").unwrap();
         (dir, store)
@@ -622,6 +624,9 @@ mod tests {
             created_at: "2026-01-01T00:00:00.000Z".to_string(),
             updated_at: "2026-01-01T00:00:00.000Z".to_string(),
             acknowledged_agent_config: Vec::new(),
+            issue: None,
+            issue_closed: false,
+            issue_close_error: None,
         };
 
         // Run on a helper thread so a deadlock fails the test instead of

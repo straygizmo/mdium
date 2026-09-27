@@ -313,6 +313,8 @@ pub fn create_task(
         plan_approved: false,
         user_input: None,
         screening_ack: None,
+        issue: None,
+        pending_issue_entry: None,
     };
     let task = store.create_task(&store.lock(), meta, &new.body)?;
     emit(orch, &store, std::slice::from_ref(&task), None);
@@ -1565,6 +1567,8 @@ mod tests {
             plan_approved: false,
             user_input: None,
             screening_ack: None,
+            issue: None,
+            pending_issue_entry: None,
         }
     }
 

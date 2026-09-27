@@ -242,6 +242,9 @@ pub fn begin_attempt(
                 created_at: now.clone(),
                 updated_at: now,
                 acknowledged_agent_config: Vec::new(),
+                issue: None,
+                issue_closed: false,
+                issue_close_error: None,
             };
             create_run_or_discard(guard, store, worktree_base, &run)?;
             run
@@ -1136,6 +1139,8 @@ pub fn advance(
                 plan_approved: false,
                 user_input: None,
                 screening_ack: None,
+                issue: None,
+                pending_issue_entry: None,
             };
             store.create_task(guard, meta, child_body)?
         }
@@ -1420,6 +1425,8 @@ mod tests {
                 plan_approved: false,
                 user_input: None,
                 screening_ack: None,
+                issue: None,
+                pending_issue_entry: None,
             };
             self.store
                 .create_task(&self.store.lock(), meta, body)
@@ -1638,6 +1645,8 @@ mod tests {
             plan_approved: false,
             user_input: None,
             screening_ack: None,
+            issue: None,
+            pending_issue_entry: None,
         };
         store.create_task(&store.lock(), meta, "a").unwrap();
         let result = begin_attempt(&store.lock(), &store, &[workflow], &id, base.path()).unwrap();
@@ -1711,6 +1720,9 @@ mod tests {
             created_at: fsutil::now(),
             updated_at: fsutil::now(),
             acknowledged_agent_config: Vec::new(),
+            issue: None,
+            issue_closed: false,
+            issue_close_error: None,
         };
         let err =
             create_run_or_discard(&env.store.lock(), &env.store, env.fx.base(), &run).unwrap_err();

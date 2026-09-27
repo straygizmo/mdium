@@ -1113,6 +1113,8 @@ mod tests {
                 plan_approved: false,
                 user_input: None,
                 screening_ack: None,
+                issue: None,
+                pending_issue_entry: None,
             };
             self.store
                 .create_task(&self.store.lock(), meta, body)

@@ -8,6 +8,7 @@
 //! into the app yet (Part 3b-2), so the whole module is allowed to look
 //! unused for now.
 
+use crate::workflow::forge::ForgeKind;
 use crate::workflow::integrity::IntegritySnapshot;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -179,6 +180,25 @@ pub struct TaskMeta {
     /// SHA-256 hex digest of screened input the user accepted.
     #[serde(default)]
     pub screening_ack: Option<String>,
+    /// Forge issue tracking this task; set on root tasks only.
+    #[serde(default)]
+    pub issue: Option<IssueRef>,
+    /// Entry kind (`design` | `implement` | `review`) whose issue comment
+    /// still awaits sync after `ATTENTION_ISSUE_SYNC_FAILED`.
+    #[serde(default)]
+    pub pending_issue_entry: Option<String>,
+}
+
+/// A forge issue linked to a task/run: which forge and repository it lives
+/// in, plus its number and web URL.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueRef {
+    pub kind: ForgeKind,
+    pub host: String,
+    pub path: String,
+    pub number: u64,
+    pub url: String,
 }
 
 /// Why a task is waiting on the user. Serializes as snake_case.
@@ -309,6 +329,153 @@ pub struct WorkflowRun {
     /// Agent-config file states the user explicitly accepted for this run.
     #[serde(default)]
     pub acknowledged_agent_config: Vec<FileFingerprint>,
+    /// Forge issue tracking this run (copied from the root task).
+    #[serde(default)]
+    pub issue: Option<IssueRef>,
+    /// True once the run's issue was closed on the forge.
+    #[serde(default)]
+    pub issue_closed: bool,
+    /// Error code of the last failed attempt to close the issue.
+    #[serde(default)]
+    pub issue_close_error: Option<String>,
+}
+
+// Consumed by the intake module (not wired up yet).
+#[allow(dead_code)]
+/// What an intake session is collecting. Serializes as snake_case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IntakeKind {
+    Feature,
+    Bug,
+}
+
+// Consumed by the intake module (not wired up yet).
+#[allow(dead_code)]
+/// Lifecycle status of an intake session. Serializes as snake_case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IntakeStatus {
+    Active,
+    Finalizing,
+    Done,
+    Abandoned,
+}
+
+// Consumed by the intake module (not wired up yet).
+#[allow(dead_code)]
+/// The last completed step of the resumable finalize pipeline. Serializes
+/// as snake_case; defaults to `Ready` (nothing done yet).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FinalizeStage {
+    #[default]
+    Ready,
+    IssueCreated,
+    AttachmentsCommitted,
+    TaskCreated,
+    Done,
+}
+
+// Consumed by the intake module (not wired up yet).
+#[allow(dead_code)]
+/// One message of an intake transcript.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntakeMessage {
+    pub id: String,
+    /// `user` | `assistant` | `error`.
+    pub role: String,
+    pub text: String,
+    /// Draft attachments sent with this message.
+    #[serde(default)]
+    pub draft_ids: Vec<String>,
+    pub at: String,
+}
+
+// Consumed by the intake module (not wired up yet).
+#[allow(dead_code)]
+/// The agent's current proposal for the task/issue title and body.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntakeProposal {
+    pub title: String,
+    pub body: String,
+}
+
+// Consumed by the intake module (not wired up yet).
+#[allow(dead_code)]
+/// A proposed replacement of a project document's content.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocUpdateProposal {
+    pub id: String,
+    /// Project-relative path of the document.
+    pub path: String,
+    pub content: String,
+    /// `pending` | `applied` | `rejected`.
+    pub status: String,
+}
+
+// Consumed by the intake module (not wired up yet).
+#[allow(dead_code)]
+/// A question the agent asked in its last turn, with optional choices.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntakeQuestion {
+    pub text: String,
+    #[serde(default)]
+    pub options: Vec<String>,
+}
+
+// Consumed by the intake module (not wired up yet).
+#[allow(dead_code)]
+/// Progress of the finalize pipeline, persisted so a failed finalize resumes
+/// at the failed step without redoing completed ones.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FinalizeState {
+    #[serde(default)]
+    pub stage: FinalizeStage,
+    #[serde(default)]
+    pub root_task_id: Option<String>,
+    #[serde(default)]
+    pub issue: Option<IssueRef>,
+    #[serde(default)]
+    pub attachment_ids: Vec<String>,
+    #[serde(default)]
+    pub skip_issue: bool,
+    /// Error code of the last failed finalize step.
+    #[serde(default)]
+    pub last_error: Option<String>,
+}
+
+// Consumed by the intake module (not wired up yet).
+#[allow(dead_code)]
+/// On-disk shape of `.mdium/intakes/<intakeId>.json`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntakeSession {
+    pub schema_version: u32,
+    pub id: String,
+    pub workflow_id: String,
+    pub kind: IntakeKind,
+    pub provider: Provider,
+    #[serde(default)]
+    pub model: Option<String>,
+    pub status: IntakeStatus,
+    #[serde(default)]
+    pub messages: Vec<IntakeMessage>,
+    #[serde(default)]
+    pub last_question: Option<IntakeQuestion>,
+    #[serde(default)]
+    pub proposal: Option<IntakeProposal>,
+    #[serde(default)]
+    pub doc_updates: Vec<DocUpdateProposal>,
+    #[serde(default)]
+    pub finalize: FinalizeState,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 /// A `Workflow::validate` rule violation. Each variant has a stable `code()`
@@ -552,6 +719,8 @@ mod tests {
             plan_approved: false,
             user_input: None,
             screening_ack: None,
+            issue: None,
+            pending_issue_entry: None,
         }
     }
 
@@ -640,7 +809,9 @@ mod tests {
                 "awaiting": null,
                 "planApproved": false,
                 "userInput": null,
-                "screeningAck": null
+                "screeningAck": null,
+                "issue": null,
+                "pendingIssueEntry": null
             })
         );
 
@@ -780,6 +951,184 @@ mod tests {
             serde_json::to_value(AttemptMode::Plan).unwrap(),
             json!("plan")
         );
+    }
+
+    fn sample_issue() -> IssueRef {
+        IssueRef {
+            kind: ForgeKind::GitHub,
+            host: "github.com".to_string(),
+            path: "owner/repo".to_string(),
+            number: 42,
+            url: "https://github.com/owner/repo/issues/42".to_string(),
+        }
+    }
+
+    #[test]
+    fn task_meta_without_issue_fields_loads_with_defaults() {
+        let mut value = serde_json::to_value(minimal_task_meta()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("issue");
+        object.remove("pendingIssueEntry");
+
+        let meta: TaskMeta = serde_json::from_value(value).unwrap();
+        assert_eq!(meta.issue, None);
+        assert_eq!(meta.pending_issue_entry, None);
+    }
+
+    #[test]
+    fn task_meta_issue_fields_roundtrip_uses_camel_case() {
+        let mut meta = minimal_task_meta();
+        meta.issue = Some(sample_issue());
+        meta.pending_issue_entry = Some("implement".to_string());
+
+        let value = serde_json::to_value(&meta).unwrap();
+        assert_eq!(
+            value["issue"],
+            json!({
+                "kind": serde_json::to_value(ForgeKind::GitHub).unwrap(),
+                "host": "github.com",
+                "path": "owner/repo",
+                "number": 42,
+                "url": "https://github.com/owner/repo/issues/42"
+            })
+        );
+        assert_eq!(value["pendingIssueEntry"], json!("implement"));
+
+        let round_tripped: TaskMeta = serde_json::from_value(value).unwrap();
+        assert_eq!(round_tripped, meta);
+    }
+
+    #[test]
+    fn run_without_issue_fields_loads_with_defaults() {
+        let run: WorkflowRun = serde_json::from_value(sample_run_value()).unwrap();
+        assert_eq!(run.issue, None);
+        assert!(!run.issue_closed);
+        assert_eq!(run.issue_close_error, None);
+    }
+
+    #[test]
+    fn run_issue_fields_roundtrip_uses_camel_case() {
+        let mut run: WorkflowRun = serde_json::from_value(sample_run_value()).unwrap();
+        run.issue = Some(sample_issue());
+        run.issue_closed = true;
+        run.issue_close_error = Some("FORGE_COMMAND_FAILED".to_string());
+
+        let value = serde_json::to_value(&run).unwrap();
+        assert_eq!(value["issue"]["number"], json!(42));
+        assert_eq!(value["issueClosed"], json!(true));
+        assert_eq!(value["issueCloseError"], json!("FORGE_COMMAND_FAILED"));
+
+        let round_tripped: WorkflowRun = serde_json::from_value(value).unwrap();
+        assert_eq!(round_tripped, run);
+    }
+
+    fn sample_intake_session() -> IntakeSession {
+        IntakeSession {
+            schema_version: 1,
+            id: "0123456789abcdef".to_string(),
+            workflow_id: "wf-1".to_string(),
+            kind: IntakeKind::Bug,
+            provider: Provider::Claude,
+            model: Some("sonnet".to_string()),
+            status: IntakeStatus::Finalizing,
+            messages: vec![IntakeMessage {
+                id: "m1".to_string(),
+                role: "user".to_string(),
+                text: "It crashes".to_string(),
+                draft_ids: vec!["d1".to_string()],
+                at: "2026-01-01T00:00:00Z".to_string(),
+            }],
+            last_question: Some(IntakeQuestion {
+                text: "Which OS?".to_string(),
+                options: vec!["Windows".to_string(), "macOS".to_string()],
+            }),
+            proposal: Some(IntakeProposal {
+                title: "Fix crash".to_string(),
+                body: "Steps...".to_string(),
+            }),
+            doc_updates: vec![DocUpdateProposal {
+                id: "u1".to_string(),
+                path: "docs/a.md".to_string(),
+                content: "new".to_string(),
+                status: "pending".to_string(),
+            }],
+            finalize: FinalizeState {
+                stage: FinalizeStage::AttachmentsCommitted,
+                root_task_id: Some("fedcba9876543210".to_string()),
+                issue: Some(sample_issue()),
+                attachment_ids: vec!["a1".to_string()],
+                skip_issue: false,
+                last_error: None,
+            },
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:01Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn intake_session_roundtrip_uses_camel_case_and_snake_case_enums() {
+        let session = sample_intake_session();
+        let value = serde_json::to_value(&session).unwrap();
+
+        assert_eq!(value["schemaVersion"], json!(1));
+        assert_eq!(value["workflowId"], json!("wf-1"));
+        assert_eq!(value["kind"], json!("bug"));
+        assert_eq!(value["status"], json!("finalizing"));
+        assert_eq!(value["messages"][0]["draftIds"], json!(["d1"]));
+        assert_eq!(
+            value["lastQuestion"]["options"],
+            json!(["Windows", "macOS"])
+        );
+        assert_eq!(value["docUpdates"][0]["status"], json!("pending"));
+        assert_eq!(value["finalize"]["stage"], json!("attachments_committed"));
+        assert_eq!(value["finalize"]["rootTaskId"], json!("fedcba9876543210"));
+        assert_eq!(value["finalize"]["attachmentIds"], json!(["a1"]));
+        assert_eq!(value["finalize"]["skipIssue"], json!(false));
+        assert_eq!(value["finalize"]["lastError"], json!(null));
+        assert_eq!(value["createdAt"], json!("2026-01-01T00:00:00Z"));
+
+        let round_tripped: IntakeSession = serde_json::from_value(value).unwrap();
+        assert_eq!(round_tripped, session);
+
+        assert_eq!(
+            serde_json::to_value(IntakeKind::Feature).unwrap(),
+            json!("feature")
+        );
+        assert_eq!(
+            serde_json::to_value(IntakeStatus::Abandoned).unwrap(),
+            json!("abandoned")
+        );
+        assert_eq!(
+            serde_json::to_value(FinalizeStage::IssueCreated).unwrap(),
+            json!("issue_created")
+        );
+        assert_eq!(
+            serde_json::to_value(FinalizeStage::TaskCreated).unwrap(),
+            json!("task_created")
+        );
+    }
+
+    #[test]
+    fn intake_session_minimal_json_loads_with_defaults() {
+        let value = json!({
+            "schemaVersion": 1,
+            "id": "0123456789abcdef",
+            "workflowId": "wf-1",
+            "kind": "feature",
+            "provider": "codex",
+            "status": "active",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-01-01T00:00:00Z"
+        });
+
+        let session: IntakeSession = serde_json::from_value(value).unwrap();
+        assert_eq!(session.model, None);
+        assert!(session.messages.is_empty());
+        assert_eq!(session.last_question, None);
+        assert_eq!(session.proposal, None);
+        assert!(session.doc_updates.is_empty());
+        assert_eq!(session.finalize, FinalizeState::default());
+        assert_eq!(session.finalize.stage, FinalizeStage::Ready);
     }
 
     #[test]

@@ -888,6 +888,8 @@ mod tests {
             plan_approved: false,
             user_input: None,
             screening_ack: None,
+            issue: None,
+            pending_issue_entry: None,
         }
     }
 
@@ -1419,6 +1421,9 @@ mod tests {
             created_at: created_at.to_string(),
             updated_at: created_at.to_string(),
             acknowledged_agent_config: Vec::new(),
+            issue: None,
+            issue_closed: false,
+            issue_close_error: None,
         }
     }
 
