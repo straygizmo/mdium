@@ -15,6 +15,8 @@ pub mod checks;
 pub mod containment;
 pub mod errors;
 pub mod flow;
+#[allow(dead_code)]
+pub mod forge;
 pub mod frontmatter;
 #[allow(dead_code)]
 pub mod fsutil;
