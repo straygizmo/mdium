@@ -1,10 +1,53 @@
-import mammoth from "mammoth";
-import TurndownService from "turndown";
-import { gfm } from "turndown-plugin-gfm";
 import { writeTextFile, writeFile, mkdir } from "@tauri-apps/plugin-fs";
+import { convertDocx } from "./core/docx";
+import type { ConvertedAsset } from "./core/types";
 
 export interface ConvertResult {
   mdPath: string;
+}
+
+/**
+ * Output location of a converted document. Preserves the input path
+ * separator so the result matches the OS-native paths delivered by the file
+ * tree — otherwise a mixed separator path creates duplicate tabs when the
+ * same file is reopened.
+ */
+export function outputLocation(
+  inputPath: string,
+  extension: RegExp,
+  saveToMdium: boolean,
+): { sep: string; outputDir: string; baseName: string; mdPath: string } {
+  const sep = inputPath.includes("\\") ? "\\" : "/";
+  const dir = inputPath.replace(/[\\/][^\\/]*$/, "");
+  const baseName = inputPath.replace(/^.*[\\/]/, "").replace(extension, "");
+  const outputDir = saveToMdium ? `${dir}${sep}.mdium` : dir;
+  return { sep, outputDir, baseName, mdPath: `${outputDir}${sep}${baseName}.md` };
+}
+
+/** Write a converted document's assets and Markdown under `outputDir`. */
+export async function writeConverted(
+  outputDir: string,
+  sep: string,
+  mdPath: string,
+  markdown: string,
+  assets: ConvertedAsset[],
+  saveToMdium: boolean,
+): Promise<void> {
+  const created = new Set<string>();
+  for (const asset of assets) {
+    const target = `${outputDir}${sep}${asset.path.split("/").join(sep)}`;
+    const targetDir = target.slice(0, target.lastIndexOf(sep));
+    if (!created.has(targetDir)) {
+      await mkdir(targetDir, { recursive: true });
+      created.add(targetDir);
+    }
+    await writeFile(target, asset.data);
+  }
+  // Ensure output dir exists (needed when saving into .mdium/)
+  if (saveToMdium) {
+    await mkdir(outputDir, { recursive: true });
+  }
+  await writeTextFile(mdPath, markdown);
 }
 
 /**
@@ -17,72 +60,8 @@ export async function docxToMarkdown(
   docxPath: string,
   saveToMdium: boolean,
 ): Promise<ConvertResult> {
-  // Derive output paths (preserve input path separator so the result matches
-  // the OS-native paths delivered by the file tree — otherwise a mixed
-  // separator path creates duplicate tabs when the same file is reopened).
-  const sep = docxPath.includes("\\") ? "\\" : "/";
-  const dir = docxPath.replace(/[\\/][^\\/]*$/, "");
-  const baseName = docxPath.replace(/^.*[\\/]/, "").replace(/\.docx$/i, "");
-  const outputDir = saveToMdium ? `${dir}${sep}.mdium` : dir;
-  const imagesDir = `${outputDir}${sep}${baseName}_images`;
-  const mdPath = `${outputDir}${sep}${baseName}.md`;
-
-  // Collect images during conversion
-  const images: { name: string; data: Uint8Array }[] = [];
-  let imageIndex = 0;
-
-  const result = await mammoth.convertToHtml(
-    { arrayBuffer: data.buffer as ArrayBuffer },
-    {
-      convertImage: mammoth.images.imgElement((image) => {
-        imageIndex++;
-        const ext = (image.contentType?.split("/")[1] || "png").replace("jpeg", "jpg");
-        const name = `image${imageIndex}.${ext}`;
-
-        return image.read("base64").then((base64Data) => {
-          const binary = atob(base64Data);
-          const bytes = new Uint8Array(binary.length);
-          for (let i = 0; i < binary.length; i++) {
-            bytes[i] = binary.charCodeAt(i);
-          }
-          images.push({ name, data: bytes });
-          return { src: `__IMG_PLACEHOLDER_${imageIndex}__` };
-        });
-      }),
-    }
-  );
-
-  // Convert HTML to Markdown
-  const turndown = new TurndownService({
-    headingStyle: "atx",
-    codeBlockStyle: "fenced",
-  });
-  turndown.use(gfm);
-
-  let markdown = turndown.turndown(result.value);
-
-  // Replace image placeholders with relative paths
-  for (let i = 1; i <= images.length; i++) {
-    const placeholder = `__IMG_PLACEHOLDER_${i}__`;
-    const relativePath = `${baseName}_images/${images[i - 1].name}`;
-    markdown = markdown.split(placeholder).join(relativePath);
-  }
-
-  // Save images if any
-  if (images.length > 0) {
-    await mkdir(imagesDir, { recursive: true });
-    for (const img of images) {
-      await writeFile(`${imagesDir}/${img.name}`, img.data);
-    }
-  }
-
-  // Ensure output dir exists (needed when saving into .mdium/)
-  if (saveToMdium) {
-    await mkdir(outputDir, { recursive: true });
-  }
-
-  // Save .md file
-  await writeTextFile(mdPath, markdown);
-
+  const { sep, outputDir, baseName, mdPath } = outputLocation(docxPath, /\.docx$/i, saveToMdium);
+  const { markdown, assets } = await convertDocx(data, baseName);
+  await writeConverted(outputDir, sep, mdPath, markdown, assets, saveToMdium);
   return { mdPath };
 }
