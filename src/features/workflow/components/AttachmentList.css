@@ -1,0 +1,66 @@
+.workflow-attachments__note,
+.workflow-attachments__error {
+  margin: 0 0 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.workflow-attachments__error {
+  color: var(--accent-red);
+}
+
+.workflow-attachments__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workflow-attachments__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.workflow-attachments__thumb {
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  object-fit: cover;
+}
+
+.workflow-attachments__name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.workflow-attachments__meta {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.workflow-attachments__btn {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.workflow-attachments__btn:hover:not(:disabled) {
+  border-color: var(--border-hover);
+}
+
+.workflow-attachments__btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}

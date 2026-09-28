@@ -1,13 +1,15 @@
 import { type KeyboardEvent, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { AttemptRecord, HistoryEntry, Task, TaskDetail, WorkflowRun } from "@/shared/types/workflow";
-import { formatAttention, formatCommandError } from "../lib/format";
+import { formatAttention, formatCommandError, formatIssueEntry } from "../lib/format";
 import { workflowApi } from "../lib/workflow-api";
 import { useWorkflowStore } from "../workflow-store";
+import { AttachmentList } from "./AttachmentList";
 import { DialogShell } from "./DialogShell";
+import { IssueSection } from "./IssueSection";
 import { MergeSection } from "./MergeSection";
 import { SafeMarkdown } from "./SafeMarkdown";
-import { TaskActions } from "./TaskActions";
+import { ISSUE_SYNC_FAILED, TaskActions } from "./TaskActions";
 import { statusBackground } from "./TaskCard";
 import "./TaskDetailModal.css";
 
@@ -135,10 +137,10 @@ export function TaskDetailModal() {
         {current.error}
       </p>
     );
-  } else if (!detail || !task) {
+  } else if (!detail || !task || !activeRoot) {
     content = <p className="workflow-detail__message">{t("loading")}</p>;
   } else {
-    content = <DetailSections detail={detail} tasks={tasks ?? []} formatDate={formatDate} />;
+    content = <DetailSections root={activeRoot} detail={detail} tasks={tasks ?? []} formatDate={formatDate} />;
   }
 
   return (
@@ -177,13 +179,15 @@ export function TaskDetailModal() {
 }
 
 interface DetailSectionsProps {
+  /** The project root the task belongs to. */
+  root: string;
   detail: TaskDetail;
   /** All tasks of the project (for the run's stage transitions). */
   tasks: Task[];
   formatDate(iso: string | null): string;
 }
 
-function DetailSections({ detail, tasks, formatDate }: DetailSectionsProps) {
+function DetailSections({ root, detail, tasks, formatDate }: DetailSectionsProps) {
   const { t } = useTranslation("workflow");
   const { task, run, latestOutput, logTail } = detail;
   const { meta } = task;
@@ -199,6 +203,12 @@ function DetailSections({ detail, tasks, formatDate }: DetailSectionsProps) {
   const attention = meta.status === "attention" && meta.attention ? formatAttention(meta.attention) : null;
   const transition = run ? latestTransition(run, tasks) : null;
   const currentTask = run ? tasks.find((task) => task.meta.id === run.currentTaskId) : undefined;
+  // The run carries the root task's Issue; a root task without a run has its own.
+  const issue = run?.issue ?? meta.issue;
+  const syncEntry =
+    meta.attention?.code === ISSUE_SYNC_FAILED
+      ? formatIssueEntry(meta.attention.params?.entry ?? meta.pendingIssueEntry ?? undefined)
+      : "";
 
   const statusText = (entry: HistoryEntry) =>
     entry.from ? `${t(`status.${entry.from}`)} → ${t(`status.${entry.to}`)}` : `${t("detail.created")}: ${t(`status.${entry.to}`)}`;
@@ -209,6 +219,7 @@ function DetailSections({ detail, tasks, formatDate }: DetailSectionsProps) {
         <section className="workflow-detail__section workflow-detail__attention" data-section="attention">
           <h3 className="workflow-detail__heading">{t("detail.attention")}</h3>
           <p>{attention.text}</p>
+          {syncEntry && <p className="workflow-detail__muted">{t("intake.issueSync.entry", { entry: syncEntry })}</p>}
           {attention.items.length > 0 && (
             <ul className="workflow-detail__items">
               {attention.items.map((item, i) => (
@@ -241,6 +252,14 @@ function DetailSections({ detail, tasks, formatDate }: DetailSectionsProps) {
           <p className="workflow-detail__muted">{t("detail.emptyBody")}</p>
         )}
       </section>
+
+      <AttachmentList root={root} rootTaskId={meta.rootId} fromRootTask={meta.rootId !== meta.id} />
+
+      {!run && issue && (
+        <section className="workflow-detail__section">
+          <IssueSection issue={issue} run={null} />
+        </section>
+      )}
 
       {latestOutput !== null && (
         <details
@@ -340,6 +359,7 @@ function DetailSections({ detail, tasks, formatDate }: DetailSectionsProps) {
               </>
             )}
           </dl>
+          {issue && <IssueSection issue={issue} run={run} />}
           <MergeSection run={run} />
         </section>
       )}

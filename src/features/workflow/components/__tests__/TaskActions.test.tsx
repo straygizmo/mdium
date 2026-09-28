@@ -19,6 +19,8 @@ vi.mock("../../lib/workflow-api", () => ({
     retryTask: vi.fn(),
     requestRevision: vi.fn(),
     answerQuestion: vi.fn(),
+    retryIssueSync: vi.fn(),
+    skipIssueSync: vi.fn(),
   },
   subscribeWorkflowEvents: vi.fn(),
 }));
@@ -32,7 +34,7 @@ vi.mock("@/stores/dialog-store", () => ({
 
 import i18n from "@/shared/i18n";
 import { showConfirm, showMessage } from "@/stores/dialog-store";
-import { formatCommandError } from "../../lib/format";
+import { formatCommandError, formatIssueEntry } from "../../lib/format";
 import { workflowApi } from "../../lib/workflow-api";
 import { useWorkflowStore } from "../../workflow-store";
 import { TaskActions } from "../TaskActions";
@@ -96,6 +98,8 @@ describe("TaskActions", () => {
       api.retryTask,
       api.requestRevision,
       api.answerQuestion,
+      api.retryIssueSync,
+      api.skipIssueSync,
     ]) {
       fn.mockResolvedValue(task());
     }
@@ -236,6 +240,46 @@ describe("TaskActions", () => {
     await click(button("delete"));
     expect(api.deleteTask).toHaveBeenLastCalledWith(ROOT, "t1");
     expect(useWorkflowStore.getState().selectedTaskId).toBeNull();
+  });
+
+  describe("Issue sync failures", () => {
+    const syncFailed: AttentionReason = {
+      code: "ATTENTION_ISSUE_SYNC_FAILED",
+      params: { entry: "implement", code: "FORGE_TIMEOUT" },
+    };
+
+    it("offers retry sync and continue without syncing instead of the generic retry", async () => {
+      await render(task({ status: "attention", attention: syncFailed, pendingIssueEntry: "implement" }));
+      expect(buttons()).toEqual(["retryIssueSync", "skipIssueSync", "cancel"]);
+      expect(button("retryIssueSync").textContent).toBe(i18n.t("workflow:intake.issueSync.retry"));
+      expect(button("skipIssueSync").textContent).toBe(i18n.t("workflow:intake.issueSync.skip"));
+    });
+
+    it("retries the Issue sync and disables the buttons while it runs", async () => {
+      let resolve!: (t: Task) => void;
+      api.retryIssueSync.mockReturnValue(new Promise((r) => (resolve = r)));
+      await render(task({ status: "attention", attention: syncFailed }));
+      await click(button("retryIssueSync"));
+      expect(api.retryIssueSync).toHaveBeenCalledWith(ROOT, "t1");
+      for (const action of ["retryIssueSync", "skipIssueSync", "cancel"]) expect(button(action).disabled).toBe(true);
+      await act(async () => resolve(task()));
+      expect(button("retryIssueSync").disabled).toBe(false);
+      expect(api.retryTask).not.toHaveBeenCalled();
+    });
+
+    it("confirms continuing without syncing", async () => {
+      await render(task({ status: "attention", attention: syncFailed }));
+      vi.mocked(showConfirm).mockResolvedValueOnce(false);
+      await click(button("skipIssueSync"));
+      expect(showConfirm).toHaveBeenCalledWith(
+        i18n.t("workflow:intake.issueSync.skipConfirm", { entry: formatIssueEntry("implement") }),
+        { kind: "warning" },
+      );
+      expect(api.skipIssueSync).not.toHaveBeenCalled();
+      await click(button("skipIssueSync"));
+      expect(api.skipIssueSync).toHaveBeenCalledWith(ROOT, "t1");
+      expect(api.markComplete).not.toHaveBeenCalled();
+    });
   });
 
   describe("retry dialog", () => {

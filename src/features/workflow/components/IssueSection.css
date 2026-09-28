@@ -1,0 +1,70 @@
+.workflow-issue {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
+.workflow-detail__section > .workflow-issue:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+.workflow-issue__heading {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.workflow-issue__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.workflow-issue__link {
+  color: var(--primary);
+  overflow-wrap: anywhere;
+}
+
+.workflow-issue__state {
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.workflow-issue__error {
+  margin: 0;
+  color: var(--accent-red);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.workflow-issue__btn {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.workflow-issue__btn:hover:not(:disabled) {
+  border-color: var(--border-hover);
+}
+
+.workflow-issue__btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}

@@ -433,6 +433,7 @@
       "empty": "添付はありません。",
       "rootTask": "ルートタスクの添付",
       "showInFolder": "フォルダーで表示",
+      "showInFolderFailed": "フォルダーを開けませんでした。",
       "loadFailed": "添付を読み込めませんでした。",
       "sizeBytes": "{{size}} B",
       "sizeKB": "{{size}} KB",
@@ -445,7 +446,8 @@
       "stateOpen": "オープン",
       "closed": "クローズ済み",
       "closeFailed": "Issue をクローズできませんでした。{{error}}",
-      "retryClose": "Issue のクローズを再試行"
+      "retryClose": "Issue のクローズを再試行",
+      "retryCloseFailed": "Issue をクローズできませんでした。"
     },
     "issueSync": {
       "entry": "未記録の内容: {{entry}}",

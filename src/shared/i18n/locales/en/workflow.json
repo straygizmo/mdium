@@ -433,6 +433,7 @@
       "empty": "No attachments.",
       "rootTask": "Attachments of the root task",
       "showInFolder": "Show in folder",
+      "showInFolderFailed": "The folder could not be opened.",
       "loadFailed": "The attachments could not be loaded.",
       "sizeBytes": "{{size}} B",
       "sizeKB": "{{size}} KB",
@@ -445,7 +446,8 @@
       "stateOpen": "Open",
       "closed": "Closed",
       "closeFailed": "The Issue could not be closed. {{error}}",
-      "retryClose": "Retry closing the Issue"
+      "retryClose": "Retry closing the Issue",
+      "retryCloseFailed": "The Issue could not be closed."
     },
     "issueSync": {
       "entry": "Unrecorded entry: {{entry}}",

@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { showConfirm } from "@/stores/dialog-store";
 import type { Task } from "@/shared/types/workflow";
 import { isCommandError } from "../lib/errors";
+import { formatIssueEntry } from "../lib/format";
 import { workflowApi } from "../lib/workflow-api";
 import { useWorkflowStore } from "../workflow-store";
 import { RetryDialog, type RetryOptions } from "./RetryDialog";
@@ -14,6 +15,8 @@ type Action =
   | "resume"
   | "retry"
   | "markComplete"
+  | "retryIssueSync"
+  | "skipIssueSync"
   | "approve"
   | "requestRevision"
   | "answer"
@@ -22,9 +25,18 @@ type Action =
 
 const INTEGRITY_ACK_REQUIRED = "WORKFLOW_INTEGRITY_ACK_REQUIRED";
 
+/** Attention after a stage result could not be posted to the run's Issue. */
+export const ISSUE_SYNC_FAILED = "ATTENTION_ISSUE_SYNC_FAILED";
+
+/** Label keys of actions whose text lives outside `actions.*`. */
+const LABEL_KEYS: Partial<Record<Action, string>> = {
+  retryIssueSync: "intake.issueSync.retry",
+  skipIssueSync: "intake.issueSync.skip",
+};
+
 /** The operations offered for a task, in display order. */
 function actionsFor(task: Task): Action[] {
-  const { status, awaiting, archived } = task.meta;
+  const { status, awaiting, archived, attention } = task.meta;
   switch (status) {
     case "inbox":
       return ["cancel"];
@@ -33,7 +45,10 @@ function actionsFor(task: Task): Action[] {
     case "on_hold":
       return ["resume", "cancel"];
     case "attention":
-      return ["retry", "markComplete", "cancel"];
+      // An Issue sync failure is resolved by syncing again or skipping the entry.
+      return attention?.code === ISSUE_SYNC_FAILED
+        ? ["retryIssueSync", "skipIssueSync", "cancel"]
+        : ["retry", "markComplete", "cancel"];
     case "awaiting_user":
       return awaiting?.kind === "question" ? ["answer", "cancel"] : ["approve", "requestRevision", "cancel"];
     case "completed":
@@ -112,6 +127,16 @@ export function TaskActions({ task }: { task: Task }) {
           await execute((root) => workflowApi.markComplete(root, id));
         }
         break;
+      case "retryIssueSync":
+        await execute((root) => workflowApi.retryIssueSync(root, id));
+        break;
+      case "skipIssueSync": {
+        const entry = formatIssueEntry(task.meta.attention?.params?.entry ?? task.meta.pendingIssueEntry ?? undefined);
+        if (await showConfirm(t("intake.issueSync.skipConfirm", { entry }), { kind: "warning" })) {
+          await execute((root) => workflowApi.skipIssueSync(root, id));
+        }
+        break;
+      }
       case "approve":
         await execute((root) => workflowApi.approvePlan(root, id));
         break;
@@ -166,7 +191,7 @@ export function TaskActions({ task }: { task: Task }) {
             disabled={busy || ((action === "requestRevision" || action === "answer") && !hasText)}
             onClick={() => void onAction(action)}
           >
-            {t(`actions.${action}`)}
+            {t(LABEL_KEYS[action] ?? `actions.${action}`)}
           </button>
         ))}
       </div>

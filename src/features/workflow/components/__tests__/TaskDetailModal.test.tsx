@@ -10,6 +10,8 @@ vi.mock("../../lib/workflow-api", () => ({
     listWorkflows: vi.fn(),
     listTasks: vi.fn(),
     listRuns: vi.fn(),
+    listAttachments: vi.fn(),
+    attachmentPath: vi.fn(),
   },
   subscribeWorkflowEvents: vi.fn(),
 }));
@@ -22,9 +24,11 @@ vi.mock("@/stores/dialog-store", () => ({
 }));
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+const readFile = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/plugin-fs", () => ({ readFile }));
 
 import i18n from "@/shared/i18n";
-import { formatAttention } from "../../lib/format";
+import { formatAttention, formatIssueEntry } from "../../lib/format";
 import { workflowApi } from "../../lib/workflow-api";
 import { type ProjectState, useWorkflowStore } from "../../workflow-store";
 import { TaskDetailModal } from "../TaskDetailModal";
@@ -218,6 +222,7 @@ describe("TaskDetailModal", () => {
       selectedTaskId: "t2",
     });
     api.taskDetail.mockResolvedValue(detail());
+    api.listAttachments.mockResolvedValue([]);
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -521,6 +526,59 @@ describe("TaskDetailModal", () => {
     });
     await render();
     expect(container.querySelector('[data-section="progress"]')).toBeNull();
+  });
+
+  it("shows the root task's attachments on a child task", async () => {
+    api.listAttachments.mockResolvedValue([
+      {
+        schemaVersion: 1,
+        id: "a1",
+        originalName: "spec.pdf",
+        storedName: "spec.pdf",
+        mime: "application/pdf",
+        size: 10,
+        sha256: "x",
+        createdAt: "2026-09-01T00:00:00Z",
+      },
+    ]);
+    await render();
+    expect(api.listAttachments).toHaveBeenCalledWith(ROOT, "t1");
+    const attachments = section("attachments")!;
+    expect(attachments.textContent).toContain("spec.pdf");
+    expect(attachments.textContent).toContain(i18n.t("workflow:intake.attachments.rootTask"));
+  });
+
+  it("shows the entry kind of an Issue sync failure", async () => {
+    const reason = { code: "ATTENTION_ISSUE_SYNC_FAILED", params: { entry: "review", code: "FORGE_TIMEOUT" } };
+    api.taskDetail.mockResolvedValue(detail({ task: task("t2", { ...current.meta, attention: reason }) }));
+    await render();
+    expect(section("attention")!.textContent).toContain(
+      i18n.t("workflow:intake.issueSync.entry", { entry: formatIssueEntry("review") }),
+    );
+    expect(container.querySelector('button[data-action="retry"]')).toBeNull();
+    expect(container.querySelector('button[data-action="retryIssueSync"]')).not.toBeNull();
+  });
+
+  it("shows the Issue in the run section even after the worktree was removed", async () => {
+    const issue = { kind: "github" as const, host: "github.com", path: "acme/app", number: 7, url: "https://github.com/acme/app/issues/7" };
+    api.taskDetail.mockResolvedValue(
+      detail({ run: runOf({ status: "merged", worktree: null, issue, issueClosed: false, issueCloseError: "FORGE_TIMEOUT" }) }),
+    );
+    await render();
+    const run = section("run")!;
+    expect(section("merge")).toBeNull();
+    expect(run.querySelector('[data-section="issue"]')?.textContent).toContain(
+      i18n.t("workflow:intake.issue.link", { number: 7, host: "github.com", path: "acme/app" }),
+    );
+    expect(run.querySelector('button[data-action="retryIssueClose"]')).not.toBeNull();
+  });
+
+  it("shows the Issue of a root task without a run", async () => {
+    const issue = { kind: "gitlab" as const, host: "gitlab.com", path: "g/p", number: 3, url: "https://gitlab.com/g/p/-/issues/3" };
+    api.taskDetail.mockResolvedValue(detail({ task: task("t1", { status: "inbox", issue }), run: null }));
+    useWorkflowStore.setState({ selectedTaskId: "t1" });
+    await render();
+    expect(section("issue")?.textContent).toContain("#3");
   });
 
   it("shows a load error inside the modal", async () => {
