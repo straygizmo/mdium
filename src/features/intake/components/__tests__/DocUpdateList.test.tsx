@@ -26,7 +26,7 @@ vi.mock("@/stores/dialog-store", () => dialogs);
 import i18n from "@/shared/i18n";
 import { formatCode } from "@/features/workflow/lib/format";
 import { useIntakeStore } from "../../intake-store";
-import { DocUpdateList } from "../DocUpdateList";
+import { DocUpdateList, MAX_DIFF_SOURCE_CHARS } from "../DocUpdateList";
 import { reviewSession } from "./review-test-utils";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -105,11 +105,38 @@ describe("DocUpdateList", () => {
   it("reports a file that cannot be read", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     readTextFile.mockRejectedValue(new Error("access denied"));
-    await mount(reviewSession({ docUpdates: [doc()] }));
+    await mount(reviewSession({ docUpdates: [doc({ baseSha256: null })] }));
     expect(container.textContent).toContain(t("intake.docUpdates.readFailed"));
+    expect(container.textContent).not.toContain(t("intake.docUpdates.newFile"));
     expect(q<HTMLButtonElement>(".intake-doc__apply")?.disabled).toBe(true);
     expect(q<HTMLButtonElement>(".intake-doc__reject")?.disabled).toBe(false);
     warn.mockRestore();
+  });
+
+  it("reports a file deleted since the proposal", async () => {
+    readTextFile.mockRejectedValue(new Error("failed to open file: os error 2"));
+    await mount(reviewSession({ docUpdates: [doc()] }));
+    expect(container.textContent).toContain(t("intake.docUpdates.deleted"));
+    expect(container.textContent).not.toContain(t("intake.docUpdates.newFile"));
+    expect(container.querySelector(".unified-diff")).toBeNull();
+    expect(q<HTMLButtonElement>(".intake-doc__apply")?.disabled).toBe(true);
+  });
+
+  it("does not diff a very large current file", async () => {
+    readTextFile.mockResolvedValue("x".repeat(MAX_DIFF_SOURCE_CHARS + 1));
+    await mount(reviewSession({ docUpdates: [doc()] }));
+    expect(container.textContent).toContain(t("intake.docUpdates.fileTooLarge"));
+    expect(container.querySelector(".unified-diff")).toBeNull();
+    expect(q<HTMLButtonElement>(".intake-doc__apply")?.disabled).toBe(true);
+  });
+
+  it("gives up on a diff that is too large to compute", async () => {
+    const block = (p: string) => Array.from({ length: 3000 }, (_, i) => `${p}${i}`).join("\n");
+    readTextFile.mockResolvedValue(block("old"));
+    await mount(reviewSession({ docUpdates: [doc({ content: block("new") })] }));
+    expect(container.textContent).toContain(t("intake.docUpdates.diffTooLarge"));
+    expect(container.querySelector(".unified-diff")).toBeNull();
+    expect(q<HTMLButtonElement>(".intake-doc__apply")?.disabled).toBe(false);
   });
 
   it("applies and rejects pending updates", async () => {
@@ -147,13 +174,17 @@ describe("DocUpdateList", () => {
     await click(q(".intake-doc__apply"));
     expect(q(".intake-doc__error")?.textContent).toBe(t("intake.docUpdates.changed"));
     expect(dialogs.showMessage).not.toHaveBeenCalled();
+    expect(q<HTMLButtonElement>(".intake-doc__apply")?.disabled).toBe(true);
+    expect(q<HTMLButtonElement>(".intake-doc__reject")?.disabled).toBe(false);
 
     readTextFile.mockResolvedValue("# Guide\nedited by user\n");
     await click(q(".intake-doc__reload"));
     await act(async () => {});
     expect(readTextFile).toHaveBeenCalledTimes(2);
     expect(lines("removed")).toEqual(["-edited by user"]);
-    expect(q(".intake-doc__error")).toBeNull();
+    // The update stays unappliable: only rejecting or a new proposal helps.
+    expect(q(".intake-doc__error")?.textContent).toBe(t("intake.docUpdates.changed"));
+    expect(q<HTMLButtonElement>(".intake-doc__apply")?.disabled).toBe(true);
   });
 
   it("shows other apply failures inline", async () => {

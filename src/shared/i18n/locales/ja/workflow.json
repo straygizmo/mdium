@@ -383,9 +383,12 @@
       },
       "newFile": "新規ファイル",
       "reason": "却下の理由: {{reason}}",
-      "changed": "提案の後にファイルが変更されました。差分を再読み込みして、もう一度確認してください。",
+      "changed": "提案の後にファイルが変更されたため、この更新は適用できません。却下するか、エージェントに更新した提案を依頼してください。",
       "reloadDiff": "差分を再読み込み",
       "readFailed": "現在のファイルを読み込めませんでした。",
+      "deleted": "提案の後にファイルが削除されました。",
+      "fileTooLarge": "現在のファイルが大きすぎるため、差分を表示しません。",
+      "diffTooLarge": "変更が大きすぎるため、差分を表示できません。",
       "noChanges": "変更はありません。",
       "appliedTitle": "更新した文書",
       "appliedNotice": "これらのファイルは作業ツリーで変更されています。エージェントが参照できるよう、ワークフローの開始前にコミットしてください。"
@@ -412,6 +415,7 @@
       "retry": "再試行",
       "continueWithoutIssue": "Issue なしで続行",
       "continueWithoutIssueConfirm": "Issue を作成せずに確定しますか？この要件整理では、以降の再試行でも Issue を作成しません。",
+      "continueWithoutIssueCreatingConfirm": "Issue がすでに作成されている可能性があります。その Issue はタスクに関連付けられません。リポジトリを確認し、必要なら閉じてください。",
       "issueUnavailable": "Issue 連携を利用できません: {{reason}}",
       "issueCreating": "Issue が既に作成されている可能性があります。再試行すると、まず既存の Issue を探します。",
       "reopen": "対話に戻る",
@@ -420,7 +424,8 @@
       "pendingDocs": "まだ承認・却下していない文書更新提案があります。",
       "done": "タスクを作成しました。",
       "openTask": "タスクを開く",
-      "issueLink": "Issue #{{number}}（{{host}}/{{path}}）"
+      "issueLink": "Issue #{{number}}（{{host}}/{{path}}）",
+      "issueLinkFailed": "Issue を開けませんでした。"
     },
     "list": {
       "title": "要件整理",

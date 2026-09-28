@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { createTwoFilesPatch } from "diff";
 import { join } from "@tauri-apps/api/path";
@@ -15,11 +15,28 @@ const DOC_CHANGED = "INTAKE_DOC_CHANGED_SINCE_PROPOSAL";
 const NOT_FOUND = /os error 2\b|not found|no such file|cannot find/i;
 
 /**
- * The hunks of a unified diff from `current` to `proposed` (the file header
- * is left out: the path is shown next to it); "" when they are equal.
+ * Current files longer than this (in UTF-16 units, about 1 MiB of ASCII) are
+ * not diffed. The intake window may not stat files, so the file is read
+ * first; only the diff is skipped.
  */
-export function docDiff(path: string, current: string, proposed: string): string {
-  const patch = createTwoFilesPatch(path, path, current, proposed, "", "", { context: 3 });
+export const MAX_DIFF_SOURCE_CHARS = 1024 * 1024;
+
+/** Bounds of the diff computation; beyond them it gives up. */
+const MAX_EDIT_LENGTH = 2000;
+const DIFF_TIMEOUT_MS = 500;
+
+/**
+ * The hunks of a unified diff from `current` to `proposed` (the file header
+ * is left out: the path is shown next to it); "" when they are equal, null
+ * when the diff is too large to compute within the bounds.
+ */
+export function docDiff(path: string, current: string, proposed: string): string | null {
+  const patch = createTwoFilesPatch(path, path, current, proposed, "", "", {
+    context: 3,
+    maxEditLength: MAX_EDIT_LENGTH,
+    timeout: DIFF_TIMEOUT_MS,
+  });
+  if (patch === undefined) return null;
   const start = patch.indexOf("\n@@");
   return start < 0 ? "" : patch.slice(start + 1);
 }
@@ -65,8 +82,17 @@ export function DocUpdateList({ session }: { session: IntakeSessionView }) {
   );
 }
 
-/** Result of reading the current file of a pending update. */
-type Current = { kind: "loading" } | { kind: "loaded"; content: string; missing: boolean } | { kind: "failed" };
+/**
+ * Result of reading the current file of a pending update: its content
+ * (`isNew`: absent, as when it was proposed), deleted since the proposal,
+ * too large to diff, or unreadable.
+ */
+type Current =
+  | { kind: "loading" }
+  | { kind: "loaded"; content: string; isNew: boolean }
+  | { kind: "deleted" }
+  | { kind: "tooLarge" }
+  | { kind: "failed" };
 
 interface DocUpdateItemProps {
   doc: DocUpdateProposal;
@@ -98,6 +124,9 @@ function PendingDoc({ doc, active }: DocUpdateItemProps) {
   const root = useIntakeStore((s) => s.root);
   const applyDocUpdate = useIntakeStore((s) => s.applyDocUpdate);
   const [current, setCurrent] = useState<Current>({ kind: "loading" });
+  // Set once applying was refused because the file changed since the
+  // proposal; the base never changes, so applying stays impossible.
+  const [changed, setChanged] = useState(false);
   // Incremented by "Reload diff" to read the file again.
   const [reloads, setReloads] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -110,12 +139,16 @@ function PendingDoc({ doc, active }: DocUpdateItemProps) {
       let next: Current;
       try {
         const content = await readTextFile(await join(root, doc.path));
-        next = { kind: "loaded", content, missing: false };
+        next = content.length > MAX_DIFF_SOURCE_CHARS ? { kind: "tooLarge" } : { kind: "loaded", content, isNew: false };
       } catch (err) {
-        // A file that does not exist is diffed as empty (a new file).
-        const missing = doc.baseSha256 === null || NOT_FOUND.test(String(err));
-        if (!missing) console.warn("[intake] reading a document failed", err);
-        next = missing ? { kind: "loaded", content: "", missing: true } : { kind: "failed" };
+        if (NOT_FOUND.test(String(err))) {
+          // Still absent: a new file, diffed as empty. Absent now but not
+          // when proposed: deleted meanwhile, so it can no longer be applied.
+          next = doc.baseSha256 === null ? { kind: "loaded", content: "", isNew: true } : { kind: "deleted" };
+        } else {
+          console.warn("[intake] reading a document failed", err);
+          next = { kind: "failed" };
+        }
       }
       if (!disposed) setCurrent(next);
     })();
@@ -129,46 +162,66 @@ function PendingDoc({ doc, active }: DocUpdateItemProps) {
     setBusy(true);
     setError(null);
     try {
-      await applyDocUpdate(doc.id, accept, (text, code) => setError({ code, text }));
+      await applyDocUpdate(doc.id, accept, (text, code) => {
+        if (code === DOC_CHANGED) setChanged(true);
+        else setError({ code, text });
+      });
     } finally {
       setBusy(false);
     }
   };
 
-  const reload = () => {
-    setError(null);
-    setReloads((n) => n + 1);
-  };
+  const reload = () => setReloads((n) => n + 1);
 
-  const diff = current.kind === "loaded" ? docDiff(doc.path, current.content, doc.content) : "";
+  const currentContent = current.kind === "loaded" ? current.content : null;
+  const diff = useMemo(
+    () => (currentContent === null ? null : docDiff(doc.path, currentContent, doc.content)),
+    [doc.path, currentContent, doc.content],
+  );
+  const note = (() => {
+    switch (current.kind) {
+      case "loading":
+        return t("intake.loading");
+      case "deleted":
+        return t("intake.docUpdates.deleted");
+      case "tooLarge":
+        return t("intake.docUpdates.fileTooLarge");
+      case "failed":
+        return t("intake.docUpdates.readFailed");
+      case "loaded":
+        if (diff === null) return t("intake.docUpdates.diffTooLarge");
+        return diff === "" ? t("intake.docUpdates.noChanges") : null;
+    }
+  })();
 
   return (
     <>
-      {current.kind === "loaded" && current.missing && (
+      {current.kind === "loaded" && current.isNew && (
         <span className="intake-doc__new">{t("intake.docUpdates.newFile")}</span>
       )}
       <div className="intake-doc__diff">
-        {current.kind === "loading" && <p className="intake-doc__note">{t("intake.loading")}</p>}
-        {current.kind === "failed" && <p className="intake-doc__note">{t("intake.docUpdates.readFailed")}</p>}
-        {current.kind === "loaded" &&
-          (diff ? <UnifiedDiffView diff={diff} /> : <p className="intake-doc__note">{t("intake.docUpdates.noChanges")}</p>)}
+        {note !== null ? <p className="intake-doc__note">{note}</p> : diff && <UnifiedDiffView diff={diff} />}
       </div>
-      {error && (
+      {changed && (
         <div className="intake-doc__failure" role="alert">
-          <p className="intake-doc__error">{error.code === DOC_CHANGED ? t("intake.docUpdates.changed") : error.text}</p>
-          {error.code === DOC_CHANGED && (
-            <button type="button" className="intake-doc__reload" onClick={reload}>
-              {t("intake.docUpdates.reloadDiff")}
-            </button>
-          )}
+          <p className="intake-doc__error">{t("intake.docUpdates.changed")}</p>
+          <button type="button" className="intake-doc__reload" onClick={reload}>
+            {t("intake.docUpdates.reloadDiff")}
+          </button>
         </div>
+      )}
+      {error && (
+        <p className="intake-doc__error" role="alert">
+          {error.text}
+        </p>
       )}
       {active && (
         <div className="intake-doc__buttons">
           <button
             type="button"
             className="intake-doc__apply"
-            disabled={busy || current.kind !== "loaded"}
+            // Applying needs the current content shown; a changed file can never be applied.
+            disabled={busy || changed || current.kind !== "loaded"}
             onClick={() => void decide(true)}
           >
             {t("intake.docUpdates.apply")}

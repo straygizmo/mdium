@@ -3,8 +3,9 @@ import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import type { IntakeSessionView, IssueRef } from "@/shared/types/workflow";
 import { externalUrl } from "@/features/workflow/components/SafeMarkdown";
-import { formatCode } from "@/features/workflow/lib/format";
-import { showConfirm } from "@/stores/dialog-store";
+import i18n from "@/shared/i18n";
+import { formatCode, formatCommandError } from "@/features/workflow/lib/format";
+import { showConfirm, showMessage } from "@/stores/dialog-store";
 import { ISSUE_TRACKING_UNAVAILABLE, turnRequestInFlight, useIntakeStore } from "../intake-store";
 import { issueTarget } from "./IntakeStartForm";
 import "./FinalizePanel.css";
@@ -34,14 +35,19 @@ export function FinalizePanel({ session }: { session: IntakeSessionView }) {
   if (session.status === "done") return <FinalizeDone session={session} />;
 
   const f = session.finalize;
-  const tracksIssues = workflows.find((w) => w.id === session.workflowId)?.issueTracking === "auto";
   const target = issueTarget(forge);
   const inFlight = action !== null;
   const finalizing = session.status === "finalizing";
-  // This window's failure, unless the session changed since.
+  // This window's latest failure, unless the session changed since. It is
+  // newer than the recorded one, and some failures (e.g. a finalize already
+  // in progress) are not recorded at all.
   const fresh = failure && failure.updatedAt === session.updatedAt ? failure : null;
-  // Recorded by the session while finalizing; returned directly before that.
-  const errorCode = finalizing ? (f.lastError ?? fresh?.code ?? null) : (fresh?.code ?? null);
+  const errorCode = fresh ? fresh.code : finalizing ? f.lastError : null;
+  // `ISSUE_TRACKING_UNAVAILABLE` implies tracking, even while the workflow
+  // list does not contain the session's workflow.
+  const tracksIssues =
+    workflows.find((w) => w.id === session.workflowId)?.issueTracking === "auto" ||
+    errorCode === ISSUE_TRACKING_UNAVAILABLE;
 
   // Why Issue tracking is unavailable, from the latest forge probe.
   const unavailableText =
@@ -72,7 +78,10 @@ export function FinalizePanel({ session }: { session: IntakeSessionView }) {
 
   const skipIssue = async () => {
     if (inFlight) return;
-    if (!(await showConfirm(t("intake.finalize.continueWithoutIssueConfirm"), { kind: "warning" }))) return;
+    let text = t("intake.finalize.continueWithoutIssueConfirm");
+    // An Issue created by an interrupted attempt would stay unlinked.
+    if (f.issueCreating) text += `\n\n${t("intake.finalize.continueWithoutIssueCreatingConfirm")}`;
+    if (!(await showConfirm(text, { kind: "warning" }))) return;
     await finalize(true);
   };
 
@@ -180,11 +189,16 @@ export function FinalizePanel({ session }: { session: IntakeSessionView }) {
   );
 }
 
-/** Opens an Issue's page in the external browser. */
+/** Opens an Issue's page in the external browser; failures are shown. */
 function openIssue(issue: IssueRef) {
+  const fail = (detail: string) =>
+    void showMessage(detail, { title: i18n.t("workflow:intake.finalize.issueLinkFailed"), kind: "error" });
   const url = externalUrl(issue.url);
-  if (!url) return;
-  invoke("open_external_url", { url }).catch((err: unknown) => console.warn("[intake] opening the Issue failed", err));
+  if (!url) {
+    fail(issue.url);
+    return;
+  }
+  invoke("open_external_url", { url }).catch((err: unknown) => fail(formatCommandError(err)));
 }
 
 /** The finished intake: the Issue link and "Open task". */

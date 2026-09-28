@@ -383,9 +383,12 @@
       },
       "newFile": "New file",
       "reason": "Rejected: {{reason}}",
-      "changed": "The file changed after this update was proposed. Reload the diff and review it again.",
+      "changed": "The file changed after this update was proposed, so it can no longer be applied. Reject it, or ask the agent for an updated proposal.",
       "reloadDiff": "Reload diff",
       "readFailed": "The current file could not be read.",
+      "deleted": "The file was deleted after this update was proposed.",
+      "fileTooLarge": "The current file is too large to compare, so no diff is shown.",
+      "diffTooLarge": "The changes are too large to show as a diff.",
       "noChanges": "No changes.",
       "appliedTitle": "Updated documents",
       "appliedNotice": "These files were changed in your working tree. Commit them before the workflow starts so the agents see them."
@@ -412,6 +415,7 @@
       "retry": "Retry",
       "continueWithoutIssue": "Continue without an Issue",
       "continueWithoutIssueConfirm": "Finalize without creating an Issue? Later retries of this intake will not create one either.",
+      "continueWithoutIssueCreatingConfirm": "An Issue may already have been created. It will not be linked to the task; check the repository and close it if needed.",
       "issueUnavailable": "Issue tracking is unavailable: {{reason}}",
       "issueCreating": "An Issue may already have been created. Retrying looks for it first.",
       "reopen": "Back to the conversation",
@@ -420,7 +424,8 @@
       "pendingDocs": "Some document updates have not been applied or rejected yet.",
       "done": "The task was created.",
       "openTask": "Open task",
-      "issueLink": "Issue #{{number}} ({{host}}/{{path}})"
+      "issueLink": "Issue #{{number}} ({{host}}/{{path}})",
+      "issueLinkFailed": "The Issue could not be opened."
     },
     "list": {
       "title": "Requirement intakes",

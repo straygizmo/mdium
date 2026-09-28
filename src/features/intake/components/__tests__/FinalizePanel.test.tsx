@@ -147,6 +147,13 @@ describe("FinalizePanel", () => {
 
     await click(q(".intake-finalize__issue-link"));
     expect(invoke).toHaveBeenCalledWith("open_external_url", { url: ISSUE.url });
+    expect(dialogs.showMessage).not.toHaveBeenCalled();
+    invoke.mockRejectedValueOnce(new Error("no browser"));
+    await click(q(".intake-finalize__issue-link"));
+    expect(dialogs.showMessage).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ title: t("intake.finalize.issueLinkFailed"), kind: "error" }),
+    );
 
     await click(q(".intake-finalize__open-task"));
     expect(emitTo).toHaveBeenCalledWith("main", "workflow://open-task", { projectRoot: ROOT, taskId: "t1" });
@@ -202,6 +209,30 @@ describe("FinalizePanel", () => {
     await mount(finalizing({ lastError: "FORGE_COMMAND_FAILED", issueCreating: true }));
     expect(container.textContent).toContain(t("intake.finalize.issueCreating"));
     expect(shownActions()).toEqual(["retry", "skip"]);
+
+    api.intakeFinalize.mockResolvedValue(finalizing({ stage: "done", skipIssue: true }, { status: "done" }));
+    await click(q(".intake-finalize__skip"));
+    expect(dialogs.showConfirm).toHaveBeenCalledWith(
+      `${t("intake.finalize.continueWithoutIssueConfirm")}\n\n${t("intake.finalize.continueWithoutIssueCreatingConfirm")}`,
+      expect.anything(),
+    );
+    expect(api.intakeFinalize).toHaveBeenCalledWith(ROOT, "i1", true);
+  });
+
+  it("shows this window's latest failure over the recorded one", async () => {
+    const view = finalizing({ lastError: "FORGE_TIMEOUT" });
+    await mount(view);
+    api.intakeFinalize.mockRejectedValue({ code: "INTAKE_FINALIZE_IN_PROGRESS", message: "" });
+    await click(q(".intake-finalize__retry"));
+    expect(q(".intake-finalize__error")?.textContent).toBe(formatCode("INTAKE_FINALIZE_IN_PROGRESS"));
+  });
+
+  it("offers skipping the Issue when tracking is unavailable and the workflow is not loaded", async () => {
+    await mount(reviewSession(), { forge: FORGE_NO_REPO });
+    await act(async () => useIntakeStore.setState({ workflows: [] }));
+    api.intakeFinalize.mockRejectedValueOnce({ code: "ISSUE_TRACKING_UNAVAILABLE", message: "" });
+    await click(q(".intake-finalize__submit"));
+    expect(shownActions()).toEqual(["submit", "skip"]);
   });
 
   it("only retries once the Issue exists", async () => {
