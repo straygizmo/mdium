@@ -8,8 +8,7 @@ import {
 } from "@/shared/types/workflow";
 import { useTabStore } from "@/stores/tab-store";
 import { useUiStore } from "@/stores/ui-store";
-import { sameRoot } from "./lib/errors";
-import { workflowApi } from "./lib/workflow-api";
+import { isWindows, sameRoot } from "./lib/errors";
 import { useWorkflowStore } from "./workflow-store";
 
 /**
@@ -28,35 +27,35 @@ export function startWorkflowFolderSync(): () => void {
 }
 
 /**
+ * A path in a comparable form without touching the file system: `\\?\`
+ * prefix removed, separators unified to `/`, trailing separators stripped,
+ * and lowercased on Windows.
+ */
+export function comparablePath(path: string): string {
+  let p = path.replace(/^\\\\\?\\/, "").replace(/\\/g, "/");
+  // Keep the root of a drive ("C:/") or of the file system ("/").
+  while (p.length > 1 && p.endsWith("/") && !/^[A-Za-z]:\/$/.test(p)) p = p.slice(0, -1);
+  return isWindows() ? p.toLowerCase() : p;
+}
+
+/**
  * The open folder whose project is `projectRoot` (a normalized root): the
- * active folder first, then the other open folders. Folders are normalized
- * by attaching them; null when none matches.
+ * active folder when its attached root matches, else another open folder
+ * whose path matches by `comparablePath`. Other folders are never attached
+ * here (attaching starts their orchestrators); null when none matches.
  */
 async function folderOfProject(projectRoot: string): Promise<string | null> {
   const { activeFolderPath, openFolderPaths } = useTabStore.getState();
-  // The user switched folders meanwhile: do not switch back.
-  const switched = () => useTabStore.getState().activeFolderPath !== activeFolderPath;
   if (activeFolderPath) {
     // The active folder may still be attaching: join that attach.
     await useWorkflowStore.getState().ensureActivated(activeFolderPath);
-    if (switched()) return null;
+    // The user switched folders meanwhile: do not switch back.
+    if (useTabStore.getState().activeFolderPath !== activeFolderPath) return null;
     const root = useWorkflowStore.getState().activeRoot;
     if (root && sameRoot(root, projectRoot)) return activeFolderPath;
   }
-  for (const folder of openFolderPaths) {
-    if (folder === activeFolderPath) continue;
-    let root: string;
-    try {
-      root = await workflowApi.attach(folder);
-    } catch (err) {
-      // A folder that is not a valid project (any more) cannot hold the task.
-      console.warn("[workflow] attaching an open folder failed", err);
-      continue;
-    }
-    if (switched()) return null;
-    if (sameRoot(root, projectRoot)) return folder;
-  }
-  return null;
+  const wanted = comparablePath(projectRoot);
+  return openFolderPaths.find((f) => f !== activeFolderPath && comparablePath(f) === wanted) ?? null;
 }
 
 /**

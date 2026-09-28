@@ -32,7 +32,7 @@ import {
 } from "@/shared/types/workflow";
 import { useTabStore } from "@/stores/tab-store";
 import { useUiStore } from "@/stores/ui-store";
-import { startWorkflowFolderSync, startWorkflowOpenTaskListener } from "../folder-sync";
+import { comparablePath, startWorkflowFolderSync, startWorkflowOpenTaskListener } from "../folder-sync";
 import { useWorkflowStore } from "../workflow-store";
 
 const initialState = useWorkflowStore.getState();
@@ -176,11 +176,12 @@ describe("startWorkflowOpenTaskListener", () => {
   });
 
   it("switches to another open folder of the project and opens the task there", async () => {
-    // The folder path differs from the normalized root the intake passed.
+    // The folder path differs from the normalized root the intake passed only by form.
     api.attach.mockImplementation(async (folder: string) => (folder === "C:/b/" ? "C:/b" : folder));
-    useTabStore.setState({ openFolderPaths: ["C:/a", "C:/b/"] });
+    useTabStore.setState({ openFolderPaths: ["C:/a", "C:/c", "C:/b/"] });
     await useWorkflowStore.getState().activate("C:/a");
     await startWorkflowOpenTaskListener();
+    api.attach.mockClear();
     emit({ projectRoot: "C:/b", taskId: "t9" });
     await waitAck("t9", true);
     expect(useTabStore.getState().activeFolderPath).toBe("C:/b/");
@@ -188,6 +189,19 @@ describe("startWorkflowOpenTaskListener", () => {
     expect(useWorkflowStore.getState().selectedTaskId).toBe("t9");
     expect(useUiStore.getState().leftPanel).toBe("workflow");
     expect(useTabStore.getState().folderLeftPanel["C:/b/"]).toBe("workflow");
+    // Only the folder switched to is attached (by its normal activation).
+    expect(api.attach.mock.calls).toEqual([["C:/b/"]]);
+  });
+
+  it("does not attach open folders that do not match by path", async () => {
+    useTabStore.setState({ openFolderPaths: ["C:/a", "C:/c", "D:/d"] });
+    await useWorkflowStore.getState().activate("C:/a");
+    await startWorkflowOpenTaskListener();
+    api.attach.mockClear();
+    emit({ projectRoot: "C:/b", taskId: "t9" });
+    await waitAck("t9", false);
+    expect(api.attach).not.toHaveBeenCalled();
+    expect(useTabStore.getState().activeFolderPath).toBe("C:/a");
   });
 
   it("still opens the task when the main window cannot be focused", async () => {
@@ -210,5 +224,28 @@ describe("startWorkflowOpenTaskListener", () => {
     await waitAck("t9", false);
     expect(api.attach).not.toHaveBeenCalled();
     expect(useWorkflowStore.getState().selectedTaskId).toBeNull();
+  });
+});
+
+describe("comparablePath", () => {
+  it("unifies separators, strips trailing separators and the long-path prefix", () => {
+    const ua = vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Windows");
+    try {
+      expect(comparablePath("\\\\?\\C:\\Work\\App\\")).toBe("c:/work/app");
+      expect(comparablePath("c:/work/app//")).toBe("c:/work/app");
+      expect(comparablePath("C:\\")).toBe("c:/");
+    } finally {
+      ua.mockRestore();
+    }
+  });
+
+  it("keeps case elsewhere", () => {
+    const ua = vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Linux");
+    try {
+      expect(comparablePath("/home/U/app/")).toBe("/home/U/app");
+      expect(comparablePath("/")).toBe("/");
+    } finally {
+      ua.mockRestore();
+    }
   });
 });
