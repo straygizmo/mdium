@@ -53,12 +53,115 @@ pub fn marker(entry_id: &str) -> String {
     format!("<!-- mdium:entry:{entry_id} -->")
 }
 
+/// Inserted after `@` to keep a mention from notifying anyone.
+const WORD_JOINER: char = '\u{2060}';
+
+/// Neutralizes `@` mentions in Markdown posted to an Issue, so text written
+/// by agents or users never notifies people or teams: a word joiner
+/// (U+2060, invisible) is inserted after every `@` followed by an
+/// identifier character (alphanumeric, `_` or `-`). Text inside fenced
+/// code blocks (``` or ~~~) and inline code spans is left alone (code is
+/// never rendered as a mention). Addresses such as `a@b.c` are changed too,
+/// which is harmless: they read the same.
+pub fn neutralize_mentions(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    // The open fence: its character and length.
+    let mut fence: Option<(char, usize)> = None;
+    for line in text.split_inclusive('\n') {
+        let opener = fence_run(line);
+        match (fence, opener) {
+            (Some((ch, len)), Some((c, n))) if c == ch && n >= len && is_bare_fence(line, n) => {
+                fence = None;
+                out.push_str(line);
+            }
+            (Some(_), _) => out.push_str(line),
+            (None, Some(open)) => {
+                fence = Some(open);
+                out.push_str(line);
+            }
+            (None, None) => neutralize_line(line, &mut out),
+        }
+    }
+    out
+}
+
+/// The fence run (character and length) a line starts with: at most three
+/// spaces of indentation, then at least three backticks or tildes.
+fn fence_run(line: &str) -> Option<(char, usize)> {
+    let indent = line.len() - line.trim_start_matches(' ').len();
+    if indent > 3 {
+        return None;
+    }
+    let rest = &line[indent..];
+    let ch = rest.chars().next().filter(|c| *c == '`' || *c == '~')?;
+    let len = rest.chars().take_while(|c| *c == ch).count();
+    (len >= 3).then_some((ch, len))
+}
+
+/// Whether a line starting with a fence run of `len` characters has
+/// nothing else on it (a closing fence).
+fn is_bare_fence(line: &str, len: usize) -> bool {
+    let rest = line.trim_start_matches(' ');
+    rest[len..].trim().is_empty()
+}
+
+/// Appends `line` to `out`, neutralizing mentions outside inline code
+/// spans (a backtick run opens a span that the next run of the same length
+/// closes; an unmatched run is literal).
+fn neutralize_line(line: &str, out: &mut String) {
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '`' {
+            let run = chars[i..].iter().take_while(|c| **c == '`').count();
+            if let Some(end) = closing_run(&chars, i + run, run) {
+                out.extend(&chars[i..end + run]);
+                i = end + run;
+            } else {
+                out.extend(&chars[i..i + run]);
+                i += run;
+            }
+            continue;
+        }
+        out.push(c);
+        if c == '@' {
+            if let Some(next) = chars.get(i + 1) {
+                if next.is_alphanumeric() || *next == '_' || *next == '-' {
+                    out.push(WORD_JOINER);
+                }
+            }
+        }
+        i += 1;
+    }
+}
+
+/// The start of the first backtick run of exactly `len` characters at or
+/// after `from`.
+fn closing_run(chars: &[char], from: usize, len: usize) -> Option<usize> {
+    let mut i = from;
+    while i < chars.len() {
+        if chars[i] == '`' {
+            let run = chars[i..].iter().take_while(|c| **c == '`').count();
+            if run == len {
+                return Some(i);
+            }
+            i += run;
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
 /// Joins `content` and the marker, truncating `content` (by characters) so
 /// the whole body stays within [`MAX_BODY_CHARS`]. A truncation note is
-/// placed before the marker so the marker always survives.
+/// placed before the marker so the marker always survives. Mentions in
+/// `content` are neutralized first ([`neutralize_mentions`]).
 fn finish_body(content: &str, entry: &str) -> String {
     const NOTE: &str = "\n\n_[truncated: the full text is in the task's run history]_";
     let tail = format!("\n\n{}", marker(entry));
+    let content = neutralize_mentions(content);
     let content = content.trim_end();
     let budget = MAX_BODY_CHARS.saturating_sub(tail.chars().count());
     if content.chars().count() <= budget {
@@ -298,6 +401,57 @@ mod tests {
         assert_eq!(err, ForgeError::Timeout);
         assert_eq!(fake.calls(), vec![ForgeCall::ListComments(9)]);
         assert!(fake.comments(9).is_empty());
+    }
+
+    const WJ: char = '\u{2060}';
+
+    #[test]
+    fn mentions_are_neutralized() {
+        assert_eq!(
+            neutralize_mentions("ping @alice and @org/team, cc @bob-2."),
+            format!("ping @{WJ}alice and @{WJ}org/team, cc @{WJ}bob-2.")
+        );
+        // Emails are neutralized too (harmless: the text reads the same).
+        assert_eq!(neutralize_mentions("a@b.c"), format!("a@{WJ}b.c"));
+        // A lone `@` or one before punctuation or space is left alone.
+        assert_eq!(neutralize_mentions("@ x @! @"), "@ x @! @");
+    }
+
+    #[test]
+    fn mentions_in_code_are_left_alone() {
+        let text = "use `@decorator` here\n```py\n@app.route\n```\n~~~\n@x\n~~~\nthen @bob";
+        assert_eq!(
+            neutralize_mentions(text),
+            format!("use `@decorator` here\n```py\n@app.route\n```\n~~~\n@x\n~~~\nthen @{WJ}bob")
+        );
+        // Longer backtick runs delimit spans containing single backticks.
+        assert_eq!(
+            neutralize_mentions("``a ` @b`` @c"),
+            format!("``a ` @b`` @{WJ}c")
+        );
+        // An unclosed backtick is literal, so the mention after it counts.
+        assert_eq!(neutralize_mentions("` @d"), format!("` @{WJ}d"));
+        // A fence closes only with a run at least as long as its opener.
+        assert_eq!(
+            neutralize_mentions("````\n```\n@e\n````\n@f"),
+            format!("````\n```\n@e\n````\n@{WJ}f")
+        );
+        // CRLF line endings are kept.
+        assert_eq!(
+            neutralize_mentions("@g\r\n```\r\n@h\r\n```\r\n"),
+            format!("@{WJ}g\r\n```\r\n@h\r\n```\r\n")
+        );
+    }
+
+    #[test]
+    fn entry_bodies_neutralize_mentions_but_keep_the_marker() {
+        let body = design_body("Ask @alice.", ENTRY);
+        assert!(body.contains(&format!("@{WJ}alice")), "{body}");
+        assert!(body.ends_with(&marker(ENTRY)));
+        let body = implement_body("Done by @bob", "b", &[], ENTRY);
+        assert!(body.contains(&format!("@{WJ}bob")), "{body}");
+        let body = review_body("@carol please look", true, ENTRY);
+        assert!(body.contains(&format!("@{WJ}carol")), "{body}");
     }
 
     #[test]
