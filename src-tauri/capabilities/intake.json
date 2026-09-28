@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "intake",
+  "description": "Capability for the intake windows (read-only file access)",
+  "windows": ["intake-*"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:window:allow-set-title",
+    "core:window:allow-close",
+    "core:window:allow-set-focus",
+    "dialog:allow-open",
+    "fs:allow-read-file",
+    "fs:allow-read-text-file",
+    { "identifier": "fs:scope", "allow": [{ "path": "**" }] }
+  ]
+}
