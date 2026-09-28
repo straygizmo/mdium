@@ -9,13 +9,14 @@
 //! and then kicks the orchestrator (after releasing the guard: a kick may
 //! take it), since the change may let queued work start.
 
+use crate::workflow::attachments::{self, AttachmentError};
 use crate::workflow::attempt::CancelReason;
 use crate::workflow::checks;
 use crate::workflow::flow::{
     self, FlowError, IssueSyncError, StageError, StageResult, ATTENTION_ISSUE_SYNC_FAILED,
 };
 use crate::workflow::forge::ForgeError;
-use crate::workflow::fsutil::{self, new_id};
+use crate::workflow::fsutil::{self, new_id, MdiumPaths};
 use crate::workflow::gitops::{self, CommitSummary, GitError};
 use crate::workflow::integrity::{
     self, IntegrityChange, IntegrityError, IntegritySnapshot, MERGE_REVIEW_PATTERNS,
@@ -27,13 +28,14 @@ use crate::workflow::model::{
 use crate::workflow::orchestrator::Orchestrator;
 use crate::workflow::outcome::parse_outcome;
 use crate::workflow::prompt::cap_diff;
-use crate::workflow::state::{transition_locked, ProjectGuard, TransitionError};
+use crate::workflow::state::{project_key, transition_locked, ProjectGuard, TransitionError};
 use crate::workflow::store::{StoreError, WorkflowList, WorkflowStore};
 use crate::workflow::template::standard_workflow;
 use serde::Serialize;
 use serde_json::json;
-use std::path::Path;
-use std::sync::Arc;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 /// Schema version of the task documents and workflow files written here.
@@ -114,6 +116,8 @@ pub const ISSUE_SYNC_OUTPUT_INVALID: &str = "ISSUE_SYNC_OUTPUT_INVALID";
 pub const ISSUE_NOT_TRACKED: &str = "ISSUE_NOT_TRACKED";
 /// The run's Issue is only closed once the run is merged.
 pub const ISSUE_RUN_NOT_MERGED: &str = "ISSUE_RUN_NOT_MERGED";
+/// Another retry or skip of the same task's Issue sync is still running.
+pub const ISSUE_SYNC_IN_PROGRESS: &str = "ISSUE_SYNC_IN_PROGRESS";
 
 /// Why a user operation failed.
 #[derive(Debug, Clone, PartialEq)]
@@ -124,6 +128,8 @@ pub enum ActionError {
     Integrity(IntegrityError),
     /// An Issue operation on the forge failed.
     Forge(ForgeError),
+    /// Removing a task's attachments failed.
+    Attachment(AttachmentError),
     /// The task or run is not in a state that allows the operation; the
     /// value is the machine code.
     InvalidState(&'static str),
@@ -138,6 +144,7 @@ impl ActionError {
             ActionError::Git(err) => err.code(),
             ActionError::Integrity(err) => err.code(),
             ActionError::Forge(err) => err.code(),
+            ActionError::Attachment(err) => err.code(),
             ActionError::InvalidState(code) => code,
         }
     }
@@ -151,6 +158,7 @@ impl std::fmt::Display for ActionError {
             ActionError::Git(err) => err.fmt(f),
             ActionError::Integrity(err) => err.fmt(f),
             ActionError::Forge(err) => err.fmt(f),
+            ActionError::Attachment(err) => err.fmt(f),
             ActionError::InvalidState(code) => f.write_str(code),
         }
     }
@@ -173,6 +181,12 @@ impl From<TransitionError> for ActionError {
 impl From<StoreError> for ActionError {
     fn from(err: StoreError) -> Self {
         ActionError::Store(err)
+    }
+}
+
+impl From<AttachmentError> for ActionError {
+    fn from(err: AttachmentError) -> Self {
+        ActionError::Attachment(err)
     }
 }
 
@@ -755,12 +769,41 @@ pub fn skip_issue_sync(
     resolve_issue_sync(orch, project_root, task_id, false)
 }
 
+/// Tasks whose Issue sync is being retried or skipped in this process, by
+/// project key and task id. The entry is posted without the project lock,
+/// so this keeps two concurrent resolutions of one task from racing.
+static ISSUE_SYNCING: Mutex<BTreeSet<(PathBuf, String)>> = Mutex::new(BTreeSet::new());
+
+/// Membership of a task in [`ISSUE_SYNCING`], released on drop.
+struct IssueSyncSlot((PathBuf, String));
+
+impl IssueSyncSlot {
+    fn acquire(project_root: &Path, task_id: &str) -> Result<IssueSyncSlot, ActionError> {
+        let key = (project_key(project_root), task_id.to_string());
+        let mut running = ISSUE_SYNCING.lock().unwrap_or_else(PoisonError::into_inner);
+        if !running.insert(key.clone()) {
+            return Err(ActionError::InvalidState(ISSUE_SYNC_IN_PROGRESS));
+        }
+        Ok(IssueSyncSlot(key))
+    }
+}
+
+impl Drop for IssueSyncSlot {
+    fn drop(&mut self) {
+        ISSUE_SYNCING
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.0);
+    }
+}
+
 /// [`retry_issue_sync`] (`post`) or [`skip_issue_sync`]. The entry is built
 /// under the guard, posted without it, and the stage is completed under the
 /// guard again after the checks are repeated. When the stage cannot
 /// complete (e.g. the design document cannot be saved), the task stays in
 /// attention with that reason instead. Either way the pending entry is
-/// cleared.
+/// cleared. Only one resolution of a task runs at a time
+/// ([`ISSUE_SYNC_IN_PROGRESS`]).
 fn resolve_issue_sync(
     orch: &Arc<Orchestrator>,
     project_root: &Path,
@@ -768,6 +811,7 @@ fn resolve_issue_sync(
     post: bool,
 ) -> Result<Task, ActionError> {
     let store = orch.store(project_root);
+    let _slot = IssueSyncSlot::acquire(store.project_root(), task_id)?;
     if post {
         let entry = {
             let _guard = store.lock();
@@ -1019,7 +1063,8 @@ pub fn archive_task(
 /// Deletes a completed or cancelled task whose run (if it has one) is no
 /// longer in progress (neither Active nor awaiting its merge): the run's
 /// later steps may still read any of its tasks (designs, outputs, the
-/// root's title).
+/// root's title). Deleting a root task also deletes its committed
+/// attachments (first, so a failure leaves the task to delete again).
 pub fn delete_task(
     orch: &Arc<Orchestrator>,
     project_root: &Path,
@@ -1036,6 +1081,9 @@ pub fn delete_task(
             if matches!(run.status, RunStatus::Active | RunStatus::AwaitingMerge) {
                 return Err(ActionError::InvalidState(WORKFLOW_RUN_IN_PROGRESS));
             }
+        }
+        if task.meta.root_id == task.meta.id {
+            attachments::remove_task_attachments(&MdiumPaths::new(store.project_root()), task_id)?;
         }
         store.delete_task(&guard, task_id)?;
         task
@@ -2366,6 +2414,50 @@ mod tests {
     }
 
     #[test]
+    fn deleting_a_root_task_removes_its_attachments() {
+        let env = Env::new();
+        let paths = crate::workflow::fsutil::MdiumPaths::new(env.root());
+        let commit = |root_id: &str| {
+            let intake = new_id();
+            attachments::add_draft_from_bytes(&paths, &intake, "a.png", b"png").unwrap();
+            attachments::commit_drafts(&paths, &intake, root_id).unwrap();
+        };
+        let root = env.plain(TaskStatus::Cancelled, None);
+        commit(&root.meta.id);
+        // A subtask of another root: deleting it keeps that root's files.
+        let other_root = new_id();
+        commit(&other_root);
+        let sub_id = new_id();
+        let sub = env
+            .store
+            .create_task(
+                &env.store.lock(),
+                TaskMeta {
+                    root_id: other_root.clone(),
+                    ..plain_meta(&sub_id, TaskStatus::Completed)
+                },
+                "body",
+            )
+            .unwrap();
+
+        delete_task(&env.orch, env.root(), &sub.meta.id).unwrap();
+        assert_eq!(
+            attachments::list_attachments(&paths, &other_root)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        delete_task(&env.orch, env.root(), &root.meta.id).unwrap();
+        assert!(!paths.task_attachments_dir(&root.meta.id).unwrap().exists());
+        assert_eq!(
+            env.store.get_task(&root.meta.id).unwrap_err(),
+            StoreError::NotFound
+        );
+        env.wait_idle();
+    }
+
+    #[test]
     fn delete_refuses_the_current_task_of_an_active_run() {
         let env = Env::new();
         let root = env.root_task();
@@ -3189,6 +3281,32 @@ mod tests {
             "TRANSITION_CONFLICT"
         );
         assert!(env.forge.calls().is_empty());
+    }
+
+    #[test]
+    fn one_issue_sync_resolution_runs_at_a_time_per_task() {
+        let env = Env::new();
+        let id = design_with_failed_sync(&env);
+        let before = env.raw(&id);
+        let slot = IssueSyncSlot::acquire(env.root(), &id).unwrap();
+        assert_eq!(
+            code(retry_issue_sync(&env.orch, env.root(), &id)),
+            ISSUE_SYNC_IN_PROGRESS
+        );
+        assert_eq!(
+            code(skip_issue_sync(&env.orch, env.root(), &id)),
+            ISSUE_SYNC_IN_PROGRESS
+        );
+        assert_eq!(env.raw(&id), before);
+        assert!(env.forge.calls().is_empty());
+        // Another task of the same project, or the same id elsewhere, is
+        // independent.
+        drop(IssueSyncSlot::acquire(env.root(), &new_id()).unwrap());
+        let elsewhere = tempfile::tempdir().unwrap();
+        drop(IssueSyncSlot::acquire(elsewhere.path(), &id).unwrap());
+        drop(slot);
+        let task = retry_issue_sync(&env.orch, env.root(), &id).unwrap();
+        assert_eq!(task.meta.pending_issue_entry, None);
     }
 
     #[test]

@@ -311,13 +311,95 @@ pub fn commit_drafts(
     intake_id: &str,
     root_task_id: &str,
 ) -> Result<Vec<AttachmentMeta>, AttachmentError> {
+    let prepared = prepare_commit(paths, intake_id, root_task_id)?;
+    apply_commit(paths, prepared)
+}
+
+/// The first half of [`commit_drafts`], which only reads and so needs no
+/// lock: the drafts to commit, with their content read and verified
+/// against their sha256 (so the slow part of a commit runs outside the
+/// project lock). Conflicts and the count limit are checked here and again
+/// by [`apply_commit`].
+#[derive(Debug)]
+pub struct PreparedCommit {
+    intake_id: String,
+    root_task_id: String,
+    /// Every draft of the intake when prepared.
+    drafts: Vec<AttachmentMeta>,
+    /// The drafts not yet committed, with their verified content.
+    pending: Vec<(AttachmentMeta, Vec<u8>)>,
+}
+
+/// Reads and verifies what [`commit_drafts`] would commit; see
+/// [`PreparedCommit`].
+pub fn prepare_commit(
+    paths: &MdiumPaths,
+    intake_id: &str,
+    root_task_id: &str,
+) -> Result<PreparedCommit, AttachmentError> {
     paths.task_attachments_dir(root_task_id)?;
-    let drafts_dir = paths.drafts_dir(intake_id)?;
+    paths.drafts_dir(intake_id)?;
     let drafts = list_drafts(paths, intake_id)?;
     let existing = list_attachments(paths, root_task_id)?;
-
     let mut pending = Vec::new();
-    for draft in &drafts {
+    for draft in uncommitted(&drafts, &existing)? {
+        let bytes = read_content(&paths.draft_dir(intake_id, &draft.id)?, draft)?;
+        pending.push((draft.clone(), bytes));
+    }
+    Ok(PreparedCommit {
+        intake_id: intake_id.to_string(),
+        root_task_id: root_task_id.to_string(),
+        drafts,
+        pending,
+    })
+}
+
+/// The second half of [`commit_drafts`], to be called under the project
+/// lock: the drafts must still be exactly the prepared ones (else
+/// `Corrupt`, nothing written); the conflict and count checks are
+/// repeated, the prepared content is written, and the intake's draft
+/// directory is removed. Returns all attachments of the task.
+pub fn apply_commit(
+    paths: &MdiumPaths,
+    prepared: PreparedCommit,
+) -> Result<Vec<AttachmentMeta>, AttachmentError> {
+    let PreparedCommit {
+        intake_id,
+        root_task_id,
+        drafts,
+        pending,
+    } = prepared;
+    let drafts_dir = paths.drafts_dir(&intake_id)?;
+    if list_drafts(paths, &intake_id)? != drafts {
+        return Err(AttachmentError::Corrupt(format!(
+            "the drafts of intake {intake_id} changed while they were committed"
+        )));
+    }
+    let existing = list_attachments(paths, &root_task_id)?;
+    let still: Vec<&str> = uncommitted(&drafts, &existing)?
+        .into_iter()
+        .map(|draft| draft.id.as_str())
+        .collect();
+    for (draft, bytes) in &pending {
+        if !still.contains(&draft.id.as_str()) {
+            continue;
+        }
+        let dest = paths.attachment_dir(&root_task_id, &draft.id)?;
+        write_entry(paths, &dest, draft, bytes)?;
+    }
+    remove_tree(paths, &drafts_dir)?;
+    list_attachments(paths, &root_task_id)
+}
+
+/// The drafts not committed yet. A draft whose id is committed with the
+/// same sha256 counts as committed; with another sha256 it is `Corrupt`.
+/// More than [`MAX_ATTACHMENTS_PER_TASK`] in total is `TooMany`.
+fn uncommitted<'a>(
+    drafts: &'a [AttachmentMeta],
+    existing: &[AttachmentMeta],
+) -> Result<Vec<&'a AttachmentMeta>, AttachmentError> {
+    let mut pending = Vec::new();
+    for draft in drafts {
         match existing.iter().find(|committed| committed.id == draft.id) {
             Some(committed) if committed.sha256 == draft.sha256 => {}
             Some(_) => {
@@ -332,14 +414,18 @@ pub fn commit_drafts(
     if existing.len() + pending.len() > MAX_ATTACHMENTS_PER_TASK {
         return Err(AttachmentError::TooMany);
     }
+    Ok(pending)
+}
 
-    for draft in pending {
-        let bytes = read_content(&paths.draft_dir(intake_id, &draft.id)?, draft)?;
-        let dest = paths.attachment_dir(root_task_id, &draft.id)?;
-        write_entry(paths, &dest, draft, &bytes)?;
-    }
-    remove_tree(paths, &drafts_dir)?;
-    list_attachments(paths, root_task_id)
+/// Deletes every committed attachment of root task `root_task_id` (its
+/// whole directory; a missing one is a no-op, a link is removed itself,
+/// never followed). Callers hold the project lock.
+pub fn remove_task_attachments(
+    paths: &MdiumPaths,
+    root_task_id: &str,
+) -> Result<(), AttachmentError> {
+    let dir = paths.task_attachments_dir(root_task_id)?;
+    remove_tree(paths, &dir)
 }
 
 /// The committed attachments of root task `root_task_id`, oldest first.
@@ -359,11 +445,34 @@ pub fn attachment_file(
     attachment_id: &str,
 ) -> Result<PathBuf, AttachmentError> {
     let dir = paths.attachment_dir(root_task_id, attachment_id)?;
-    if !walk_real_dirs(paths, &dir, false)? {
+    verified_entry_file(paths, &dir, attachment_id)
+}
+
+/// The absolute, canonical path of a draft's content of intake
+/// `intake_id`, verified like [`attachment_file`]. A missing draft is
+/// `NotFound`.
+pub fn draft_file(
+    paths: &MdiumPaths,
+    intake_id: &str,
+    draft_id: &str,
+) -> Result<PathBuf, AttachmentError> {
+    let dir = paths.draft_dir(intake_id, draft_id)?;
+    verified_entry_file(paths, &dir, draft_id)
+}
+
+/// The content file of the entry `id` in `dir`: every directory on the way
+/// is real, the metadata is valid, the content matches it, and the file
+/// resolves under the attachments root.
+fn verified_entry_file(
+    paths: &MdiumPaths,
+    dir: &Path,
+    id: &str,
+) -> Result<PathBuf, AttachmentError> {
+    if !walk_real_dirs(paths, dir, false)? {
         return Err(AttachmentError::NotFound);
     }
-    let meta = read_meta(&dir, attachment_id)?.ok_or(AttachmentError::NotFound)?;
-    read_content(&dir, &meta)?;
+    let meta = read_meta(dir, id)?.ok_or(AttachmentError::NotFound)?;
+    read_content(dir, &meta)?;
     let canonical = ensure_under_root(paths, &dir.join(&meta.stored_name))?;
     Ok(simplify_verbatim(canonical))
 }
@@ -687,7 +796,7 @@ fn simplify_verbatim(path: PathBuf) -> PathBuf {
     path
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -1256,6 +1365,91 @@ mod tests {
         std::fs::create_dir_all(paths.drafts_dir(INTAKE).unwrap().join("not-an-id")).unwrap();
 
         assert_eq!(list_drafts(&paths, INTAKE).unwrap(), vec![meta]);
+    }
+
+    #[test]
+    fn a_prepared_commit_is_written_by_apply() {
+        let (_dir, paths) = setup();
+        let a = add_draft_from_bytes(&paths, INTAKE, "a.txt", b"alpha").unwrap();
+
+        let prepared = prepare_commit(&paths, INTAKE, ROOT).unwrap();
+        // Preparing only reads.
+        assert!(list_attachments(&paths, ROOT).unwrap().is_empty());
+        assert_eq!(list_drafts(&paths, INTAKE).unwrap(), vec![a.clone()]);
+
+        assert_eq!(apply_commit(&paths, prepared).unwrap(), vec![a.clone()]);
+        assert_eq!(
+            std::fs::read(attachment_file(&paths, ROOT, &a.id).unwrap()).unwrap(),
+            b"alpha"
+        );
+        assert!(!paths.drafts_dir(INTAKE).unwrap().exists());
+    }
+
+    #[test]
+    fn apply_refuses_drafts_that_changed_after_prepare() {
+        let (_dir, paths) = setup();
+        add_draft_from_bytes(&paths, INTAKE, "a.txt", b"alpha").unwrap();
+        let prepared = prepare_commit(&paths, INTAKE, ROOT).unwrap();
+        add_draft_from_bytes(&paths, INTAKE, "b.txt", b"beta").unwrap();
+
+        assert!(matches!(
+            apply_commit(&paths, prepared),
+            Err(AttachmentError::Corrupt(_))
+        ));
+        assert!(list_attachments(&paths, ROOT).unwrap().is_empty());
+        assert_eq!(list_drafts(&paths, INTAKE).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn draft_file_is_verified_like_attachment_file() {
+        let (_dir, paths) = setup();
+        let meta = add_draft_from_bytes(&paths, INTAKE, "shot.png", b"png").unwrap();
+        let file = draft_file(&paths, INTAKE, &meta.id).unwrap();
+        assert!(file.is_absolute());
+        assert_eq!(file.file_name().unwrap(), "shot.png");
+        assert_eq!(std::fs::read(&file).unwrap(), b"png");
+
+        assert_eq!(
+            draft_file(&paths, INTAKE, "4444444444444444"),
+            Err(AttachmentError::NotFound)
+        );
+        assert_eq!(
+            draft_file(&paths, "..", &meta.id),
+            Err(AttachmentError::InvalidId)
+        );
+        std::fs::write(&file, b"PNG").unwrap();
+        assert!(matches!(
+            draft_file(&paths, INTAKE, &meta.id),
+            Err(AttachmentError::Corrupt(_))
+        ));
+    }
+
+    #[test]
+    fn removing_a_tasks_attachments_deletes_its_directory_only() {
+        let (dir, paths) = setup();
+        add_draft_from_bytes(&paths, INTAKE, "a.txt", b"alpha").unwrap();
+        commit_drafts(&paths, INTAKE, ROOT).unwrap();
+        let other = "3333333333333333";
+        add_draft_from_bytes(&paths, "4444444444444444", "b.txt", b"beta").unwrap();
+        commit_drafts(&paths, "4444444444444444", other).unwrap();
+
+        remove_task_attachments(&paths, ROOT).unwrap();
+        assert!(!paths.task_attachments_dir(ROOT).unwrap().exists());
+        assert_eq!(list_attachments(&paths, other).unwrap().len(), 1);
+        // Removing again is a no-op; bad ids are refused.
+        remove_task_attachments(&paths, ROOT).unwrap();
+        assert_eq!(
+            remove_task_attachments(&paths, ".."),
+            Err(AttachmentError::InvalidId)
+        );
+
+        // A linked task directory is removed itself, never followed.
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("keep.txt"), b"keep").unwrap();
+        link_dir(&outside, &paths.task_attachments_dir(ROOT).unwrap());
+        remove_task_attachments(&paths, ROOT).unwrap();
+        assert_eq!(std::fs::read(outside.join("keep.txt")).unwrap(), b"keep");
     }
 
     #[test]
