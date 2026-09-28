@@ -1,0 +1,136 @@
+.intake-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.intake-list__heading {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.intake-list__message {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.intake-list__error {
+  margin: 0;
+  color: var(--accent-red);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.intake-list__items {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.intake-list__item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-base);
+  min-width: 0;
+}
+
+.intake-list__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.intake-list__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.intake-list__badge {
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.intake-list__busy {
+  color: var(--primary);
+  font-size: 10px;
+}
+
+.intake-list__time {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.intake-list__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.intake-list__btn {
+  background: none;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 8px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.intake-list__btn:hover:not(:disabled) {
+  background: var(--bg-overlay);
+}
+
+.intake-list__btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.intake-list__warnings summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+
+.intake-list__warning-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.intake-list__warning {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.intake-list__warning-file {
+  font-family: monospace;
+  font-size: 11px;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.intake-list__warning-message {
+  white-space: pre-wrap;
+  word-break: break-word;
+}

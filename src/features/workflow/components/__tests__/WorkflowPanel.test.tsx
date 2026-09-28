@@ -13,8 +13,9 @@ const api = vi.hoisted(() => ({
   addStandard: vi.fn(),
   activeRunCount: vi.fn(),
   probeProviders: vi.fn(),
-  createTask: vi.fn(),
   gitignoreStatus: vi.fn(),
+  intakeList: vi.fn(),
+  openIntakeWindow: vi.fn(),
 }));
 const dialogs = vi.hoisted(() => ({
   showMessage: vi.fn(),
@@ -88,6 +89,8 @@ describe("WorkflowPanel", () => {
     api.activeRunCount.mockResolvedValue(0);
     api.probeProviders.mockResolvedValue([]);
     api.gitignoreStatus.mockResolvedValue({ missing: [] });
+    api.intakeList.mockResolvedValue({ sessions: [], warnings: [] });
+    api.openIntakeWindow.mockResolvedValue("intake-new");
     localStorage.clear();
     stopSync = null;
     useTabStore.setState({ activeFolderPath: "C:/proj" });
@@ -324,7 +327,7 @@ describe("WorkflowPanel", () => {
     expect(useWorkflowStore.getState().filters.workflowId).toBeNull();
   });
 
-  it("opens the built-in edit and task creation dialogs", async () => {
+  it("opens the built-in edit dialog", async () => {
     await render();
     await act(async () => button(row("wf1")!, i18n.t("workflow:panel.edit"))!.click());
     const edit = container.querySelector('[role="dialog"]')!;
@@ -332,12 +335,60 @@ describe("WorkflowPanel", () => {
     expect(edit.querySelector<HTMLInputElement>('[name="name"]')!.value).toBe("Flow wf1");
     await act(async () => button(edit, i18n.t("workflow:edit.cancel"))!.click());
     expect(container.querySelector('[role="dialog"]')).toBeNull();
+  });
 
+  it("starts a new task in an intake window of the project, preselecting the filtered workflow", async () => {
+    await render();
     await act(async () => button(container, i18n.t("workflow:panel.newTask"))!.click());
-    const create = container.querySelector('[role="dialog"]')!;
-    expect(create.textContent).toContain(i18n.t("workflow:create.title"));
-    const options = [...create.querySelectorAll<HTMLOptionElement>('[name="workflow"] option')].map((o) => o.value);
-    expect(options).toEqual(["wf2"]);
+    expect(api.openIntakeWindow).toHaveBeenLastCalledWith(ROOT, null, null);
+    // No task creation dialog: every new task goes through the intake.
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+
+    await act(async () => useWorkflowStore.getState().setFilters({ workflowId: "wf2" }));
+    await act(async () => button(container, i18n.t("workflow:panel.newTask"))!.click());
+    expect(api.openIntakeWindow).toHaveBeenLastCalledWith(ROOT, null, "wf2");
+  });
+
+  it("disables New task while the intake window opens and reports a failure", async () => {
+    let resolve!: (id: string) => void;
+    api.openIntakeWindow.mockReturnValue(new Promise<string>((r) => (resolve = r)));
+    await render();
+    const newTask = button(container, i18n.t("workflow:panel.newTask"))!;
+    await act(async () => newTask.click());
+    expect(newTask.disabled).toBe(true);
+    await act(async () => newTask.click());
+    expect(api.openIntakeWindow).toHaveBeenCalledTimes(1);
+    await act(async () => resolve("intake-new"));
+    expect(newTask.disabled).toBe(false);
+
+    api.openIntakeWindow.mockRejectedValue({ code: "WORKFLOW_PROJECT_INVALID", message: "no window" });
+    await act(async () => newTask.click());
+    expect(dialogs.showMessage).toHaveBeenCalledWith(
+      expect.stringContaining("no window"),
+      expect.objectContaining({ kind: "error" }),
+    );
+  });
+
+  it("lists the project's intakes", async () => {
+    api.intakeList.mockResolvedValue({
+      sessions: [
+        {
+          id: "i1",
+          kind: "feature",
+          status: "active",
+          busy: false,
+          messages: [],
+          proposal: { title: "Export to PDF", body: "" },
+          finalize: { stage: "ready", issue: null, issueCreating: false },
+          updatedAt: "2026-09-28T10:00:00Z",
+        },
+      ],
+      warnings: [],
+    });
+    await render();
+    const list = container.querySelector(".intake-list")!;
+    expect(list.textContent).toContain(i18n.t("workflow:intake.list.title"));
+    expect(list.querySelector('[data-intake-id="i1"]')!.textContent).toContain("Export to PDF");
   });
 
   it("passes the enable confirmation to the edit dialog", async () => {
@@ -350,22 +401,9 @@ describe("WorkflowPanel", () => {
     expect(enabled.checked).toBe(false);
   });
 
-  it("closes the create dialog and adds the standard workflow from it", async () => {
-    workflows = [workflow("wf1")];
-    dialogs.showPrompt.mockResolvedValue(null);
-    await render();
-    await act(async () => button(container, i18n.t("workflow:panel.newTask"))!.click());
-    await act(async () => button(container.querySelector('[role="dialog"]')!, i18n.t("workflow:panel.addStandard"))!.click());
-    expect(container.querySelector('[role="dialog"]')).toBeNull();
-    expect(dialogs.showPrompt).toHaveBeenCalled();
-  });
-
-  it("uses the given handlers instead of the built-in dialogs", async () => {
-    const onCreateTask = vi.fn();
+  it("uses the given edit handler instead of the built-in dialog", async () => {
     const onEditWorkflow = vi.fn();
-    await render({ onCreateTask, onEditWorkflow });
-    await act(async () => button(container, i18n.t("workflow:panel.newTask"))!.click());
-    expect(onCreateTask).toHaveBeenCalled();
+    await render({ onEditWorkflow });
     await act(async () => button(row("wf1")!, i18n.t("workflow:panel.edit"))!.click());
     expect(onEditWorkflow).toHaveBeenCalledWith(expect.objectContaining({ id: "wf1" }));
     expect(container.querySelector('[role="dialog"]')).toBeNull();

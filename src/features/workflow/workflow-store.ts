@@ -1,9 +1,21 @@
 import { create } from "zustand";
 import { showMessage } from "@/stores/dialog-store";
-import type { ProgressEvent, StoreWarning, Task, Workflow, WorkflowRun } from "@/shared/types/workflow";
+import type {
+  IntakeSessionView,
+  ProgressEvent,
+  StoreWarning,
+  Task,
+  Workflow,
+  WorkflowRun,
+} from "@/shared/types/workflow";
 import { isCommandError, sameRoot } from "./lib/errors";
 import { formatCommandError } from "./lib/format";
-import { subscribeWorkflowEvents, workflowApi } from "./lib/workflow-api";
+import {
+  subscribeIntakeChanged,
+  subscribeWorkflowEvents,
+  subscribeWorkflowsChanged,
+  workflowApi,
+} from "./lib/workflow-api";
 
 /** Latest progress line of a running task. */
 export interface TaskProgress {
@@ -20,6 +32,11 @@ export interface ProjectState {
   tasks: Task[];
   taskWarnings: StoreWarning[];
   runs: WorkflowRun[];
+  /** Intake sessions of every status, newest first. */
+  intakes: IntakeSessionView[];
+  intakeWarnings: StoreWarning[];
+  /** Localized intake list failure, or null; the other lists stay usable. */
+  intakeError: string | null;
   /** Keyed by task id. */
   progress: Record<string, TaskProgress>;
   /** True only while the project's first load is in progress. */
@@ -61,8 +78,10 @@ interface WorkflowState {
   filters: WorkflowFilters;
   /** Attaches the folder and loads its lists; null clears the active root. */
   activate(folderPath: string | null): Promise<void>;
-  /** Reloads workflows, tasks and runs of a project. */
+  /** Reloads workflows, tasks, runs and intake sessions of a project. */
   refresh(root: string): Promise<void>;
+  /** Reloads only the intake sessions of a project. */
+  refreshIntakes(root: string): Promise<void>;
   openTask(taskId: string | null): void;
   setFilters(p: Partial<WorkflowFilters>): void;
   /**
@@ -89,6 +108,9 @@ function emptyProject(root: string): ProjectState {
     tasks: [],
     taskWarnings: [],
     runs: [],
+    intakes: [],
+    intakeWarnings: [],
+    intakeError: null,
     progress: {},
     loading: false,
     refreshing: false,
@@ -109,10 +131,43 @@ let activateSeq = 0;
 let activeFolder: string | null = null;
 /** Latest refresh sequence per root; older refresh results are dropped. */
 const refreshSeq = new Map<string, number>();
+/** Latest intake refresh sequence per root; older intake list results are dropped. */
+const intakeRefreshSeq = new Map<string, number>();
 
 export const useWorkflowStore = create<WorkflowState>()((set, get) => {
   const updateProject = (root: string, fn: (p: ProjectState) => ProjectState) =>
     set((s) => ({ projects: { ...s.projects, [root]: fn(s.projects[root] ?? emptyProject(root)) } }));
+
+  /** Reloads workflows, tasks and runs of a project (not its intakes). */
+  const loadLists = async (root: string) => {
+    const seq = (refreshSeq.get(root) ?? 0) + 1;
+    refreshSeq.set(root, seq);
+    updateProject(root, (p) => (p.loaded ? { ...p, refreshing: true } : { ...p, loading: true }));
+    try {
+      const [workflows, tasks, runs] = await Promise.all([
+        workflowApi.listWorkflows(root),
+        workflowApi.listTasks(root),
+        workflowApi.listRuns(root),
+      ]);
+      if (refreshSeq.get(root) !== seq) return;
+      updateProject(root, (p) => ({
+        ...p,
+        workflows: workflows.workflows,
+        workflowWarnings: workflows.warnings,
+        tasks: tasks.tasks,
+        taskWarnings: tasks.warnings,
+        runs: runs.runs,
+        progress: pruneProgress(p.progress, tasks.tasks),
+        loading: false,
+        refreshing: false,
+        loaded: true,
+        error: null,
+      }));
+    } catch (err) {
+      if (refreshSeq.get(root) !== seq) return;
+      updateProject(root, (p) => ({ ...p, loading: false, refreshing: false, error: formatCommandError(err) }));
+    }
+  };
 
   return {
     activeRoot: null,
@@ -147,32 +202,19 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => {
     },
 
     async refresh(root) {
-      const seq = (refreshSeq.get(root) ?? 0) + 1;
-      refreshSeq.set(root, seq);
-      updateProject(root, (p) => (p.loaded ? { ...p, refreshing: true } : { ...p, loading: true }));
+      await Promise.all([loadLists(root), get().refreshIntakes(root)]);
+    },
+
+    async refreshIntakes(root) {
+      const seq = (intakeRefreshSeq.get(root) ?? 0) + 1;
+      intakeRefreshSeq.set(root, seq);
       try {
-        const [workflows, tasks, runs] = await Promise.all([
-          workflowApi.listWorkflows(root),
-          workflowApi.listTasks(root),
-          workflowApi.listRuns(root),
-        ]);
-        if (refreshSeq.get(root) !== seq) return;
-        updateProject(root, (p) => ({
-          ...p,
-          workflows: workflows.workflows,
-          workflowWarnings: workflows.warnings,
-          tasks: tasks.tasks,
-          taskWarnings: tasks.warnings,
-          runs: runs.runs,
-          progress: pruneProgress(p.progress, tasks.tasks),
-          loading: false,
-          refreshing: false,
-          loaded: true,
-          error: null,
-        }));
+        const list = await workflowApi.intakeList(root);
+        if (intakeRefreshSeq.get(root) !== seq) return;
+        updateProject(root, (p) => ({ ...p, intakes: list.sessions, intakeWarnings: list.warnings, intakeError: null }));
       } catch (err) {
-        if (refreshSeq.get(root) !== seq) return;
-        updateProject(root, (p) => ({ ...p, loading: false, refreshing: false, error: formatCommandError(err) }));
+        if (intakeRefreshSeq.get(root) !== seq) return;
+        updateProject(root, (p) => ({ ...p, intakeError: formatCommandError(err) }));
       }
     },
 
@@ -217,19 +259,61 @@ let bridgeUsers = 0;
 let bridgeSubscription: Promise<() => void> | null = null;
 /** Pending debounced refreshes, keyed by project root. */
 const refreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
+/** Pending debounced intake refreshes, keyed by project root. */
+const intakeRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-function scheduleRefresh(eventRoot: string) {
+/** Runs `refresh(root)` for the known project of `eventRoot` once its events pause. */
+function debounce(
+  timers: Map<string, ReturnType<typeof setTimeout>>,
+  eventRoot: string,
+  refresh: (root: string) => Promise<void>,
+) {
   const root = knownRoot(eventRoot);
   if (!root) return;
-  const pending = refreshTimers.get(root);
+  const pending = timers.get(root);
   if (pending !== undefined) clearTimeout(pending);
-  refreshTimers.set(
+  timers.set(
     root,
     setTimeout(() => {
-      refreshTimers.delete(root);
-      void useWorkflowStore.getState().refresh(root);
+      timers.delete(root);
+      void refresh(root);
     }, REFRESH_DEBOUNCE_MS),
   );
+}
+
+function scheduleRefresh(eventRoot: string) {
+  debounce(refreshTimers, eventRoot, (root) => useWorkflowStore.getState().refresh(root));
+}
+
+function scheduleIntakeRefresh(eventRoot: string) {
+  debounce(intakeRefreshTimers, eventRoot, (root) => useWorkflowStore.getState().refreshIntakes(root));
+}
+
+/**
+ * Subscribes to the orchestrator, intake and workflow file events; resolves
+ * to a function removing every listener. Fails as a whole (without leaking
+ * listeners) when any subscription fails.
+ */
+async function subscribeAll(): Promise<() => void> {
+  const results = await Promise.allSettled([
+    subscribeWorkflowEvents({
+      onTaskChanged: (e) => scheduleRefresh(e.projectRoot),
+      onRunChanged: (e) => scheduleRefresh(e.projectRoot),
+      onProgress: updateProgress,
+    }),
+    subscribeIntakeChanged((e) => scheduleIntakeRefresh(e.projectRoot)),
+    subscribeWorkflowsChanged((e) => scheduleRefresh(e.projectRoot)),
+  ]);
+  const unsubscribers: (() => void)[] = [];
+  for (const r of results) if (r.status === "fulfilled") unsubscribers.push(r.value);
+  const failed = results.find((r) => r.status === "rejected");
+  if (failed) {
+    for (const unsubscribe of unsubscribers) unsubscribe();
+    throw failed.reason;
+  }
+  return () => {
+    for (const unsubscribe of unsubscribers) unsubscribe();
+  };
 }
 
 function updateProgress(e: ProgressEvent) {
@@ -250,20 +334,17 @@ function updateProgress(e: ProgressEvent) {
 }
 
 /**
- * Holds the orchestrator event subscription (ref-counted: every caller shares
- * one subscription). Task/run events for a known project schedule a debounced
- * refresh; progress events update the latest progress line of known
- * projects. Resolves to this caller's idempotent release; the subscription
+ * Holds the workflow event subscription (ref-counted: every caller shares
+ * one subscription). Task/run and `workflows-changed` events for a known
+ * project schedule a debounced refresh, `intake-changed` events a debounced
+ * refresh of its intakes; progress events update the latest progress line of
+ * known projects. Resolves to this caller's idempotent release; the subscription
  * ends when every caller has released it.
  */
 export async function startWorkflowEventBridge(): Promise<() => void> {
   bridgeUsers++;
   if (!bridgeSubscription) {
-    const subscription = subscribeWorkflowEvents({
-      onTaskChanged: (e) => scheduleRefresh(e.projectRoot),
-      onRunChanged: (e) => scheduleRefresh(e.projectRoot),
-      onProgress: updateProgress,
-    });
+    const subscription = subscribeAll();
     bridgeSubscription = subscription;
     subscription.catch(() => {
       if (bridgeSubscription === subscription) bridgeSubscription = null;
@@ -283,8 +364,10 @@ export async function startWorkflowEventBridge(): Promise<() => void> {
     bridgeUsers--;
     if (bridgeUsers > 0) return;
     if (bridgeSubscription === subscription) bridgeSubscription = null;
-    for (const timer of refreshTimers.values()) clearTimeout(timer);
-    refreshTimers.clear();
+    for (const timers of [refreshTimers, intakeRefreshTimers]) {
+      for (const timer of timers.values()) clearTimeout(timer);
+      timers.clear();
+    }
     void subscription.then((unsubscribe) => unsubscribe());
   };
 }

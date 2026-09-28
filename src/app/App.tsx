@@ -27,7 +27,7 @@ import { FolderTabBar, TabBar } from "./components/TabBar";
 import { StatusBar } from "./components/StatusBar";
 import { MainArea } from "./components/MainArea";
 import { startWorkflowEventBridge } from "@/features/workflow/workflow-store";
-import { startWorkflowFolderSync } from "@/features/workflow/folder-sync";
+import { startWorkflowFolderSync, startWorkflowOpenTaskListener } from "@/features/workflow/folder-sync";
 import { startSettingsSync } from "@/shared/lib/settings-sync";
 import { LeftPanel } from "@/features/file-tree/components/LeftPanel";
 import { EditorPanel } from "@/features/editor/components/EditorPanel";
@@ -76,6 +76,21 @@ export function App() {
   }, []);
   // Attach the active folder's workflows whether or not a workflow view is shown.
   useEffect(() => startWorkflowFolderSync(), []);
+  // Open the tasks that intake windows create in the workflow view.
+  useEffect(() => {
+    let disposed = false;
+    let release: (() => void) | null = null;
+    startWorkflowOpenTaskListener()
+      .then((r) => {
+        if (disposed) r();
+        else release = r;
+      })
+      .catch((err) => console.error("[workflow] open-task listener failed", err));
+    return () => {
+      disposed = true;
+      release?.();
+    };
+  }, []);
   // Follow theme and language changes made in other windows (e.g. intake windows).
   useEffect(() => startSettingsSync(), []);
   const initializeTheme = useSettingsStore((s) => s.initializeTheme);

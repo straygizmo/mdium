@@ -2,11 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useTabStore } from "@/stores/tab-store";
 import { showConfirm, showMessage, showPrompt } from "@/stores/dialog-store";
-import type { Provider, StoreWarning, Workflow, WorkflowInput } from "@/shared/types/workflow";
-import { formatCode, formatCommandError } from "../lib/format";
+import type { Provider, Workflow, WorkflowInput } from "@/shared/types/workflow";
+import { formatCommandError, formatWarning } from "../lib/format";
 import { workflowApi } from "../lib/workflow-api";
 import { useWorkflowStore } from "../workflow-store";
-import { CreateTaskDialog } from "./CreateTaskDialog";
+import { IntakeList } from "./IntakeList";
 import { useSafetyConfirm } from "./SafetyNoticeDialog";
 import { WorkflowEditDialog } from "./WorkflowEditDialog";
 import "./WorkflowPanel.css";
@@ -17,8 +17,6 @@ const PROVIDERS: readonly Provider[] = ["codex", "copilot", "opencode", "claude"
 const WORKFLOWS_SCHEMA_VERSION = 1;
 
 interface WorkflowPanelProps {
-  /** Replaces the built-in task creation dialog. */
-  onCreateTask?: () => void;
   /** Replaces the built-in workflow edit dialog. */
   onEditWorkflow?: (workflow: Workflow) => void;
   /**
@@ -58,16 +56,8 @@ function rememberGitignoreDismissed(root: string): void {
   }
 }
 
-/** Localizes a store warning (`STORE_*` code plus an optional `: detail`). */
-function formatWarning(warning: StoreWarning): string {
-  const match = /^([A-Z][A-Z0-9_]*)(?::\s*(.*))?$/s.exec(warning.message);
-  if (!match) return warning.message;
-  const [, code, detail] = match;
-  return detail ? `${formatCode(code)} ${detail}` : formatCode(code);
-}
-
 /** Left panel of the workflows view: workflow list, warnings and board filters. */
-export function WorkflowPanel({ onCreateTask, onEditWorkflow, confirmEnable: confirmEnableProp }: WorkflowPanelProps) {
+export function WorkflowPanel({ onEditWorkflow, confirmEnable: confirmEnableProp }: WorkflowPanelProps) {
   const { t } = useTranslation("workflow");
   const activeFolderPath = useTabStore((s) => s.activeFolderPath);
   const activeRoot = useWorkflowStore((s) => s.activeRoot);
@@ -79,8 +69,10 @@ export function WorkflowPanel({ onCreateTask, onEditWorkflow, confirmEnable: con
   const [busy, setBusy] = useState(false);
   /** Workflow shown in the built-in edit dialog. */
   const [editing, setEditing] = useState<Workflow | null>(null);
-  /** Whether the built-in task creation dialog is open. */
-  const [creating, setCreating] = useState(false);
+  /** Whether the intake window for a new task is being opened. */
+  const [starting, setStarting] = useState(false);
+  /** Synchronous guard against opening the new task window twice. */
+  const startingRef = useRef(false);
   /** Synchronous guard: only one workflow operation runs at a time. */
   const busyRef = useRef(false);
   const safety = useSafetyConfirm();
@@ -101,7 +93,6 @@ export function WorkflowPanel({ onCreateTask, onEditWorkflow, confirmEnable: con
   const cancelSafety = safety.cancel;
   useEffect(() => {
     setEditing(null);
-    setCreating(false);
     cancelSafety();
   }, [activeRoot, cancelSafety]);
 
@@ -252,7 +243,20 @@ export function WorkflowPanel({ onCreateTask, onEditWorkflow, confirmEnable: con
     setGitignore(null);
   };
 
-  const openCreate = onCreateTask ?? (() => setCreating(true));
+  /** Every new task starts with a requirement intake in its own window. */
+  const startTask = async (root: string) => {
+    if (startingRef.current) return;
+    startingRef.current = true;
+    setStarting(true);
+    try {
+      await workflowApi.openIntakeWindow(root, null, filters.workflowId);
+    } catch (err) {
+      void showMessage(formatCommandError(err), { title: t("intake.actionFailed"), kind: "error" });
+    } finally {
+      startingRef.current = false;
+      setStarting(false);
+    }
+  };
   const openEdit = onEditWorkflow ?? setEditing;
 
   return (
@@ -261,15 +265,6 @@ export function WorkflowPanel({ onCreateTask, onEditWorkflow, confirmEnable: con
         <WorkflowEditDialog workflow={editing} confirmEnable={confirmEnable} onClose={() => setEditing(null)} />
       )}
       {safety.dialog}
-      {creating && (
-        <CreateTaskDialog
-          onClose={() => setCreating(false)}
-          onAddStandard={() => {
-            setCreating(false);
-            void addStandard();
-          }}
-        />
-      )}
       {attachError && (
         <p className="workflow-panel__error" role="alert">
           {attachError}
@@ -282,9 +277,16 @@ export function WorkflowPanel({ onCreateTask, onEditWorkflow, confirmEnable: con
       )}
       {activeRoot && (
         <>
-          <button type="button" className="workflow-panel__btn workflow-panel__btn--primary" onClick={openCreate}>
+          <button
+            type="button"
+            className="workflow-panel__btn workflow-panel__btn--primary"
+            disabled={starting}
+            onClick={() => void startTask(activeRoot)}
+          >
             {t("panel.newTask")}
           </button>
+
+          <IntakeList />
 
           {gitignore?.root === activeRoot && (
             <section className="workflow-panel__gitignore" aria-labelledby="workflow-panel-gitignore-title">

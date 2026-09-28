@@ -1,5 +1,5 @@
 import i18n from "@/shared/i18n";
-import type { AttentionReason } from "@/shared/types/workflow";
+import type { AttentionReason, StoreWarning } from "@/shared/types/workflow";
 import { isCommandError, isRecord } from "./errors";
 
 export { isCommandError, sameRoot } from "./errors";
@@ -21,6 +21,14 @@ export function formatCode(code: string, params?: Record<string, string>): strin
     return i18n.t(key, { ...params, missingInterpolationHandler }).trim();
   }
   return i18n.t("workflow:codes.unknown", { code });
+}
+
+/** Localizes a store warning (`STORE_*` code plus an optional `: detail`). */
+export function formatWarning(warning: StoreWarning): string {
+  const match = /^([A-Z][A-Z0-9_]*)(?::\s*(.*))?$/s.exec(warning.message);
+  if (!match) return warning.message;
+  const [, code, detail] = match;
+  return detail ? `${formatCode(code)} ${detail}` : formatCode(code);
 }
 
 /** Localizes a guard rule id; unknown ids show the raw id after the generic label. */

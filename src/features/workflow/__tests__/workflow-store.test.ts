@@ -1,11 +1,14 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  IntakeChangedEvent,
+  IntakeSessionView,
   ProgressEvent,
   RunChangedEvent,
   Task,
   TaskChangedEvent,
   Workflow,
+  WorkflowsChangedEvent,
 } from "@/shared/types/workflow";
 import type { WorkflowEventHandlers } from "../lib/workflow-api";
 
@@ -14,10 +17,18 @@ const api = vi.hoisted(() => ({
   listWorkflows: vi.fn(),
   listTasks: vi.fn(),
   listRuns: vi.fn(),
+  intakeList: vi.fn(),
 }));
 const subscribe = vi.hoisted(() => vi.fn());
+const subscribeIntake = vi.hoisted(() => vi.fn());
+const subscribeWorkflowsChanged = vi.hoisted(() => vi.fn());
 const showMessage = vi.hoisted(() => vi.fn());
-vi.mock("../lib/workflow-api", () => ({ workflowApi: api, subscribeWorkflowEvents: subscribe }));
+vi.mock("../lib/workflow-api", () => ({
+  workflowApi: api,
+  subscribeWorkflowEvents: subscribe,
+  subscribeIntakeChanged: subscribeIntake,
+  subscribeWorkflowsChanged,
+}));
 vi.mock("@/stores/dialog-store", () => ({ showMessage }));
 
 import i18n from "@/shared/i18n";
@@ -57,6 +68,13 @@ function task(id: string, status: Task["meta"]["status"] = "inbox"): Task {
 
 const WORKFLOW = { id: "wf1", name: "WF" } as Workflow;
 
+function intake(id: string): IntakeSessionView {
+  return { id, status: "active", busy: false } as IntakeSessionView;
+}
+
+/** Per-root intake sessions returned by the mocked `intakeList`. */
+let intakesByRoot: Record<string, IntakeSessionView[]>;
+
 /** Per-root task lists returned by the mocked `listTasks`. */
 let tasksByRoot: Record<string, Task[]>;
 
@@ -71,7 +89,11 @@ function deferred<T>() {
 const initialState = useWorkflowStore.getState();
 let releases: (() => void)[] = [];
 let handlers: WorkflowEventHandlers;
+let onIntakeChanged: (e: IntakeChangedEvent) => void;
+let onWorkflowsChanged: (e: WorkflowsChangedEvent) => void;
 const unsubscribe = vi.hoisted(() => vi.fn());
+const unsubscribeIntake = vi.hoisted(() => vi.fn());
+const unsubscribeWorkflows = vi.hoisted(() => vi.fn());
 
 async function startBridge() {
   const release = await startWorkflowEventBridge();
@@ -92,9 +114,19 @@ describe("workflow store", () => {
     api.listWorkflows.mockResolvedValue({ workflows: [WORKFLOW], warnings: [] });
     api.listTasks.mockImplementation(async (root: string) => ({ tasks: tasksByRoot[root] ?? [], warnings: [] }));
     api.listRuns.mockResolvedValue({ runs: [], warnings: [] });
+    intakesByRoot = { [ROOT_A]: [intake("i1")], [ROOT_B]: [intake("i2")] };
+    api.intakeList.mockImplementation(async (root: string) => ({ sessions: intakesByRoot[root] ?? [], warnings: [] }));
     subscribe.mockImplementation(async (h: WorkflowEventHandlers) => {
       handlers = h;
       return unsubscribe;
+    });
+    subscribeIntake.mockImplementation(async (h: (e: IntakeChangedEvent) => void) => {
+      onIntakeChanged = h;
+      return unsubscribeIntake;
+    });
+    subscribeWorkflowsChanged.mockImplementation(async (h: (e: WorkflowsChangedEvent) => void) => {
+      onWorkflowsChanged = h;
+      return unsubscribeWorkflows;
     });
   });
 
@@ -113,8 +145,74 @@ describe("workflow store", () => {
     expect(p.workflows).toEqual([WORKFLOW]);
     expect(p.tasks.map((t) => t.meta.id)).toEqual(["a1"]);
     expect(p.runs).toEqual([]);
+    expect(p.intakes.map((i) => i.id)).toEqual(["i1"]);
+    expect(api.intakeList).toHaveBeenCalledWith(ROOT_A);
     expect(p.loading).toBe(false);
     expect(p.error).toBeNull();
+  });
+
+  it("keeps the lists and stores the intake error when the intake list fails", async () => {
+    api.intakeList.mockRejectedValue({ code: "WORKFLOW_PROJECT_INVALID", message: "no intakes" });
+    await useWorkflowStore.getState().activate(ROOT_A);
+    const p = useWorkflowStore.getState().projects[ROOT_A];
+    expect(p.tasks.map((t) => t.meta.id)).toEqual(["a1"]);
+    expect(p.error).toBeNull();
+    expect(p.intakeError).toContain("no intakes");
+    api.intakeList.mockResolvedValue({ sessions: [intake("i3")], warnings: [] });
+    await useWorkflowStore.getState().refreshIntakes(ROOT_A);
+    const next = useWorkflowStore.getState().projects[ROOT_A];
+    expect(next.intakeError).toBeNull();
+    expect(next.intakes.map((i) => i.id)).toEqual(["i3"]);
+  });
+
+  it("refreshes only the intakes of the event's project on intake-changed, debounced", async () => {
+    vi.useFakeTimers();
+    await useWorkflowStore.getState().activate(ROOT_A);
+    await startBridge();
+    api.intakeList.mockClear();
+    api.listTasks.mockClear();
+    intakesByRoot[ROOT_A] = [intake("i1"), intake("i4")];
+    onIntakeChanged({ projectRoot: ROOT_A, intakeId: "i4", status: "active", busy: true });
+    onIntakeChanged({ projectRoot: ROOT_A, intakeId: "i4", status: "active", busy: false });
+    onIntakeChanged({ projectRoot: ROOT_B, intakeId: "i2", status: "active", busy: false });
+    await vi.advanceTimersByTimeAsync(149);
+    expect(api.intakeList).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(api.intakeList).toHaveBeenCalledTimes(1);
+    expect(api.intakeList).toHaveBeenCalledWith(ROOT_A);
+    expect(api.listTasks).not.toHaveBeenCalled();
+    expect(useWorkflowStore.getState().projects[ROOT_A].intakes.map((i) => i.id)).toEqual(["i1", "i4"]);
+  });
+
+  it("refreshes the workflows of the event's project on workflows-changed", async () => {
+    vi.useFakeTimers();
+    await useWorkflowStore.getState().activate(ROOT_A);
+    await startBridge();
+    api.listWorkflows.mockClear();
+    const renamed = { id: "wf1", name: "Renamed" } as Workflow;
+    api.listWorkflows.mockResolvedValue({ workflows: [renamed], warnings: [] });
+    onWorkflowsChanged({ projectRoot: ROOT_B });
+    onWorkflowsChanged({ projectRoot: ROOT_A });
+    await vi.advanceTimersByTimeAsync(150);
+    expect(api.listWorkflows).toHaveBeenCalledTimes(1);
+    expect(api.listWorkflows).toHaveBeenCalledWith(ROOT_A);
+    expect(useWorkflowStore.getState().projects[ROOT_A].workflows).toEqual([renamed]);
+  });
+
+  it("removes every listener when the bridge is released and fails as a whole", async () => {
+    const release = await startWorkflowEventBridge();
+    release();
+    await Promise.resolve();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expect(unsubscribeIntake).toHaveBeenCalledTimes(1);
+    expect(unsubscribeWorkflows).toHaveBeenCalledTimes(1);
+
+    vi.clearAllMocks();
+    subscribeWorkflowsChanged.mockRejectedValue(new Error("denied"));
+    await expect(startWorkflowEventBridge()).rejects.toThrow("denied");
+    // The listeners that did register are removed again.
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expect(unsubscribeIntake).toHaveBeenCalledTimes(1);
   });
 
   it("keeps activeRoot on the latest folder when switching mid-load", async () => {
