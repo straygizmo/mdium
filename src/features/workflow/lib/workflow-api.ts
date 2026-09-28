@@ -176,8 +176,12 @@ export const workflowApi = {
   /** Verified absolute path of a committed attachment's content (for `convertFileSrc` or opening it). */
   attachmentPath: (projectRoot: string, rootTaskId: string, attachmentId: string) =>
     call<string>("workflow_attachment_path", { projectRoot, rootTaskId, attachmentId }),
-  retryIssueSync: taskAction("workflow_retry_issue_sync"),
-  skipIssueSync: taskAction("workflow_skip_issue_sync"),
+  /** Posts the pending Issue entry; `acceptIntegrity` first accepts the repository as it is now. */
+  retryIssueSync: (projectRoot: string, taskId: string, acceptIntegrity = false) =>
+    call<Task>("workflow_retry_issue_sync", { projectRoot, taskId, acceptIntegrity }),
+  /** Completes the stage without the Issue entry; `acceptIntegrity` first accepts the repository as it is now. */
+  skipIssueSync: (projectRoot: string, taskId: string, acceptIntegrity = false) =>
+    call<Task>("workflow_skip_issue_sync", { projectRoot, taskId, acceptIntegrity }),
   retryIssueClose: (projectRoot: string, rootTaskId: string) =>
     call<WorkflowRun>("workflow_retry_issue_close", { projectRoot, rootTaskId }),
   /**

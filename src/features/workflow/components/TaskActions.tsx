@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { showConfirm } from "@/stores/dialog-store";
 import type { Task } from "@/shared/types/workflow";
 import { isCommandError } from "../lib/errors";
-import { formatIssueEntry } from "../lib/format";
+import { formatIssueEntry, formatItems } from "../lib/format";
 import { workflowApi } from "../lib/workflow-api";
 import { useWorkflowStore } from "../workflow-store";
 import { RetryDialog, type RetryOptions } from "./RetryDialog";
@@ -24,6 +24,9 @@ type Action =
   | "delete";
 
 const INTEGRITY_ACK_REQUIRED = "WORKFLOW_INTEGRITY_ACK_REQUIRED";
+
+/** Refusal of an Issue sync action; the message is the JSON list of the repository changes. */
+const INTEGRITY_CHANGED = "WORKFLOW_INTEGRITY_CHANGED";
 
 /** Attention after a stage result could not be posted to the run's Issue. */
 export const ISSUE_SYNC_FAILED = "ATTENTION_ISSUE_SYNC_FAILED";
@@ -59,6 +62,14 @@ function actionsFor(task: Task): Action[] {
   }
 }
 
+type SyncAction = "retryIssueSync" | "skipIssueSync";
+
+/** Repository changes that refused an Issue sync action, awaiting the user's acceptance. */
+interface IntegrityState {
+  action: SyncAction;
+  items: string[];
+}
+
 /** State of the retry dialog while it is shown. */
 interface RetryState {
   integrityAckRequired: boolean;
@@ -71,6 +82,7 @@ export function TaskActions({ task }: { task: Task }) {
   const [busy, setBusy] = useState(false);
   const [text, setText] = useState("");
   const [retry, setRetry] = useState<RetryState | null>(null);
+  const [integrity, setIntegrity] = useState<IntegrityState | null>(null);
   const { id, title, status, awaiting } = task.meta;
   const actions = actionsFor(task);
   const needsText = status === "awaiting_user";
@@ -104,6 +116,27 @@ export function TaskActions({ task }: { task: Task }) {
     if (ackRequired) setRetry({ integrityAckRequired: true, options });
   };
 
+  /**
+   * Runs an Issue sync action; a refusal over repository changes shows them
+   * with the option to accept them instead of an error.
+   */
+  const syncIssue = async (action: SyncAction, acceptIntegrity: boolean) => {
+    setIntegrity(null);
+    let refused: IntegrityState | null = null;
+    await execute(async (root) => {
+      try {
+        return await workflowApi[action](root, id, acceptIntegrity);
+      } catch (err) {
+        if (!acceptIntegrity && isCommandError(err) && err.code === INTEGRITY_CHANGED) {
+          refused = { action, items: formatItems(err.message) };
+          return undefined;
+        }
+        throw err;
+      }
+    });
+    if (refused) setIntegrity(refused);
+  };
+
   const onAction = async (action: Action) => {
     switch (action) {
       case "cancel": {
@@ -128,12 +161,14 @@ export function TaskActions({ task }: { task: Task }) {
         }
         break;
       case "retryIssueSync":
-        await execute((root) => workflowApi.retryIssueSync(root, id));
+        await syncIssue("retryIssueSync", false);
         break;
       case "skipIssueSync": {
-        const entry = formatIssueEntry(task.meta.attention?.params?.entry ?? task.meta.pendingIssueEntry ?? undefined);
+        const entry =
+          formatIssueEntry(task.meta.attention?.params?.entry ?? task.meta.pendingIssueEntry ?? undefined) ||
+          t("intake.issueSync.entryFallback");
         if (await showConfirm(t("intake.issueSync.skipConfirm", { entry }), { kind: "warning" })) {
-          await execute((root) => workflowApi.skipIssueSync(root, id));
+          await syncIssue("skipIssueSync", false);
         }
         break;
       }
@@ -180,6 +215,39 @@ export function TaskActions({ task }: { task: Task }) {
             onChange={(e) => setText(e.target.value)}
           />
         </label>
+      )}
+      {integrity && (
+        <div className="workflow-actions__integrity" role="alert">
+          <p className="workflow-actions__integrity-text">{t("intake.issueSync.integrityChanged")}</p>
+          {integrity.items.length > 0 && (
+            <ul className="workflow-actions__integrity-list">
+              {integrity.items.map((item, i) => (
+                <li key={i}>{item}</li>
+              ))}
+            </ul>
+          )}
+          <p className="workflow-actions__integrity-help">{t("intake.issueSync.integrityHelp")}</p>
+          <div className="workflow-actions__integrity-buttons">
+            <button
+              type="button"
+              className="workflow-actions__btn"
+              data-action="dismissIntegrity"
+              disabled={busy}
+              onClick={() => setIntegrity(null)}
+            >
+              {t("intake.issueSync.dismiss")}
+            </button>
+            <button
+              type="button"
+              className="workflow-actions__btn workflow-actions__btn--danger"
+              data-action="acceptIntegrity"
+              disabled={busy}
+              onClick={() => void syncIssue(integrity.action, true)}
+            >
+              {t(integrity.action === "retryIssueSync" ? "intake.issueSync.acceptRetry" : "intake.issueSync.acceptSkip")}
+            </button>
+          </div>
+        </div>
       )}
       <div className="workflow-actions__buttons" role="group" aria-label={t("actions.label")}>
         {actions.map((action) => (

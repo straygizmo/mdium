@@ -2026,7 +2026,7 @@ mod tests {
         let landed = issue_sync::design_body("# Design\nthe plan", &entry);
         env.forge.set_comments(ISSUE, &[&landed]);
 
-        crate::workflow::actions::retry_issue_sync(&env.orch, env.fx.root(), &id).unwrap();
+        crate::workflow::actions::retry_issue_sync(&env.orch, env.fx.root(), &id, false).unwrap();
         env.wait_idle();
 
         assert_eq!(env.forge.calls(), [ForgeCall::ListComments(ISSUE)]);
@@ -2054,14 +2054,14 @@ mod tests {
         // A retry that fails again leaves everything as it was.
         env.forge
             .set_failure(FakeOp::AddComment, Some(ForgeError::NotAuthenticated));
-        let err =
-            crate::workflow::actions::retry_issue_sync(&env.orch, env.fx.root(), &id).unwrap_err();
+        let err = crate::workflow::actions::retry_issue_sync(&env.orch, env.fx.root(), &id, false)
+            .unwrap_err();
         assert_eq!(err.code(), "FORGE_NOT_AUTHENTICATED");
         assert_eq!(env.tasks().len(), 1);
         assert!(!doc.exists());
         env.forge.set_failure(FakeOp::AddComment, None);
 
-        crate::workflow::actions::retry_issue_sync(&env.orch, env.fx.root(), &id).unwrap();
+        crate::workflow::actions::retry_issue_sync(&env.orch, env.fx.root(), &id, false).unwrap();
         env.wait_idle();
 
         let bodies = comment_bodies(&env);
@@ -2082,7 +2082,7 @@ mod tests {
         let root = design_with_failed_sync(&env, FakeOp::ListComments);
         let id = root.meta.id.clone();
 
-        crate::workflow::actions::skip_issue_sync(&env.orch, env.fx.root(), &id).unwrap();
+        crate::workflow::actions::skip_issue_sync(&env.orch, env.fx.root(), &id, false).unwrap();
         env.wait_idle();
 
         // The implement attempt (unscripted: attention) posts nothing.
@@ -2250,7 +2250,7 @@ mod tests {
 
         // The retry finds the landed entry by its marker and advances.
         env.forge.clear_calls();
-        crate::workflow::actions::retry_issue_sync(&next, env.fx.root(), &id).unwrap();
+        crate::workflow::actions::retry_issue_sync(&next, env.fx.root(), &id, false).unwrap();
         assert!(next.wait_idle(WAIT));
         assert_eq!(env.forge.calls(), [ForgeCall::ListComments(ISSUE)]);
         assert_eq!(comment_bodies(&env), [posted]);
@@ -2285,7 +2285,7 @@ mod tests {
         assert_eq!(env.tasks().len(), 1);
         assert_eq!(env.run(&id).attempts[0].issue_sync_pending, None);
 
-        crate::workflow::actions::retry_issue_sync(&env.orch, env.fx.root(), &id).unwrap();
+        crate::workflow::actions::retry_issue_sync(&env.orch, env.fx.root(), &id, false).unwrap();
         assert_eq!(comment_bodies(&env).len(), 1);
         assert_eq!(env.task(&id).meta.status, TaskStatus::Completed);
         assert_eq!(env.tasks().len(), 2);

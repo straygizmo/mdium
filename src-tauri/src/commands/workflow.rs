@@ -1483,29 +1483,33 @@ pub async fn workflow_list_attachments(
 }
 
 /// Posts the pending Issue entry of a task whose Issue sync failed, then
-/// completes its stage.
+/// completes its stage; `accept_integrity` first accepts the repository as
+/// it is now as the run's integrity baseline.
 #[tauri::command]
 pub async fn workflow_retry_issue_sync(
     state: tauri::State<'_, WorkflowState>,
     project_root: String,
     task_id: String,
+    accept_integrity: Option<bool>,
 ) -> Result<Task, CommandError> {
     with_project(state, project_root, move |orch, root| {
-        actions::retry_issue_sync(orch, root, &task_id)
+        actions::retry_issue_sync(orch, root, &task_id, accept_integrity.unwrap_or(false))
     })
     .await
 }
 
 /// Completes the stage of a task whose Issue sync failed without posting
-/// its Issue entry.
+/// its Issue entry; `accept_integrity` first accepts the repository as it
+/// is now as the run's integrity baseline.
 #[tauri::command]
 pub async fn workflow_skip_issue_sync(
     state: tauri::State<'_, WorkflowState>,
     project_root: String,
     task_id: String,
+    accept_integrity: Option<bool>,
 ) -> Result<Task, CommandError> {
     with_project(state, project_root, move |orch, root| {
-        actions::skip_issue_sync(orch, root, &task_id)
+        actions::skip_issue_sync(orch, root, &task_id, accept_integrity.unwrap_or(false))
     })
     .await
 }

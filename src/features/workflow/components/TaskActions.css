@@ -60,3 +60,36 @@
 .workflow-actions__btn--danger {
   color: var(--accent-red);
 }
+
+.workflow-actions__integrity {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--accent-red);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.workflow-actions__integrity-text,
+.workflow-actions__integrity-help {
+  margin: 0;
+}
+
+.workflow-actions__integrity-help {
+  color: var(--text-muted);
+}
+
+.workflow-actions__integrity-list {
+  max-height: 120px;
+  margin: 0;
+  padding-left: 18px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+
+.workflow-actions__integrity-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}

@@ -12,6 +12,14 @@ import "./AttachmentList.css";
 const KB = 1024;
 const MB = 1024 * 1024;
 
+/** Largest image (in bytes) read for a thumbnail; larger ones show the generic icon. */
+export const MAX_THUMBNAIL_BYTES = 5 * MB;
+
+/** Whether `attachment` gets an image thumbnail. */
+function hasThumbnail(attachment: AttachmentMeta): boolean {
+  return attachment.mime.startsWith("image/") && attachment.size <= MAX_THUMBNAIL_BYTES;
+}
+
 /** A byte count with a localized number and unit (B, KB or MB). */
 export function formatSize(bytes: number): string {
   const number = new Intl.NumberFormat(i18n.language, { maximumFractionDigits: 1 });
@@ -62,6 +70,8 @@ export function AttachmentList({ root, rootTaskId, fromRootTask }: AttachmentLis
   }, [root, rootTaskId, key]);
 
   const current = loaded?.key === key ? loaded : null;
+  const attachments = current && "attachments" in current ? current.attachments : null;
+  const thumbnails = useThumbnails(root, rootTaskId, attachments);
   if (!current) return null;
 
   if ("error" in current) {
@@ -84,7 +94,11 @@ export function AttachmentList({ root, rootTaskId, fromRootTask }: AttachmentLis
     try {
       const path = await workflowApi.attachmentPath(root, rootTaskId, attachment.id);
       const directory = attachmentDirectory(path);
-      if (directory) await invoke("open_external_url", { url: directory });
+      if (!directory) {
+        void showMessage(t("intake.attachments.showInFolderFailed"), { kind: "error" });
+        return;
+      }
+      await invoke("open_external_url", { url: directory });
     } catch (err) {
       void showMessage(formatCommandError(err), { title: t("intake.attachments.showInFolderFailed"), kind: "error" });
     } finally {
@@ -99,8 +113,10 @@ export function AttachmentList({ root, rootTaskId, fromRootTask }: AttachmentLis
       <ul className="workflow-attachments__list">
         {current.attachments.map((attachment) => (
           <li key={attachment.id} className="workflow-attachments__item">
-            {attachment.mime.startsWith("image/") && (
-              <AttachmentThumbnail root={root} rootTaskId={rootTaskId} attachment={attachment} />
+            {thumbnails[attachment.id] ? (
+              <img className="workflow-attachments__thumb" src={thumbnails[attachment.id]} alt="" />
+            ) : (
+              <FileIcon />
             )}
             <span className="workflow-attachments__name">{attachment.originalName}</span>
             <span className="workflow-attachments__meta">{formatSize(attachment.size)}</span>
@@ -109,6 +125,8 @@ export function AttachmentList({ root, rootTaskId, fromRootTask }: AttachmentLis
               type="button"
               className="workflow-attachments__btn"
               data-action="showInFolder"
+              aria-label={t("intake.attachments.showInFolderLabel", { name: attachment.originalName })}
+              title={t("intake.attachments.showInFolderLabel", { name: attachment.originalName })}
               disabled={opening !== null}
               onClick={() => void showInFolder(attachment)}
             >
@@ -121,40 +139,50 @@ export function AttachmentList({ root, rootTaskId, fromRootTask }: AttachmentLis
   );
 }
 
-interface AttachmentThumbnailProps {
-  root: string;
-  rootTaskId: string;
-  attachment: AttachmentMeta;
+/** Generic file icon shown where no thumbnail is. */
+function FileIcon() {
+  return (
+    <svg className="workflow-attachments__icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path d="M4 1.5h5l3.5 3.5v9.5h-8.5z M9 1.5v3.5h3.5" fill="none" stroke="currentColor" strokeWidth="1" />
+    </svg>
+  );
 }
 
 /**
- * Thumbnail of an image attachment, read with the fs plugin into a blob URL
- * (the asset protocol stays disabled). The URL is revoked on unmount, and a
- * read that finishes after unmounting never creates one.
+ * Thumbnails of the image attachments (up to `MAX_THUMBNAIL_BYTES`) by
+ * attachment id, read one after another with the fs plugin into blob URLs
+ * (the asset protocol stays disabled). Every URL is revoked when the list
+ * changes or unmounts, and a read that finishes afterwards never creates one.
  */
-function AttachmentThumbnail({ root, rootTaskId, attachment }: AttachmentThumbnailProps) {
-  const [url, setUrl] = useState<string | null>(null);
+function useThumbnails(root: string, rootTaskId: string, attachments: AttachmentMeta[] | null): Record<string, string> {
+  const [urls, setUrls] = useState<Record<string, string>>({});
 
   useEffect(() => {
+    setUrls({});
+    if (!attachments) return;
     let disposed = false;
-    let created: string | null = null;
+    const created: string[] = [];
     (async () => {
-      try {
-        const path = await workflowApi.attachmentPath(root, rootTaskId, attachment.id);
-        const bytes = await readFile(path);
-        if (disposed) return;
-        created = URL.createObjectURL(new Blob([bytes], { type: attachment.mime }));
-        setUrl(created);
-      } catch (err) {
-        // The item still shows the name; only the preview is missing.
-        console.warn("[workflow] loading an attachment thumbnail failed", err);
+      for (const attachment of attachments.filter(hasThumbnail)) {
+        try {
+          const path = await workflowApi.attachmentPath(root, rootTaskId, attachment.id);
+          const bytes = await readFile(path);
+          if (disposed) return;
+          const url = URL.createObjectURL(new Blob([bytes], { type: attachment.mime }));
+          created.push(url);
+          setUrls((prev) => ({ ...prev, [attachment.id]: url }));
+        } catch (err) {
+          if (disposed) return;
+          // The item keeps the generic icon; only the preview is missing.
+          console.warn("[workflow] loading an attachment thumbnail failed", err);
+        }
       }
     })();
     return () => {
       disposed = true;
-      if (created) URL.revokeObjectURL(created);
+      for (const url of created) URL.revokeObjectURL(url);
     };
-  }, [root, rootTaskId, attachment.id, attachment.mime]);
+  }, [root, rootTaskId, attachments]);
 
-  return url ? <img className="workflow-attachments__thumb" src={url} alt="" /> : null;
+  return urls;
 }

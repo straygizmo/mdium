@@ -255,11 +255,7 @@ function DetailSections({ root, detail, tasks, formatDate }: DetailSectionsProps
 
       <AttachmentList root={root} rootTaskId={meta.rootId} fromRootTask={meta.rootId !== meta.id} />
 
-      {!run && issue && (
-        <section className="workflow-detail__section">
-          <IssueSection issue={issue} run={null} />
-        </section>
-      )}
+      {!run && issue && <IssueSection issue={issue} run={null} standalone />}
 
       {latestOutput !== null && (
         <details

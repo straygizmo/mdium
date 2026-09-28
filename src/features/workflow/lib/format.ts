@@ -85,10 +85,11 @@ function formatItem(item: unknown): string {
 }
 
 /**
- * Parses the `items` param (a JSON array string) into display lines: at most
+ * Parses a JSON array string (the `items` param, or the change list of a
+ * `WORKFLOW_INTEGRITY_CHANGED` refusal) into display lines: at most
  * `MAX_ITEMS`, followed by a localized "and N more" line when some are cut off.
  */
-function parseItems(raw: string | undefined): string[] {
+export function formatItems(raw: string | undefined): string[] {
   if (!raw) return [];
   let parsed: unknown;
   try {
@@ -122,7 +123,7 @@ export function formatAttention(reason: AttentionReason): { text: string; items:
   };
   return {
     text: formatCode(reason.code, derived),
-    items: parseItems(params.items),
+    items: formatItems(params.items),
   };
 }
 

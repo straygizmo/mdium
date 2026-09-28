@@ -64,3 +64,14 @@
   cursor: not-allowed;
   opacity: 0.5;
 }
+
+.workflow-attachments__icon {
+  box-sizing: border-box;
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+}

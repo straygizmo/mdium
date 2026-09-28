@@ -194,9 +194,26 @@ const cases: Case[] = [
     "retryIssueSync",
     () => workflowApi.retryIssueSync(ROOT, "t1"),
     "workflow_retry_issue_sync",
-    { projectRoot: ROOT, taskId: "t1" },
+    { projectRoot: ROOT, taskId: "t1", acceptIntegrity: false },
   ],
-  ["skipIssueSync", () => workflowApi.skipIssueSync(ROOT, "t1"), "workflow_skip_issue_sync", { projectRoot: ROOT, taskId: "t1" }],
+  [
+    "retryIssueSync accepting the repository",
+    () => workflowApi.retryIssueSync(ROOT, "t1", true),
+    "workflow_retry_issue_sync",
+    { projectRoot: ROOT, taskId: "t1", acceptIntegrity: true },
+  ],
+  [
+    "skipIssueSync",
+    () => workflowApi.skipIssueSync(ROOT, "t1"),
+    "workflow_skip_issue_sync",
+    { projectRoot: ROOT, taskId: "t1", acceptIntegrity: false },
+  ],
+  [
+    "skipIssueSync accepting the repository",
+    () => workflowApi.skipIssueSync(ROOT, "t1", true),
+    "workflow_skip_issue_sync",
+    { projectRoot: ROOT, taskId: "t1", acceptIntegrity: true },
+  ],
   [
     "retryIssueClose",
     () => workflowApi.retryIssueClose(ROOT, "r1"),

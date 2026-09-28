@@ -437,7 +437,8 @@
       "loadFailed": "The attachments could not be loaded.",
       "sizeBytes": "{{size}} B",
       "sizeKB": "{{size}} KB",
-      "sizeMB": "{{size}} MB"
+      "sizeMB": "{{size}} MB",
+      "showInFolderLabel": "Show {{name}} in its folder"
     },
     "issue": {
       "title": "Issue",
@@ -453,7 +454,13 @@
       "entry": "Unrecorded entry: {{entry}}",
       "retry": "Retry Issue sync",
       "skip": "Continue without syncing",
-      "skipConfirm": "Continue without recording the {{entry}} on the Issue? The workflow moves on to the next stage."
+      "skipConfirm": "Continue without recording the {{entry}} on the Issue? The workflow moves on to the next stage.",
+      "entryFallback": "stage result",
+      "integrityChanged": "The repository changed since the run last checked it:",
+      "integrityHelp": "Only accept after checking these changes. The repository as it is now becomes the run's new baseline.",
+      "acceptRetry": "Accept the repository changes and retry the sync",
+      "acceptSkip": "Accept the repository changes and continue",
+      "dismiss": "Close"
     }
   },
   "codes": {

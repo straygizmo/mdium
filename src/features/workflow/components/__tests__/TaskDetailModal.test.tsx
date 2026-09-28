@@ -578,6 +578,8 @@ describe("TaskDetailModal", () => {
     api.taskDetail.mockResolvedValue(detail({ task: task("t1", { status: "inbox", issue }), run: null }));
     useWorkflowStore.setState({ selectedTaskId: "t1" });
     await render();
+    expect(section("issue")?.tagName).toBe("SECTION");
+    expect(section("issue")?.querySelector("h3")?.textContent).toBe(i18n.t("workflow:intake.issue.title"));
     expect(section("issue")?.textContent).toContain("#3");
   });
 

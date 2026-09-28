@@ -91,10 +91,21 @@ describe("IssueSection", () => {
     expect(invoke).toHaveBeenCalledWith("open_external_url", { url: issue.url });
   });
 
-  it("never opens a non-http Issue URL", async () => {
+  it("shows a non-http Issue URL as text without a link", async () => {
     await act(async () => root.render(<IssueSection issue={{ ...issue, url: "file:///c:/x" }} run={null} />));
-    await act(async () => container.querySelector<HTMLAnchorElement>("a.workflow-issue__link")!.click());
-    expect(invoke).not.toHaveBeenCalled();
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.querySelector(".workflow-issue__text")?.textContent).toContain("#42");
+  });
+
+  it("uses the normalized URL as the link target", async () => {
+    await render(null);
+    expect(container.querySelector("a")?.getAttribute("href")).toBe(issue.url);
+  });
+
+  it("renders a section with a heading when standalone", async () => {
+    await act(async () => root.render(<IssueSection issue={issue} run={null} standalone />));
+    const section = container.querySelector('section[data-section="issue"]')!;
+    expect(section.querySelector("h3")?.textContent).toBe(i18n.t("workflow:intake.issue.title"));
   });
 
   it("shows the closed state of the run's Issue", async () => {

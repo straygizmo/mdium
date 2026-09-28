@@ -133,6 +133,10 @@ pub enum ActionError {
     /// The task or run is not in a state that allows the operation; the
     /// value is the machine code.
     InvalidState(&'static str),
+    /// The user's repository has changes the run did not acknowledge
+    /// (`WORKFLOW_INTEGRITY_CHANGED`); the message is the JSON list of the
+    /// changes, so the user can review them before accepting.
+    IntegrityChanged(Vec<IntegrityChange>),
 }
 
 impl ActionError {
@@ -146,6 +150,7 @@ impl ActionError {
             ActionError::Forge(err) => err.code(),
             ActionError::Attachment(err) => err.code(),
             ActionError::InvalidState(code) => code,
+            ActionError::IntegrityChanged(_) => WORKFLOW_INTEGRITY_CHANGED,
         }
     }
 }
@@ -160,6 +165,9 @@ impl std::fmt::Display for ActionError {
             ActionError::Forge(err) => err.fmt(f),
             ActionError::Attachment(err) => err.fmt(f),
             ActionError::InvalidState(code) => f.write_str(code),
+            ActionError::IntegrityChanged(changes) => {
+                f.write_str(&serde_json::to_string(changes).map_err(|_| std::fmt::Error)?)
+            }
         }
     }
 }
@@ -659,17 +667,27 @@ pub fn mark_complete(
 /// stage outside an attempt must not carry one past the stage, whatever its
 /// role.
 fn refuse_config_changes(store: &WorkflowStore, run: &WorkflowRun) -> Result<(), ActionError> {
-    if let Some(info) = &run.worktree {
-        let now = integrity::snapshot_with_worktree(
-            store.project_root(),
-            Some(&info.base_branch),
-            Some(info),
-        )?;
-        if !checks::config_changes(run, &now).is_empty() {
-            return Err(ActionError::InvalidState(WORKFLOW_INTEGRITY_CHANGED));
-        }
+    if !unacknowledged_config_changes(store, run)?.is_empty() {
+        return Err(ActionError::InvalidState(WORKFLOW_INTEGRITY_CHANGED));
     }
     Ok(())
+}
+
+/// The git config or hooks changes in the user's repository that the run
+/// did not acknowledge (none for a run without a worktree).
+fn unacknowledged_config_changes(
+    store: &WorkflowStore,
+    run: &WorkflowRun,
+) -> Result<Vec<IntegrityChange>, ActionError> {
+    let Some(info) = &run.worktree else {
+        return Ok(Vec::new());
+    };
+    let now = integrity::snapshot_with_worktree(
+        store.project_root(),
+        Some(&info.base_branch),
+        Some(info),
+    )?;
+    Ok(checks::config_changes(run, &now))
 }
 
 /// A task whose stage completed but whose Issue sync failed, with what is
@@ -683,18 +701,12 @@ struct PendingSync {
     result: StageResult,
 }
 
-/// Loads task `task_id` awaiting an Issue sync (`ATTENTION_ISSUE_SYNC_FAILED`)
-/// as the current task of its Active run, re-parses its latest attempt
-/// output, and runs the integrity checks of completing a stage by hand
-/// ([`mark_complete`]'s): no unacknowledged git config or hooks change, and
-/// no change needing acknowledgement before MDium runs git in the worktree
-/// (to commit the design document, or with `lists_commits` to list an
-/// implement entry's commits).
-fn pending_sync(
+/// Task `task_id` awaiting an Issue sync (`ATTENTION_ISSUE_SYNC_FAILED`) as
+/// the current task of its Active run, with that run.
+fn sync_task_and_run(
     store: &WorkflowStore,
     task_id: &str,
-    lists_commits: bool,
-) -> Result<PendingSync, ActionError> {
+) -> Result<(Task, WorkflowRun), ActionError> {
     let task = store.get_task(task_id)?;
     if task.meta.status != TaskStatus::Attention {
         return Err(conflict(task.meta.status));
@@ -715,8 +727,27 @@ fn pending_sync(
     if run.current_task_id != task_id {
         return Err(ActionError::InvalidState(WORKFLOW_TASK_NOT_CURRENT));
     }
+    Ok((task, run))
+}
+
+/// Loads task `task_id` awaiting an Issue sync ([`sync_task_and_run`]),
+/// re-parses its latest attempt output, and runs the integrity checks of
+/// completing a stage by hand ([`mark_complete`]'s): no unacknowledged git
+/// config or hooks change, and no change needing acknowledgement before
+/// MDium runs git in the worktree (to commit the design document, or with
+/// `lists_commits` to list an implement entry's commits). A refusal lists
+/// the changes ([`ActionError::IntegrityChanged`]).
+fn pending_sync(
+    store: &WorkflowStore,
+    task_id: &str,
+    lists_commits: bool,
+) -> Result<PendingSync, ActionError> {
+    let (task, run) = sync_task_and_run(store, task_id)?;
     let role = task.meta.role.unwrap_or(Role::Design);
-    refuse_config_changes(store, &run)?;
+    let config_changes = unacknowledged_config_changes(store, &run)?;
+    if !config_changes.is_empty() {
+        return Err(ActionError::IntegrityChanged(config_changes));
+    }
     let runs_git = match role {
         Role::Design => run.workflow.design_doc_path.is_some(),
         Role::Implement => lists_commits,
@@ -729,7 +760,7 @@ fn pending_sync(
             .ok_or(ActionError::InvalidState(WORKFLOW_RUN_NO_WORKTREE))?;
         let (changes, _) = integrity_state(store.project_root(), &run, info)?;
         if !changes.is_empty() {
-            return Err(ActionError::InvalidState(WORKFLOW_INTEGRITY_CHANGED));
+            return Err(ActionError::IntegrityChanged(changes));
         }
     }
     let invalid = || ActionError::InvalidState(ISSUE_SYNC_OUTPUT_INVALID);
@@ -750,23 +781,28 @@ fn pending_sync(
 /// Posts the Issue entry of a task whose Issue sync failed (a comment that
 /// already carries the entry's marker counts as posted, so an entry that
 /// landed before the failure is never posted twice), then completes its
-/// stage as the attempt would have. If the post fails, nothing changes.
+/// stage as the attempt would have. If the post fails, nothing changes
+/// except an accepted integrity baseline. With `accept_integrity` the
+/// repository as it is now first becomes the run's integrity baseline.
 pub fn retry_issue_sync(
     orch: &Arc<Orchestrator>,
     project_root: &Path,
     task_id: &str,
+    accept_integrity: bool,
 ) -> Result<Task, ActionError> {
-    resolve_issue_sync(orch, project_root, task_id, true)
+    resolve_issue_sync(orch, project_root, task_id, true, accept_integrity)
 }
 
 /// Completes the stage of a task whose Issue sync failed without posting
-/// its Issue entry.
+/// its Issue entry. With `accept_integrity` the repository as it is now
+/// first becomes the run's integrity baseline.
 pub fn skip_issue_sync(
     orch: &Arc<Orchestrator>,
     project_root: &Path,
     task_id: &str,
+    accept_integrity: bool,
 ) -> Result<Task, ActionError> {
-    resolve_issue_sync(orch, project_root, task_id, false)
+    resolve_issue_sync(orch, project_root, task_id, false, accept_integrity)
 }
 
 /// Tasks whose Issue sync is being retried or skipped in this process, by
@@ -803,15 +839,31 @@ impl Drop for IssueSyncSlot {
 /// complete (e.g. the design document cannot be saved), the task stays in
 /// attention with that reason instead. Either way the pending entry is
 /// cleared. Only one resolution of a task runs at a time
-/// ([`ISSUE_SYNC_IN_PROGRESS`]).
+/// ([`ISSUE_SYNC_IN_PROGRESS`]). With `accept_integrity` the current
+/// repository snapshot is stored as the run's baseline before anything else.
 fn resolve_issue_sync(
     orch: &Arc<Orchestrator>,
     project_root: &Path,
     task_id: &str,
     post: bool,
+    accept_integrity: bool,
 ) -> Result<Task, ActionError> {
     let store = orch.store(project_root);
     let _slot = IssueSyncSlot::acquire(store.project_root(), task_id)?;
+    if accept_integrity {
+        let accepted = {
+            let guard = store.lock();
+            let (_, mut run) = sync_task_and_run(&store, task_id)?;
+            let info = run
+                .worktree
+                .clone()
+                .ok_or(ActionError::InvalidState(WORKFLOW_RUN_NO_WORKTREE))?;
+            let (_, now) = integrity_state(store.project_root(), &run, &info)?;
+            store_acknowledged_baseline(&guard, &store, &mut run, now)?;
+            run
+        };
+        emit(orch, &store, &[], Some(&accepted));
+    }
     if post {
         let entry = {
             let _guard = store.lock();
@@ -3266,18 +3318,23 @@ mod tests {
         env.stage(&id, failed());
         let before = env.raw(&id);
         assert_eq!(
-            code(retry_issue_sync(&env.orch, env.root(), &id)),
+            code(retry_issue_sync(&env.orch, env.root(), &id, false)),
             ISSUE_SYNC_NOT_PENDING
         );
         assert_eq!(
-            code(skip_issue_sync(&env.orch, env.root(), &id)),
+            code(skip_issue_sync(&env.orch, env.root(), &id, false)),
             ISSUE_SYNC_NOT_PENDING
         );
         assert_eq!(env.raw(&id), before);
 
         let inbox = env.plain(TaskStatus::Inbox, None);
         assert_eq!(
-            code(retry_issue_sync(&env.orch, env.root(), &inbox.meta.id)),
+            code(retry_issue_sync(
+                &env.orch,
+                env.root(),
+                &inbox.meta.id,
+                false
+            )),
             "TRANSITION_CONFLICT"
         );
         assert!(env.forge.calls().is_empty());
@@ -3290,11 +3347,11 @@ mod tests {
         let before = env.raw(&id);
         let slot = IssueSyncSlot::acquire(env.root(), &id).unwrap();
         assert_eq!(
-            code(retry_issue_sync(&env.orch, env.root(), &id)),
+            code(retry_issue_sync(&env.orch, env.root(), &id, false)),
             ISSUE_SYNC_IN_PROGRESS
         );
         assert_eq!(
-            code(skip_issue_sync(&env.orch, env.root(), &id)),
+            code(skip_issue_sync(&env.orch, env.root(), &id, false)),
             ISSUE_SYNC_IN_PROGRESS
         );
         assert_eq!(env.raw(&id), before);
@@ -3305,7 +3362,7 @@ mod tests {
         let elsewhere = tempfile::tempdir().unwrap();
         drop(IssueSyncSlot::acquire(elsewhere.path(), &id).unwrap());
         drop(slot);
-        let task = retry_issue_sync(&env.orch, env.root(), &id).unwrap();
+        let task = retry_issue_sync(&env.orch, env.root(), &id, false).unwrap();
         assert_eq!(task.meta.pending_issue_entry, None);
     }
 
@@ -3317,16 +3374,78 @@ mod tests {
 
         let before = env.raw(&id);
         assert_eq!(
-            code(retry_issue_sync(&env.orch, env.root(), &id)),
+            code(retry_issue_sync(&env.orch, env.root(), &id, false)),
             WORKFLOW_INTEGRITY_CHANGED
         );
         assert_eq!(
-            code(skip_issue_sync(&env.orch, env.root(), &id)),
+            code(skip_issue_sync(&env.orch, env.root(), &id, false)),
             WORKFLOW_INTEGRITY_CHANGED
         );
         assert_eq!(env.raw(&id), before);
         assert!(env.forge.calls().is_empty());
         assert_eq!(env.tasks().len(), 1);
+    }
+
+    #[test]
+    fn an_integrity_refusal_lists_the_changes() {
+        let env = Env::new();
+        let id = design_with_failed_sync(&env);
+        write_file(env.root(), ".git/hooks/pre-commit", "#!/bin/sh\n");
+        let err = retry_issue_sync(&env.orch, env.root(), &id, false).unwrap_err();
+        assert_eq!(err.code(), WORKFLOW_INTEGRITY_CHANGED);
+        let changes: Vec<IntegrityChange> = serde_json::from_str(&err.to_string()).unwrap();
+        assert!(!changes.is_empty());
+        assert!(changes.iter().all(|change| !change.code.is_empty()));
+    }
+
+    #[test]
+    fn retrying_the_issue_sync_can_accept_the_repository_changes() {
+        let env = Env::new();
+        let id = design_with_failed_sync(&env);
+        let old = env.run(&id).integrity_baseline;
+        write_file(env.root(), ".git/hooks/pre-commit", "#!/bin/sh\n");
+
+        let task = retry_issue_sync(&env.orch, env.root(), &id, true).unwrap();
+        assert_eq!(task.meta.pending_issue_entry, None);
+        assert_ne!(task.meta.status, TaskStatus::Attention);
+        let run = env.run(&id);
+        assert!(run.integrity_baseline.is_some());
+        assert_ne!(run.integrity_baseline, old);
+        assert_eq!(env.forge.comments(ISSUE).len(), 1);
+        env.wait_idle();
+    }
+
+    #[test]
+    fn skipping_the_issue_sync_can_accept_the_repository_changes() {
+        let env = Env::new();
+        let id = design_with_failed_sync(&env);
+        let old = env.run(&id).integrity_baseline;
+        write_file(env.root(), ".git/hooks/pre-commit", "#!/bin/sh\n");
+
+        let task = skip_issue_sync(&env.orch, env.root(), &id, true).unwrap();
+        assert_eq!(task.meta.pending_issue_entry, None);
+        assert_ne!(task.meta.status, TaskStatus::Attention);
+        assert_ne!(env.run(&id).integrity_baseline, old);
+        assert!(env.forge.comments(ISSUE).is_empty());
+        env.wait_idle();
+    }
+
+    #[test]
+    fn accepting_the_repository_requires_a_pending_sync() {
+        let env = Env::new();
+        let root = env.root_task();
+        let id = root.meta.id.clone();
+        env.stage(&id, failed());
+        let before = env.run(&id);
+        assert_eq!(
+            code(retry_issue_sync(&env.orch, env.root(), &id, true)),
+            ISSUE_SYNC_NOT_PENDING
+        );
+        assert_eq!(
+            code(skip_issue_sync(&env.orch, env.root(), &id, true)),
+            ISSUE_SYNC_NOT_PENDING
+        );
+        assert_eq!(env.run(&id), before);
     }
 
     #[test]
@@ -3338,7 +3457,7 @@ mod tests {
         // A directory where the design document goes: it cannot be written.
         std::fs::create_dir_all(Path::new(&info.path).join("docs/design.md")).unwrap();
 
-        let task = retry_issue_sync(&env.orch, env.root(), &id).unwrap();
+        let task = retry_issue_sync(&env.orch, env.root(), &id, false).unwrap();
         assert_eq!(task.meta.status, TaskStatus::Attention);
         assert_eq!(attention_code(&task), "ATTENTION_DESIGN_DOC_FAILED");
         assert_eq!(task.meta.pending_issue_entry, None);

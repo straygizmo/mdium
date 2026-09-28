@@ -437,7 +437,8 @@
       "loadFailed": "添付を読み込めませんでした。",
       "sizeBytes": "{{size}} B",
       "sizeKB": "{{size}} KB",
-      "sizeMB": "{{size}} MB"
+      "sizeMB": "{{size}} MB",
+      "showInFolderLabel": "{{name}} をフォルダーで表示"
     },
     "issue": {
       "title": "Issue",
@@ -453,7 +454,13 @@
       "entry": "未記録の内容: {{entry}}",
       "retry": "Issue 同期を再試行",
       "skip": "同期せずに続行",
-      "skipConfirm": "{{entry}}を Issue に記録せずに続行しますか？ワークフローは次の工程に進みます。"
+      "skipConfirm": "{{entry}}を Issue に記録せずに続行しますか？ワークフローは次の工程に進みます。",
+      "entryFallback": "工程の結果",
+      "integrityChanged": "前回の確認以降、リポジトリが変更されました:",
+      "integrityHelp": "変更内容を確認してから承認してください。現在のリポジトリの状態が実行の新しい基準になります。",
+      "acceptRetry": "リポジトリの変更を承認して同期を再試行",
+      "acceptSkip": "リポジトリの変更を承認して続行",
+      "dismiss": "閉じる"
     }
   },
   "codes": {

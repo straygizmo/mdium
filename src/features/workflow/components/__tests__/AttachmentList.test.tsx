@@ -20,7 +20,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 import i18n from "@/shared/i18n";
 import { showMessage } from "@/stores/dialog-store";
 import { workflowApi } from "../../lib/workflow-api";
-import { AttachmentList, attachmentDirectory, formatSize } from "../AttachmentList";
+import { AttachmentList, MAX_THUMBNAIL_BYTES, attachmentDirectory, formatSize } from "../AttachmentList";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -99,6 +99,7 @@ describe("AttachmentList", () => {
     expect(readFile).toHaveBeenCalledTimes(1);
     expect(list[0].querySelector("img")?.getAttribute("src")).toBe("blob:thumb-0");
     expect(list[1].querySelector("img")).toBeNull();
+    expect(list[1].querySelector(".workflow-attachments__icon")).not.toBeNull();
 
     await act(async () => root!.unmount());
     root = undefined;
@@ -113,7 +114,34 @@ describe("AttachmentList", () => {
     await act(async () => root!.unmount());
     root = undefined;
     await act(async () => resolveBytes(new Uint8Array([1])));
-    expect(createSpy.mock.calls.length).toBe(revokeSpy.mock.calls.length);
+    // Never shown, so no URL is created at all.
+    expect(createSpy).not.toHaveBeenCalled();
+    expect(revokeSpy).not.toHaveBeenCalled();
+  });
+
+  it("reads the thumbnails one after another", async () => {
+    const resolvers: ((v: Uint8Array) => void)[] = [];
+    readFile.mockImplementation(() => new Promise((r) => resolvers.push(r)));
+    api.listAttachments.mockResolvedValue([
+      attachment("a1", "one.png", "image/png"),
+      attachment("a2", "two.png", "image/png"),
+    ]);
+    await render();
+    expect(readFile).toHaveBeenCalledTimes(1);
+    expect(api.attachmentPath).toHaveBeenCalledTimes(1);
+    await act(async () => resolvers[0](new Uint8Array([1])));
+    expect(readFile).toHaveBeenCalledTimes(2);
+    await act(async () => resolvers[1](new Uint8Array([2])));
+    const srcs = items().map((item) => item.querySelector("img")?.getAttribute("src"));
+    expect(srcs).toEqual(["blob:thumb-0", "blob:thumb-1"]);
+  });
+
+  it("shows the generic icon instead of reading a large image", async () => {
+    api.listAttachments.mockResolvedValue([attachment("a1", "huge.png", "image/png", MAX_THUMBNAIL_BYTES + 1)]);
+    await render();
+    expect(readFile).not.toHaveBeenCalled();
+    expect(items()[0].querySelector("img")).toBeNull();
+    expect(items()[0].querySelector(".workflow-attachments__icon")).not.toBeNull();
   });
 
   it("renders nothing without attachments", async () => {
@@ -141,6 +169,9 @@ describe("AttachmentList", () => {
     await render();
     const button = container.querySelector<HTMLButtonElement>('button[data-action="showInFolder"]')!;
     expect(button.textContent).toBe(i18n.t("workflow:intake.attachments.showInFolder"));
+    expect(button.getAttribute("aria-label")).toBe(
+      i18n.t("workflow:intake.attachments.showInFolderLabel", { name: "notes.txt" }),
+    );
     await act(async () => button.click());
     expect(api.attachmentPath).toHaveBeenCalledWith(ROOT, "t1", "a2");
     expect(invoke).toHaveBeenCalledWith("open_external_url", { url: "C:\\work\\app\\.mdium\\att\\t1" });
@@ -160,6 +191,17 @@ describe("AttachmentList", () => {
       expect.stringContaining("Failed to open URL"),
       expect.objectContaining({ kind: "error" }),
     );
+  });
+
+  it("reports a path without a directory instead of opening it", async () => {
+    api.listAttachments.mockResolvedValue([attachment("a2", "notes.txt", "text/plain")]);
+    api.attachmentPath.mockResolvedValue("notes.bin");
+    await render();
+    await act(async () => container.querySelector<HTMLButtonElement>('button[data-action="showInFolder"]')!.click());
+    expect(invoke).not.toHaveBeenCalled();
+    expect(showMessage).toHaveBeenCalledWith(i18n.t("workflow:intake.attachments.showInFolderFailed"), {
+      kind: "error",
+    });
   });
 
   it("formats sizes with localized units", () => {

@@ -34,7 +34,7 @@ vi.mock("@/stores/dialog-store", () => ({
 
 import i18n from "@/shared/i18n";
 import { showConfirm, showMessage } from "@/stores/dialog-store";
-import { formatCommandError, formatIssueEntry } from "../../lib/format";
+import { formatCode, formatCommandError, formatIssueEntry } from "../../lib/format";
 import { workflowApi } from "../../lib/workflow-api";
 import { useWorkflowStore } from "../../workflow-store";
 import { TaskActions } from "../TaskActions";
@@ -260,7 +260,7 @@ describe("TaskActions", () => {
       api.retryIssueSync.mockReturnValue(new Promise((r) => (resolve = r)));
       await render(task({ status: "attention", attention: syncFailed }));
       await click(button("retryIssueSync"));
-      expect(api.retryIssueSync).toHaveBeenCalledWith(ROOT, "t1");
+      expect(api.retryIssueSync).toHaveBeenCalledWith(ROOT, "t1", false);
       for (const action of ["retryIssueSync", "skipIssueSync", "cancel"]) expect(button(action).disabled).toBe(true);
       await act(async () => resolve(task()));
       expect(button("retryIssueSync").disabled).toBe(false);
@@ -277,8 +277,72 @@ describe("TaskActions", () => {
       );
       expect(api.skipIssueSync).not.toHaveBeenCalled();
       await click(button("skipIssueSync"));
-      expect(api.skipIssueSync).toHaveBeenCalledWith(ROOT, "t1");
+      expect(api.skipIssueSync).toHaveBeenCalledWith(ROOT, "t1", false);
       expect(api.markComplete).not.toHaveBeenCalled();
+    });
+
+    it("names a generic entry when the failure records none", async () => {
+      await render(task({ status: "attention", attention: { code: "ATTENTION_ISSUE_SYNC_FAILED", params: {} } }));
+      vi.mocked(showConfirm).mockResolvedValueOnce(false);
+      await click(button("skipIssueSync"));
+      expect(showConfirm).toHaveBeenCalledWith(
+        i18n.t("workflow:intake.issueSync.skipConfirm", { entry: i18n.t("workflow:intake.issueSync.entryFallback") }),
+        { kind: "warning" },
+      );
+    });
+
+    const changed = {
+      code: "WORKFLOW_INTEGRITY_CHANGED",
+      message: JSON.stringify([{ code: "INTEGRITY_HOOKS_CHANGED", detail: "pre-commit" }]),
+    };
+
+    function panel() {
+      return container.querySelector<HTMLElement>(".workflow-actions__integrity");
+    }
+
+    it.each([
+      ["retryIssueSync", "acceptRetry"],
+      ["skipIssueSync", "acceptSkip"],
+    ] as const)("lets %s accept the repository changes after a refusal", async (action, label) => {
+      api[action].mockRejectedValueOnce(changed);
+      await render(task({ status: "attention", attention: syncFailed }));
+      await click(button(action));
+      expect(showMessage).not.toHaveBeenCalled();
+      const shown = panel()!;
+      expect(shown.textContent).toContain(i18n.t("workflow:intake.issueSync.integrityChanged"));
+      expect([...shown.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
+        `${formatCode("INTEGRITY_HOOKS_CHANGED")}: pre-commit`,
+      ]);
+      const accept = button("acceptIntegrity");
+      expect(accept.textContent).toBe(i18n.t(`workflow:intake.issueSync.${label}`));
+      vi.mocked(showConfirm).mockClear();
+      await click(accept);
+      // The panel is the confirmation: no second prompt.
+      expect(showConfirm).not.toHaveBeenCalled();
+      expect(api[action]).toHaveBeenLastCalledWith(ROOT, "t1", true);
+      expect(panel()).toBeNull();
+    });
+
+    it("closes the integrity panel without accepting", async () => {
+      api.retryIssueSync.mockRejectedValueOnce(changed);
+      await render(task({ status: "attention", attention: syncFailed }));
+      await click(button("retryIssueSync"));
+      await click(button("dismissIntegrity"));
+      expect(panel()).toBeNull();
+      expect(api.retryIssueSync).toHaveBeenCalledTimes(1);
+    });
+
+    it("disables the accept button while the accepted retry runs", async () => {
+      api.retryIssueSync.mockRejectedValueOnce(changed);
+      let resolve!: (t: Task) => void;
+      await render(task({ status: "attention", attention: syncFailed }));
+      await click(button("retryIssueSync"));
+      api.retryIssueSync.mockReturnValueOnce(new Promise((r) => (resolve = r)));
+      const accept = button("acceptIntegrity");
+      await click(accept);
+      expect(button("retryIssueSync").disabled).toBe(true);
+      await act(async () => resolve(task()));
+      expect(api.retryIssueSync).toHaveBeenCalledTimes(2);
     });
   });
 
