@@ -28,8 +28,8 @@ export function startWorkflowFolderSync(): () => void {
 async function openTaskFromIntake(e: OpenTaskEvent): Promise<void> {
   const folder = useTabStore.getState().activeFolderPath;
   if (!folder) return;
-  // The active folder may still be attaching (the root is compared normalized).
-  if (!useWorkflowStore.getState().activeRoot) await useWorkflowStore.getState().activate(folder);
+  // The active folder may still be attaching: join that attach (the root is compared normalized).
+  await useWorkflowStore.getState().ensureActivated(folder);
   const root = useWorkflowStore.getState().activeRoot;
   if (!root || !sameRoot(root, e.projectRoot) || useTabStore.getState().activeFolderPath !== folder) return;
   useUiStore.getState().setLeftPanel("workflow");

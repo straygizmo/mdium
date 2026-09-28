@@ -37,6 +37,8 @@ export interface ProjectState {
   intakeWarnings: StoreWarning[];
   /** Localized intake list failure, or null; the other lists stay usable. */
   intakeError: string | null;
+  /** Whether the intake list has loaded successfully once. */
+  intakesLoaded: boolean;
   /** Keyed by task id. */
   progress: Record<string, TaskProgress>;
   /** True only while the project's first load is in progress. */
@@ -80,8 +82,15 @@ interface WorkflowState {
   activate(folderPath: string | null): Promise<void>;
   /** Reloads workflows, tasks, runs and intake sessions of a project. */
   refresh(root: string): Promise<void>;
+  /** Reloads workflows, tasks and runs of a project, not its intake sessions. */
+  refreshLists(root: string): Promise<void>;
   /** Reloads only the intake sessions of a project. */
   refreshIntakes(root: string): Promise<void>;
+  /**
+   * Resolves once `folderPath` is attached: joins the activation in flight
+   * for that folder, or starts one when the folder is not the active one.
+   */
+  ensureActivated(folderPath: string): Promise<void>;
   openTask(taskId: string | null): void;
   setFilters(p: Partial<WorkflowFilters>): void;
   /**
@@ -111,6 +120,7 @@ function emptyProject(root: string): ProjectState {
     intakes: [],
     intakeWarnings: [],
     intakeError: null,
+    intakesLoaded: false,
     progress: {},
     loading: false,
     refreshing: false,
@@ -129,6 +139,8 @@ function pruneProgress(progress: Record<string, TaskProgress>, tasks: Task[]): R
 let activateSeq = 0;
 /** Folder path passed to the latest non-null `activate` call. */
 let activeFolder: string | null = null;
+/** The latest `activate` call for `activeFolder`, while it is in flight. */
+let pendingActivation: Promise<void> | null = null;
 /** Latest refresh sequence per root; older refresh results are dropped. */
 const refreshSeq = new Map<string, number>();
 /** Latest intake refresh sequence per root; older intake list results are dropped. */
@@ -169,6 +181,32 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => {
     }
   };
 
+  /** Attaches `folderPath` and loads its lists; see `activate`. */
+  const activateFolder = async (folderPath: string | null) => {
+    const seq = ++activateSeq;
+    if (!folderPath) {
+      activeFolder = null;
+      set({ activeRoot: null, attachError: null, selectedTaskId: null });
+      return;
+    }
+    if (folderPath !== activeFolder) {
+      // Hide the previous project's lists until the new folder is attached.
+      activeFolder = folderPath;
+      set({ activeRoot: null, attachError: null, selectedTaskId: null });
+    }
+    let root: string;
+    try {
+      root = await workflowApi.attach(folderPath);
+    } catch (err) {
+      if (seq === activateSeq) set({ attachError: formatCommandError(err) });
+      return;
+    }
+    if (!get().projects[root]) updateProject(root, (p) => p);
+    // A newer activate call owns `activeRoot`; this result is only stored under its own root.
+    if (seq === activateSeq) set({ activeRoot: root, attachError: null });
+    await get().refresh(root);
+  };
+
   return {
     activeRoot: null,
     attachError: null,
@@ -176,34 +214,26 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => {
     selectedTaskId: null,
     filters: { workflowId: null, showArchived: false, showCancelled: false, view: "kanban" },
 
-    async activate(folderPath) {
-      const seq = ++activateSeq;
-      if (!folderPath) {
-        activeFolder = null;
-        set({ activeRoot: null, attachError: null, selectedTaskId: null });
-        return;
-      }
-      if (folderPath !== activeFolder) {
-        // Hide the previous project's lists until the new folder is attached.
-        activeFolder = folderPath;
-        set({ activeRoot: null, attachError: null, selectedTaskId: null });
-      }
-      let root: string;
-      try {
-        root = await workflowApi.attach(folderPath);
-      } catch (err) {
-        if (seq === activateSeq) set({ attachError: formatCommandError(err) });
-        return;
-      }
-      if (!get().projects[root]) updateProject(root, (p) => p);
-      // A newer activate call owns `activeRoot`; this result is only stored under its own root.
-      if (seq === activateSeq) set({ activeRoot: root, attachError: null });
-      await get().refresh(root);
+    activate(folderPath) {
+      const activation = activateFolder(folderPath);
+      pendingActivation = folderPath ? activation : null;
+      void activation.finally(() => {
+        if (pendingActivation === activation) pendingActivation = null;
+      });
+      return activation;
+    },
+
+    async ensureActivated(folderPath) {
+      if (folderPath === activeFolder && pendingActivation) return pendingActivation;
+      if (folderPath === activeFolder && get().activeRoot) return;
+      return get().activate(folderPath);
     },
 
     async refresh(root) {
       await Promise.all([loadLists(root), get().refreshIntakes(root)]);
     },
+
+    refreshLists: (root) => loadLists(root),
 
     async refreshIntakes(root) {
       const seq = (intakeRefreshSeq.get(root) ?? 0) + 1;
@@ -211,7 +241,13 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => {
       try {
         const list = await workflowApi.intakeList(root);
         if (intakeRefreshSeq.get(root) !== seq) return;
-        updateProject(root, (p) => ({ ...p, intakes: list.sessions, intakeWarnings: list.warnings, intakeError: null }));
+        updateProject(root, (p) => ({
+          ...p,
+          intakes: list.sessions,
+          intakeWarnings: list.warnings,
+          intakeError: null,
+          intakesLoaded: true,
+        }));
       } catch (err) {
         if (intakeRefreshSeq.get(root) !== seq) return;
         updateProject(root, (p) => ({ ...p, intakeError: formatCommandError(err) }));
@@ -257,7 +293,7 @@ function knownRoot(eventRoot: string): string | undefined {
 let bridgeUsers = 0;
 /** The shared subscription while at least one caller holds the bridge. */
 let bridgeSubscription: Promise<() => void> | null = null;
-/** Pending debounced refreshes, keyed by project root. */
+/** Pending debounced list refreshes, keyed by project root. */
 const refreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 /** Pending debounced intake refreshes, keyed by project root. */
 const intakeRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -281,8 +317,8 @@ function debounce(
   );
 }
 
-function scheduleRefresh(eventRoot: string) {
-  debounce(refreshTimers, eventRoot, (root) => useWorkflowStore.getState().refresh(root));
+function scheduleListRefresh(eventRoot: string) {
+  debounce(refreshTimers, eventRoot, (root) => useWorkflowStore.getState().refreshLists(root));
 }
 
 function scheduleIntakeRefresh(eventRoot: string) {
@@ -297,12 +333,12 @@ function scheduleIntakeRefresh(eventRoot: string) {
 async function subscribeAll(): Promise<() => void> {
   const results = await Promise.allSettled([
     subscribeWorkflowEvents({
-      onTaskChanged: (e) => scheduleRefresh(e.projectRoot),
-      onRunChanged: (e) => scheduleRefresh(e.projectRoot),
+      onTaskChanged: (e) => scheduleListRefresh(e.projectRoot),
+      onRunChanged: (e) => scheduleListRefresh(e.projectRoot),
       onProgress: updateProgress,
     }),
     subscribeIntakeChanged((e) => scheduleIntakeRefresh(e.projectRoot)),
-    subscribeWorkflowsChanged((e) => scheduleRefresh(e.projectRoot)),
+    subscribeWorkflowsChanged((e) => scheduleListRefresh(e.projectRoot)),
   ]);
   const unsubscribers: (() => void)[] = [];
   for (const r of results) if (r.status === "fulfilled") unsubscribers.push(r.value);
@@ -336,8 +372,8 @@ function updateProgress(e: ProgressEvent) {
 /**
  * Holds the workflow event subscription (ref-counted: every caller shares
  * one subscription). Task/run and `workflows-changed` events for a known
- * project schedule a debounced refresh, `intake-changed` events a debounced
- * refresh of its intakes; progress events update the latest progress line of
+ * project schedule a debounced refresh of its lists (not its intakes),
+ * `intake-changed` events a debounced refresh of only its intakes; progress events update the latest progress line of
  * known projects. Resolves to this caller's idempotent release; the subscription
  * ends when every caller has released it.
  */

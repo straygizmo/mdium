@@ -128,6 +128,7 @@ describe("WorkflowEditDialog", () => {
           intakes: [],
           intakeWarnings: [],
           intakeError: null,
+          intakesLoaded: true,
           progress: {},
           loading: false,
           refreshing: false,

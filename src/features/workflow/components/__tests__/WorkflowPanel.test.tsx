@@ -363,10 +363,10 @@ describe("WorkflowPanel", () => {
 
     api.openIntakeWindow.mockRejectedValue({ code: "WORKFLOW_PROJECT_INVALID", message: "no window" });
     await act(async () => newTask.click());
-    expect(dialogs.showMessage).toHaveBeenCalledWith(
-      expect.stringContaining("no window"),
-      expect.objectContaining({ kind: "error" }),
-    );
+    expect(dialogs.showMessage).toHaveBeenCalledWith(expect.stringContaining("no window"), {
+      title: i18n.t("workflow:panel.newTaskFailed"),
+      kind: "error",
+    });
   });
 
   it("lists the project's intakes", async () => {

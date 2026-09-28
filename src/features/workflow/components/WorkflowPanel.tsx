@@ -251,7 +251,7 @@ export function WorkflowPanel({ onEditWorkflow, confirmEnable: confirmEnableProp
     try {
       await workflowApi.openIntakeWindow(root, null, filters.workflowId);
     } catch (err) {
-      void showMessage(formatCommandError(err), { title: t("intake.actionFailed"), kind: "error" });
+      void showMessage(formatCommandError(err), { title: t("panel.newTaskFailed"), kind: "error" });
     } finally {
       startingRef.current = false;
       setStarting(false);

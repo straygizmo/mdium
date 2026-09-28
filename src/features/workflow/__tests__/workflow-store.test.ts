@@ -146,6 +146,7 @@ describe("workflow store", () => {
     expect(p.tasks.map((t) => t.meta.id)).toEqual(["a1"]);
     expect(p.runs).toEqual([]);
     expect(p.intakes.map((i) => i.id)).toEqual(["i1"]);
+    expect(p.intakesLoaded).toBe(true);
     expect(api.intakeList).toHaveBeenCalledWith(ROOT_A);
     expect(p.loading).toBe(false);
     expect(p.error).toBeNull();
@@ -158,10 +159,12 @@ describe("workflow store", () => {
     expect(p.tasks.map((t) => t.meta.id)).toEqual(["a1"]);
     expect(p.error).toBeNull();
     expect(p.intakeError).toContain("no intakes");
+    expect(p.intakesLoaded).toBe(false);
     api.intakeList.mockResolvedValue({ sessions: [intake("i3")], warnings: [] });
     await useWorkflowStore.getState().refreshIntakes(ROOT_A);
     const next = useWorkflowStore.getState().projects[ROOT_A];
     expect(next.intakeError).toBeNull();
+    expect(next.intakesLoaded).toBe(true);
     expect(next.intakes.map((i) => i.id)).toEqual(["i3"]);
   });
 
@@ -252,6 +255,24 @@ describe("workflow store", () => {
     expect(s.projects[ROOT_A].tasks.map((t) => t.meta.id)).toEqual(["a1", "a2"]);
   });
 
+  it("ensureActivated joins the activation in flight instead of attaching again", async () => {
+    const attach = deferred<string>();
+    api.attach.mockReturnValueOnce(attach.promise);
+    const first = useWorkflowStore.getState().activate(ROOT_A);
+    const joined = useWorkflowStore.getState().ensureActivated(ROOT_A);
+    attach.resolve(ROOT_A);
+    await Promise.all([first, joined]);
+    expect(api.attach).toHaveBeenCalledTimes(1);
+    expect(useWorkflowStore.getState().activeRoot).toBe(ROOT_A);
+    // Already attached: nothing to do.
+    await useWorkflowStore.getState().ensureActivated(ROOT_A);
+    expect(api.attach).toHaveBeenCalledTimes(1);
+    // Another folder is attached.
+    await useWorkflowStore.getState().ensureActivated(ROOT_B);
+    expect(api.attach).toHaveBeenLastCalledWith(ROOT_B);
+    expect(useWorkflowStore.getState().activeRoot).toBe(ROOT_B);
+  });
+
   it("activate(null) clears the active root", async () => {
     await useWorkflowStore.getState().activate(ROOT_A);
     await useWorkflowStore.getState().activate(null);
@@ -283,6 +304,22 @@ describe("workflow store", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(api.listTasks).toHaveBeenCalledTimes(1);
     expect(api.listTasks).toHaveBeenCalledWith(ROOT_A);
+  });
+
+  it("refreshes only the lists, not the intakes, on task, run and workflows-changed events", async () => {
+    vi.useFakeTimers();
+    await useWorkflowStore.getState().activate(ROOT_A);
+    await startBridge();
+    api.intakeList.mockClear();
+    api.listTasks.mockClear();
+    handlers.onTaskChanged?.({ projectRoot: ROOT_A, taskId: "a1", rootId: "a1", status: "running" });
+    await vi.advanceTimersByTimeAsync(150);
+    handlers.onRunChanged?.({ projectRoot: ROOT_A, rootTaskId: "a1", status: "active" } as RunChangedEvent);
+    await vi.advanceTimersByTimeAsync(150);
+    onWorkflowsChanged({ projectRoot: ROOT_A });
+    await vi.advanceTimersByTimeAsync(150);
+    expect(api.listTasks).toHaveBeenCalledTimes(3);
+    expect(api.intakeList).not.toHaveBeenCalled();
   });
 
   it("updates progress only for known projects", async () => {

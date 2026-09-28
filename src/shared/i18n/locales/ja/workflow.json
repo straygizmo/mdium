@@ -159,20 +159,6 @@
     "cancel": "キャンセル",
     "discardConfirm": "このワークフローへの変更を破棄しますか？"
   },
-  "create": {
-    "title": "新しいタスク",
-    "taskTitle": "タイトル",
-    "body": "説明（Markdown）",
-    "write": "編集",
-    "preview": "プレビュー",
-    "emptyPreview": "プレビューする内容がありません。",
-    "workflow": "ワークフロー",
-    "noWorkflows": "有効なワークフローがありません。パネルでワークフローを有効にするか、標準ワークフローを追加して有効にしてください。",
-    "create": "作成",
-    "cancel": "キャンセル",
-    "failed": "タスクを作成できませんでした。",
-    "discardConfirm": "この新しいタスクを破棄しますか？"
-  },
   "panel": {
     "workflows": "ワークフロー",
     "empty": "ワークフローはまだありません。",
@@ -189,6 +175,7 @@
     "addStandardPrompt": "新しいワークフローの名前",
     "provider": "プロバイダー",
     "newTask": "新しいタスク",
+    "newTaskFailed": "要件整理のウィンドウを開けませんでした。",
     "saveFailed": "ワークフローを保存できませんでした。",
     "addFailed": "ワークフローを追加できませんでした。",
     "runCountFailed": "進行中のフロー実行の件数を確認できませんでした。",
@@ -437,7 +424,9 @@
       "abandon": "破棄",
       "abandonConfirm": "要件整理「{{title}}」を破棄しますか？添付したファイルも削除されます。",
       "warnings": "読み込み時の警告（{{count}} 件）",
-      "loadFailed": "要件整理の一覧を読み込めませんでした。"
+      "loadFailed": "要件整理の一覧を読み込めませんでした。",
+      "openFailed": "要件整理のウィンドウを開けませんでした。",
+      "abandonFailed": "要件整理を破棄できませんでした。"
     },
     "attachments": {
       "title": "添付",

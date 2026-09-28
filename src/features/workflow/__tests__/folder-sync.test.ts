@@ -114,6 +114,33 @@ describe("startWorkflowOpenTaskListener", () => {
     expect(useUiStore.getState().leftPanel).toBe("workflow");
   });
 
+  it("joins an attach in flight instead of attaching again", async () => {
+    let resolve!: (root: string) => void;
+    api.attach.mockReturnValueOnce(new Promise<string>((r) => (resolve = r)));
+    const activation = useWorkflowStore.getState().activate("C:/a");
+    await startWorkflowOpenTaskListener();
+    emit({ projectRoot: "C:/a", taskId: "t9" });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(useWorkflowStore.getState().selectedTaskId).toBeNull();
+    resolve("C:/a");
+    await activation;
+    await vi.waitFor(() => expect(useWorkflowStore.getState().selectedTaskId).toBe("t9"));
+    expect(api.attach).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores the task when the folder changes while it attaches", async () => {
+    let resolve!: (root: string) => void;
+    api.attach.mockReturnValueOnce(new Promise<string>((r) => (resolve = r)));
+    await startWorkflowOpenTaskListener();
+    emit({ projectRoot: "C:/a", taskId: "t9" });
+    await new Promise((r) => setTimeout(r, 10));
+    useTabStore.setState({ activeFolderPath: "C:/b" });
+    resolve("C:/a");
+    await new Promise((r) => setTimeout(r, 10));
+    expect(useWorkflowStore.getState().selectedTaskId).toBeNull();
+    expect(useUiStore.getState().leftPanel).toBe("folder");
+  });
+
   it("ignores a task of another project", async () => {
     await useWorkflowStore.getState().activate("C:/a");
     await startWorkflowOpenTaskListener();

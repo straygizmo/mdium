@@ -76,6 +76,7 @@ function setProject(patch: Partial<ProjectState>) {
     intakes: [],
     intakeWarnings: [],
     intakeError: null,
+    intakesLoaded: true,
     progress: {},
     loading: false,
     refreshing: false,
@@ -174,6 +175,12 @@ describe("IntakeList", () => {
     expect(container.textContent).toContain(".mdium/intakes/x.json");
   });
 
+  it("does not claim the list is empty before the intakes loaded", async () => {
+    setProject({ intakesLoaded: false });
+    await render();
+    expect(container.textContent).not.toContain(i18n.t("workflow:intake.list.empty"));
+  });
+
   it("re-renders when the store's intakes change", async () => {
     setProject({ intakes: [session("i1")] });
     await render();
@@ -205,10 +212,10 @@ describe("IntakeList", () => {
 
     api.openIntakeWindow.mockRejectedValue({ code: "WORKFLOW_PROJECT_INVALID", message: "no window" });
     await act(async () => open.click());
-    expect(dialogs.showMessage).toHaveBeenCalledWith(
-      expect.stringContaining("no window"),
-      expect.objectContaining({ kind: "error" }),
-    );
+    expect(dialogs.showMessage).toHaveBeenCalledWith(expect.stringContaining("no window"), {
+      title: i18n.t("workflow:intake.list.openFailed"),
+      kind: "error",
+    });
   });
 
   it("abandons a session after confirmation and refreshes the list", async () => {
@@ -238,7 +245,10 @@ describe("IntakeList", () => {
     dialogs.showConfirm.mockResolvedValue(true);
     await render();
     await act(async () => button(item("i1")!, i18n.t("workflow:intake.list.abandon"))!.click());
-    expect(dialogs.showMessage).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ kind: "error" }));
+    expect(dialogs.showMessage).toHaveBeenCalledWith(expect.stringContaining("gone"), {
+      title: i18n.t("workflow:intake.list.abandonFailed"),
+      kind: "error",
+    });
     expect(api.intakeList).toHaveBeenCalledWith(ROOT);
   });
 
@@ -255,6 +265,7 @@ describe("IntakeList", () => {
           }),
         }),
         session("creating", { status: "finalizing", finalize: finalize({ issueCreating: true }) }),
+        session("busy", { busy: true }),
       ],
     });
     await render();
@@ -263,8 +274,10 @@ describe("IntakeList", () => {
     expect(button(item("ready")!, label)).toBeDefined();
     expect(button(item("issued")!, label)).toBeUndefined();
     expect(button(item("creating")!, label)).toBeUndefined();
+    // Not while the agent is replying.
+    expect(button(item("busy")!, label)).toBeUndefined();
     // Every listed session can be opened.
-    for (const id of ["active", "ready", "issued", "creating"]) {
+    for (const id of ["active", "ready", "issued", "creating", "busy"]) {
       expect(button(item(id)!, i18n.t("workflow:intake.list.open"))).toBeDefined();
     }
   });

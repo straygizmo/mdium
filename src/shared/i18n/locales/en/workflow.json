@@ -159,20 +159,6 @@
     "cancel": "Cancel",
     "discardConfirm": "Discard the changes to this workflow?"
   },
-  "create": {
-    "title": "New task",
-    "taskTitle": "Title",
-    "body": "Description (Markdown)",
-    "write": "Write",
-    "preview": "Preview",
-    "emptyPreview": "Nothing to preview.",
-    "workflow": "Workflow",
-    "noWorkflows": "No workflow is enabled. Enable a workflow in the panel, or add the standard workflow and enable it.",
-    "create": "Create",
-    "cancel": "Cancel",
-    "failed": "The task could not be created.",
-    "discardConfirm": "Discard this new task?"
-  },
   "panel": {
     "workflows": "Workflows",
     "empty": "No workflows yet.",
@@ -189,6 +175,7 @@
     "addStandardPrompt": "Name of the new workflow",
     "provider": "Provider",
     "newTask": "New task",
+    "newTaskFailed": "The requirement intake window could not be opened.",
     "saveFailed": "The workflows could not be saved.",
     "addFailed": "The workflow could not be added.",
     "runCountFailed": "The number of runs in progress could not be checked.",
@@ -437,7 +424,9 @@
       "abandon": "Abandon",
       "abandonConfirm": "Abandon the requirement intake \"{{title}}\"? Files attached to it are deleted.",
       "warnings": "Load warnings ({{count}})",
-      "loadFailed": "The requirement intakes could not be loaded."
+      "loadFailed": "The requirement intakes could not be loaded.",
+      "openFailed": "The requirement intake window could not be opened.",
+      "abandonFailed": "The requirement intake could not be abandoned."
     },
     "attachments": {
       "title": "Attachments",

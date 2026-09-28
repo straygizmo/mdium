@@ -13,11 +13,12 @@ function isOpen(session: IntakeSessionView): boolean {
 }
 
 /**
- * Whether the backend accepts abandoning the session: while it is in
- * conversation, or while its finalize has not created (or started creating)
- * anything yet.
+ * Whether the session can be abandoned: no agent turn is running, and it is
+ * in conversation or its finalize has not created (or started creating)
+ * anything yet (what the backend accepts).
  */
 function canAbandon(session: IntakeSessionView): boolean {
+  if (session.busy) return false;
   if (session.status === "active") return true;
   const f = session.finalize;
   return session.status === "finalizing" && f.stage === "ready" && f.issue === null && !f.issueCreating;
@@ -68,7 +69,7 @@ export function IntakeList() {
       try {
         await workflowApi.openIntakeWindow(activeRoot, session.id);
       } catch (err) {
-        void showMessage(formatCommandError(err), { title: t("intake.actionFailed"), kind: "error" });
+        void showMessage(formatCommandError(err), { title: t("intake.list.openFailed"), kind: "error" });
       }
     });
 
@@ -78,7 +79,7 @@ export function IntakeList() {
       try {
         await workflowApi.intakeAbandon(activeRoot, session.id);
       } catch (err) {
-        void showMessage(formatCommandError(err), { title: t("intake.actionFailed"), kind: "error" });
+        void showMessage(formatCommandError(err), { title: t("intake.list.abandonFailed"), kind: "error" });
       }
       // Show the real state whether or not the session was abandoned.
       await useWorkflowStore.getState().refreshIntakes(activeRoot);
@@ -99,7 +100,7 @@ export function IntakeList() {
           {`${t("intake.list.loadFailed")} ${project.intakeError}`}
         </p>
       )}
-      {project.loaded && sessions.length === 0 && <p className="intake-list__message">{t("intake.list.empty")}</p>}
+      {project.intakesLoaded && sessions.length === 0 && <p className="intake-list__message">{t("intake.list.empty")}</p>}
       {sessions.length > 0 && (
         <ul className="intake-list__items">
           {sessions.map((session) => {

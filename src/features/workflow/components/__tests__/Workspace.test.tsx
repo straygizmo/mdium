@@ -85,6 +85,7 @@ function project(tasks: Task[], extra: Partial<ProjectState> = {}): ProjectState
     intakes: [],
     intakeWarnings: [],
     intakeError: null,
+    intakesLoaded: true,
     progress: {},
     loading: false,
     refreshing: false,
