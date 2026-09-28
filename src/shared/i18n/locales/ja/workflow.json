@@ -309,7 +309,9 @@
       "provider": "プロバイダー",
       "model": "モデル",
       "modelPlaceholder": "プロバイダーの既定",
-      "issueChecking": "Issue 連携を確認しています…",
+      "handOffFailed": "要件整理を作成しましたが、ウィンドウを開けませんでした。もう一度試すか、メインウィンドウの要件整理一覧から開いてください。",
+      "openAgain": "もう一度開く",
+      "handedOff": "要件整理を別のウィンドウで開きました。このウィンドウは閉じてかまいません。",
       "issueWillCreate": "確定すると {{host}}/{{path}} に Issue を作成します。",
       "issueUnavailable": "Issue 連携を利用できません: {{reason}}。確定時に Issue なしで続行できます。",
       "forgeReason": {

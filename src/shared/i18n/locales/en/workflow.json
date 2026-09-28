@@ -309,7 +309,9 @@
       "provider": "Provider",
       "model": "Model",
       "modelPlaceholder": "Provider default",
-      "issueChecking": "Checking Issue tracking…",
+      "handOffFailed": "The requirement intake was created, but its window could not be opened. Try again, or open it from the requirement intake list in the main window.",
+      "openAgain": "Open again",
+      "handedOff": "The requirement intake opened in its own window. You can close this window.",
       "issueWillCreate": "An Issue will be created on {{host}}/{{path}} when you finalize.",
       "issueUnavailable": "Issue tracking is unavailable: {{reason}}. You can continue without an Issue when finalizing.",
       "forgeReason": {
