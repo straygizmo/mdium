@@ -318,17 +318,44 @@ pub fn create_task(
     project_root: &Path,
     new: NewTask,
 ) -> Result<Task, ActionError> {
+    let task = create_root_task_with_id(
+        orch,
+        project_root,
+        &new_id(),
+        &new.title,
+        &new.body,
+        &new.workflow_id,
+        None,
+    )?;
+    orch.kick(project_root);
+    Ok(task)
+}
+
+/// Creates a root task (its own root, design role) in the inbox with the
+/// fixed id `id`, linked to `issue`. An intake's finalize assigns the id up
+/// front, so a retry after a crash targets the same task: an existing task
+/// with `id` is [`StoreError::AlreadyExists`]. Reports the task but does not
+/// kick the orchestrator; the caller does once its own bookkeeping is done.
+pub fn create_root_task_with_id(
+    orch: &Arc<Orchestrator>,
+    project_root: &Path,
+    id: &str,
+    title: &str,
+    body: &str,
+    workflow_id: &str,
+    issue: Option<IssueRef>,
+) -> Result<Task, ActionError> {
     let store = orch.store(project_root);
-    let title = new.title.trim();
+    let title = title.trim();
     if title.is_empty() {
         return Err(ActionError::InvalidState(WORKFLOW_TITLE_EMPTY));
     }
     let workflows = store.load_workflows()?.workflows;
     let workflow = workflows
         .iter()
-        .find(|w| w.id == new.workflow_id)
+        .find(|w| w.id == workflow_id)
         .ok_or(ActionError::InvalidState(WORKFLOW_NOT_FOUND))?;
-    let id = new_id();
+    let id = id.to_string();
     let now = fsutil::now();
     let meta = TaskMeta {
         schema_version: SCHEMA_VERSION,
@@ -355,12 +382,11 @@ pub fn create_task(
         plan_approved: false,
         user_input: None,
         screening_ack: None,
-        issue: None,
+        issue,
         pending_issue_entry: None,
     };
-    let task = store.create_task(&store.lock(), meta, &new.body)?;
+    let task = store.create_task(&store.lock(), meta, body)?;
     emit(orch, &store, std::slice::from_ref(&task), None);
-    orch.kick(project_root);
     Ok(task)
 }
 

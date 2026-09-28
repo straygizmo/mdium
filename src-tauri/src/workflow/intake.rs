@@ -9,17 +9,20 @@
 //!
 //! Locking: every mutation takes the project's [`ProjectGuard`];
 //! [`run_turn`] takes it only to load and to save, never while waiting on
-//! the runner.
+//! the runner, and [`finalize`] never holds it while talking to the forge.
 
+use crate::workflow::actions::{self, ActionError};
 use crate::workflow::attachments::{self, AttachmentError, AttachmentMeta};
 use crate::workflow::attempt::{CancelToken, CANCEL_GRACE};
+use crate::workflow::forge::{self, ForgeCli, ForgeError, ForgeProbe};
 use crate::workflow::frontmatter::{split_frontmatter, strip_bom, DelimiterMatch};
 use crate::workflow::fsutil::{self, MdiumPaths};
 use crate::workflow::integrity::{path_matches, MERGE_REVIEW_PATTERNS};
 use crate::workflow::model::{
-    DocUpdateProposal, FinalizeState, IntakeKind, IntakeMessage, IntakeProposal, IntakeQuestion,
-    IntakeSession, IntakeStatus, Provider,
+    DocUpdateProposal, FinalizeStage, FinalizeState, IntakeKind, IntakeMessage, IntakeProposal,
+    IntakeQuestion, IntakeSession, IntakeStatus, IssueRef, IssueTracking, Provider,
 };
+use crate::workflow::orchestrator::Orchestrator;
 use crate::workflow::outcome::strip_wrapping_fence;
 use crate::workflow::runner_client::{
     RunnerError, RunnerEvent, RunnerPermission, StartSessionParams,
@@ -30,8 +33,10 @@ use crate::workflow::store::{StoreError, StoreWarning, WorkflowStore};
 use crate::workflow::template;
 use serde::{Deserialize, Serialize};
 use serde_yaml_ng::Value as YamlValue;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::RecvTimeoutError;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 /// Maximum size of one user message, in bytes (64 KiB).
@@ -86,6 +91,16 @@ pub const INTAKE_GUARD_BLOCKED: &str = "INTAKE_GUARD_BLOCKED";
 pub const INTAKE_DOC_PATH_INVALID: &str = "INTAKE_DOC_PATH_INVALID";
 pub const INTAKE_DOC_PATH_PROTECTED: &str = "INTAKE_DOC_PATH_PROTECTED";
 pub const INTAKE_DOC_TOO_LARGE: &str = "INTAKE_DOC_TOO_LARGE";
+/// Finalize was requested before the agent proposed a requirement document.
+pub const INTAKE_NO_PROPOSAL: &str = "INTAKE_NO_PROPOSAL";
+/// The session's workflow is missing, disabled or archived.
+pub const INTAKE_WORKFLOW_UNAVAILABLE: &str = "INTAKE_WORKFLOW_UNAVAILABLE";
+/// Another finalize of the same session is still running.
+pub const INTAKE_FINALIZE_IN_PROGRESS: &str = "INTAKE_FINALIZE_IN_PROGRESS";
+/// The workflow tracks Issues automatically but `origin` is not a forge, or
+/// its CLI is missing or not logged in; finalize again with
+/// [`FinalizeOptions::skip_issue`] to continue without an Issue.
+pub const ISSUE_TRACKING_UNAVAILABLE: &str = "ISSUE_TRACKING_UNAVAILABLE";
 
 /// Message roles.
 const ROLE_USER: &str = "user";
@@ -122,6 +137,10 @@ pub enum IntakeError {
     Contract(String),
     Store(StoreError),
     Attachment(AttachmentError),
+    /// Creating the Issue failed.
+    Forge(ForgeError),
+    /// Creating the root task failed.
+    Action(ActionError),
 }
 
 impl IntakeError {
@@ -134,6 +153,8 @@ impl IntakeError {
             IntakeError::Contract(_) => "INTAKE_INVALID_OUTPUT",
             IntakeError::Store(err) => err.code(),
             IntakeError::Attachment(err) => err.code(),
+            IntakeError::Forge(err) => err.code(),
+            IntakeError::Action(err) => err.code(),
         }
     }
 }
@@ -146,6 +167,8 @@ impl std::fmt::Display for IntakeError {
             }
             IntakeError::Store(err) => err.fmt(f),
             IntakeError::Attachment(err) => err.fmt(f),
+            IntakeError::Forge(err) => err.fmt(f),
+            IntakeError::Action(err) => err.fmt(f),
             _ => f.write_str(self.code()),
         }
     }
@@ -162,6 +185,18 @@ impl From<StoreError> for IntakeError {
 impl From<AttachmentError> for IntakeError {
     fn from(err: AttachmentError) -> Self {
         IntakeError::Attachment(err)
+    }
+}
+
+impl From<ForgeError> for IntakeError {
+    fn from(err: ForgeError) -> Self {
+        IntakeError::Forge(err)
+    }
+}
+
+impl From<ActionError> for IntakeError {
+    fn from(err: ActionError) -> Self {
+        IntakeError::Action(err)
     }
 }
 
@@ -455,6 +490,285 @@ pub fn apply_doc_update(
         doc.status = DOC_REJECTED.to_string();
     }
     save_session(store, guard, &session)
+}
+
+/// What the user decided before finalizing.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FinalizeOptions {
+    /// Continue without an Issue (after [`ISSUE_TRACKING_UNAVAILABLE`] or a
+    /// failed Issue creation). Remembered by the session once given.
+    pub skip_issue: bool,
+}
+
+/// Intakes whose finalize is running in this process. The forge is called
+/// without the project lock, so this is what keeps two concurrent
+/// finalizes of one session from creating two Issues. Intake ids are
+/// random, so the id alone is the key.
+static FINALIZING: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+
+/// Membership of an intake id in [`FINALIZING`], released on drop.
+struct FinalizeSlot(String);
+
+impl FinalizeSlot {
+    fn acquire(intake_id: &str) -> Result<FinalizeSlot, IntakeError> {
+        let mut running = FINALIZING.lock().unwrap_or_else(PoisonError::into_inner);
+        if !running.insert(intake_id.to_string()) {
+            return Err(IntakeError::InvalidState(INTAKE_FINALIZE_IN_PROGRESS));
+        }
+        Ok(FinalizeSlot(intake_id.to_string()))
+    }
+}
+
+impl Drop for FinalizeSlot {
+    fn drop(&mut self) {
+        FINALIZING
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.0);
+    }
+}
+
+/// Turns an intake's proposal into a root task, in resumable stages (each
+/// persisted before the next starts, so a retry resumes at the failed one):
+///
+/// 1. `ready`: the session needs a proposal and a usable workflow (enabled,
+///    not archived); it becomes `finalizing` and gets its root task id,
+///    which is kept across retries.
+/// 2. `issue_created`: when the workflow tracks Issues automatically and
+///    the user did not choose to skip it, the Issue (title and body from
+///    the proposal, plus the attachment names) is created on the forge of
+///    `origin`, without holding the project lock. An undetected forge or a
+///    missing or logged-out CLI fails with [`ISSUE_TRACKING_UNAVAILABLE`];
+///    it is never skipped silently.
+/// 3. `attachments_committed`: the drafts become the root task's
+///    attachments.
+/// 4. `task_created`: the root task is created with the fixed id, linked
+///    to the Issue; its body is the proposal plus an `## Attachments` list.
+///    A task already created under that id counts as done.
+/// 5. `done`: the session is done and the orchestrator is kicked.
+///
+/// A failure records its code in `finalize.last_error` (while the session
+/// is finalizing) and is returned. Finalizing a done session returns it
+/// unchanged; an abandoned one is refused.
+pub fn finalize(
+    orch: &Arc<Orchestrator>,
+    project_root: &Path,
+    intake_id: &str,
+    opts: FinalizeOptions,
+) -> Result<IntakeSession, IntakeError> {
+    let store = orch.store(project_root);
+    let _slot = FinalizeSlot::acquire(intake_id)?;
+    let result = run_finalize(orch, &store, intake_id, opts);
+    if let Err(err) = &result {
+        record_finalize_error(&store, intake_id, err.code());
+    }
+    result
+}
+
+fn run_finalize(
+    orch: &Arc<Orchestrator>,
+    store: &WorkflowStore,
+    intake_id: &str,
+    opts: FinalizeOptions,
+) -> Result<IntakeSession, IntakeError> {
+    let paths = mdium_paths(store);
+
+    // 1. Start (or resume) finalizing.
+    let (mut session, proposal, tracking, draft_names) = {
+        let guard = store.lock();
+        let mut session = get_session(store, intake_id)?;
+        match session.status {
+            IntakeStatus::Done => return Ok(session),
+            IntakeStatus::Abandoned => return Err(IntakeError::InvalidState(INTAKE_NOT_ACTIVE)),
+            IntakeStatus::Active | IntakeStatus::Finalizing => {}
+        }
+        let proposal = session
+            .proposal
+            .clone()
+            .ok_or(IntakeError::InvalidState(INTAKE_NO_PROPOSAL))?;
+        let tracking = match session.finalize.stage {
+            FinalizeStage::Ready
+            | FinalizeStage::IssueCreated
+            | FinalizeStage::AttachmentsCommitted => {
+                Some(usable_workflow(store, &session.workflow_id)?)
+            }
+            FinalizeStage::TaskCreated | FinalizeStage::Done => None,
+        };
+        let draft_names = if session.finalize.stage == FinalizeStage::Ready {
+            attachments::list_drafts(&paths, intake_id)?
+                .into_iter()
+                .map(|draft| draft.stored_name)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let before = session.clone();
+        session.status = IntakeStatus::Finalizing;
+        if session.finalize.root_task_id.is_none() {
+            session.finalize.root_task_id = Some(fsutil::new_id());
+        }
+        session.finalize.skip_issue |= opts.skip_issue;
+        if session != before {
+            session = save_session(store, &guard, &session)?;
+        }
+        (session, proposal, tracking, draft_names)
+    };
+    let root_task_id = session
+        .finalize
+        .root_task_id
+        .clone()
+        .expect("the root task id is assigned when finalizing starts");
+
+    // 2. The Issue, outside the project lock.
+    if session.finalize.stage == FinalizeStage::Ready
+        && tracking == Some(IssueTracking::Auto)
+        && !session.finalize.skip_issue
+    {
+        let body = with_attachment_list(&proposal.body, &draft_names);
+        let issue = create_issue(
+            orch.forge().as_ref(),
+            store.project_root(),
+            &proposal.title,
+            &body,
+        )?;
+        session = update_session(store, intake_id, |session| {
+            session.finalize.issue = Some(issue);
+            session.finalize.stage = FinalizeStage::IssueCreated;
+            session.finalize.last_error = None;
+        })?;
+    }
+
+    // 3. The attachments.
+    if matches!(
+        session.finalize.stage,
+        FinalizeStage::Ready | FinalizeStage::IssueCreated
+    ) {
+        let guard = store.lock();
+        let committed = attachments::commit_drafts(&paths, intake_id, &root_task_id)?;
+        let mut fresh = get_session(store, intake_id)?;
+        fresh.finalize.attachment_ids = committed.into_iter().map(|meta| meta.id).collect();
+        fresh.finalize.stage = FinalizeStage::AttachmentsCommitted;
+        fresh.finalize.last_error = None;
+        session = save_session(store, &guard, &fresh)?;
+    }
+
+    // 4. The root task.
+    if session.finalize.stage == FinalizeStage::AttachmentsCommitted {
+        let lines: Vec<String> = {
+            let _guard = store.lock();
+            attachments::list_attachments(&paths, &root_task_id)?
+                .into_iter()
+                .filter(|meta| session.finalize.attachment_ids.contains(&meta.id))
+                .map(|meta| format!("{} (id `{}`)", meta.stored_name, meta.id))
+                .collect()
+        };
+        let body = with_attachment_list(&proposal.body, &lines);
+        match actions::create_root_task_with_id(
+            orch,
+            store.project_root(),
+            &root_task_id,
+            &proposal.title,
+            &body,
+            &session.workflow_id,
+            session.finalize.issue.clone(),
+        ) {
+            Ok(_) | Err(ActionError::Store(StoreError::AlreadyExists)) => {}
+            Err(err) => return Err(err.into()),
+        }
+        update_session(store, intake_id, |session| {
+            session.finalize.stage = FinalizeStage::TaskCreated;
+            session.finalize.last_error = None;
+        })?;
+    }
+
+    // 5. Done.
+    let session = update_session(store, intake_id, |session| {
+        session.finalize.stage = FinalizeStage::Done;
+        session.finalize.last_error = None;
+        session.status = IntakeStatus::Done;
+    })?;
+    orch.kick(store.project_root());
+    Ok(session)
+}
+
+/// The issue tracking of workflow `workflow_id`, which must exist and be
+/// enabled and not archived.
+fn usable_workflow(store: &WorkflowStore, workflow_id: &str) -> Result<IssueTracking, IntakeError> {
+    store
+        .load_workflows()?
+        .workflows
+        .into_iter()
+        .find(|workflow| workflow.id == workflow_id && workflow.enabled && !workflow.archived)
+        .map(|workflow| workflow.issue_tracking)
+        .ok_or(IntakeError::InvalidState(INTAKE_WORKFLOW_UNAVAILABLE))
+}
+
+/// Creates the Issue on the forge of `project_root`'s `origin`, which must
+/// be detected with its CLI installed and logged in.
+fn create_issue(
+    cli: &dyn ForgeCli,
+    project_root: &Path,
+    title: &str,
+    body: &str,
+) -> Result<IssueRef, IntakeError> {
+    let repo = match forge::probe(project_root, cli) {
+        ForgeProbe {
+            repo: Some(repo),
+            cli_available: true,
+            authenticated: true,
+        } => repo,
+        _ => return Err(IntakeError::InvalidState(ISSUE_TRACKING_UNAVAILABLE)),
+    };
+    let created = cli.create_issue(&repo, title, body)?;
+    Ok(IssueRef {
+        kind: repo.kind,
+        host: repo.host,
+        path: repo.path,
+        number: created.number,
+        url: created.url,
+    })
+}
+
+/// `body` followed by an `## Attachments` list of `items` (unchanged when
+/// there are none).
+fn with_attachment_list(body: &str, items: &[String]) -> String {
+    if items.is_empty() {
+        return body.to_string();
+    }
+    let list: Vec<String> = items.iter().map(|item| format!("- {item}")).collect();
+    format!(
+        "{}\n\n## Attachments\n\n{}\n",
+        body.trim_end(),
+        list.join("\n")
+    )
+}
+
+/// Loads session `id` under the project lock, applies `edit` and saves it.
+fn update_session(
+    store: &WorkflowStore,
+    id: &str,
+    edit: impl FnOnce(&mut IntakeSession),
+) -> Result<IntakeSession, IntakeError> {
+    let guard = store.lock();
+    let mut session = get_session(store, id)?;
+    edit(&mut session);
+    save_session(store, &guard, &session)
+}
+
+/// Records a failed finalize step's `code` on a finalizing session. Failing
+/// to record it is only logged: the caller returns the original error.
+fn record_finalize_error(store: &WorkflowStore, id: &str, code: &str) {
+    let guard = store.lock();
+    let result = get_session(store, id).and_then(|mut session| {
+        if session.status != IntakeStatus::Finalizing {
+            return Ok(());
+        }
+        session.finalize.last_error = Some(code.to_string());
+        save_session(store, &guard, &session).map(|_| ())
+    });
+    if let Err(err) = result {
+        eprintln!("[workflow] failed to record the finalize error of intake {id}: {err}");
+    }
 }
 
 /// Everything a turn needs once the lock is released.
@@ -1183,7 +1497,14 @@ fn check_real_location(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow::attempt::CancelReason;
+    use crate::workflow::attempt::{CancelReason, ProgressUpdate};
+    use crate::workflow::forge::{FakeForge, FakeOp, ForgeCall, ForgeError, ForgeKind};
+    use crate::workflow::gitops::test_support::Fixture;
+    use crate::workflow::model::{
+        FinalizeStage, IssueTracking, Task, TaskStatus, WorkflowRun, WorkflowsFile,
+    };
+    use crate::workflow::orchestrator::EventSink;
+    use crate::workflow::template::standard_workflow;
     use std::sync::mpsc::{self, Receiver};
     use std::sync::Mutex;
 
@@ -2265,6 +2586,395 @@ mod tests {
         assert_eq!(docs, vec![("A.md", "rejected"), ("C.md", "pending")]);
     }
 
+    // ---- finalize -------------------------------------------------------
+
+    /// Ignores every change report.
+    struct NullSink;
+
+    impl EventSink for NullSink {
+        fn task_changed(&self, _: &Path, _: &Task) {}
+        fn run_changed(&self, _: &Path, _: &WorkflowRun) {}
+        fn progress(&self, _: &Path, _: &str, _: &str, _: &ProgressUpdate) {}
+    }
+
+    /// A git repo whose `origin` is a GitHub repository, one enabled
+    /// workflow, a fake forge and an orchestrator that never dispatches (so
+    /// created tasks stay in the inbox).
+    struct FinalizeEnv {
+        fx: Fixture,
+        store: WorkflowStore,
+        forge: Arc<FakeForge>,
+        orch: Arc<Orchestrator>,
+        workflow_id: String,
+    }
+
+    impl FinalizeEnv {
+        fn new(tracking: IssueTracking) -> Self {
+            let fx = Fixture::new();
+            fx.run(&[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/owner/repo.git",
+            ]);
+            let forge = Arc::new(FakeForge::new());
+            let runner = FakeRunner::new(&WorkflowStore::new(fx.root().to_path_buf()), Vec::new());
+            let orch = Orchestrator::new(
+                Arc::new(runner),
+                Arc::new(NullSink),
+                forge.clone(),
+                fx.base().to_path_buf(),
+            );
+            orch.mark_shut_down();
+            let store = orch.store(fx.root());
+            let mut workflow = standard_workflow("Standard", Provider::Codex);
+            workflow.enabled = true;
+            workflow.issue_tracking = tracking;
+            let workflow_id = workflow.id.clone();
+            store
+                .save_workflows(&WorkflowsFile {
+                    schema_version: 1,
+                    workflows: vec![workflow],
+                })
+                .unwrap();
+            FinalizeEnv {
+                fx,
+                store,
+                forge,
+                orch,
+                workflow_id,
+            }
+        }
+
+        /// Logs the GitHub CLI in to github.com.
+        fn authenticate(&self) {
+            self.forge
+                .set_authenticated(ForgeKind::GitHub, "github.com", true);
+        }
+
+        /// An active session with a proposal and one draft.
+        fn proposed_session(&self) -> (IntakeSession, AttachmentMeta) {
+            let guard = self.store.lock();
+            let mut session = create_session(
+                &self.store,
+                &guard,
+                &self.workflow_id,
+                IntakeKind::Feature,
+                Provider::Claude,
+                None,
+            )
+            .unwrap();
+            let draft = attachments::add_draft_from_bytes(
+                &paths(&self.store),
+                &session.id,
+                "shot.png",
+                b"png",
+            )
+            .unwrap();
+            session.proposal = Some(IntakeProposal {
+                title: "Export data".to_string(),
+                body: "## Goal\n\nExport.".to_string(),
+            });
+            let session = save_session(&self.store, &guard, &session).unwrap();
+            (session, draft)
+        }
+
+        fn finalize(&self, id: &str, skip_issue: bool) -> Result<IntakeSession, IntakeError> {
+            finalize(
+                &self.orch,
+                self.fx.root(),
+                id,
+                FinalizeOptions { skip_issue },
+            )
+        }
+
+        fn created_issues(&self) -> usize {
+            self.forge
+                .calls()
+                .iter()
+                .filter(|call| matches!(call, ForgeCall::CreateIssue { .. }))
+                .count()
+        }
+    }
+
+    #[test]
+    fn finalize_creates_the_issue_commits_attachments_and_creates_the_task() {
+        let env = FinalizeEnv::new(IssueTracking::Auto);
+        env.authenticate();
+        let (session, draft) = env.proposed_session();
+
+        let done = env.finalize(&session.id, false).unwrap();
+
+        assert_eq!(done.status, IntakeStatus::Done);
+        assert_eq!(done.finalize.stage, FinalizeStage::Done);
+        assert_eq!(done.finalize.last_error, None);
+        assert_eq!(done.finalize.attachment_ids, vec![draft.id.clone()]);
+        let root_id = done.finalize.root_task_id.clone().unwrap();
+
+        let creates: Vec<ForgeCall> = env
+            .forge
+            .calls()
+            .into_iter()
+            .filter(|call| matches!(call, ForgeCall::CreateIssue { .. }))
+            .collect();
+        let [ForgeCall::CreateIssue { title, body }] = creates.as_slice() else {
+            panic!("expected one Issue, got {creates:?}");
+        };
+        assert_eq!(title, "Export data");
+        assert!(body.starts_with("## Goal\n\nExport."), "{body}");
+        assert!(body.contains("## Attachments"), "{body}");
+        assert!(body.contains("shot.png"), "{body}");
+
+        let issue = done.finalize.issue.clone().unwrap();
+        assert_eq!(issue.kind, ForgeKind::GitHub);
+        assert_eq!(issue.host, "github.com");
+        assert_eq!(issue.path, "owner/repo");
+        assert_eq!(issue.number, 1);
+
+        let task = env.store.get_task(&root_id).unwrap();
+        assert_eq!(task.meta.root_id, root_id);
+        assert_eq!(task.meta.title, "Export data");
+        assert_eq!(task.meta.status, TaskStatus::Inbox);
+        assert_eq!(
+            task.meta.workflow_id.as_deref(),
+            Some(env.workflow_id.as_str())
+        );
+        assert_eq!(task.meta.issue, Some(issue));
+        assert!(task.body.starts_with("## Goal\n\nExport."), "{}", task.body);
+        assert!(task.body.contains("## Attachments"), "{}", task.body);
+        assert!(task.body.contains("shot.png"), "{}", task.body);
+        assert!(task.body.contains(&draft.id), "{}", task.body);
+
+        let p = paths(&env.store);
+        let committed = attachments::list_attachments(&p, &root_id).unwrap();
+        assert_eq!(committed.len(), 1);
+        assert_eq!(committed[0].id, draft.id);
+        assert!(attachments::list_drafts(&p, &session.id)
+            .unwrap()
+            .is_empty());
+        assert_eq!(get_session(&env.store, &session.id).unwrap(), done);
+    }
+
+    #[test]
+    fn a_failure_after_the_issue_resumes_without_a_second_issue() {
+        let env = FinalizeEnv::new(IssueTracking::Auto);
+        env.authenticate();
+        let (mut session, _draft) = env.proposed_session();
+        // Fix the root id up front and put a file where the task's
+        // attachments directory goes, so committing the drafts fails.
+        let root_id = fsutil::new_id();
+        session.finalize.root_task_id = Some(root_id.clone());
+        {
+            let guard = env.store.lock();
+            save_session(&env.store, &guard, &session).unwrap();
+        }
+        let blocker = paths(&env.store).task_attachments_dir(&root_id).unwrap();
+        std::fs::create_dir_all(blocker.parent().unwrap()).unwrap();
+        std::fs::write(&blocker, b"not a directory").unwrap();
+
+        let err = env.finalize(&session.id, false).unwrap_err();
+        let failed = get_session(&env.store, &session.id).unwrap();
+        assert_eq!(failed.status, IntakeStatus::Finalizing);
+        assert_eq!(failed.finalize.stage, FinalizeStage::IssueCreated);
+        assert_eq!(failed.finalize.last_error.as_deref(), Some(err.code()));
+        assert_eq!(
+            failed.finalize.root_task_id.as_deref(),
+            Some(root_id.as_str())
+        );
+        assert_eq!(failed.finalize.issue.as_ref().map(|i| i.number), Some(1));
+        assert_eq!(env.created_issues(), 1);
+        assert!(env.store.get_task(&root_id).is_err());
+
+        std::fs::remove_file(&blocker).unwrap();
+        let done = env.finalize(&session.id, false).unwrap();
+        assert_eq!(done.status, IntakeStatus::Done);
+        assert_eq!(
+            done.finalize.root_task_id.as_deref(),
+            Some(root_id.as_str())
+        );
+        assert_eq!(done.finalize.last_error, None);
+        assert_eq!(env.created_issues(), 1);
+        let task = env.store.get_task(&root_id).unwrap();
+        assert_eq!(task.meta.issue.map(|i| i.number), Some(1));
+    }
+
+    #[test]
+    fn a_task_created_before_a_crash_is_not_created_again() {
+        let env = FinalizeEnv::new(IssueTracking::Off);
+        let (session, _draft) = env.proposed_session();
+        let done = env.finalize(&session.id, false).unwrap();
+        let root_id = done.finalize.root_task_id.clone().unwrap();
+        // Rewind to the state right after the task was written.
+        let mut rewound = done.clone();
+        rewound.status = IntakeStatus::Finalizing;
+        rewound.finalize.stage = FinalizeStage::AttachmentsCommitted;
+        {
+            let guard = env.store.lock();
+            save_session(&env.store, &guard, &rewound).unwrap();
+        }
+
+        let again = env.finalize(&session.id, false).unwrap();
+        assert_eq!(again.status, IntakeStatus::Done);
+        assert_eq!(
+            again.finalize.root_task_id.as_deref(),
+            Some(root_id.as_str())
+        );
+        assert_eq!(env.store.list_tasks().unwrap().tasks.len(), 1);
+    }
+
+    #[test]
+    fn tracking_off_makes_no_forge_calls() {
+        let env = FinalizeEnv::new(IssueTracking::Off);
+        env.authenticate();
+        let (session, _draft) = env.proposed_session();
+
+        let done = env.finalize(&session.id, false).unwrap();
+
+        assert_eq!(done.status, IntakeStatus::Done);
+        assert_eq!(done.finalize.issue, None);
+        assert!(env.forge.calls().is_empty(), "{:?}", env.forge.calls());
+        let task = env
+            .store
+            .get_task(done.finalize.root_task_id.as_deref().unwrap())
+            .unwrap();
+        assert_eq!(task.meta.issue, None);
+    }
+
+    #[test]
+    fn unavailable_tracking_fails_until_the_issue_is_skipped() {
+        let env = FinalizeEnv::new(IssueTracking::Auto);
+        // Not logged in.
+        let (session, _draft) = env.proposed_session();
+
+        let err = env.finalize(&session.id, false).unwrap_err();
+        assert_eq!(err.code(), ISSUE_TRACKING_UNAVAILABLE);
+        let failed = get_session(&env.store, &session.id).unwrap();
+        assert_eq!(failed.status, IntakeStatus::Finalizing);
+        assert_eq!(failed.finalize.stage, FinalizeStage::Ready);
+        assert_eq!(
+            failed.finalize.last_error.as_deref(),
+            Some(ISSUE_TRACKING_UNAVAILABLE)
+        );
+        let root_id = failed.finalize.root_task_id.clone().unwrap();
+        assert_eq!(env.created_issues(), 0);
+
+        // Retrying without acknowledging still refuses.
+        assert_eq!(
+            env.finalize(&session.id, false).unwrap_err().code(),
+            ISSUE_TRACKING_UNAVAILABLE
+        );
+
+        let done = env.finalize(&session.id, true).unwrap();
+        assert_eq!(done.status, IntakeStatus::Done);
+        assert!(done.finalize.skip_issue);
+        assert_eq!(done.finalize.issue, None);
+        assert_eq!(
+            done.finalize.root_task_id.as_deref(),
+            Some(root_id.as_str())
+        );
+        assert_eq!(env.created_issues(), 0);
+        assert_eq!(env.store.get_task(&root_id).unwrap().meta.issue, None);
+    }
+
+    #[test]
+    fn a_failed_issue_creation_is_retried() {
+        let env = FinalizeEnv::new(IssueTracking::Auto);
+        env.authenticate();
+        let (session, _draft) = env.proposed_session();
+        env.forge
+            .set_failure(FakeOp::CreateIssue, Some(ForgeError::Timeout));
+
+        let err = env.finalize(&session.id, false).unwrap_err();
+        assert_eq!(err.code(), "FORGE_TIMEOUT");
+        let failed = get_session(&env.store, &session.id).unwrap();
+        assert_eq!(failed.finalize.stage, FinalizeStage::Ready);
+        assert_eq!(failed.finalize.last_error.as_deref(), Some("FORGE_TIMEOUT"));
+
+        env.forge.set_failure(FakeOp::CreateIssue, None);
+        let done = env.finalize(&session.id, false).unwrap();
+        assert_eq!(done.status, IntakeStatus::Done);
+        assert_eq!(done.finalize.issue.as_ref().map(|i| i.number), Some(1));
+    }
+
+    #[test]
+    fn finalizing_a_done_session_again_is_a_no_op() {
+        let env = FinalizeEnv::new(IssueTracking::Auto);
+        env.authenticate();
+        let (session, _draft) = env.proposed_session();
+        let done = env.finalize(&session.id, false).unwrap();
+        let calls = env.forge.calls().len();
+
+        let again = env.finalize(&session.id, false).unwrap();
+
+        assert_eq!(again, done);
+        assert_eq!(env.forge.calls().len(), calls);
+        assert_eq!(env.store.list_tasks().unwrap().tasks.len(), 1);
+    }
+
+    #[test]
+    fn finalize_needs_a_proposal_and_a_usable_workflow() {
+        let env = FinalizeEnv::new(IssueTracking::Off);
+        let session = {
+            let guard = env.store.lock();
+            create_session(
+                &env.store,
+                &guard,
+                &env.workflow_id,
+                IntakeKind::Bug,
+                Provider::Claude,
+                None,
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            env.finalize(&session.id, false).unwrap_err().code(),
+            INTAKE_NO_PROPOSAL
+        );
+        assert_eq!(
+            get_session(&env.store, &session.id).unwrap().status,
+            IntakeStatus::Active
+        );
+
+        let (proposed, _draft) = env.proposed_session();
+        let mut file = env.store.load_workflows().unwrap();
+        file.workflows[0].archived = true;
+        env.store
+            .save_workflows(&WorkflowsFile {
+                schema_version: 1,
+                workflows: file.workflows,
+            })
+            .unwrap();
+        assert_eq!(
+            env.finalize(&proposed.id, false).unwrap_err().code(),
+            INTAKE_WORKFLOW_UNAVAILABLE
+        );
+        let refused = get_session(&env.store, &proposed.id).unwrap();
+        assert_eq!(refused.status, IntakeStatus::Active);
+        assert_eq!(refused.finalize.root_task_id, None);
+
+        let abandoned = {
+            let guard = env.store.lock();
+            abandon_session(&env.store, &guard, &session.id).unwrap()
+        };
+        assert_eq!(
+            env.finalize(&abandoned.id, false).unwrap_err().code(),
+            INTAKE_NOT_ACTIVE
+        );
+    }
+
+    #[test]
+    fn one_session_finalizes_at_a_time() {
+        let id = fsutil::new_id();
+        let slot = FinalizeSlot::acquire(&id).unwrap();
+        assert_eq!(
+            FinalizeSlot::acquire(&id).err().map(|err| err.code()),
+            Some(INTAKE_FINALIZE_IN_PROGRESS)
+        );
+        FinalizeSlot::acquire(&fsutil::new_id()).unwrap();
+        drop(slot);
+        FinalizeSlot::acquire(&id).unwrap();
+    }
+
     #[test]
     fn error_codes_are_stable() {
         assert_eq!(IntakeError::NotFound.code(), "INTAKE_NOT_FOUND");
@@ -2284,6 +2994,10 @@ mod tests {
         assert_eq!(
             IntakeError::Store(StoreError::NotFound).code(),
             "STORE_NOT_FOUND"
+        );
+        assert_eq!(
+            IntakeError::Forge(ForgeError::Timeout).code(),
+            "FORGE_TIMEOUT"
         );
         let json = serde_json::to_value(IntakeError::TooLarge).unwrap();
         assert_eq!(json["code"], "INTAKE_TOO_LARGE");
