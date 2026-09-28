@@ -28,7 +28,9 @@ use crate::workflow::prompt::{
 };
 use crate::workflow::runner_client::RunnerPermission;
 use crate::workflow::screening::screen;
-use crate::workflow::state::{transition_locked, ProjectGuard, TransitionError};
+use crate::workflow::state::{
+    transition_locked, transition_locked_with, ProjectGuard, TransitionError,
+};
 use crate::workflow::store::{StoreError, WorkflowStore};
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
@@ -53,6 +55,48 @@ const RUNNER_EXITED: &str = "RUNNER_EXITED";
 /// Attention code of a completed stage whose Issue entry could not be
 /// posted (params `code`, `message`, `entry`).
 pub const ATTENTION_ISSUE_SYNC_FAILED: &str = "ATTENTION_ISSUE_SYNC_FAILED";
+/// Code of an Issue entry that could not be built locally (e.g. its
+/// commits could not be listed).
+pub const WORKFLOW_ISSUE_ENTRY_FAILED: &str = "WORKFLOW_ISSUE_ENTRY_FAILED";
+/// Code of an Issue sync that was interrupted (the app shut down or
+/// crashed while the entry was being posted).
+pub const WORKFLOW_ISSUE_SYNC_INTERRUPTED: &str = "WORKFLOW_ISSUE_SYNC_INTERRUPTED";
+
+/// Why a stage's Issue entry was not posted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IssueSyncError {
+    /// The forge operation failed.
+    Forge(ForgeError),
+    /// A local step failed before posting: `code` (e.g.
+    /// [`WORKFLOW_ISSUE_ENTRY_FAILED`], [`WORKFLOW_ISSUE_SYNC_INTERRUPTED`]
+    /// or a store code) and a technical detail.
+    Local { code: &'static str, detail: String },
+}
+
+impl IssueSyncError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            IssueSyncError::Forge(err) => err.code(),
+            IssueSyncError::Local { code, .. } => code,
+        }
+    }
+}
+
+impl std::fmt::Display for IssueSyncError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IssueSyncError::Forge(err) => err.fmt(f),
+            IssueSyncError::Local { code, detail } if detail.is_empty() => f.write_str(code),
+            IssueSyncError::Local { code, detail } => write!(f, "{code}: {detail}"),
+        }
+    }
+}
+
+impl From<ForgeError> for IssueSyncError {
+    fn from(err: ForgeError) -> Self {
+        IssueSyncError::Forge(err)
+    }
+}
 
 /// An attempt that [`begin_attempt`] recorded and that is ready to run.
 #[derive(Debug, Clone)]
@@ -86,7 +130,7 @@ pub struct FinishInput {
     /// Why posting the stage's Issue entry failed. The entry is posted
     /// before the finish; when it failed, a stage that would complete moves
     /// to attention (`ATTENTION_ISSUE_SYNC_FAILED`) instead.
-    pub issue_sync_error: Option<ForgeError>,
+    pub issue_sync_error: Option<IssueSyncError>,
 }
 
 /// What [`finish_attempt`] changed.
@@ -362,6 +406,7 @@ pub fn begin_attempt(
         outcome: None,
         mode,
         user_input: consumed_input,
+        issue_sync_pending: None,
     });
     let recorded = store
         .put_task(guard, &running)
@@ -578,8 +623,10 @@ fn design_doc_failed(code: &str) -> AttentionReason {
 }
 
 /// The committed attachments of root task `root_id` as listed in stage
-/// prompts, with absolute verified paths. An attachment that cannot be
-/// verified is left out (and logged).
+/// prompts, with absolute paths. The content is not re-hashed here (it is
+/// verified whenever MDium itself reads an attachment); only a cheap check
+/// is made that the content is a regular file of the recorded size. An
+/// attachment failing it is left out (and logged).
 fn root_attachments(project_root: &Path, root_id: &str) -> Vec<AttachmentView> {
     let paths = MdiumPaths::new(project_root);
     let metas = match attachments::list_attachments(&paths, root_id) {
@@ -591,25 +638,52 @@ fn root_attachments(project_root: &Path, root_id: &str) -> Vec<AttachmentView> {
     };
     metas
         .into_iter()
-        .filter_map(
-            |meta| match attachments::attachment_file(&paths, root_id, &meta.id) {
-                Ok(path) => Some(AttachmentView {
-                    id: meta.id,
-                    name: meta.stored_name,
-                    mime: meta.mime,
-                    size: meta.size,
-                    path: path.display().to_string(),
-                }),
-                Err(err) => {
-                    eprintln!(
-                        "[workflow] attachment {} of task {root_id} left out: {err}",
-                        meta.id
-                    );
-                    None
-                }
-            },
-        )
+        .filter_map(|meta| {
+            let path = attachment_content_path(&paths, root_id, &meta.id, &meta.stored_name);
+            let fits = path.as_ref().is_some_and(|path| {
+                std::fs::symlink_metadata(path)
+                    .is_ok_and(|m| m.file_type().is_file() && m.len() == meta.size)
+            });
+            if !fits {
+                eprintln!(
+                    "[workflow] attachment {} of task {root_id} left out: content missing or changed",
+                    meta.id
+                );
+                return None;
+            }
+            Some(AttachmentView {
+                id: meta.id,
+                name: meta.stored_name,
+                mime: meta.mime,
+                size: meta.size,
+                path: path?.display().to_string(),
+            })
+        })
         .collect()
+}
+
+/// The content path of a committed attachment, or `None` when its id or
+/// stored name could leave its directory.
+fn attachment_content_path(
+    paths: &MdiumPaths,
+    root_id: &str,
+    attachment_id: &str,
+    stored_name: &str,
+) -> Option<PathBuf> {
+    let mut components = Path::new(stored_name).components();
+    let plain_name = matches!(
+        (components.next(), components.next()),
+        (Some(Component::Normal(_)), None)
+    );
+    if !plain_name {
+        return None;
+    }
+    Some(
+        paths
+            .attachment_dir(root_id, attachment_id)
+            .ok()?
+            .join(stored_name),
+    )
 }
 
 /// The design passed to the review stage: the output body (parsed, else
@@ -945,7 +1019,28 @@ fn close_attempt(run: &mut WorkflowRun, attempt_id: &str, finished_at: &str, out
     if let Some(record) = run.attempts.iter_mut().find(|a| a.attempt_id == attempt_id) {
         record.finished_at = Some(finished_at.to_string());
         record.outcome = Some(outcome.to_string());
+        record.issue_sync_pending = None;
     }
+}
+
+/// Marks attempt `attempt_id` of run `root_id` as posting an `entry` Issue
+/// entry (see [`AttemptRecord::issue_sync_pending`]).
+pub fn mark_issue_sync_pending(
+    guard: &ProjectGuard,
+    store: &WorkflowStore,
+    root_id: &str,
+    attempt_id: &str,
+    entry: EntryKind,
+) -> Result<(), StoreError> {
+    let mut run = store.get_run(root_id)?;
+    let record = run
+        .attempts
+        .iter_mut()
+        .find(|a| a.attempt_id == attempt_id)
+        .ok_or(StoreError::NotFound)?;
+    record.issue_sync_pending = Some(entry.as_str().to_string());
+    store.put_run(guard, &run)?;
+    Ok(())
 }
 
 /// Performs `action` on the running `task`, returning the tasks written.
@@ -995,19 +1090,32 @@ fn apply_action(
             }
         }
         Action::IssueSyncFailed(reason, entry) => {
-            let mut parked = move_task(
-                guard,
-                store,
-                id,
-                TaskStatus::Running,
-                TaskStatus::Attention,
-                Some(reason),
-                None,
-            )?;
-            parked.meta.pending_issue_entry = Some(entry.as_str().to_string());
-            Ok(vec![store.put_task(guard, &parked)?])
+            Ok(vec![park_failed_sync(guard, store, id, reason, entry)?])
         }
     }
+}
+
+/// Moves running task `task_id` to attention for a failed Issue sync of an
+/// `entry` entry, recording the pending entry in the same write.
+fn park_failed_sync(
+    guard: &ProjectGuard,
+    store: &WorkflowStore,
+    task_id: &str,
+    reason: AttentionReason,
+    entry: EntryKind,
+) -> Result<Task, FlowError> {
+    Ok(transition_locked_with(
+        guard,
+        store,
+        task_id,
+        TaskStatus::Running,
+        TaskStatus::Attention,
+        Some(reason),
+        |meta| {
+            meta.awaiting = None;
+            meta.pending_issue_entry = Some(entry.as_str().to_string());
+        },
+    )?)
 }
 
 /// Why [`complete_stage`] did not complete the stage.
@@ -1109,7 +1217,7 @@ pub fn entry_kind(role: Role) -> EntryKind {
 }
 
 /// The attention reason of a failed Issue sync of an `entry` entry.
-fn issue_sync_failed(err: &ForgeError, entry: EntryKind) -> AttentionReason {
+fn issue_sync_failed(err: &IssueSyncError, entry: EntryKind) -> AttentionReason {
     to_attention(
         ATTENTION_ISSUE_SYNC_FAILED,
         [
@@ -1153,8 +1261,8 @@ pub struct StageEntry {
 /// Builds the Issue entry of attempt `attempt_id` of task `task_id` (of
 /// stage `role`) that ended with `result`. An implement entry lists the
 /// branch and its commits since the base, read by git in the run's
-/// worktree (under `worktree_base`); a failure to read them is reported as
-/// a failed forge command (exit code -1), so the sync fails visibly.
+/// worktree (under `worktree_base`); a failure to read them is
+/// [`WORKFLOW_ISSUE_ENTRY_FAILED`].
 pub fn stage_entry(
     worktree_base: &Path,
     run: &WorkflowRun,
@@ -1162,18 +1270,22 @@ pub fn stage_entry(
     attempt_id: &str,
     role: Role,
     result: &StageResult,
-) -> Result<StageEntry, ForgeError> {
+) -> Result<StageEntry, IssueSyncError> {
     let kind = entry_kind(role);
     let id = issue_sync::entry_id(task_id, attempt_id);
     let body = match (role, result) {
         (Role::Design, result) => issue_sync::design_body(result.body(), &id),
         (Role::Implement, result) => {
+            let entry_failed = |detail: String| IssueSyncError::Local {
+                code: WORKFLOW_ISSUE_ENTRY_FAILED,
+                detail,
+            };
             let info = run
                 .worktree
                 .as_ref()
-                .ok_or_else(|| ForgeError::command_failed(-1, GIT_INVALID_WORKTREE_INFO))?;
+                .ok_or_else(|| entry_failed(GIT_INVALID_WORKTREE_INFO.to_string()))?;
             let commits = gitops::commits_since_base_in(worktree_base, info)
-                .map_err(|err| ForgeError::command_failed(-1, &err.to_string()))?;
+                .map_err(|err| entry_failed(err.to_string()))?;
             issue_sync::implement_body(result.body(), &info.branch, &commits, &id)
         }
         (Role::Review, StageResult::Returned(findings)) => {
@@ -1452,8 +1564,14 @@ pub fn recover(
 }
 
 /// Moves one running task to attention (`ATTENTION_INTERRUPTED`) and
-/// closes its open attempt records as `interrupted`.
+/// closes its open attempt records as `interrupted`. A task whose attempt
+/// was interrupted while posting its Issue entry (see
+/// [`interrupted_sync`]) instead waits for the sync to be retried or
+/// skipped.
 fn interrupt(guard: &ProjectGuard, store: &WorkflowStore, task: &Task) -> Result<Task, FlowError> {
+    if let Some(parked) = interrupted_sync(guard, store, task)? {
+        return Ok(parked);
+    }
     let interrupted = move_task(
         guard,
         store,
@@ -1490,6 +1608,75 @@ fn interrupt(guard: &ProjectGuard, store: &WorkflowStore, task: &Task) -> Result
         store.put_run(guard, &run)?;
     }
     Ok(interrupted)
+}
+
+/// Recovers a running task whose latest attempt was interrupted while
+/// posting its Issue entry: the attempt is marked, still open, and its
+/// saved output is a stage result. The attempt is closed with that result's
+/// outcome and the task moves to attention (`ATTENTION_ISSUE_SYNC_FAILED`,
+/// code [`WORKFLOW_ISSUE_SYNC_INTERRUPTED`]) with the pending entry, so a
+/// retry posts the same entry (found by its marker if it already landed)
+/// and completes the stage. Returns `None` when this does not apply.
+fn interrupted_sync(
+    guard: &ProjectGuard,
+    store: &WorkflowStore,
+    task: &Task,
+) -> Result<Option<Task>, FlowError> {
+    let Ok(mut run) = store.get_run(&task.meta.root_id) else {
+        return Ok(None);
+    };
+    let Some(attempt) = run
+        .attempts
+        .iter()
+        .rev()
+        .find(|a| a.task_id == task.meta.id)
+        .cloned()
+    else {
+        return Ok(None);
+    };
+    let Some(entry) = attempt.issue_sync_pending.as_deref() else {
+        return Ok(None);
+    };
+    let entry = match entry {
+        "design" => EntryKind::Design,
+        "implement" => EntryKind::Implement,
+        "review" => EntryKind::Review,
+        _ => return Ok(None),
+    };
+    if attempt.finished_at.is_some() {
+        return Ok(None);
+    }
+    let role = task.meta.role.unwrap_or(Role::Design);
+    let result = store
+        .read_attempt_output(&run.root_task_id, &task.meta.id, &attempt.attempt_id)
+        .ok()
+        .and_then(|raw| parse_outcome(&raw).ok())
+        .and_then(|outcome| stage_result(role, attempt.mode, &outcome));
+    let Some(result) = result else {
+        return Ok(None);
+    };
+    let outcome = match result {
+        StageResult::Completed(_) => "completed",
+        StageResult::Returned(_) => "attention",
+    };
+    // Close the attempt first: a crash in between leaves a running task
+    // whose attempt is closed, which the plain interruption handles.
+    close_attempt(&mut run, &attempt.attempt_id, &fsutil::now(), outcome);
+    store.put_run(guard, &run)?;
+    let reason = issue_sync_failed(
+        &IssueSyncError::Local {
+            code: WORKFLOW_ISSUE_SYNC_INTERRUPTED,
+            detail: String::new(),
+        },
+        entry,
+    );
+    Ok(Some(park_failed_sync(
+        guard,
+        store,
+        &task.meta.id,
+        reason,
+        entry,
+    )?))
 }
 
 /// Resumes or abandons one run's pending transition (see [`recover`]).
@@ -3058,7 +3245,7 @@ question: Sure?
                     after: None,
                     reason: None,
                 },
-                issue_sync_error: Some(sync_error),
+                issue_sync_error: Some(sync_error.into()),
             },
         )
     }
@@ -3084,10 +3271,13 @@ question: Sure?
         let intake = new_id();
         attachments::add_draft_from_bytes(&paths, &intake, "spec.txt", b"spec").unwrap();
         let committed = attachments::commit_drafts(&paths, &intake, &root.meta.id).unwrap();
-        let file = attachments::attachment_file(&paths, &root.meta.id, &committed[0].id).unwrap();
+        let file = paths
+            .attachment_dir(&root.meta.id, &committed[0].id)
+            .unwrap()
+            .join(&committed[0].stored_name);
         assert!(file.is_absolute());
         let listed = format!(
-            "- `{}` (spec.txt, {}, 4 bytes)",
+            "- {} (spec.txt, {}, 4 bytes)",
             file.display(),
             committed[0].mime
         );
@@ -3178,7 +3368,7 @@ question: Sure?
                     after: None,
                     reason: None,
                 },
-                issue_sync_error: Some(ForgeError::Timeout),
+                issue_sync_error: Some(ForgeError::Timeout.into()),
             },
         );
         let task = env.task(&root.meta.id);
@@ -3370,5 +3560,92 @@ question: Sure?
         );
         assert_eq!(stage_result(Role::Design, single, &found), None);
         assert_eq!(stage_result(Role::Review, single, &asked), None);
+    }
+
+    #[test]
+    fn an_implement_entry_whose_commits_cannot_be_listed_is_a_local_failure() {
+        let env = Env::new();
+        let root = env.root_task("A", "a");
+        env.started(&root.meta.id);
+        let mut run = env.run(&root.meta.id);
+        run.worktree = None;
+        let err = stage_entry(
+            env.fx.base(),
+            &run,
+            &root.meta.id,
+            "fedcba9876543210",
+            Role::Implement,
+            &StageResult::Completed("Did it.".to_string()),
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), WORKFLOW_ISSUE_ENTRY_FAILED);
+        assert!(!matches!(err, IssueSyncError::Forge(_)));
+    }
+
+    #[test]
+    fn an_attachment_whose_content_changed_size_is_left_out_of_the_prompt() {
+        let env = Env::new();
+        let root = env.root_task("A", "a");
+        let paths = MdiumPaths::new(env.store.project_root());
+        let intake = new_id();
+        attachments::add_draft_from_bytes(&paths, &intake, "spec.txt", b"spec").unwrap();
+        let committed = attachments::commit_drafts(&paths, &intake, &root.meta.id).unwrap();
+        let file = paths
+            .attachment_dir(&root.meta.id, &committed[0].id)
+            .unwrap()
+            .join(&committed[0].stored_name);
+        std::fs::write(&file, b"longer content").unwrap();
+
+        let planned = env.started(&root.meta.id);
+        assert!(!planned.request.prompt.contains("## Attachments"));
+    }
+
+    #[test]
+    fn a_marked_attempt_without_a_stage_result_is_a_plain_interruption() {
+        let env = Env::new();
+        let root = env.root_task("A", "a");
+        let planned = env.started(&root.meta.id);
+        let req = &planned.request;
+        env.store
+            .write_attempt_output(&req.root_task_id, &req.task_id, &req.attempt_id, "garbage")
+            .unwrap();
+        mark_issue_sync_pending(
+            &env.store.lock(),
+            &env.store,
+            &root.meta.id,
+            &req.attempt_id,
+            EntryKind::Design,
+        )
+        .unwrap();
+
+        recover(&env.store.lock(), &env.store, true).unwrap();
+        let task = env.task(&root.meta.id);
+        assert_eq!(attention_code(&task), "ATTENTION_INTERRUPTED");
+        assert_eq!(task.meta.pending_issue_entry, None);
+        let attempt = env.last_attempt(&root.meta.id);
+        assert_eq!(attempt.outcome.as_deref(), Some("interrupted"));
+    }
+
+    #[test]
+    fn finishing_an_attempt_clears_its_sync_marker() {
+        let env = Env::new();
+        let root = env.root_task("A", "a");
+        let planned = env.started(&root.meta.id);
+        mark_issue_sync_pending(
+            &env.store.lock(),
+            &env.store,
+            &root.meta.id,
+            &planned.request.attempt_id,
+            EntryKind::Design,
+        )
+        .unwrap();
+        assert_eq!(
+            env.last_attempt(&root.meta.id)
+                .issue_sync_pending
+                .as_deref(),
+            Some("design")
+        );
+        env.complete(&planned, &completed("# Design"));
+        assert_eq!(env.last_attempt(&root.meta.id).issue_sync_pending, None);
     }
 }

@@ -12,7 +12,7 @@
 use crate::workflow::attempt::CancelReason;
 use crate::workflow::checks;
 use crate::workflow::flow::{
-    self, FlowError, StageError, StageResult, ATTENTION_ISSUE_SYNC_FAILED,
+    self, FlowError, IssueSyncError, StageError, StageResult, ATTENTION_ISSUE_SYNC_FAILED,
 };
 use crate::workflow::forge::ForgeError;
 use crate::workflow::fsutil::{self, new_id};
@@ -199,6 +199,18 @@ impl From<IntegrityError> for ActionError {
 impl From<ForgeError> for ActionError {
     fn from(err: ForgeError) -> Self {
         ActionError::Forge(err)
+    }
+}
+
+impl From<IssueSyncError> for ActionError {
+    fn from(err: IssueSyncError) -> Self {
+        match err {
+            IssueSyncError::Forge(err) => ActionError::Forge(err),
+            IssueSyncError::Local { code, detail } => {
+                eprintln!("[workflow] Issue entry failed: {code}: {detail}");
+                ActionError::InvalidState(code)
+            }
+        }
     }
 }
 
@@ -768,18 +780,17 @@ fn resolve_issue_sync(
     let (task, changed, run) = {
         let guard = store.lock();
         let PendingSync {
-            task,
+            mut task,
             mut run,
             result,
             ..
         } = pending_sync(&store, task_id, false)?;
-        let clear_pending = |mut task: Task| -> Result<Task, ActionError> {
-            if task.meta.pending_issue_entry.is_none() {
-                return Ok(task);
-            }
+        // The sync is resolved from here on: clear the pending entry under
+        // this guard before the stage completes.
+        if task.meta.pending_issue_entry.is_some() {
             task.meta.pending_issue_entry = None;
-            Ok(store.put_task(&guard, &task)?)
-        };
+            task = store.put_task(&guard, &task)?;
+        }
         match flow::complete_stage(
             &guard,
             &store,
@@ -789,24 +800,15 @@ fn resolve_issue_sync(
             orch.worktree_base(),
         ) {
             Ok(changed) => {
-                let done = clear_pending(store.get_task(task_id)?)?;
-                let changed: Vec<Task> = changed
-                    .into_iter()
-                    .map(|t| {
-                        if t.meta.id == task_id {
-                            done.clone()
-                        } else {
-                            t
-                        }
-                    })
-                    .collect();
+                let done = match changed.iter().find(|t| t.meta.id == task_id) {
+                    Some(done) => done.clone(),
+                    None => store.get_task(task_id)?,
+                };
                 (done, changed, run)
             }
             Err(StageError::Attention(reason)) => {
-                let mut parked = store.get_task(task_id)?;
-                parked.meta.attention = Some(reason);
-                parked.meta.pending_issue_entry = None;
-                let parked = store.put_task(&guard, &parked)?;
+                task.meta.attention = Some(reason);
+                let parked = store.put_task(&guard, &task)?;
                 (parked.clone(), vec![parked], run)
             }
             Err(StageError::Flow(err)) => return Err(err.into()),
@@ -3025,7 +3027,7 @@ mod tests {
                 after: Some(after),
                 reason: None,
             },
-            issue_sync_error: Some(ForgeError::Timeout),
+            issue_sync_error: Some(ForgeError::Timeout.into()),
         };
         finish_attempt(&env.store.lock(), &env.store, &planned, input).unwrap();
         assert_eq!(

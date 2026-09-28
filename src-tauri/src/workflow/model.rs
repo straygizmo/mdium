@@ -286,6 +286,12 @@ pub struct AttemptRecord {
     /// Copy of the user input consumed by this attempt (traceability).
     #[serde(default)]
     pub user_input: Option<String>,
+    /// Entry kind (`design` | `implement` | `review`) of the Issue entry
+    /// being posted for this attempt's result; set right before the post
+    /// and cleared when the attempt is finished, so recovery can tell an
+    /// attempt interrupted during its Issue sync.
+    #[serde(default)]
+    pub issue_sync_pending: Option<String>,
 }
 
 /// Content fingerprint of an agent-config file. `sha256` is `None` when the
@@ -932,6 +938,7 @@ mod tests {
         ];
         run.attempts[0].mode = AttemptMode::Execute;
         run.attempts[0].user_input = Some("go ahead".to_string());
+        run.attempts[0].issue_sync_pending = Some("design".to_string());
 
         let value = serde_json::to_value(&run).unwrap();
         assert_eq!(
@@ -943,6 +950,7 @@ mod tests {
         );
         assert_eq!(value["attempts"][0]["mode"], json!("execute"));
         assert_eq!(value["attempts"][0]["userInput"], json!("go ahead"));
+        assert_eq!(value["attempts"][0]["issueSyncPending"], json!("design"));
 
         let round_tripped: WorkflowRun = serde_json::from_value(value).unwrap();
         assert_eq!(round_tripped, run);

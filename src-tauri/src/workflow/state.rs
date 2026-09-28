@@ -24,7 +24,7 @@
 //! window but cannot close it.
 
 use crate::workflow::fsutil;
-use crate::workflow::model::{AttentionReason, HistoryEntry, Task, TaskStatus};
+use crate::workflow::model::{AttentionReason, HistoryEntry, Task, TaskMeta, TaskStatus};
 use crate::workflow::store::{StoreError, WorkflowStore};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -252,6 +252,20 @@ pub fn transition_locked(
     to: TaskStatus,
     reason: Option<AttentionReason>,
 ) -> Result<Task, TransitionError> {
+    transition_locked_with(guard, store, task_id, expected_from, to, reason, |_| {})
+}
+
+/// [`transition_locked`] that also applies `edit` to the task's metadata
+/// in the same write (after the status, attention and history changes).
+pub fn transition_locked_with(
+    guard: &ProjectGuard,
+    store: &WorkflowStore,
+    task_id: &str,
+    expected_from: TaskStatus,
+    to: TaskStatus,
+    reason: Option<AttentionReason>,
+    edit: impl FnOnce(&mut TaskMeta),
+) -> Result<Task, TransitionError> {
     if !guard.covers(store.project_root()) {
         return Err(TransitionError::Store(StoreError::LockMismatch));
     }
@@ -282,6 +296,7 @@ pub fn transition_locked(
         to,
         reason,
     });
+    edit(&mut task.meta);
 
     // Stamp updated_at with the same instant as the history entry.
     Ok(store.put_task_at(guard, &task, at)?)

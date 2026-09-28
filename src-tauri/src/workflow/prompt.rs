@@ -318,8 +318,9 @@ fn previous_block(previous: &PreviousAttempt) -> Option<String> {
     (!blocks.is_empty()).then(|| blocks.join("\n\n"))
 }
 
-/// The body of the "Attachments" section: one line per attachment with its
-/// absolute path, name, type and size. `None` when there are none.
+/// The body of the "Attachments" section: a lead sentence and a data block
+/// with one line per attachment (absolute path, name, type and size).
+/// `None` when there are none.
 fn attachments_block(attachments: &[AttachmentView]) -> Option<String> {
     if attachments.is_empty() {
         return None;
@@ -328,7 +329,7 @@ fn attachments_block(attachments: &[AttachmentView]) -> Option<String> {
         .iter()
         .map(|a| {
             format!(
-                "- `{}` ({}, {}, {} bytes)",
+                "- {} ({}, {}, {} bytes)",
                 a.path,
                 collapse_whitespace(&a.name),
                 a.mime,
@@ -336,9 +337,12 @@ fn attachments_block(attachments: &[AttachmentView]) -> Option<String> {
             )
         })
         .collect();
+    // File names and paths are user-controlled: they go into a data block
+    // whose fence no backtick run in them can close.
+    let list = lines.join("\n");
     Some(format!(
         "The user attached these files to the task. Read these files if they are relevant.\n\n{}",
-        lines.join("\n")
+        data_block(Some(&list))?
     ))
 }
 
@@ -510,8 +514,8 @@ mod tests {
                 "## Requirement",
                 "## Attachments",
                 "Read these files if they are relevant",
-                "- `C:/project/.mdium/task-attachments/r/0123456789abcdef/spec.pdf` (spec.pdf, application/pdf, 2048 bytes)",
-                "- `/abs/screen.png` (screen.png, image/png, 10 bytes)",
+                "- C:/project/.mdium/task-attachments/r/0123456789abcdef/spec.pdf (spec.pdf, application/pdf, 2048 bytes)",
+                "- /abs/screen.png (screen.png, image/png, 10 bytes)",
                 "## Input from the previous stage",
             ],
         );
@@ -522,6 +526,29 @@ mod tests {
         // No attachments: no section.
         let prompt = build_prompt(&full_input(&s));
         assert!(!prompt.contains("## Attachments"), "{prompt}");
+    }
+
+    #[test]
+    fn backticks_in_attachment_names_cannot_close_the_block() {
+        let s = stage(Role::Design);
+        let attachments = [AttachmentView {
+            id: "0123456789abcdef".to_string(),
+            name: "a```b.txt".to_string(),
+            mime: "text/plain".to_string(),
+            size: 1,
+            path: "/abs/a```b.txt".to_string(),
+        }];
+        let input = PromptInput {
+            attachments: &attachments,
+            ..full_input(&s)
+        };
+        let prompt = build_prompt(&input);
+        let section = &prompt[prompt.find("## Attachments").unwrap()..];
+        let block = &section[..section.find("## Input from the previous stage").unwrap()];
+        assert!(
+            block.contains("````text\n- /abs/a```b.txt (a```b.txt, text/plain, 1 bytes)\n````"),
+            "{block}"
+        );
     }
 
     #[test]

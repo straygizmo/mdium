@@ -16,9 +16,9 @@ use crate::workflow::checks::{self, CheckResult};
 use crate::workflow::errors::to_attention;
 use crate::workflow::flow::{
     self, begin_attempt, finish_attempt, park_unfinished, recover, BeginResult, FinishInput,
-    PlannedAttempt, StageResult,
+    IssueSyncError, PlannedAttempt, StageResult, WORKFLOW_ISSUE_SYNC_INTERRUPTED,
 };
-use crate::workflow::forge::{ForgeCli, ForgeError};
+use crate::workflow::forge::ForgeCli;
 use crate::workflow::model::{RunStatus, Task, TaskStatus, Workflow, WorkflowRun};
 use crate::workflow::outcome::parse_outcome;
 use crate::workflow::runner_host::RunnerApi;
@@ -303,6 +303,13 @@ impl Orchestrator {
             eprintln!("[workflow] shutdown: attempts still running after {wait:?}");
         }
         self.runner.shutdown();
+    }
+
+    /// Sets the shutdown flag without cancelling anything, as when a
+    /// shutdown starts right after an attempt's turn ended.
+    #[cfg(test)]
+    pub fn mark_shut_down(&self) {
+        self.inner().shut_down = true;
     }
 
     /// Waits until no dispatch pass and no attempt is running.
@@ -617,7 +624,12 @@ impl Orchestrator {
         let issue_sync_error = catch_unwind(AssertUnwindSafe(|| {
             self.sync_issue(&store, planned, &input)
         }))
-        .unwrap_or_else(|_| Some(ForgeError::command_failed(-1, WORKFLOW_ATTEMPT_PANICKED)));
+        .unwrap_or_else(|_| {
+            Some(IssueSyncError::Local {
+                code: WORKFLOW_ATTEMPT_PANICKED,
+                detail: String::new(),
+            })
+        });
         self.finish(
             &store,
             planned,
@@ -634,12 +646,20 @@ impl Orchestrator {
     /// flow on is posted: a completed stage (not a plan attempt) or review
     /// findings that will be returned (re-entry limit not reached), and only
     /// while the task is still running. Returns why the post failed.
+    ///
+    /// Crash safety: right before posting, the attempt is marked as syncing
+    /// (`issue_sync_pending`, under a short guard); the finish clears the
+    /// mark. If the app dies in between, recovery parks the task as a failed
+    /// sync of that same attempt, so a retry finds an entry that already
+    /// landed by its marker instead of posting a second one. During shutdown
+    /// nothing is posted (the post could outlast the shutdown wait); the
+    /// stage parks as an interrupted sync instead.
     fn sync_issue(
         &self,
         store: &WorkflowStore,
         planned: &PlannedAttempt,
         input: &FinishInput,
-    ) -> Option<ForgeError> {
+    ) -> Option<IssueSyncError> {
         if input.check.reason.is_some() {
             return None;
         }
@@ -674,7 +694,38 @@ impl Orchestrator {
             Ok(entry) => entry,
             Err(err) => return Some(err),
         };
-        flow::post_stage_entry(self.forge.as_ref(), issue, &entry).err()
+        if self.inner().shut_down {
+            return Some(IssueSyncError::Local {
+                code: WORKFLOW_ISSUE_SYNC_INTERRUPTED,
+                detail: String::new(),
+            });
+        }
+        {
+            let guard = store.lock();
+            if let Err(err) = flow::mark_issue_sync_pending(
+                &guard,
+                store,
+                &req.root_task_id,
+                &req.attempt_id,
+                entry.kind,
+            ) {
+                // Without the mark a crash during the post could not be
+                // recovered safely: do not post.
+                return Some(IssueSyncError::Local {
+                    code: err.code(),
+                    detail: err.to_string(),
+                });
+            }
+        }
+        // The task may be put on hold or cancelled while the entry is being
+        // posted (the status check above is not under the guard). The entry
+        // then records a result the finish does not apply: the finish leaves
+        // a task that is no longer running as it is, and a later attempt
+        // posts its own entry. This is accepted; the Issue history only
+        // gains an extra record.
+        flow::post_stage_entry(self.forge.as_ref(), issue, &entry)
+            .err()
+            .map(IssueSyncError::from)
     }
 
     /// Applies an attempt's end under the project guard and reports it.
@@ -851,7 +902,7 @@ mod tests {
     use crate::workflow::forge::{FakeForge, FakeOp, ForgeCall, ForgeError, ForgeKind};
     use crate::workflow::fsutil::{self, new_id};
     use crate::workflow::gitops::{self, test_support::Fixture};
-    use crate::workflow::issue_sync;
+    use crate::workflow::issue_sync::{self, EntryKind};
     use crate::workflow::model::{
         IssueRef, IssueTracking, Provider, Role, RunStatus, TaskMeta, TaskStatus, Workflow,
         WorkflowsFile,
@@ -2116,5 +2167,112 @@ mod tests {
         assert!(bodies[1].contains("No commits"));
         assert!(bodies[2].contains("Result: Approved."));
         assert!(bodies[2].contains("Looks good."));
+        // Every finish cleared its attempt's sync mark.
+        let run = env.run(&root.meta.id);
+        assert!(run.attempts.iter().all(|a| a.issue_sync_pending.is_none()));
+    }
+
+    #[test]
+    fn a_crash_after_the_post_is_recovered_without_a_second_comment() {
+        let env = tracked_env(|_| {});
+        let root = tracked_root(&env);
+        let id = root.meta.id.clone();
+        // The design attempt ends, its output is saved, it is marked as
+        // syncing and its entry lands; then the app dies before the finish.
+        let workflows = env.store.load_workflows().unwrap().workflows;
+        let begun = begin_attempt(
+            &env.store.lock(),
+            &env.store,
+            &workflows,
+            &id,
+            env.fx.base(),
+        )
+        .unwrap();
+        let BeginResult::Started(planned) = begun else {
+            panic!("expected Started, got {begun:?}");
+        };
+        let req = &planned.request;
+        env.store
+            .write_attempt_output(
+                &req.root_task_id,
+                &req.task_id,
+                &req.attempt_id,
+                &completed("# Design\nthe plan"),
+            )
+            .unwrap();
+        flow::mark_issue_sync_pending(
+            &env.store.lock(),
+            &env.store,
+            &id,
+            &req.attempt_id,
+            EntryKind::Design,
+        )
+        .unwrap();
+        let entry = issue_sync::entry_id(&id, &req.attempt_id);
+        let posted = issue_sync::design_body("# Design\nthe plan", &entry);
+        env.forge.set_comments(ISSUE, &[&posted]);
+        assert_eq!(env.task(&id).meta.status, TaskStatus::Running);
+
+        // The next start recovers the task as an interrupted sync.
+        let (runner, _waiting) = FakeRunner::new();
+        let next = Orchestrator::new(
+            runner,
+            Arc::new(RecordingSink::default()),
+            env.forge.clone(),
+            env.fx.base().to_path_buf(),
+        );
+        assert!(next.attach(env.fx.root()).1);
+        let task = env.task(&id);
+        assert_eq!(attention_code(&task), "ATTENTION_ISSUE_SYNC_FAILED");
+        let params = &task.meta.attention.as_ref().unwrap().params;
+        assert_eq!(params["code"], WORKFLOW_ISSUE_SYNC_INTERRUPTED);
+        assert_eq!(params["entry"], "design");
+        assert_eq!(task.meta.pending_issue_entry.as_deref(), Some("design"));
+        let attempt = env.run(&id).attempts[0].clone();
+        assert_eq!(attempt.outcome.as_deref(), Some("completed"));
+        assert!(attempt.finished_at.is_some());
+        assert_eq!(attempt.issue_sync_pending, None);
+
+        // The retry finds the landed entry by its marker and advances.
+        env.forge.clear_calls();
+        crate::workflow::actions::retry_issue_sync(&next, env.fx.root(), &id).unwrap();
+        assert!(next.wait_idle(WAIT));
+        assert_eq!(env.forge.calls(), [ForgeCall::ListComments(ISSUE)]);
+        assert_eq!(comment_bodies(&env), [posted]);
+        let task = env.task(&id);
+        assert_eq!(task.meta.status, TaskStatus::Completed);
+        assert_eq!(task.meta.pending_issue_entry, None);
+        let tasks = env.tasks();
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks[1].meta.role, Some(Role::Implement));
+    }
+
+    #[test]
+    fn a_shutdown_right_after_the_turn_parks_the_sync_without_posting() {
+        let env = tracked_env(|_| {});
+        let orch = env.orch.clone();
+        env.runner.script(Script::complete_after(
+            move |_| orch.mark_shut_down(),
+            &completed("# Design\nthe plan"),
+        ));
+        let root = tracked_root(&env);
+        let id = root.meta.id.clone();
+
+        env.kick();
+        env.wait_idle();
+
+        assert!(env.forge.calls().is_empty(), "{:?}", env.forge.calls());
+        let task = env.task(&id);
+        assert_eq!(attention_code(&task), "ATTENTION_ISSUE_SYNC_FAILED");
+        let params = &task.meta.attention.as_ref().unwrap().params;
+        assert_eq!(params["code"], WORKFLOW_ISSUE_SYNC_INTERRUPTED);
+        assert_eq!(task.meta.pending_issue_entry.as_deref(), Some("design"));
+        assert_eq!(env.tasks().len(), 1);
+        assert_eq!(env.run(&id).attempts[0].issue_sync_pending, None);
+
+        crate::workflow::actions::retry_issue_sync(&env.orch, env.fx.root(), &id).unwrap();
+        assert_eq!(comment_bodies(&env).len(), 1);
+        assert_eq!(env.task(&id).meta.status, TaskStatus::Completed);
+        assert_eq!(env.tasks().len(), 2);
     }
 }

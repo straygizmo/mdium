@@ -1411,6 +1411,7 @@ mod tests {
                 outcome: None,
                 mode: AttemptMode::Single,
                 user_input: None,
+                issue_sync_pending: None,
             }],
             pending_transition: Some(PendingTransition {
                 from_task_id: TASK_B.to_string(),
