@@ -455,6 +455,11 @@ pub struct FinalizeState {
     pub attachment_ids: Vec<String>,
     #[serde(default)]
     pub skip_issue: bool,
+    /// Set (and saved) right before the Issue is created and cleared once
+    /// it is recorded: when still set on a retry, the Issue may exist
+    /// already and is looked up by the session marker before creating one.
+    #[serde(default)]
+    pub issue_creating: bool,
     /// Error code of the last failed finalize step.
     #[serde(default)]
     pub last_error: Option<String>,
@@ -1071,6 +1076,7 @@ mod tests {
                 issue: Some(sample_issue()),
                 attachment_ids: vec!["a1".to_string()],
                 skip_issue: false,
+                issue_creating: false,
                 last_error: None,
             },
             created_at: "2026-01-01T00:00:00Z".to_string(),
@@ -1097,6 +1103,7 @@ mod tests {
         assert_eq!(value["finalize"]["rootTaskId"], json!("fedcba9876543210"));
         assert_eq!(value["finalize"]["attachmentIds"], json!(["a1"]));
         assert_eq!(value["finalize"]["skipIssue"], json!(false));
+        assert_eq!(value["finalize"]["issueCreating"], json!(false));
         assert_eq!(value["finalize"]["lastError"], json!(null));
         assert_eq!(value["createdAt"], json!("2026-01-01T00:00:00Z"));
 

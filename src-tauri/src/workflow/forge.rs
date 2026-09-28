@@ -146,6 +146,13 @@ pub trait ForgeCli: Send + Sync {
     fn list_comments(&self, repo: &ForgeRepo, number: u64) -> Result<Vec<Comment>, ForgeError>;
     fn add_comment(&self, repo: &ForgeRepo, number: u64, body: &str) -> Result<(), ForgeError>;
     fn close_issue(&self, repo: &ForgeRepo, number: u64) -> Result<(), ForgeError>;
+    /// The most recent of the Issues the logged-in user created in `repo`
+    /// (up to [`RECENT_ISSUES`], any state) whose body contains `marker`.
+    fn find_issue_by_marker(
+        &self,
+        repo: &ForgeRepo,
+        marker: &str,
+    ) -> Result<Option<IssueRefData>, ForgeError>;
 }
 
 /// What the UI needs to know before an intake starts.
@@ -363,6 +370,9 @@ const GITLAB_PATH_ENCODE: &AsciiSet = &NON_ALPHANUMERIC
 
 /// Comments/notes requested per page.
 const PER_PAGE: u32 = 100;
+/// How many of the user's most recent Issues
+/// [`ForgeCli::find_issue_by_marker`] searches.
+pub const RECENT_ISSUES: u32 = 50;
 
 /// One CLI operation, as passed to [`build_args`]. `body_file` is the temp
 /// file holding the user-authored text: for GitHub the raw body, for GitLab
@@ -370,10 +380,27 @@ const PER_PAGE: u32 = 100;
 #[derive(Debug, Clone, Copy)]
 pub enum ForgeOp<'a> {
     AuthStatus,
-    CreateIssue { title: &'a str, body_file: &'a Path },
-    ListComments { number: u64 },
-    AddComment { number: u64, body_file: &'a Path },
-    CloseIssue { number: u64 },
+    CreateIssue {
+        title: &'a str,
+        body_file: &'a Path,
+    },
+    ListComments {
+        number: u64,
+    },
+    AddComment {
+        number: u64,
+        body_file: &'a Path,
+    },
+    CloseIssue {
+        number: u64,
+    },
+    /// The logged-in user (GitHub: to filter Issues by creator).
+    CurrentUser,
+    /// The most recent Issues (any state) created by `creator` (GitHub) or
+    /// by the logged-in user (GitLab, which ignores `creator`).
+    RecentIssues {
+        creator: &'a str,
+    },
 }
 
 /// The CLI program for a forge.
@@ -441,6 +468,19 @@ pub fn build_args(repo: &ForgeRepo, op: &ForgeOp) -> Vec<String> {
                     "-f",
                     "state=closed",
                 ]),
+                ForgeOp::CurrentUser => {
+                    push(&["api", "--hostname", host, "--method", "GET", "user"])
+                }
+                ForgeOp::RecentIssues { creator } => push(&[
+                    "api",
+                    "--hostname",
+                    host,
+                    "--method",
+                    "GET",
+                    &format!(
+                        "{base}?creator={creator}&state=all&sort=created&direction=desc&per_page={RECENT_ISSUES}"
+                    ),
+                ]),
             }
         }
         ForgeKind::GitLab => {
@@ -484,6 +524,21 @@ pub fn build_args(repo: &ForgeRepo, op: &ForgeOp) -> Vec<String> {
                     &format!("{base}/{number}"),
                     "-f",
                     "state_event=close",
+                ]),
+                ForgeOp::CurrentUser => {
+                    push(&["api", "--hostname", host, "--method", "GET", "user"])
+                }
+                // Without a `state` filter GitLab lists Issues in every
+                // state.
+                ForgeOp::RecentIssues { .. } => push(&[
+                    "api",
+                    "--hostname",
+                    host,
+                    "--method",
+                    "GET",
+                    &format!(
+                        "{base}?scope=created_by_me&order_by=created_at&sort=desc&per_page={RECENT_ISSUES}"
+                    ),
                 ]),
             }
         }
@@ -577,6 +632,60 @@ pub fn parse_comments(stdout: &str) -> Result<Vec<Comment>, ForgeError> {
         return Err(ForgeError::BadResponse("empty comments response".into()));
     }
     Ok(comments)
+}
+
+/// Parses a `user` response into the login (GitHub `login`, GitLab
+/// `username`), which must consist of letters, digits, `-`, `_` and `.`
+/// since it is put into a query string.
+pub fn parse_login(stdout: &str) -> Result<String, ForgeError> {
+    let value: serde_json::Value = serde_json::from_str(stdout.trim())
+        .map_err(|err| ForgeError::BadResponse(format!("user json: {err}")))?;
+    let login = value
+        .get("login")
+        .or_else(|| value.get("username"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ForgeError::BadResponse("missing login".into()))?;
+    let valid = !login.is_empty()
+        && login
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.');
+    if !valid {
+        return Err(ForgeError::BadResponse("unexpected login".into()));
+    }
+    Ok(login.to_string())
+}
+
+/// Parses an Issue listing into `(issue, body)` pairs: GitHub
+/// `{ number, html_url, body }` (pull requests, which the endpoint also
+/// returns, are skipped), GitLab `{ iid, web_url, description }`. A null
+/// body reads as empty.
+pub fn parse_issue_list(
+    kind: ForgeKind,
+    stdout: &str,
+) -> Result<Vec<(IssueRefData, String)>, ForgeError> {
+    let value: serde_json::Value = serde_json::from_str(stdout.trim())
+        .map_err(|err| ForgeError::BadResponse(format!("issues json: {err}")))?;
+    let items = value
+        .as_array()
+        .ok_or_else(|| ForgeError::BadResponse("issues response is not an array".into()))?;
+    let body_key = match kind {
+        ForgeKind::GitHub => "body",
+        ForgeKind::GitLab => "description",
+    };
+    let mut issues = Vec::new();
+    for item in items {
+        if item.get("pull_request").is_some() {
+            continue;
+        }
+        let issue = parse_issue(kind, &item.to_string())?;
+        let body = item
+            .get(body_key)
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        issues.push((issue, body));
+    }
+    Ok(issues)
 }
 
 /// Maps a non-zero CLI exit to an error: `gh`'s exit code 4 ("authentication
@@ -759,6 +868,30 @@ impl ForgeCli for CliForge {
         )?;
         Ok(())
     }
+
+    fn find_issue_by_marker(
+        &self,
+        repo: &ForgeRepo,
+        marker: &str,
+    ) -> Result<Option<IssueRefData>, ForgeError> {
+        let creator = match repo.kind {
+            ForgeKind::GitHub => parse_login(&CliForge::run(
+                repo.kind,
+                &build_args(repo, &ForgeOp::CurrentUser),
+                API_TIMEOUT,
+            )?)?,
+            ForgeKind::GitLab => String::new(),
+        };
+        let stdout = CliForge::run(
+            repo.kind,
+            &build_args(repo, &ForgeOp::RecentIssues { creator: &creator }),
+            API_TIMEOUT,
+        )?;
+        Ok(parse_issue_list(repo.kind, &stdout)?
+            .into_iter()
+            .find(|(_, body)| body.contains(marker))
+            .map(|(issue, _)| issue))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -775,6 +908,7 @@ pub enum ForgeCall {
     ListComments(u64),
     AddComment { number: u64, body: String },
     CloseIssue(u64),
+    FindIssueByMarker(String),
 }
 
 /// Which [`FakeForge`] operation a configured failure applies to.
@@ -785,6 +919,7 @@ pub enum FakeOp {
     ListComments,
     AddComment,
     CloseIssue,
+    FindIssue,
 }
 
 #[cfg(test)]
@@ -796,6 +931,8 @@ struct FakeState {
     failures: std::collections::HashMap<FakeOp, ForgeError>,
     comments: std::collections::BTreeMap<u64, Vec<Comment>>,
     closed: Vec<u64>,
+    /// Bodies of the created Issues, by number.
+    issues: std::collections::BTreeMap<u64, String>,
     next_number: u64,
 }
 
@@ -931,6 +1068,7 @@ impl ForgeCli for FakeForge {
         let number = state.next_number;
         state.next_number += 1;
         state.comments.entry(number).or_default();
+        state.issues.insert(number, body.to_string());
         Ok(IssueRefData {
             number,
             url: format!("https://forge.test/issues/{number}"),
@@ -963,6 +1101,28 @@ impl ForgeCli for FakeForge {
         Self::check(&state, FakeOp::CloseIssue)?;
         state.closed.push(number);
         Ok(())
+    }
+
+    fn find_issue_by_marker(
+        &self,
+        _repo: &ForgeRepo,
+        marker: &str,
+    ) -> Result<Option<IssueRefData>, ForgeError> {
+        let mut state = self.lock();
+        state
+            .calls
+            .push(ForgeCall::FindIssueByMarker(marker.to_string()));
+        Self::check(&state, FakeOp::FindIssue)?;
+        // Newest first, like the real listing.
+        Ok(state
+            .issues
+            .iter()
+            .rev()
+            .find(|(_, body)| body.contains(marker))
+            .map(|(number, _)| IssueRefData {
+                number: *number,
+                url: format!("https://forge.test/issues/{number}"),
+            }))
     }
 }
 
@@ -1428,6 +1588,95 @@ mod tests {
                 "-f",
                 "state_event=close",
             ]
+        );
+    }
+
+    #[test]
+    fn build_args_issue_search() {
+        let gh = repo(ForgeKind::GitHub, "ghe.corp", "o/r");
+        assert_eq!(
+            strs(&build_args(&gh, &ForgeOp::CurrentUser)),
+            ["api", "--hostname", "ghe.corp", "--method", "GET", "user"]
+        );
+        assert_eq!(
+            strs(&build_args(&gh, &ForgeOp::RecentIssues { creator: "me-1" })),
+            [
+                "api",
+                "--hostname",
+                "ghe.corp",
+                "--method",
+                "GET",
+                "repos/o/r/issues?creator=me-1&state=all&sort=created&direction=desc&per_page=50",
+            ]
+        );
+        let gl = repo(ForgeKind::GitLab, "gitlab.com", "group/proj");
+        assert_eq!(
+            strs(&build_args(&gl, &ForgeOp::RecentIssues { creator: "" })),
+            [
+                "api",
+                "--hostname",
+                "gitlab.com",
+                "--method",
+                "GET",
+                "projects/group%2Fproj/issues?scope=created_by_me&order_by=created_at&sort=desc&per_page=50",
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_login_accepts_only_plain_logins() {
+        assert_eq!(parse_login(r#"{"login":"octo-cat"}"#).unwrap(), "octo-cat");
+        assert_eq!(parse_login(r#"{"username":"a.b_c"}"#).unwrap(), "a.b_c");
+        for bad in ["", "{}", r#"{"login":""}"#, r#"{"login":"a&state=open"}"#] {
+            let err = parse_login(bad).unwrap_err();
+            assert_eq!(err.code(), FORGE_BAD_RESPONSE, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn parse_issue_list_both_kinds() {
+        let github = r#"[
+            {"number":3,"html_url":"https://github.com/o/r/issues/3","body":"a <!-- m -->"},
+            {"number":2,"html_url":"https://github.com/o/r/pull/2","body":"pr","pull_request":{}},
+            {"number":1,"html_url":"https://github.com/o/r/issues/1","body":null}
+        ]"#;
+        let issues = parse_issue_list(ForgeKind::GitHub, github).unwrap();
+        let numbers: Vec<(u64, &str)> = issues
+            .iter()
+            .map(|(issue, body)| (issue.number, body.as_str()))
+            .collect();
+        assert_eq!(numbers, [(3, "a <!-- m -->"), (1, "")]);
+
+        let gitlab =
+            r#"[{"iid":4,"web_url":"https://gitlab.com/g/p/-/issues/4","description":"d"}]"#;
+        let issues = parse_issue_list(ForgeKind::GitLab, gitlab).unwrap();
+        assert_eq!(issues[0].0.number, 4);
+        assert_eq!(issues[0].1, "d");
+
+        for bad in ["", "{}", r#"[{"body":"x"}]"#] {
+            let err = parse_issue_list(ForgeKind::GitHub, bad).unwrap_err();
+            assert_eq!(err.code(), FORGE_BAD_RESPONSE, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn fake_finds_created_issues_by_marker() {
+        let forge = FakeForge::new();
+        let r = repo(ForgeKind::GitHub, "github.com", "o/r");
+        forge.create_issue(&r, "t", "one <!-- a -->").unwrap();
+        forge.create_issue(&r, "t", "two <!-- b -->").unwrap();
+        assert_eq!(
+            forge
+                .find_issue_by_marker(&r, "<!-- b -->")
+                .unwrap()
+                .map(|i| i.number),
+            Some(2)
+        );
+        assert_eq!(forge.find_issue_by_marker(&r, "<!-- c -->").unwrap(), None);
+        forge.set_failure(FakeOp::FindIssue, Some(ForgeError::Timeout));
+        assert_eq!(
+            forge.find_issue_by_marker(&r, "<!-- a -->"),
+            Err(ForgeError::Timeout)
         );
     }
 
