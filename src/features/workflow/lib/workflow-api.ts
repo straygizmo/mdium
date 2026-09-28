@@ -162,8 +162,20 @@ export const workflowApi = {
     call<IntakeSessionView>("workflow_intake_apply_doc_update", { projectRoot, intakeId, proposalId, accept }),
   intakeFinalize: (projectRoot: string, intakeId: string, skipIssue: boolean) =>
     call<IntakeSessionView>("workflow_intake_finalize", { projectRoot, intakeId, skipIssue }),
+  /** Replaces the proposal with the user's edit (rejects with `INTAKE_TURN_BUSY` while a turn runs). */
+  intakeUpdateProposal: (projectRoot: string, intakeId: string, title: string, body: string) =>
+    call<IntakeSessionView>("workflow_intake_update_proposal", { projectRoot, intakeId, title, body }),
+  /** Returns a finalize that stopped before the Issue was created to the conversation. */
+  intakeReopen: (projectRoot: string, intakeId: string) =>
+    call<IntakeSessionView>("workflow_intake_reopen", { projectRoot, intakeId }),
+  /** Verified absolute path of a draft's content (for `convertFileSrc` or opening it). */
+  intakeDraftPath: (projectRoot: string, intakeId: string, draftId: string) =>
+    call<string>("workflow_intake_draft_path", { projectRoot, intakeId, draftId }),
   listAttachments: (projectRoot: string, rootTaskId: string) =>
     call<AttachmentMeta[]>("workflow_list_attachments", { projectRoot, rootTaskId }),
+  /** Verified absolute path of a committed attachment's content (for `convertFileSrc` or opening it). */
+  attachmentPath: (projectRoot: string, rootTaskId: string, attachmentId: string) =>
+    call<string>("workflow_attachment_path", { projectRoot, rootTaskId, attachmentId }),
   retryIssueSync: taskAction("workflow_retry_issue_sync"),
   skipIssueSync: taskAction("workflow_skip_issue_sync"),
   retryIssueClose: (projectRoot: string, rootTaskId: string) =>

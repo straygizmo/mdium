@@ -369,6 +369,11 @@ export interface IntakeMessage {
   /** Draft attachments sent with this message. */
   draftIds: string[];
   at: string;
+  /**
+   * For `error` messages, debugging detail shown with the code: the agent's
+   * raw reply (at most 16 KiB) when it broke the output contract.
+   */
+  detail: string | null;
 }
 
 export interface IntakeQuestion {
@@ -392,6 +397,12 @@ export interface DocUpdateProposal {
   status: DocUpdateStatus;
   /** Why the update was rejected when proposed (an `INTAKE_*` code). */
   reason: string | null;
+  /**
+   * sha256 of the document when the update was proposed (`null`: it did not
+   * exist). Applying is refused with `INTAKE_DOC_CHANGED_SINCE_PROPOSAL` when
+   * the document no longer matches.
+   */
+  baseSha256: string | null;
 }
 
 export interface FinalizeState {
@@ -428,6 +439,8 @@ export interface IntakeSession {
 export interface IntakeSessionView extends IntakeSession {
   /** An agent turn of the session is running. */
   busy: boolean;
+  /** Paths of the applied doc updates: files written into the working tree that still need committing. */
+  appliedDocPaths: string[];
 }
 
 /** Result of `workflow_intake_list`: sessions newest first. */

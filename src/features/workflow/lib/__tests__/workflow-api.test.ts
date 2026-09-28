@@ -166,10 +166,29 @@ const cases: Case[] = [
     { projectRoot: ROOT, intakeId: "i1", skipIssue: false },
   ],
   [
+    "intakeUpdateProposal",
+    () => workflowApi.intakeUpdateProposal(ROOT, "i1", "Title", "Body"),
+    "workflow_intake_update_proposal",
+    { projectRoot: ROOT, intakeId: "i1", title: "Title", body: "Body" },
+  ],
+  ["intakeReopen", () => workflowApi.intakeReopen(ROOT, "i1"), "workflow_intake_reopen", { projectRoot: ROOT, intakeId: "i1" }],
+  [
+    "intakeDraftPath",
+    () => workflowApi.intakeDraftPath(ROOT, "i1", "d1"),
+    "workflow_intake_draft_path",
+    { projectRoot: ROOT, intakeId: "i1", draftId: "d1" },
+  ],
+  [
     "listAttachments",
     () => workflowApi.listAttachments(ROOT, "r1"),
     "workflow_list_attachments",
     { projectRoot: ROOT, rootTaskId: "r1" },
+  ],
+  [
+    "attachmentPath",
+    () => workflowApi.attachmentPath(ROOT, "r1", "a1"),
+    "workflow_attachment_path",
+    { projectRoot: ROOT, rootTaskId: "r1", attachmentId: "a1" },
   ],
   [
     "retryIssueSync",

@@ -944,13 +944,16 @@ pub fn cancel_intake_turns() {
     INTAKE_TURNS.cancel_all(CancelReason::Shutdown);
 }
 
-/// An intake session plus whether one of its agent turns is running.
+/// An intake session plus whether one of its agent turns is running and
+/// the paths of its applied doc updates (files written into the user's
+/// working tree that still need committing).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IntakeSessionView {
     #[serde(flatten)]
     pub session: IntakeSession,
     pub busy: bool,
+    pub applied_doc_paths: Vec<String>,
 }
 
 /// Result of [`workflow_intake_list`]: sessions newest first, plus one
@@ -964,7 +967,12 @@ pub struct IntakeListView {
 
 fn session_view(store: &WorkflowStore, session: IntakeSession) -> IntakeSessionView {
     let busy = INTAKE_TURNS.is_busy(store.project_root(), &session.id);
-    IntakeSessionView { session, busy }
+    let applied_doc_paths = intake::applied_doc_paths(&session);
+    IntakeSessionView {
+        session,
+        busy,
+        applied_doc_paths,
+    }
 }
 
 /// Reports `session` (with its live busy state) as changed.
@@ -1334,6 +1342,110 @@ pub async fn workflow_intake_apply_doc_update(
     .await
 }
 
+/// Replaces the proposal of an active session with the user's edit.
+/// Refused with [`INTAKE_TURN_BUSY`] while a turn runs (its reply would
+/// replace the edit).
+#[tauri::command]
+pub async fn workflow_intake_update_proposal(
+    state: tauri::State<'_, WorkflowState>,
+    project_root: String,
+    intake_id: String,
+    title: String,
+    body: String,
+) -> Result<IntakeSessionView, CommandError> {
+    with_project_cmd(state, project_root, move |orch, root| {
+        let store = orch.store(root);
+        let session = update_proposal_when_idle(&INTAKE_TURNS, &store, &intake_id, &title, &body)?;
+        emit_intake(orch.sink().as_ref(), &store, &session);
+        Ok(session_view(&store, session))
+    })
+    .await
+}
+
+/// [`intake::update_proposal`] while holding the intake's turn slot of
+/// `turns`, so no turn starts (or runs) meanwhile.
+fn update_proposal_when_idle(
+    turns: &'static IntakeTurns,
+    store: &WorkflowStore,
+    intake_id: &str,
+    title: &str,
+    body: &str,
+) -> Result<IntakeSession, CommandError> {
+    let _slot = turns.begin(store.project_root(), intake_id)?;
+    let guard = store.lock();
+    Ok(intake::update_proposal(
+        store, &guard, intake_id, title, body,
+    )?)
+}
+
+/// Returns a finalize that stopped before the forge was called to the
+/// conversation (see [`intake::reopen_intake`]).
+#[tauri::command]
+pub async fn workflow_intake_reopen(
+    state: tauri::State<'_, WorkflowState>,
+    project_root: String,
+    intake_id: String,
+) -> Result<IntakeSessionView, CommandError> {
+    with_project_cmd(state, project_root, move |orch, root| {
+        let store = orch.store(root);
+        let session = {
+            let guard = store.lock();
+            intake::reopen_intake(&store, &guard, &intake_id)?
+        };
+        emit_intake(orch.sink().as_ref(), &store, &session);
+        Ok(session_view(&store, session))
+    })
+    .await
+}
+
+/// A verified absolute path as a string for the UI (e.g. for
+/// `convertFileSrc` or opening the file).
+fn path_string(path: PathBuf) -> Result<String, CommandError> {
+    path.into_os_string().into_string().map_err(|path| {
+        AttachmentError::Io(format!(
+            "{}: not valid UTF-8",
+            PathBuf::from(path).display()
+        ))
+        .into()
+    })
+}
+
+/// The absolute path of a committed attachment's content, verified against
+/// its metadata and to lie under the attachments root.
+#[tauri::command]
+pub async fn workflow_attachment_path(
+    state: tauri::State<'_, WorkflowState>,
+    project_root: String,
+    root_task_id: String,
+    attachment_id: String,
+) -> Result<String, CommandError> {
+    with_project_cmd(state, project_root, move |orch, root| {
+        let paths = MdiumPaths::new(orch.store(root).project_root());
+        path_string(attachments::attachment_file(
+            &paths,
+            &root_task_id,
+            &attachment_id,
+        )?)
+    })
+    .await
+}
+
+/// The absolute path of a draft's content, verified like
+/// [`workflow_attachment_path`].
+#[tauri::command]
+pub async fn workflow_intake_draft_path(
+    state: tauri::State<'_, WorkflowState>,
+    project_root: String,
+    intake_id: String,
+    draft_id: String,
+) -> Result<String, CommandError> {
+    with_project_cmd(state, project_root, move |orch, root| {
+        let paths = MdiumPaths::new(orch.store(root).project_root());
+        path_string(attachments::draft_file(&paths, &intake_id, &draft_id)?)
+    })
+    .await
+}
+
 /// Turns the intake's proposal into a root task (creating its Issue unless
 /// `skip_issue`); after a failure, calling it again resumes at the failed
 /// stage.
@@ -1602,9 +1714,11 @@ mod tests {
         let view = IntakeSessionView {
             session: session.clone(),
             busy: true,
+            applied_doc_paths: vec!["docs/a.md".into()],
         };
         let mut expected = serde_json::to_value(&session).unwrap();
         expected["busy"] = json!(true);
+        expected["appliedDocPaths"] = json!(["docs/a.md"]);
         assert_eq!(serde_json::to_value(&view).unwrap(), expected);
         assert_eq!(expected["workflowId"], json!("wf1"));
     }
@@ -1615,11 +1729,13 @@ mod tests {
             sessions: vec![IntakeSessionView {
                 session: sample_session(),
                 busy: false,
+                applied_doc_paths: vec![],
             }],
             warnings: vec![],
         };
         let value = serde_json::to_value(&list).unwrap();
         assert_eq!(value["sessions"][0]["busy"], json!(false));
+        assert_eq!(value["sessions"][0]["appliedDocPaths"], json!([]));
         assert_eq!(value["sessions"][0]["id"], json!("0123456789abcdef"));
         assert_eq!(value["warnings"], json!([]));
     }
@@ -1768,16 +1884,32 @@ mod tests {
         fn workflows_changed(&self, _: &Path) {}
     }
 
+    /// A store with one enabled workflow; returns its id.
+    fn store_with_workflow(dir: &Path) -> (WorkflowStore, String) {
+        let store = WorkflowStore::new(dir.to_path_buf());
+        let mut workflow =
+            crate::workflow::template::standard_workflow("Standard", Provider::Codex);
+        workflow.enabled = true;
+        let id = workflow.id.clone();
+        store
+            .save_workflows(&WorkflowsFile {
+                schema_version: 1,
+                workflows: vec![workflow],
+            })
+            .unwrap();
+        (store, id)
+    }
+
     #[test]
     fn a_panicked_turn_records_its_code_and_ends() {
         let dir = tempfile::tempdir().unwrap();
-        let store = WorkflowStore::new(dir.path().to_path_buf());
+        let (store, workflow_id) = store_with_workflow(dir.path());
         let session = {
             let guard = store.lock();
             let session = intake::create_session(
                 &store,
                 &guard,
-                "wf1",
+                &workflow_id,
                 IntakeKind::Feature,
                 Provider::Codex,
                 None,
@@ -1802,6 +1934,53 @@ mod tests {
         assert_eq!(
             *sink.reports.lock().unwrap(),
             vec![(session.id.clone(), IntakeStatus::Active, false)]
+        );
+    }
+
+    #[test]
+    fn proposals_are_not_edited_while_a_turn_runs() {
+        static TURNS: IntakeTurns = IntakeTurns::new();
+        let dir = tempfile::tempdir().unwrap();
+        let (store, workflow_id) = store_with_workflow(dir.path());
+        let session = {
+            let guard = store.lock();
+            let mut session = intake::create_session(
+                &store,
+                &guard,
+                &workflow_id,
+                IntakeKind::Feature,
+                Provider::Codex,
+                None,
+            )
+            .unwrap();
+            session.proposal = Some(crate::workflow::model::IntakeProposal {
+                title: "T".into(),
+                body: "B".into(),
+            });
+            intake::save_session(&store, &guard, &session).unwrap()
+        };
+        let slot = TURNS.begin(store.project_root(), &session.id).unwrap();
+        assert_eq!(
+            update_proposal_when_idle(&TURNS, &store, &session.id, "New", "Body")
+                .unwrap_err()
+                .code,
+            INTAKE_TURN_BUSY
+        );
+        drop(slot);
+        let updated =
+            update_proposal_when_idle(&TURNS, &store, &session.id, "New", "Body").unwrap();
+        assert_eq!(updated.proposal.unwrap().title, "New");
+        // The slot is released again.
+        assert!(!TURNS.is_busy(store.project_root(), &session.id));
+    }
+
+    #[test]
+    fn verified_paths_are_returned_as_strings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.png");
+        assert_eq!(
+            path_string(path.clone()).unwrap(),
+            path.to_str().unwrap().to_string()
         );
     }
 

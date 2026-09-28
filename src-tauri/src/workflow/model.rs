@@ -389,6 +389,10 @@ pub struct IntakeMessage {
     #[serde(default)]
     pub draft_ids: Vec<String>,
     pub at: String,
+    /// For `error` messages, debugging detail shown with the code: the
+    /// agent's raw reply (capped) when it broke the output contract.
+    #[serde(default)]
+    pub detail: Option<String>,
 }
 
 /// The agent's current proposal for the task/issue title and body.
@@ -413,6 +417,11 @@ pub struct DocUpdateProposal {
     /// code); `None` for updates the user decided.
     #[serde(default)]
     pub reason: Option<String>,
+    /// sha256 (lowercase hex) of the document when the update was
+    /// proposed; `None` when it did not exist. Applying refuses when the
+    /// document no longer matches.
+    #[serde(default)]
+    pub base_sha256: Option<String>,
 }
 
 /// A question the agent asked in its last turn, with optional choices.
@@ -1036,6 +1045,7 @@ mod tests {
                 text: "It crashes".to_string(),
                 draft_ids: vec!["d1".to_string()],
                 at: "2026-01-01T00:00:00Z".to_string(),
+                detail: None,
             }],
             last_question: Some(IntakeQuestion {
                 text: "Which OS?".to_string(),
@@ -1051,6 +1061,7 @@ mod tests {
                 content: "new".to_string(),
                 status: "pending".to_string(),
                 reason: None,
+                base_sha256: Some("ab".repeat(32)),
             }],
             finalize: FinalizeState {
                 stage: FinalizeStage::AttachmentsCommitted,
@@ -1081,6 +1092,8 @@ mod tests {
             json!(["Windows", "macOS"])
         );
         assert_eq!(value["docUpdates"][0]["status"], json!("pending"));
+        assert_eq!(value["docUpdates"][0]["baseSha256"], json!("ab".repeat(32)));
+        assert_eq!(value["messages"][0]["detail"], json!(null));
         assert_eq!(value["finalize"]["stage"], json!("attachments_committed"));
         assert_eq!(value["finalize"]["rootTaskId"], json!("fedcba9876543210"));
         assert_eq!(value["finalize"]["attachmentIds"], json!(["a1"]));

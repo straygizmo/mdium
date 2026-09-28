@@ -18,6 +18,7 @@ use crate::workflow::forge::{self, ForgeCli, ForgeError, ForgeProbe, ForgeRepo};
 use crate::workflow::frontmatter::{split_frontmatter, strip_bom, DelimiterMatch};
 use crate::workflow::fsutil::{self, MdiumPaths};
 use crate::workflow::integrity::{path_matches, MERGE_REVIEW_PATTERNS};
+use crate::workflow::issue_sync;
 use crate::workflow::model::{
     DocUpdateProposal, FinalizeStage, FinalizeState, IntakeKind, IntakeMessage, IntakeProposal,
     IntakeQuestion, IntakeSession, IntakeStatus, IssueRef, IssueTracking, Provider,
@@ -47,6 +48,11 @@ pub const MAX_TRANSCRIPT_BYTES: usize = 256 * 1024;
 pub const MAX_DOC_UPDATE_BYTES: usize = 256 * 1024;
 /// Maximum length of a proposal title, in characters.
 pub const MAX_TITLE_CHARS: usize = 100;
+/// Maximum size of a proposal body edited by the user, in bytes (256 KiB).
+pub const MAX_PROPOSAL_BODY_BYTES: usize = 256 * 1024;
+/// Maximum size of the detail kept on an `error` message, in bytes
+/// (16 KiB).
+pub const MAX_ERROR_DETAIL_BYTES: usize = 16 * 1024;
 /// Maximum number of answer options kept from a question.
 pub const MAX_OPTIONS: usize = 6;
 /// Maximum length of one answer option, in characters.
@@ -70,6 +76,8 @@ const RUNNER_TIMEOUT_MESSAGE: &str = "TIMEOUT";
 /// The runner's turn-failure message when the safety guard blocked a tool
 /// call.
 const RUNNER_GUARD_BLOCKED_MESSAGE: &str = "GUARD_BLOCKED";
+/// The runner's turn-failure message when it refused the turn's images.
+const RUNNER_INVALID_IMAGES_MESSAGE: &str = "INVALID_IMAGES";
 
 /// The session is abandoned, finalizing or done.
 pub const INTAKE_NOT_ACTIVE: &str = "INTAKE_NOT_ACTIVE";
@@ -87,12 +95,25 @@ pub const INTAKE_TURN_FAILED: &str = "INTAKE_TURN_FAILED";
 pub const INTAKE_TURN_TIMEOUT: &str = "INTAKE_TURN_TIMEOUT";
 pub const INTAKE_TURN_CANCELLED: &str = "INTAKE_TURN_CANCELLED";
 pub const INTAKE_GUARD_BLOCKED: &str = "INTAKE_GUARD_BLOCKED";
+/// The runner refused the images attached to the turn.
+pub const INTAKE_INVALID_IMAGES: &str = "INTAKE_INVALID_IMAGES";
 /// Reason codes of doc updates rejected when proposed.
 pub const INTAKE_DOC_PATH_INVALID: &str = "INTAKE_DOC_PATH_INVALID";
 pub const INTAKE_DOC_PATH_PROTECTED: &str = "INTAKE_DOC_PATH_PROTECTED";
 pub const INTAKE_DOC_TOO_LARGE: &str = "INTAKE_DOC_TOO_LARGE";
-/// Finalize was requested before the agent proposed a requirement document.
+/// The document of a doc update changed (or appeared) since the update was
+/// proposed; applying it would overwrite that change.
+pub const INTAKE_DOC_CHANGED_SINCE_PROPOSAL: &str = "INTAKE_DOC_CHANGED_SINCE_PROPOSAL";
+/// Finalize (or a proposal edit) was requested before the agent proposed a
+/// requirement document.
 pub const INTAKE_NO_PROPOSAL: &str = "INTAKE_NO_PROPOSAL";
+/// An edited proposal title is blank or longer than [`MAX_TITLE_CHARS`].
+pub const INTAKE_PROPOSAL_TITLE_INVALID: &str = "INTAKE_PROPOSAL_TITLE_INVALID";
+/// An edited proposal body is blank.
+pub const INTAKE_PROPOSAL_BODY_EMPTY: &str = "INTAKE_PROPOSAL_BODY_EMPTY";
+/// Only a finalize that stopped before the forge was called can return to
+/// the conversation.
+pub const INTAKE_NOT_REOPENABLE: &str = "INTAKE_NOT_REOPENABLE";
 /// The session's workflow is missing, disabled or archived.
 pub const INTAKE_WORKFLOW_UNAVAILABLE: &str = "INTAKE_WORKFLOW_UNAVAILABLE";
 /// Another finalize of the same session is still running.
@@ -223,7 +244,9 @@ pub struct IntakeList {
     pub warnings: Vec<StoreWarning>,
 }
 
-/// Creates a new, empty, active session for workflow `workflow_id`.
+/// Creates a new, empty, active session for workflow `workflow_id`, which
+/// must exist and be enabled and not archived
+/// ([`INTAKE_WORKFLOW_UNAVAILABLE`]).
 pub fn create_session(
     store: &WorkflowStore,
     guard: &ProjectGuard,
@@ -233,6 +256,7 @@ pub fn create_session(
     model: Option<String>,
 ) -> Result<IntakeSession, IntakeError> {
     check_guard(store, guard)?;
+    usable_workflow(store, workflow_id)?;
     let now = fsutil::now();
     let session = IntakeSession {
         schema_version: SCHEMA_VERSION,
@@ -404,6 +428,7 @@ pub fn add_user_message(
         text: text.to_string(),
         draft_ids: ids,
         at: fsutil::now(),
+        detail: None,
     });
     save_session(store, guard, &session)
 }
@@ -462,7 +487,7 @@ pub fn run_turn(
     {
         return Ok(session);
     }
-    record_turn(&mut session, result);
+    record_turn(&mut session, result, store.project_root());
     save_session(store, &guard, &session)
 }
 
@@ -480,8 +505,11 @@ pub fn parse_intake_output(text: &str) -> Result<IntakeReply, IntakeError> {
 /// the project-relative path, which must be a normalized relative path to
 /// a documentation file inside the project, not under `.git`/`.mdium` and
 /// not through a symlinked or junctioned directory; the content must be at
-/// most [`MAX_DOC_UPDATE_BYTES`]. A refused path leaves the proposal
-/// pending (the user can still reject it).
+/// most [`MAX_DOC_UPDATE_BYTES`]. The document must still be what the
+/// proposal saw (same sha256, or still absent), otherwise
+/// [`INTAKE_DOC_CHANGED_SINCE_PROPOSAL`]: the user's own edits are never
+/// overwritten. A refused update stays pending (the user can still reject
+/// it).
 pub fn apply_doc_update(
     store: &WorkflowStore,
     guard: &ProjectGuard,
@@ -507,11 +535,126 @@ pub fn apply_doc_update(
             return Err(IntakeError::TooLarge);
         }
         let target = resolve_doc_target(store.project_root(), &rel)?;
+        let current = doc_sha256(&target).map_err(StoreError::from)?;
+        if current != doc.base_sha256 {
+            return Err(IntakeError::InvalidState(INTAKE_DOC_CHANGED_SINCE_PROPOSAL));
+        }
         fsutil::atomic_write(&target, doc.content.as_bytes()).map_err(StoreError::from)?;
         doc.status = DOC_APPLIED.to_string();
     } else {
         doc.status = DOC_REJECTED.to_string();
     }
+    save_session(store, guard, &session)
+}
+
+/// The project-relative paths of the session's applied doc updates (files
+/// MDium wrote into the user's working tree, which the user still has to
+/// commit).
+pub fn applied_doc_paths(session: &IntakeSession) -> Vec<String> {
+    session
+        .doc_updates
+        .iter()
+        .filter(|doc| doc.status == DOC_APPLIED)
+        .map(|doc| doc.path.clone())
+        .collect()
+}
+
+/// sha256 (lowercase hex) of the regular file at `path`; `None` when
+/// nothing is there or it is not a regular file (such a target is refused
+/// when applied anyway). The content is hashed as it is read.
+fn doc_sha256(path: &Path) -> std::io::Result<Option<String>> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_file() => {}
+        Ok(_) => return Ok(None),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    }
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buf)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buf[..read]);
+    }
+    Ok(Some(
+        hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+    ))
+}
+
+/// Replaces the proposal of an active session with the user's edit. The
+/// title is normalized like the agent's (whitespace collapsed) and must be
+/// non-blank and at most [`MAX_TITLE_CHARS`] characters
+/// ([`INTAKE_PROPOSAL_TITLE_INVALID`]); the body must be non-blank
+/// ([`INTAKE_PROPOSAL_BODY_EMPTY`]) and at most [`MAX_PROPOSAL_BODY_BYTES`].
+/// The session must already have a proposal ([`INTAKE_NO_PROPOSAL`]).
+pub fn update_proposal(
+    store: &WorkflowStore,
+    guard: &ProjectGuard,
+    id: &str,
+    title: &str,
+    body: &str,
+) -> Result<IntakeSession, IntakeError> {
+    check_guard(store, guard)?;
+    let mut session = get_session(store, id)?;
+    require_active(&session)?;
+    if session.proposal.is_none() {
+        return Err(IntakeError::InvalidState(INTAKE_NO_PROPOSAL));
+    }
+    let title = title.split_whitespace().collect::<Vec<_>>().join(" ");
+    if title.is_empty() || title.chars().count() > MAX_TITLE_CHARS {
+        return Err(IntakeError::InvalidState(INTAKE_PROPOSAL_TITLE_INVALID));
+    }
+    if body.len() > MAX_PROPOSAL_BODY_BYTES {
+        return Err(IntakeError::TooLarge);
+    }
+    if body.trim().is_empty() {
+        return Err(IntakeError::InvalidState(INTAKE_PROPOSAL_BODY_EMPTY));
+    }
+    session.proposal = Some(IntakeProposal {
+        title,
+        body: body.to_string(),
+    });
+    save_session(store, guard, &session)
+}
+
+/// Returns a finalizing session to the conversation when its finalize
+/// stopped before anything left the app: not running, still at `ready`,
+/// with no Issue recorded or being created. The last error is cleared and
+/// the choice to skip the Issue is forgotten (it is asked again on the next
+/// finalize); the root task id is kept, since the attachments may already
+/// be committed under it. Anything else is [`INTAKE_NOT_REOPENABLE`] (or
+/// [`INTAKE_FINALIZE_IN_PROGRESS`] while a finalize runs).
+pub fn reopen_intake(
+    store: &WorkflowStore,
+    guard: &ProjectGuard,
+    id: &str,
+) -> Result<IntakeSession, IntakeError> {
+    check_guard(store, guard)?;
+    let mut session = get_session(store, id)?;
+    if session.status != IntakeStatus::Finalizing {
+        return Err(IntakeError::InvalidState(INTAKE_NOT_REOPENABLE));
+    }
+    if FinalizeSlot::is_running(store.project_root(), id) {
+        return Err(IntakeError::InvalidState(INTAKE_FINALIZE_IN_PROGRESS));
+    }
+    if session.finalize.stage != FinalizeStage::Ready
+        || session.finalize.issue.is_some()
+        || session.finalize.issue_creating
+    {
+        return Err(IntakeError::InvalidState(INTAKE_NOT_REOPENABLE));
+    }
+    session.status = IntakeStatus::Active;
+    session.finalize.last_error = None;
+    session.finalize.skip_issue = false;
     save_session(store, guard, &session)
 }
 
@@ -565,12 +708,17 @@ impl Drop for FinalizeSlot {
 /// persisted before the next starts, so a retry resumes at the failed one):
 ///
 /// 1. `ready`: the session needs a proposal and a usable workflow (enabled,
-///    not archived); it becomes `finalizing` and gets its root task id,
-///    which is kept across retries.
+///    not archived); when an Issue is to be created, the forge is probed
+///    (without the lock) first. Only then does it become `finalizing` and
+///    get its root task id, which is kept across retries, so an early
+///    failure leaves an active session active. A finalize that stopped
+///    later but before the forge was called can return to the
+///    conversation with [`reopen_intake`].
 /// 2. `issue_created`: when the workflow tracks Issues automatically and
 ///    the user did not choose to skip it, the Issue (title and body from
 ///    the proposal, plus the attachment names and the session marker
-///    `<!-- mdium:intake:<intakeId> -->`) is created on the forge of
+///    `<!-- mdium:intake:<intakeId> -->`; mentions in the body are
+///    neutralized) is created on the forge of
 ///    `origin`, without holding the project lock. `issue_creating` is saved
 ///    before the forge is called; if it is still set on a retry (a crash or
 ///    failure after the call), the user's recent Issues are searched for
@@ -578,7 +726,7 @@ impl Drop for FinalizeSlot {
 ///    undetected forge or a missing or logged-out CLI fails with
 ///    [`ISSUE_TRACKING_UNAVAILABLE`]; it is never skipped silently.
 /// 3. `attachments_committed`: the drafts become the root task's
-///    attachments.
+///    attachments (read and verified without the lock, written under it).
 /// 4. `task_created`: the root task is created with the fixed id, linked
 ///    to the Issue; its body is the proposal plus an `## Attachments` list.
 ///    A task already created under that id counts as done.
@@ -610,31 +758,45 @@ fn run_finalize(
     opts: FinalizeOptions,
 ) -> Result<IntakeSession, IntakeError> {
     let paths = mdium_paths(store);
+    let cli = orch.forge().as_ref();
+    // Whether the Issue still has to be created.
+    let needs_issue = |session: &IntakeSession, tracking: Option<IssueTracking>| {
+        session.finalize.stage == FinalizeStage::Ready
+            && tracking == Some(IssueTracking::Auto)
+            && !(session.finalize.skip_issue || opts.skip_issue)
+    };
 
-    // 1. Start (or resume) finalizing.
+    // 0. Check before anything changes, so an early failure (including
+    //    unavailable Issue tracking, probed without the lock) leaves an
+    //    active session active.
+    let wants_issue = {
+        let _guard = store.lock();
+        let session = get_session(store, intake_id)?;
+        if session.status == IntakeStatus::Done {
+            return Ok(session);
+        }
+        let tracking = check_finalizable(store, &session)?;
+        needs_issue(&session, tracking)
+    };
+    let mut repo = if wants_issue {
+        Some(tracked_repo(cli, store.project_root())?)
+    } else {
+        None
+    };
+
+    // 1. Start (or resume) finalizing. The checks are repeated: the session
+    //    or the workflow may have changed while the forge was probed.
     let (mut session, proposal, tracking, draft_names) = {
         let guard = store.lock();
         let mut session = get_session(store, intake_id)?;
-        match session.status {
-            IntakeStatus::Done => return Ok(session),
-            IntakeStatus::Abandoned => return Err(IntakeError::InvalidState(INTAKE_NOT_ACTIVE)),
-            IntakeStatus::Active | IntakeStatus::Finalizing => {}
+        if session.status == IntakeStatus::Done {
+            return Ok(session);
         }
+        let tracking = check_finalizable(store, &session)?;
         let proposal = session
             .proposal
             .clone()
             .ok_or(IntakeError::InvalidState(INTAKE_NO_PROPOSAL))?;
-        if session.status == IntakeStatus::Active && pending_message(&session).is_some() {
-            return Err(IntakeError::InvalidState(INTAKE_TURN_PENDING));
-        }
-        let tracking = match session.finalize.stage {
-            FinalizeStage::Ready
-            | FinalizeStage::IssueCreated
-            | FinalizeStage::AttachmentsCommitted => {
-                Some(usable_workflow(store, &session.workflow_id)?)
-            }
-            FinalizeStage::TaskCreated | FinalizeStage::Done => None,
-        };
         let draft_names = if session.finalize.stage == FinalizeStage::Ready {
             attachments::list_drafts(&paths, intake_id)?
                 .into_iter()
@@ -661,12 +823,12 @@ fn run_finalize(
     })?;
 
     // 2. The Issue, outside the project lock.
-    if session.finalize.stage == FinalizeStage::Ready
-        && tracking == Some(IssueTracking::Auto)
-        && !session.finalize.skip_issue
-    {
-        let cli = orch.forge().as_ref();
-        let repo = tracked_repo(cli, store.project_root())?;
+    if needs_issue(&session, tracking) {
+        // Probed in step 0 unless tracking was turned on meanwhile.
+        let repo = match repo.take() {
+            Some(repo) => repo,
+            None => tracked_repo(cli, store.project_root())?,
+        };
         let marker = intake_marker(intake_id);
         let created = if session.finalize.issue_creating {
             // A previous call may have created the Issue before failing.
@@ -680,10 +842,12 @@ fn run_finalize(
         let created = match created {
             Some(found) => found,
             None => {
-                let body = format!(
-                    "{}\n\n{marker}\n",
-                    with_attachment_list(&proposal.body, &draft_names).trim_end()
-                );
+                // Mentions would notify people from text they never saw.
+                let body = issue_sync::neutralize_mentions(&with_attachment_list(
+                    &proposal.body,
+                    &draft_names,
+                ));
+                let body = format!("{}\n\n{marker}\n", body.trim_end());
                 cli.create_issue(&repo, &proposal.title, &body)?
             }
         };
@@ -702,13 +866,15 @@ fn run_finalize(
         })?;
     }
 
-    // 3. The attachments.
+    // 3. The attachments: read and verified without the lock (up to
+    //    20 files of 20 MiB), written under it.
     if matches!(
         session.finalize.stage,
         FinalizeStage::Ready | FinalizeStage::IssueCreated
     ) {
+        let prepared = attachments::prepare_commit(&paths, intake_id, &root_task_id)?;
         let guard = store.lock();
-        let committed = attachments::commit_drafts(&paths, intake_id, &root_task_id)?;
+        let committed = attachments::apply_commit(&paths, prepared)?;
         let mut fresh = get_session(store, intake_id)?;
         fresh.finalize.attachment_ids = committed.into_iter().map(|meta| meta.id).collect();
         fresh.finalize.stage = FinalizeStage::AttachmentsCommitted;
@@ -753,6 +919,33 @@ fn run_finalize(
     })?;
     orch.kick(store.project_root());
     Ok(session)
+}
+
+/// Checks that `session` (not done) can finalize: not abandoned, with a
+/// proposal, and, while active, no user message awaiting a reply. Before
+/// the task exists the workflow must be usable; returns its issue tracking
+/// then.
+fn check_finalizable(
+    store: &WorkflowStore,
+    session: &IntakeSession,
+) -> Result<Option<IssueTracking>, IntakeError> {
+    if session.status == IntakeStatus::Abandoned {
+        return Err(IntakeError::InvalidState(INTAKE_NOT_ACTIVE));
+    }
+    if session.proposal.is_none() {
+        return Err(IntakeError::InvalidState(INTAKE_NO_PROPOSAL));
+    }
+    if session.status == IntakeStatus::Active && pending_message(session).is_some() {
+        return Err(IntakeError::InvalidState(INTAKE_TURN_PENDING));
+    }
+    match session.finalize.stage {
+        FinalizeStage::Ready
+        | FinalizeStage::IssueCreated
+        | FinalizeStage::AttachmentsCommitted => {
+            Ok(Some(usable_workflow(store, &session.workflow_id)?))
+        }
+        FinalizeStage::TaskCreated | FinalizeStage::Done => Ok(None),
+    }
 }
 
 /// The issue tracking of workflow `workflow_id`, which must exist and be
@@ -838,6 +1031,7 @@ fn push_error(session: &mut IntakeSession, code: &str) {
         text: code.to_string(),
         draft_ids: Vec::new(),
         at: fsutil::now(),
+        detail: None,
     });
 }
 
@@ -1191,6 +1385,8 @@ fn drive_turn(
                 INTAKE_GUARD_BLOCKED
             } else if message == RUNNER_TIMEOUT_MESSAGE {
                 INTAKE_TURN_TIMEOUT
+            } else if message == RUNNER_INVALID_IMAGES_MESSAGE {
+                INTAKE_INVALID_IMAGES
             } else {
                 INTAKE_TURN_FAILED
             }
@@ -1204,9 +1400,18 @@ fn drive_turn(
 }
 
 /// Appends the turn's result to the session: an assistant message with the
-/// parsed reply, or an `error` message carrying the failure code.
-fn record_turn(session: &mut IntakeSession, result: Result<String, String>) {
-    let parsed = result.and_then(|text| parse_reply(&text).map_err(|err| err.code().to_string()));
+/// parsed reply, or an `error` message carrying the failure code (and, for
+/// a reply that breaks the output contract, the raw reply capped at
+/// [`MAX_ERROR_DETAIL_BYTES`] as its detail). Proposed doc updates record
+/// the sha256 of the documents under `project_root` they would replace.
+fn record_turn(session: &mut IntakeSession, result: Result<String, String>, project_root: &Path) {
+    let parsed = match result {
+        Ok(text) => {
+            parse_reply(&text).map_err(|err| (err.code().to_string(), Some(cap_detail(&text))))
+        }
+        Err(code) => Err((code, None)),
+    };
+    let mut detail = None;
     let (role, text) = match parsed {
         Ok((IntakeReply::Question(question), body)) => {
             let text = render_question(&question, &body);
@@ -1225,12 +1430,15 @@ fn record_turn(session: &mut IntakeSession, result: Result<String, String>) {
             session.doc_updates.retain(|doc| doc.status != DOC_PENDING);
             session
                 .doc_updates
-                .extend(proposed_doc_updates(doc_updates));
+                .extend(proposed_doc_updates(project_root, doc_updates));
             session.last_question = None;
             session.proposal = Some(proposal);
             (ROLE_ASSISTANT, text)
         }
-        Err(code) => (ROLE_ERROR, code),
+        Err((code, raw)) => {
+            detail = raw;
+            (ROLE_ERROR, code)
+        }
     };
     session.messages.push(IntakeMessage {
         id: fsutil::new_id(),
@@ -1238,14 +1446,29 @@ fn record_turn(session: &mut IntakeSession, result: Result<String, String>) {
         text,
         draft_ids: Vec::new(),
         at: fsutil::now(),
+        detail,
     });
+}
+
+/// `text` cut to at most [`MAX_ERROR_DETAIL_BYTES`] on a character
+/// boundary.
+fn cap_detail(text: &str) -> String {
+    let mut end = text.len().min(MAX_ERROR_DETAIL_BYTES);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_string()
 }
 
 /// Turns the doc updates of one proposal into records. The same path named
 /// twice keeps only the last entry. An update that fails the path checks or
 /// the size limit is recorded as rejected, without its content, with the
-/// reason code.
-fn proposed_doc_updates(updates: Vec<(String, String)>) -> Vec<DocUpdateProposal> {
+/// reason code. An accepted one records the sha256 of the document it
+/// would replace under `project_root` (`None` when there is none).
+fn proposed_doc_updates(
+    project_root: &Path,
+    updates: Vec<(String, String)>,
+) -> Vec<DocUpdateProposal> {
     let mut records: Vec<(String, DocUpdateProposal)> = Vec::new();
     for (path, content) in updates {
         let checked = check_doc_path(&path).and_then(|normalized| {
@@ -1258,6 +1481,7 @@ fn proposed_doc_updates(updates: Vec<(String, String)>) -> Vec<DocUpdateProposal
         let record = match checked {
             Ok(normalized) => DocUpdateProposal {
                 id: fsutil::new_id(),
+                base_sha256: base_sha256(project_root, &normalized),
                 path: normalized,
                 content,
                 status: DOC_PENDING.to_string(),
@@ -1269,6 +1493,7 @@ fn proposed_doc_updates(updates: Vec<(String, String)>) -> Vec<DocUpdateProposal
                 content: String::new(),
                 status: DOC_REJECTED.to_string(),
                 reason: Some(reason.to_string()),
+                base_sha256: None,
             },
         };
         // Paths are compared case-insensitively: Windows and macOS treat
@@ -1278,6 +1503,19 @@ fn proposed_doc_updates(updates: Vec<(String, String)>) -> Vec<DocUpdateProposal
         records.push((key, record));
     }
     records.into_iter().map(|(_, record)| record).collect()
+}
+
+/// The sha256 of the document at the normalized relative path `rel` when
+/// an update of it is proposed. A document that cannot be read counts as
+/// absent (logged): applying then refuses if it is readable by that time.
+fn base_sha256(project_root: &Path, rel: &str) -> Option<String> {
+    let path = rel
+        .split('/')
+        .fold(project_root.to_path_buf(), |path, part| path.join(part));
+    doc_sha256(&path).unwrap_or_else(|err| {
+        eprintln!("[workflow] cannot hash {}: {err}", path.display());
+        None
+    })
 }
 
 /// The transcript text of a question: its context, the question and the
@@ -1587,7 +1825,7 @@ mod tests {
     use crate::workflow::forge::{FakeForge, FakeOp, ForgeCall, ForgeError, ForgeKind};
     use crate::workflow::gitops::test_support::Fixture;
     use crate::workflow::model::{
-        FinalizeStage, IssueTracking, Task, TaskStatus, WorkflowRun, WorkflowsFile,
+        FinalizeStage, IssueTracking, Task, TaskStatus, Workflow, WorkflowRun, WorkflowsFile,
     };
     use crate::workflow::orchestrator::EventSink;
     use crate::workflow::template::standard_workflow;
@@ -1596,11 +1834,22 @@ mod tests {
 
     const WORKFLOW: &str = "aaaaaaaaaaaaaaaa";
 
+    /// A project with one enabled workflow whose id is [`WORKFLOW`].
     fn setup() -> (tempfile::TempDir, WorkflowStore) {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("project");
         std::fs::create_dir(&root).unwrap();
-        (dir, WorkflowStore::new(root))
+        let store = WorkflowStore::new(root);
+        let mut workflow = standard_workflow("Standard", Provider::Codex);
+        workflow.id = WORKFLOW.to_string();
+        workflow.enabled = true;
+        store
+            .save_workflows(&WorkflowsFile {
+                schema_version: 1,
+                workflows: vec![workflow],
+            })
+            .unwrap();
+        (dir, store)
     }
 
     fn paths(store: &WorkflowStore) -> MdiumPaths {
@@ -2337,7 +2586,8 @@ mod tests {
             ".husky/readme.md",
             ".devcontainer/README.md",
         ] {
-            let proposals = proposed_doc_updates(vec![(path.to_string(), "x".to_string())]);
+            let proposals =
+                proposed_doc_updates(Path::new("."), vec![(path.to_string(), "x".to_string())]);
             assert_eq!(proposals.len(), 1);
             assert_eq!(proposals[0].status, "rejected", "{path}");
             assert_eq!(
@@ -2348,18 +2598,23 @@ mod tests {
             assert_eq!(proposals[0].content, "");
         }
         let too_big = "x".repeat(MAX_DOC_UPDATE_BYTES + 1);
-        let proposals = proposed_doc_updates(vec![("docs/a.md".to_string(), too_big)]);
+        let proposals =
+            proposed_doc_updates(Path::new("."), vec![("docs/a.md".to_string(), too_big)]);
         assert_eq!(proposals[0].reason.as_deref(), Some(INTAKE_DOC_TOO_LARGE));
         assert_eq!(proposals[0].content, "");
     }
 
     #[test]
     fn a_proposal_naming_a_path_twice_keeps_the_last_entry() {
-        let proposals = proposed_doc_updates(vec![
-            ("docs/a.md".to_string(), "first".to_string()),
-            ("CONTEXT.md".to_string(), "context".to_string()),
-            ("docs\\A.md".to_string(), "second".to_string()),
-        ]);
+        let (_dir, store) = setup();
+        let proposals = proposed_doc_updates(
+            store.project_root(),
+            vec![
+                ("docs/a.md".to_string(), "first".to_string()),
+                ("CONTEXT.md".to_string(), "context".to_string()),
+                ("docs\\A.md".to_string(), "second".to_string()),
+            ],
+        );
         let entries: Vec<(&str, &str, &str)> = proposals
             .iter()
             .map(|d| (d.path.as_str(), d.content.as_str(), d.status.as_str()))
@@ -2936,14 +3191,10 @@ mod tests {
 
         let err = env.finalize(&session.id, false).unwrap_err();
         assert_eq!(err.code(), ISSUE_TRACKING_UNAVAILABLE);
+        // Probed before finalizing starts: the conversation is not locked.
         let failed = get_session(&env.store, &session.id).unwrap();
-        assert_eq!(failed.status, IntakeStatus::Finalizing);
-        assert_eq!(failed.finalize.stage, FinalizeStage::Ready);
-        assert_eq!(
-            failed.finalize.last_error.as_deref(),
-            Some(ISSUE_TRACKING_UNAVAILABLE)
-        );
-        let root_id = failed.finalize.root_task_id.clone().unwrap();
+        assert_eq!(failed.status, IntakeStatus::Active);
+        assert_eq!(failed.finalize, FinalizeState::default());
         assert_eq!(env.created_issues(), 0);
 
         // Retrying without acknowledging still refuses.
@@ -2956,10 +3207,7 @@ mod tests {
         assert_eq!(done.status, IntakeStatus::Done);
         assert!(done.finalize.skip_issue);
         assert_eq!(done.finalize.issue, None);
-        assert_eq!(
-            done.finalize.root_task_id.as_deref(),
-            Some(root_id.as_str())
-        );
+        let root_id = done.finalize.root_task_id.clone().unwrap();
         assert_eq!(env.created_issues(), 0);
         assert_eq!(env.store.get_task(&root_id).unwrap().meta.issue, None);
     }
@@ -3363,6 +3611,385 @@ mod tests {
             record_turn_error(&store, &fsutil::new_id(), "X_CODE"),
             Err(IntakeError::NotFound)
         );
+    }
+
+    // ---- final review fixes ---------------------------------------------
+
+    fn set_workflow(store: &WorkflowStore, edit: impl FnOnce(&mut Workflow)) {
+        let mut file = store.load_workflows().unwrap();
+        edit(&mut file.workflows[0]);
+        store
+            .save_workflows(&WorkflowsFile {
+                schema_version: 1,
+                workflows: file.workflows,
+            })
+            .unwrap();
+    }
+
+    fn try_create(store: &WorkflowStore, workflow_id: &str) -> Result<IntakeSession, IntakeError> {
+        let guard = store.lock();
+        create_session(
+            store,
+            &guard,
+            workflow_id,
+            IntakeKind::Feature,
+            Provider::Claude,
+            None,
+        )
+    }
+
+    #[test]
+    fn sessions_need_a_usable_workflow() {
+        let (_dir, store) = setup();
+        let unavailable = Err(IntakeError::InvalidState(INTAKE_WORKFLOW_UNAVAILABLE));
+        assert_eq!(try_create(&store, "bbbbbbbbbbbbbbbb"), unavailable);
+        set_workflow(&store, |workflow| workflow.enabled = false);
+        assert_eq!(try_create(&store, WORKFLOW), unavailable);
+        set_workflow(&store, |workflow| {
+            workflow.enabled = true;
+            workflow.archived = true;
+        });
+        assert_eq!(try_create(&store, WORKFLOW), unavailable);
+        assert!(list_sessions(&store).unwrap().sessions.is_empty());
+        set_workflow(&store, |workflow| workflow.archived = false);
+        assert!(try_create(&store, WORKFLOW).is_ok());
+    }
+
+    /// Makes committing the drafts of `session` fail by fixing its root id
+    /// and putting a file where the task's attachments directory goes;
+    /// returns the blocker's path.
+    fn block_attachments(env: &FinalizeEnv, session: &mut IntakeSession) -> PathBuf {
+        let root_id = fsutil::new_id();
+        session.finalize.root_task_id = Some(root_id.clone());
+        {
+            let guard = env.store.lock();
+            *session = save_session(&env.store, &guard, session).unwrap();
+        }
+        let blocker = paths(&env.store).task_attachments_dir(&root_id).unwrap();
+        std::fs::create_dir_all(blocker.parent().unwrap()).unwrap();
+        std::fs::write(&blocker, b"not a directory").unwrap();
+        blocker
+    }
+
+    fn reopen(env: &FinalizeEnv, id: &str) -> Result<IntakeSession, IntakeError> {
+        let guard = env.store.lock();
+        reopen_intake(&env.store, &guard, id)
+    }
+
+    #[test]
+    fn a_finalize_stopped_before_the_forge_can_be_reopened() {
+        let env = FinalizeEnv::new(IssueTracking::Off);
+        let (mut session, _draft) = env.proposed_session();
+        let blocker = block_attachments(&env, &mut session);
+        let root_id = session.finalize.root_task_id.clone().unwrap();
+        env.finalize(&session.id, true).unwrap_err();
+        let failed = get_session(&env.store, &session.id).unwrap();
+        assert_eq!(failed.status, IntakeStatus::Finalizing);
+        assert_eq!(failed.finalize.stage, FinalizeStage::Ready);
+        assert!(failed.finalize.last_error.is_some());
+        assert!(failed.finalize.skip_issue);
+
+        let reopened = reopen(&env, &session.id).unwrap();
+        assert_eq!(reopened.status, IntakeStatus::Active);
+        assert_eq!(reopened.finalize.last_error, None);
+        // The root id stays (attachments may already be committed under
+        // it); the Issue decision is asked again.
+        assert_eq!(
+            reopened.finalize.root_task_id.as_deref(),
+            Some(root_id.as_str())
+        );
+        assert!(!reopened.finalize.skip_issue);
+        assert_eq!(get_session(&env.store, &session.id).unwrap(), reopened);
+        // The conversation continues.
+        say(&env.store, &session.id, "One more detail.", &[]);
+
+        // An active session is not reopenable.
+        assert_eq!(
+            reopen(&env, &session.id).unwrap_err().code(),
+            INTAKE_NOT_REOPENABLE
+        );
+        std::fs::remove_file(&blocker).unwrap();
+    }
+
+    #[test]
+    fn a_finalize_past_the_forge_or_running_cannot_be_reopened() {
+        let env = FinalizeEnv::new(IssueTracking::Auto);
+        env.authenticate();
+
+        // Creating the Issue may have started.
+        let (creating, _draft) = env.proposed_session();
+        interrupted_while_creating(&env, &creating);
+        assert_eq!(
+            reopen(&env, &creating.id).unwrap_err().code(),
+            INTAKE_NOT_REOPENABLE
+        );
+
+        // The Issue exists.
+        let (mut created, _draft) = env.proposed_session();
+        block_attachments(&env, &mut created);
+        env.finalize(&created.id, false).unwrap_err();
+        assert_eq!(
+            get_session(&env.store, &created.id).unwrap().finalize.stage,
+            FinalizeStage::IssueCreated
+        );
+        assert_eq!(
+            reopen(&env, &created.id).unwrap_err().code(),
+            INTAKE_NOT_REOPENABLE
+        );
+
+        // A finalize of the session is running.
+        let (running, _draft) = env.proposed_session();
+        let mut session = running.clone();
+        session.status = IntakeStatus::Finalizing;
+        {
+            let guard = env.store.lock();
+            save_session(&env.store, &guard, &session).unwrap();
+        }
+        let slot = FinalizeSlot::acquire(env.store.project_root(), &running.id).unwrap();
+        assert_eq!(
+            reopen(&env, &running.id).unwrap_err().code(),
+            INTAKE_FINALIZE_IN_PROGRESS
+        );
+        drop(slot);
+        assert_eq!(
+            reopen(&env, &running.id).map(|session| session.status),
+            Ok(IntakeStatus::Active)
+        );
+
+        // Done sessions stay done.
+        let (done, _draft) = env.proposed_session();
+        env.finalize(&done.id, false).unwrap();
+        assert_eq!(
+            reopen(&env, &done.id).unwrap_err().code(),
+            INTAKE_NOT_REOPENABLE
+        );
+    }
+
+    #[test]
+    fn mentions_are_neutralized_in_the_issue_but_not_in_the_task() {
+        let env = FinalizeEnv::new(IssueTracking::Auto);
+        env.authenticate();
+        let (mut session, _draft) = env.proposed_session();
+        session.proposal = Some(IntakeProposal {
+            title: "Export data".to_string(),
+            body: "Ask @alice about `@decorator`.".to_string(),
+        });
+        {
+            let guard = env.store.lock();
+            save_session(&env.store, &guard, &session).unwrap();
+        }
+
+        let done = env.finalize(&session.id, false).unwrap();
+
+        let body = env
+            .forge
+            .calls()
+            .into_iter()
+            .find_map(|call| match call {
+                ForgeCall::CreateIssue { body, .. } => Some(body),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            body.starts_with("Ask @\u{2060}alice about `@decorator`."),
+            "{body}"
+        );
+        let task = env
+            .store
+            .get_task(done.finalize.root_task_id.as_deref().unwrap())
+            .unwrap();
+        assert!(task.body.starts_with("Ask @alice about"), "{}", task.body);
+    }
+
+    fn sha(text: &str) -> String {
+        crate::workflow::attachments::sha256_hex(text.as_bytes())
+    }
+
+    #[test]
+    fn doc_updates_record_the_sha_of_the_file_they_replace() {
+        let (_dir, store) = setup();
+        std::fs::write(store.project_root().join("CONTEXT.md"), "old").unwrap();
+        let session = new_session(&store, IntakeKind::Feature);
+        say(&store, &session.id, "hi", &[]);
+        let runner = FakeRunner::replying(&store, &proposal_with_doc("CONTEXT.md"));
+        let updated = run(&runner, &store, &session.id);
+        assert_eq!(updated.doc_updates[0].base_sha256, Some(sha("old")));
+
+        let session = new_session(&store, IntakeKind::Feature);
+        say(&store, &session.id, "hi", &[]);
+        let runner = FakeRunner::replying(&store, &proposal_with_doc("docs/NEW.md"));
+        let updated = run(&runner, &store, &session.id);
+        assert_eq!(updated.doc_updates[0].base_sha256, None);
+    }
+
+    #[test]
+    fn a_doc_changed_since_the_proposal_is_not_overwritten() {
+        let (_dir, store) = setup();
+        let target = store.project_root().join("CONTEXT.md");
+        std::fs::write(&target, "old").unwrap();
+        let session = new_session(&store, IntakeKind::Feature);
+        say(&store, &session.id, "hi", &[]);
+        let runner = FakeRunner::replying(&store, &proposal_with_doc("CONTEXT.md"));
+        let proposed = run(&runner, &store, &session.id);
+        let doc_id = proposed.doc_updates[0].id.clone();
+        std::fs::write(&target, "edited by the user").unwrap();
+
+        let guard = store.lock();
+        assert_eq!(
+            apply_doc_update(&store, &guard, &session.id, &doc_id, true),
+            Err(IntakeError::InvalidState(INTAKE_DOC_CHANGED_SINCE_PROPOSAL))
+        );
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "edited by the user"
+        );
+        assert_eq!(
+            get_session(&store, &session.id).unwrap().doc_updates[0].status,
+            "pending"
+        );
+
+        // Restored to what the proposal saw, it is applied.
+        std::fs::write(&target, "old").unwrap();
+        let applied = apply_doc_update(&store, &guard, &session.id, &doc_id, true).unwrap();
+        assert_eq!(applied.doc_updates[0].status, "applied");
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "# Context\nExports.\n"
+        );
+        assert_eq!(applied_doc_paths(&applied), vec!["CONTEXT.md".to_string()]);
+    }
+
+    #[test]
+    fn a_doc_created_since_the_proposal_is_not_overwritten() {
+        let (_dir, store) = setup();
+        let (session, doc_id) = session_proposing(&store, "CONTEXT.md");
+        assert_eq!(session.doc_updates[0].base_sha256, None);
+        let target = store.project_root().join("CONTEXT.md");
+        std::fs::write(&target, "new file").unwrap();
+        let guard = store.lock();
+        assert_eq!(
+            apply_doc_update(&store, &guard, &session.id, &doc_id, true)
+                .unwrap_err()
+                .code(),
+            INTAKE_DOC_CHANGED_SINCE_PROPOSAL
+        );
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new file");
+        assert!(applied_doc_paths(&get_session(&store, &session.id).unwrap()).is_empty());
+    }
+
+    fn edit_proposal(
+        store: &WorkflowStore,
+        id: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<IntakeSession, IntakeError> {
+        let guard = store.lock();
+        update_proposal(store, &guard, id, title, body)
+    }
+
+    #[test]
+    fn the_user_can_edit_the_proposal() {
+        let (_dir, store) = setup();
+        let session = new_session(&store, IntakeKind::Feature);
+        assert_eq!(
+            edit_proposal(&store, &session.id, "T", "B")
+                .unwrap_err()
+                .code(),
+            INTAKE_NO_PROPOSAL
+        );
+        say(&store, &session.id, "hi", &[]);
+        run(
+            &FakeRunner::replying(&store, &proposal_with_doc("A.md")),
+            &store,
+            &session.id,
+        );
+
+        let updated =
+            edit_proposal(&store, &session.id, "  New\n title ", "## Goal\n\nMore.\n").unwrap();
+        assert_eq!(
+            updated.proposal,
+            Some(IntakeProposal {
+                title: "New title".to_string(),
+                body: "## Goal\n\nMore.\n".to_string(),
+            })
+        );
+        assert_eq!(get_session(&store, &session.id).unwrap(), updated);
+
+        let title_invalid = Err(IntakeError::InvalidState(INTAKE_PROPOSAL_TITLE_INVALID));
+        assert_eq!(
+            edit_proposal(&store, &session.id, " \n", "b"),
+            title_invalid
+        );
+        let long = "t".repeat(MAX_TITLE_CHARS + 1);
+        assert_eq!(
+            edit_proposal(&store, &session.id, &long, "b"),
+            title_invalid
+        );
+        let longest = "é".repeat(MAX_TITLE_CHARS);
+        assert!(edit_proposal(&store, &session.id, &longest, "b").is_ok());
+        assert_eq!(
+            edit_proposal(&store, &session.id, "T", "  \n"),
+            Err(IntakeError::InvalidState(INTAKE_PROPOSAL_BODY_EMPTY))
+        );
+        let huge = "x".repeat(MAX_PROPOSAL_BODY_BYTES + 1);
+        assert_eq!(
+            edit_proposal(&store, &session.id, "T", &huge),
+            Err(IntakeError::TooLarge)
+        );
+        assert!(edit_proposal(&store, &session.id, "T", &huge[1..]).is_ok());
+
+        let guard = store.lock();
+        abandon_session(&store, &guard, &session.id).unwrap();
+        drop(guard);
+        assert_eq!(
+            edit_proposal(&store, &session.id, "T", "B")
+                .unwrap_err()
+                .code(),
+            INTAKE_NOT_ACTIVE
+        );
+    }
+
+    #[test]
+    fn invalid_images_are_reported_with_their_own_code() {
+        let (_dir, store) = setup();
+        let session = new_session(&store, IntakeKind::Bug);
+        say(&store, &session.id, "see", &[]);
+        let runner = FakeRunner::new(
+            &store,
+            vec![RunnerEvent::TurnFailed {
+                message: "INVALID_IMAGES".to_string(),
+            }],
+        );
+        let updated = run(&runner, &store, &session.id);
+        let last = updated.messages.last().unwrap();
+        assert_eq!(
+            (last.role.as_str(), last.text.as_str()),
+            ("error", INTAKE_INVALID_IMAGES)
+        );
+        assert_eq!(last.detail, None);
+    }
+
+    #[test]
+    fn invalid_output_keeps_the_raw_reply_capped() {
+        let (_dir, store) = setup();
+        let session = new_session(&store, IntakeKind::Feature);
+        say(&store, &session.id, "hi", &[]);
+        let updated = run(
+            &FakeRunner::replying(&store, "no frontmatter here"),
+            &store,
+            &session.id,
+        );
+        let last = updated.messages.last().unwrap();
+        assert_eq!(last.text, "INTAKE_INVALID_OUTPUT");
+        assert_eq!(last.detail.as_deref(), Some("no frontmatter here"));
+
+        // Multi-byte text is cut on a character boundary.
+        let long = "é".repeat(MAX_ERROR_DETAIL_BYTES);
+        let updated = run(&FakeRunner::replying(&store, &long), &store, &session.id);
+        let detail = updated.messages.last().unwrap().detail.clone().unwrap();
+        assert!(detail.len() <= MAX_ERROR_DETAIL_BYTES);
+        assert!(detail.len() > MAX_ERROR_DETAIL_BYTES - 4);
+        assert!(long.starts_with(&detail));
     }
 
     #[test]
