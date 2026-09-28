@@ -38,6 +38,9 @@ function backendCodes(): string[] {
       .map((f) => join(workflowDir, f)),
     join(RUST_SRC, "commands", "workflow.rs"),
   ];
+  // Codes that only occur in Rust test fixtures are collected too; they are
+  // real prefixes of the families above, so translating them costs nothing
+  // and keeps this check free of an allowlist.
   const pattern = /"((?:ATTENTION|INTAKE|ATTACHMENT|FORGE|ISSUE|WORKFLOW_ISSUE)_[A-Z0-9_]+)"/g;
   const codes = new Set<string>();
   for (const file of files) {
@@ -197,12 +200,58 @@ describe("workflow format", () => {
         code: "ATTENTION_ISSUE_SYNC_FAILED",
         params: { code: "FORGE_TIMEOUT", message: "gh api timed out", entry: "implement" },
       });
-      expect(result.text).toContain(i18n.t("workflow:entry.implement"));
+      expect(result.text).toContain(i18n.t("workflow:issueEntry.implement"));
       expect(result.text).toContain(formatCode("FORGE_TIMEOUT"));
       expect(result.text).toContain("gh api timed out");
       expect(result.text).not.toContain("FORGE_TIMEOUT");
-      expect(result.text).not.toContain("implement");
+      expect(result.text).not.toMatch(/implement/);
       expect(result.text).not.toContain("{{");
+    });
+
+    it("drops the code the backend repeats at the start of the message", () => {
+      // Shapes of `ForgeError`'s Display output stored as the `message` param.
+      const failed = formatAttention({
+        code: "ATTENTION_ISSUE_SYNC_FAILED",
+        params: {
+          code: "FORGE_COMMAND_FAILED",
+          message: "FORGE_COMMAND_FAILED (exit 1): HTTP 404: Not Found (https://api.github.com/repos/o/r/issues/7/comments)",
+          entry: "review",
+        },
+      });
+      expect(failed.text).toBe(
+        `${formatCode("ATTENTION_ISSUE_SYNC_FAILED", {
+          entryText: i18n.t("workflow:issueEntry.review"),
+          codeText: formatCode("FORGE_COMMAND_FAILED"),
+          message: "HTTP 404: Not Found (https://api.github.com/repos/o/r/issues/7/comments)",
+        })}`,
+      );
+      expect(failed.text).not.toContain("FORGE_COMMAND_FAILED");
+      expect(failed.text).not.toContain("exit 1");
+
+      const bad = formatAttention({
+        code: "ATTENTION_ISSUE_SYNC_FAILED",
+        params: { code: "FORGE_BAD_RESPONSE", message: "FORGE_BAD_RESPONSE: expected an array", entry: "design" },
+      });
+      expect(bad.text).toContain("expected an array");
+      expect(bad.text).not.toContain("FORGE_BAD_RESPONSE");
+
+      const bare = formatAttention({
+        code: "ATTENTION_ISSUE_SYNC_FAILED",
+        params: { code: "FORGE_TIMEOUT", message: "FORGE_TIMEOUT", entry: "implement" },
+      });
+      expect(bare.text).toBe(formatAttention({
+        code: "ATTENTION_ISSUE_SYNC_FAILED",
+        params: { code: "FORGE_TIMEOUT", message: "", entry: "implement" },
+      }).text);
+      expect(bare.text).not.toContain("FORGE_TIMEOUT");
+    });
+
+    it("keeps a message that only looks like it starts with the code", () => {
+      const result = formatAttention({
+        code: "ATTENTION_ATTEMPT_FAILED",
+        params: { code: "RUNNER_EXITED", message: "RUNNER_EXITED_LATE happened" },
+      });
+      expect(result.text).toContain("RUNNER_EXITED_LATE happened");
     });
 
     it("localizes the Issue sync entry kind in Japanese", async () => {
@@ -220,7 +269,7 @@ describe("workflow format", () => {
     });
 
     it("shows an unknown or missing Issue sync entry kind without a key path", () => {
-      expect(formatIssueEntry("design")).toBe(i18n.t("workflow:entry.design"));
+      expect(formatIssueEntry("design")).toBe(i18n.t("workflow:issueEntry.design"));
       expect(formatIssueEntry("future")).toBe("future");
       expect(formatIssueEntry(undefined)).toBe("");
       const result = formatAttention({

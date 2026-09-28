@@ -37,8 +37,21 @@ function formatGuardRule(rule: string | undefined): string {
  */
 export function formatIssueEntry(entry: string | undefined): string {
   if (!entry) return "";
-  const key = `workflow:entry.${entry}`;
+  const key = `workflow:issueEntry.${entry}`;
   return i18n.exists(key) ? i18n.t(key) : entry;
+}
+
+/**
+ * Removes the code the backend repeats at the start of a failure message
+ * (`CODE`, `CODE: detail`, `CODE (exit n): detail`), since the localized
+ * code text is shown next to it. Other messages are returned unchanged.
+ */
+function stripCodePrefix(message: string | undefined, code: string | undefined): string {
+  if (!message) return "";
+  if (!code || !message.startsWith(code)) return message;
+  const rest = message.slice(code.length);
+  const prefix = /^(?: \(exit -?\d+\))?(?::\s*|$)/.exec(rest);
+  return prefix ? rest.slice(prefix[0].length) : message;
 }
 
 /** Renders one entry of an `items` JSON array as a display line. */
@@ -87,12 +100,14 @@ function parseItems(raw: string | undefined): string[] {
  * an "and N more" line).
  * Code-bearing params are localized too: `codeText` from `params.code`,
  * `ruleText` from `params.rule` (guard rules) and `entryText` from
- * `params.entry` (Issue entry kinds).
+ * `params.entry` (Issue entry kinds). A `message` that repeats `params.code`
+ * at its start has that prefix removed.
  */
 export function formatAttention(reason: AttentionReason): { text: string; items: string[] } {
   const params = reason.params ?? {};
   const derived: Record<string, string> = {
     ...params,
+    message: stripCodePrefix(params.message, params.code),
     codeText: params.code ? formatCode(params.code) : "",
     ruleText: formatGuardRule(params.rule),
     entryText: formatIssueEntry(params.entry),

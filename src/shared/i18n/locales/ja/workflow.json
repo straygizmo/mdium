@@ -278,7 +278,7 @@
     "opaque-tool": "内容を確認できないツール",
     "unknown": "不明なルール"
   },
-  "entry": {
+  "issueEntry": {
     "design": "設計書",
     "implement": "実装要約",
     "review": "レビュー結果"
@@ -441,7 +441,8 @@
     "issue": {
       "title": "Issue",
       "link": "#{{number}}（{{host}}/{{path}}）",
-      "open": "オープン",
+      "openLink": "Issue を開く",
+      "stateOpen": "オープン",
       "closed": "クローズ済み",
       "closeFailed": "Issue をクローズできませんでした。{{error}}",
       "retryClose": "Issue のクローズを再試行"
@@ -585,7 +586,7 @@
     "ISSUE_SYNC_IN_PROGRESS": "このタスクの Issue 同期を実行中です。",
     "ISSUE_NOT_TRACKED": "このフロー実行は Issue と連携していません。",
     "ISSUE_RUN_NOT_MERGED": "Issue をクローズできるのは、フロー実行の取込み後だけです。",
-    "ISSUE_TRACKING_UNAVAILABLE": "Issue 連携を利用できません。origin が GitHub・GitLab のリポジトリでないか、CLI がないか未認証です。Issue なしで続行することもできます。",
+    "ISSUE_TRACKING_UNAVAILABLE": "Issue 連携を利用できません。origin が GitHub・GitLab のリポジトリでないか、gh / glab CLI がインストールされていないか、ログインしていません。Issue なしで続行することもできます。",
     "FORGE_NOT_INSTALLED": "gh / glab CLI がインストールされていません。",
     "FORGE_NOT_AUTHENTICATED": "gh / glab CLI にログインしていません。",
     "FORGE_COMMAND_FAILED": "gh / glab コマンドが失敗しました。",

@@ -278,10 +278,10 @@
     "opaque-tool": "Unverifiable tool",
     "unknown": "Unknown rule"
   },
-  "entry": {
-    "design": "Design document",
-    "implement": "Implementation summary",
-    "review": "Review result"
+  "issueEntry": {
+    "design": "design document",
+    "implement": "implementation summary",
+    "review": "review result"
   },
   "intake": {
     "windowTitle": "Requirement intake",
@@ -441,7 +441,8 @@
     "issue": {
       "title": "Issue",
       "link": "#{{number}} ({{host}}/{{path}})",
-      "open": "Open",
+      "openLink": "Open the Issue",
+      "stateOpen": "Open",
       "closed": "Closed",
       "closeFailed": "The Issue could not be closed. {{error}}",
       "retryClose": "Retry closing the Issue"
