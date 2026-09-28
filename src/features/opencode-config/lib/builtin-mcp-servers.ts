@@ -12,6 +12,15 @@ export const BUILTIN_MCP_SERVERS: Record<string, BuiltinMcpServer> = {
       GEMINI_IMAGE_MODEL: "gemini-3.1-flash-image-preview",
     },
   },
+  // Office/PDF -> Markdown (`convert_to_markdown` tool); bundled by
+  // scripts/build-doc-converter.mjs, needs no configuration.
+  "mdium-docs": {
+    serverName: "mdium-docs",
+    type: "local",
+    command: ["node", "<mcp_servers_path>\\mdium-docs\\dist\\index.js"],
+    enabled: true,
+    environment: {},
+  },
   "mdium-vba": {
     serverName: "mdium-vba",
     type: "local",

@@ -418,6 +418,29 @@ impl RunnerClient {
             .ok_or_else(|| RunnerError::Protocol("availability missing".to_string()))
     }
 
+    /// Asks the runner to convert an Office/PDF document at `input` to
+    /// Markdown at `output` (images next to it); returns the Markdown path
+    /// the runner reports. A conversion failure is a `Remote` error whose
+    /// message starts with `CONVERT_FAILED`.
+    pub fn convert_document(
+        &self,
+        input: &str,
+        output: &str,
+        timeout: Duration,
+    ) -> Result<String, RunnerError> {
+        let request_id = self.new_request_id();
+        let msg = json!({
+            "type": "convert_document",
+            "requestId": request_id,
+            "inputPath": input,
+            "outputPath": output,
+        });
+        let reply = self.request(&request_id, msg, "document_converted", timeout)?;
+        str_field(&reply, "markdownPath")
+            .filter(|p| !p.is_empty())
+            .ok_or_else(|| RunnerError::Protocol("markdownPath missing".to_string()))
+    }
+
     /// Starts a session; returns its event stream and the provider-native id.
     pub fn start_session(
         &self,
@@ -693,6 +716,45 @@ mod tests {
         assert_eq!(err, RunnerError::Remote("PROVIDER_UNAVAILABLE".to_string()));
         assert_eq!(err.code(), "RUNNER_REMOTE_ERROR");
         assert_eq!(err.detail_code(), Some("PROVIDER_UNAVAILABLE"));
+    }
+
+    #[test]
+    fn convert_document_sends_paths_and_returns_the_markdown_path() {
+        let (client, _t, rx) = setup();
+        let c = client.clone();
+        let h = thread::spawn(move || c.convert_document("C:/a/b.docx", "C:/a/md/b.md", WAIT));
+        let m = next_msg(&rx);
+        assert_eq!(m["type"], "convert_document");
+        assert_eq!(m["inputPath"], "C:/a/b.docx");
+        assert_eq!(m["outputPath"], "C:/a/md/b.md");
+        client.handle_line(
+            &json!({ "type": "document_converted", "requestId": m["requestId"], "markdownPath": "C:\\a\\md\\b.md" })
+                .to_string(),
+        );
+        assert_eq!(h.join().unwrap().unwrap(), "C:\\a\\md\\b.md");
+
+        let c = client.clone();
+        let h = thread::spawn(move || c.convert_document("C:/a/c.pdf", "C:/a/md/c.md", WAIT));
+        let m = next_msg(&rx);
+        client.handle_line(
+            &json!({ "type": "error", "requestId": m["requestId"], "message": "CONVERT_FAILED: no text" })
+                .to_string(),
+        );
+        assert_eq!(
+            h.join().unwrap().unwrap_err(),
+            RunnerError::Remote("CONVERT_FAILED: no text".to_string())
+        );
+
+        let c = client.clone();
+        let h = thread::spawn(move || c.convert_document("C:/a/d.pdf", "C:/a/md/d.md", WAIT));
+        let m = next_msg(&rx);
+        client.handle_line(
+            &json!({ "type": "document_converted", "requestId": m["requestId"] }).to_string(),
+        );
+        assert!(matches!(
+            h.join().unwrap().unwrap_err(),
+            RunnerError::Protocol(_)
+        ));
     }
 
     #[test]

@@ -1,5 +1,5 @@
 import JSZip from "jszip";
-import { resolveSlideOrder } from "./pptxToMarkdown";
+import { resolveSlideOrder } from "./core/pptx";
 
 export interface LayoutShape {
   id: string;

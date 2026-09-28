@@ -171,3 +171,23 @@ describe("imagesWithinRoot", () => {
     expect(imagesWithinRoot([link], root)).toBeUndefined();
   });
 });
+
+describe("parseInbound convert_document", () => {
+  const base = { type: "convert_document", requestId: "r", inputPath: "C:/p/a.docx", outputPath: "C:/p/md/a.md" };
+
+  it("accepts local absolute paths with a .md output", () => {
+    expect(parseInbound(JSON.stringify(base))).toEqual(base);
+    const posix = { ...base, inputPath: "/p/a.pdf", outputPath: "/p/a.MD" };
+    expect(parseInbound(JSON.stringify(posix))).toEqual(posix);
+  });
+
+  it.each([
+    ["relative input", { ...base, inputPath: "a.docx" }],
+    ["UNC input", { ...base, inputPath: "//server/share/a.docx" }],
+    ["relative output", { ...base, outputPath: "a.md" }],
+    ["non-markdown output", { ...base, outputPath: "C:/p/a.txt" }],
+    ["missing requestId", { ...base, requestId: "" }],
+  ])("rejects %s", (_label, msg) => {
+    expect(() => parseInbound(JSON.stringify(msg))).toThrow();
+  });
+});

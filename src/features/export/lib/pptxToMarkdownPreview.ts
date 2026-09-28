@@ -1,4 +1,4 @@
-import { extractPptxMarkdown } from "./pptxToMarkdown";
+import { extractPptxMarkdown } from "./core/pptx";
 import type { PptxLabels } from "./pptxParser";
 
 // Fixed baseName for preview: image refs (`pptx_images/...`) are all replaced

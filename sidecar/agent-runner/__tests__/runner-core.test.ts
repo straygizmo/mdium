@@ -665,3 +665,36 @@ describe("RunnerCore send images", () => {
     expect(t.sent.at(-1)).toEqual({ type: "error", sessionId: "nope", message: "NO_SESSION" });
   });
 });
+
+describe("RunnerCore convert_document", () => {
+  const request = { type: "convert_document", requestId: "c1", inputPath: "C:/p/a.docx", outputPath: "C:/p/md/a.md" };
+
+  it("replies with the converted Markdown path", async () => {
+    const sent: RunnerOutbound[] = [];
+    const convertDocument = vi.fn(async (_input: string, output: string) => output);
+    const core = new RunnerCore({ adapters: {}, send: (m) => sent.push(m), convertDocument });
+    await core.handleLine(JSON.stringify(request));
+    expect(convertDocument).toHaveBeenCalledWith("C:/p/a.docx", "C:/p/md/a.md");
+    expect(sent).toEqual([{ type: "document_converted", requestId: "c1", markdownPath: "C:/p/md/a.md" }]);
+  });
+
+  it("reports a conversion failure on the request", async () => {
+    const sent: RunnerOutbound[] = [];
+    const core = new RunnerCore({
+      adapters: {},
+      send: (m) => sent.push(m),
+      convertDocument: async () => {
+        throw new Error("scanned pdf");
+      },
+    });
+    await core.handleLine(JSON.stringify(request));
+    expect(sent).toEqual([{ type: "error", requestId: "c1", message: "CONVERT_FAILED: scanned pdf" }]);
+  });
+
+  it("answers CONVERT_UNAVAILABLE without a converter", async () => {
+    const sent: RunnerOutbound[] = [];
+    const core = new RunnerCore({ adapters: {}, send: (m) => sent.push(m) });
+    await core.handleLine(JSON.stringify(request));
+    expect(sent).toEqual([{ type: "error", requestId: "c1", message: "CONVERT_UNAVAILABLE" }]);
+  });
+});

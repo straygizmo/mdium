@@ -13,6 +13,7 @@ use crate::workflow::attempt::{
     run_attempt, AttemptEnd, CancelReason, CancelToken, ProgressUpdate, CANCEL_GRACE,
 };
 use crate::workflow::checks::{self, CheckResult};
+use crate::workflow::doc_markdown;
 use crate::workflow::errors::to_attention;
 use crate::workflow::flow::{
     self, begin_attempt, finish_attempt, park_unfinished, recover, BeginResult, FinishInput,
@@ -411,11 +412,39 @@ impl Orchestrator {
         }
     }
 
+    /// Before a pass takes the project guard: converts the Office/PDF
+    /// attachments of every root with an inbox workflow task to Markdown,
+    /// so the prompts built under the guard can point agents at readable
+    /// versions (see [`doc_markdown`]). Committed attachments never change,
+    /// and conversions already done (or rejected) are not repeated.
+    fn prepare_renditions(&self, store: &WorkflowStore, root: &Path) {
+        let tasks = match store.list_tasks() {
+            Ok(list) => list.tasks,
+            Err(_) => return, // The pass itself reports listing failures.
+        };
+        let roots: BTreeSet<&str> = tasks
+            .iter()
+            .filter(|t| {
+                t.meta.status == TaskStatus::Inbox
+                    && !t.meta.archived
+                    && t.meta.workflow_id.is_some()
+            })
+            .map(|t| t.meta.root_id.as_str())
+            .collect();
+        for root_id in roots {
+            if self.inner().shut_down {
+                return;
+            }
+            doc_markdown::prepare_root_renditions(root, root_id, self.runner.as_ref());
+        }
+    }
+
     /// One dispatch pass: recovers half-done advances, then starts every
     /// startable inbox task (oldest first) within its workflow's
     /// concurrency limit, and spawns one thread per started attempt.
     fn dispatch_pass(self: &Arc<Self>, key: &Path, root: &Path) {
         let store = WorkflowStore::new(root.to_path_buf());
+        self.prepare_renditions(&store, root);
         let mut started = Vec::new();
         {
             let guard = store.lock();
