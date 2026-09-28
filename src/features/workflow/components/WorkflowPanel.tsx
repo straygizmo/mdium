@@ -4,14 +4,13 @@ import { useTabStore } from "@/stores/tab-store";
 import { showConfirm, showMessage, showPrompt } from "@/stores/dialog-store";
 import type { Provider, Workflow, WorkflowInput } from "@/shared/types/workflow";
 import { formatCommandError, formatWarning } from "../lib/format";
+import { PROVIDERS } from "../lib/provider-options";
 import { workflowApi } from "../lib/workflow-api";
 import { useWorkflowStore } from "../workflow-store";
 import { IntakeList } from "./IntakeList";
 import { useSafetyConfirm } from "./SafetyNoticeDialog";
 import { WorkflowEditDialog } from "./WorkflowEditDialog";
 import "./WorkflowPanel.css";
-
-const PROVIDERS: readonly Provider[] = ["codex", "copilot", "opencode", "claude"];
 
 /** Schema version of the workflows file written by the UI. */
 const WORKFLOWS_SCHEMA_VERSION = 1;

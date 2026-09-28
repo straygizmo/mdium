@@ -8,7 +8,7 @@ import type {
   Workflow,
   WorkflowRun,
 } from "@/shared/types/workflow";
-import { isCommandError, sameRoot } from "./lib/errors";
+import { TRANSITION_CONFLICT, isCommandError, sameRoot } from "./lib/errors";
 import { formatCommandError } from "./lib/format";
 import {
   subscribeIntakeChanged,
@@ -106,8 +106,6 @@ interface WorkflowState {
 
 /** Debounce delay of event-driven refreshes, per project. */
 const REFRESH_DEBOUNCE_MS = 150;
-
-const TRANSITION_CONFLICT = "TRANSITION_CONFLICT";
 
 function emptyProject(root: string): ProjectState {
   return {

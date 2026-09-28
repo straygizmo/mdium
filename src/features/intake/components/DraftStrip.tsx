@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { readFile } from "@tauri-apps/plugin-fs";
 import type { AttachmentMeta } from "@/shared/types/workflow";
 import { workflowApi } from "@/features/workflow/lib/workflow-api";
+import { MAX_THUMBNAIL_BYTES } from "@/features/workflow/components/AttachmentList";
 import { useIntakeStore } from "../intake-store";
 import "./DraftStrip.css";
 
@@ -47,7 +48,7 @@ export function DraftStrip({ drafts, disabled }: DraftStripProps) {
       <ul className="intake-drafts__list" aria-label={t("intake.drafts.label")}>
         {drafts.map((draft) => (
           <li key={draft.id} className="intake-drafts__chip">
-            {draft.mime.startsWith("image/") && <DraftThumbnail draft={draft} />}
+            {draft.mime.startsWith("image/") && draft.size <= MAX_THUMBNAIL_BYTES && <DraftThumbnail draft={draft} />}
             <span className="intake-drafts__name">{draft.originalName}</span>
             <button
               type="button"
@@ -68,7 +69,7 @@ export function DraftStrip({ drafts, disabled }: DraftStripProps) {
 }
 
 /**
- * Thumbnail of an image draft, read with the fs plugin into a blob URL (the
+ * Thumbnail of an image draft (up to `MAX_THUMBNAIL_BYTES`), read with the fs plugin into a blob URL (the
  * asset protocol stays disabled). The URL is revoked on unmount, including
  * when the read finishes after unmounting.
  */

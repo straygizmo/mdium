@@ -332,6 +332,18 @@ describe("TaskActions", () => {
       expect(api.retryIssueSync).toHaveBeenCalledTimes(1);
     });
 
+    it("hides the integrity panel once the task no longer awaits an Issue sync", async () => {
+      api.retryIssueSync.mockRejectedValueOnce(changed);
+      await render(task({ status: "attention", attention: syncFailed }));
+      await click(button("retryIssueSync"));
+      expect(panel()).not.toBeNull();
+      // The sync was resolved elsewhere (e.g. from another view).
+      await render(task({ status: "running" }));
+      expect(panel()).toBeNull();
+      await render(task({ status: "attention", attention: { code: "ATTENTION_STAGE_FAILED", params: {} } }));
+      expect(panel()).toBeNull();
+    });
+
     it("disables the accept button while the accepted retry runs", async () => {
       api.retryIssueSync.mockRejectedValueOnce(changed);
       let resolve!: (t: Task) => void;

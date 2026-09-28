@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { showConfirm } from "@/stores/dialog-store";
 import type { Task } from "@/shared/types/workflow";
@@ -85,6 +85,12 @@ export function TaskActions({ task }: { task: Task }) {
   const [integrity, setIntegrity] = useState<IntegrityState | null>(null);
   const { id, title, status, awaiting } = task.meta;
   const actions = actionsFor(task);
+  // The integrity panel belongs to a pending Issue sync failure only.
+  const syncFailed = status === "attention" && task.meta.attention?.code === ISSUE_SYNC_FAILED;
+  useEffect(() => {
+    // Drop a stale refusal once the failure is resolved (e.g. from another view).
+    if (!syncFailed) setIntegrity(null);
+  }, [syncFailed]);
   const needsText = status === "awaiting_user";
   const hasText = text.trim().length > 0;
 
@@ -216,7 +222,7 @@ export function TaskActions({ task }: { task: Task }) {
           />
         </label>
       )}
-      {integrity && (
+      {integrity && syncFailed && (
         <div className="workflow-actions__integrity" role="alert">
           <p className="workflow-actions__integrity-text">{t("intake.issueSync.integrityChanged")}</p>
           {integrity.items.length > 0 && (

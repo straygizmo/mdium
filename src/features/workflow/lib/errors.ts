@@ -4,6 +4,9 @@
  */
 import type { CommandError } from "@/shared/types/workflow";
 
+/** The entity changed in the meantime; callers refresh silently instead of reporting it. */
+export const TRANSITION_CONFLICT = "TRANSITION_CONFLICT";
+
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

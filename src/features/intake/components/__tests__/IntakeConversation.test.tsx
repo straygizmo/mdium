@@ -41,6 +41,7 @@ vi.mock("@/features/speech/hooks/useSpeechToText", () => ({
 import i18n from "@/shared/i18n";
 import { useSettingsStore } from "@/stores/settings-store";
 import { formatCode } from "@/features/workflow/lib/format";
+import { MAX_THUMBNAIL_BYTES } from "@/features/workflow/components/AttachmentList";
 import { useIntakeStore } from "../../intake-store";
 import { showMessage } from "@/stores/dialog-store";
 import { IntakeConversation } from "../IntakeConversation";
@@ -420,6 +421,16 @@ describe("IntakeConversation", () => {
       createSpy.mockRestore();
       revokeSpy.mockRestore();
     }
+  });
+
+  it("shows no thumbnail for images over the thumbnail size limit", async () => {
+    await mount(session(), [
+      { ...draft("big", "big.png", "image/png"), size: MAX_THUMBNAIL_BYTES + 1 },
+      { ...draft("fits", "fits.png", "image/png"), size: MAX_THUMBNAIL_BYTES },
+    ]);
+    expect(api.intakeDraftPath).toHaveBeenCalledTimes(1);
+    expect(api.intakeDraftPath).toHaveBeenCalledWith(ROOT, "i1", "fits");
+    expect(container.textContent).toContain("big.png");
   });
 
   it("revokes a thumbnail that finishes loading after unmount", async () => {
