@@ -6,9 +6,13 @@ import { workflowApi } from "@/features/workflow/lib/workflow-api";
 import { useIntakeStore } from "../intake-store";
 import "./DraftStrip.css";
 
-/** Matches the backend limits (`MAX_ATTACHMENTS_PER_TASK`, `MAX_ATTACHMENT_BYTES`). */
-const MAX_DRAFTS = 20;
-const MAX_DRAFT_MB = 20;
+/*
+ * Draft limits; keep in sync with `MAX_ATTACHMENTS_PER_TASK` and
+ * `MAX_ATTACHMENT_BYTES` in src-tauri/src/workflow/attachments.rs.
+ */
+export const MAX_DRAFTS = 20;
+export const MAX_DRAFT_MB = 20;
+export const MAX_DRAFT_BYTES = MAX_DRAFT_MB * 1024 * 1024;
 
 interface DraftStripProps {
   /** Drafts not sent yet. */

@@ -22,11 +22,12 @@ export function IntakeConversation({ session }: { session: IntakeSessionView }) 
   const { t } = useTranslation("workflow");
   const drafts = useIntakeStore((s) => s.drafts);
   const pending = useMemo(() => pendingDrafts(session, drafts), [session, drafts]);
+  const pendingIds = useMemo(() => pending.map((d) => d.id), [pending]);
   const active = session.status === "active";
 
   return (
     <div className="intake-conversation">
-      <MessageList session={session} drafts={drafts} pendingDraftIds={pending.map((d) => d.id)} />
+      <MessageList session={session} drafts={drafts} pendingDraftIds={pendingIds} />
       <div className="intake-conversation__footer">
         {!active && (
           <p className="intake-conversation__inactive" role="note">
@@ -34,7 +35,7 @@ export function IntakeConversation({ session }: { session: IntakeSessionView }) 
           </p>
         )}
         <DraftStrip drafts={pending} disabled={!active} />
-        <ComposeBox session={session} pendingDraftIds={pending.map((d) => d.id)} />
+        <ComposeBox session={session} pendingDraftIds={pendingIds} />
       </div>
     </div>
   );

@@ -36,6 +36,9 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+// The intake window shows and checks these limits too; keep
+// `MAX_DRAFTS` / `MAX_DRAFT_MB` in src/features/intake/components/DraftStrip.tsx
+// in sync with them.
 /// Maximum size of one attachment (20 MiB).
 pub const MAX_ATTACHMENT_BYTES: u64 = 20 * 1024 * 1024;
 /// Maximum number of attachments per root task (and of drafts per intake).

@@ -11,7 +11,7 @@ import type {
   ProviderProbe,
   Workflow,
 } from "@/shared/types/workflow";
-import { formatCommandError, isCommandError, sameRoot } from "@/features/workflow/lib/format";
+import { formatCode, formatCommandError, isCommandError, sameRoot } from "@/features/workflow/lib/format";
 import {
   subscribeIntakeChanged,
   subscribeWorkflowsChanged,
@@ -39,6 +39,15 @@ export interface IntakeHandOff {
   error: string | null;
 }
 
+/** Options of the draft actions. */
+export interface AddDraftOptions {
+  /**
+   * Report a failure to the caller instead of showing it, so a batch of
+   * files can show its failures in one message.
+   */
+  onError?: (reason: string) => void;
+}
+
 /** State of the one intake session this window serves. */
 export interface IntakeWindowState {
   /** Normalized project root (the `workflow_attach_project` result). */
@@ -59,6 +68,8 @@ export interface IntakeWindowState {
   loading: boolean;
   /** A message send is in flight. */
   sending: boolean;
+  /** A turn retry is in flight. */
+  retrying: boolean;
   /** `create` (or a hand-off retry) is in flight. */
   creating: boolean;
   /** Set once `create` created a session (see `IntakeHandOff`). */
@@ -84,9 +95,17 @@ export interface IntakeWindowState {
   send(text: string, draftIds: string[]): Promise<boolean>;
   retry(): Promise<void>;
   cancelTurn(): Promise<void>;
-  addDraftFromPath(path: string): Promise<void>;
-  addDraftFromBytes(name: string, base64: string): Promise<void>;
+  addDraftFromPath(path: string, options?: AddDraftOptions): Promise<void>;
+  addDraftFromBytes(name: string, base64: string, options?: AddDraftOptions): Promise<void>;
   removeDraft(id: string): Promise<void>;
+}
+
+/**
+ * A request that starts an agent turn (send or retry) is in flight. Only one
+ * may run at a time, so the other controls stay disabled meanwhile.
+ */
+export function turnRequestInFlight(s: Pick<IntakeWindowState, "sending" | "retrying">): boolean {
+  return s.sending || s.retrying;
 }
 
 /** Incremented by every `init`; an older init must not overwrite a newer one. */
@@ -107,6 +126,7 @@ function initialState() {
     forge: null,
     loading: false,
     sending: false,
+    retrying: false,
     creating: false,
     handOff: null,
     error: null,
@@ -167,7 +187,10 @@ export const useIntakeStore = create<IntakeWindowState>((set, get) => {
    * dialog, except `TRANSITION_CONFLICT`, which reloads silently. Resolves to
    * undefined on failure or when no session is served.
    */
-  const act = async <T>(fn: (root: string, intakeId: string) => Promise<T>): Promise<T | undefined> => {
+  const act = async <T>(
+    fn: (root: string, intakeId: string) => Promise<T>,
+    onError?: (reason: string) => void,
+  ): Promise<T | undefined> => {
     const { root, intakeId } = get();
     if (!intakeId) return undefined;
     try {
@@ -176,6 +199,8 @@ export const useIntakeStore = create<IntakeWindowState>((set, get) => {
       if (isCommandError(err) && err.code === TRANSITION_CONFLICT) {
         // The session changed underneath: show its real state instead of an error.
         await get().reload();
+      } else if (onError) {
+        onError(isCommandError(err) ? formatCode(err.code) : formatCommandError(err));
       } else {
         void showMessage(formatCommandError(err), {
           title: i18n.t("workflow:intake.actionFailed"),
@@ -266,7 +291,7 @@ export const useIntakeStore = create<IntakeWindowState>((set, get) => {
     },
 
     async send(text, draftIds) {
-      if (get().sending) return false;
+      if (turnRequestInFlight(get())) return false;
       set({ sending: true });
       try {
         const view = await act((root, id) => workflowApi.intakeSend(root, id, text, draftIds));
@@ -281,10 +306,16 @@ export const useIntakeStore = create<IntakeWindowState>((set, get) => {
     },
 
     async retry() {
-      const view = await act((root, id) => workflowApi.intakeRetry(root, id));
-      if (view) {
-        sessionSeq++;
-        set({ session: view });
+      if (turnRequestInFlight(get())) return;
+      set({ retrying: true });
+      try {
+        const view = await act((root, id) => workflowApi.intakeRetry(root, id));
+        if (view) {
+          sessionSeq++;
+          set({ session: view });
+        }
+      } finally {
+        set({ retrying: false });
       }
     },
 
@@ -293,13 +324,13 @@ export const useIntakeStore = create<IntakeWindowState>((set, get) => {
       if (cancelled !== undefined) await get().reload();
     },
 
-    async addDraftFromPath(path) {
-      const meta = await act((root, id) => workflowApi.intakeAddDraftPath(root, id, path));
+    async addDraftFromPath(path, options) {
+      const meta = await act((root, id) => workflowApi.intakeAddDraftPath(root, id, path), options?.onError);
       if (meta) set((s) => ({ drafts: [...s.drafts, meta] }));
     },
 
-    async addDraftFromBytes(name, base64) {
-      const meta = await act((root, id) => workflowApi.intakeAddDraftBytes(root, id, name, base64));
+    async addDraftFromBytes(name, base64, options) {
+      const meta = await act((root, id) => workflowApi.intakeAddDraftBytes(root, id, name, base64), options?.onError);
       if (meta) set((s) => ({ drafts: [...s.drafts, meta] }));
     },
 

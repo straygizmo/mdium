@@ -338,6 +338,7 @@
       "retry": "Retry",
       "attachments": "Attached files",
       "attachedFile": "Attached file",
+      "announce": "{{role}}: {{text}}",
       "notActive": "This requirement intake is no longer in conversation.",
       "abandon": "Abandon intake",
       "abandonConfirm": "Abandon this requirement intake? Files attached to it are deleted."
@@ -350,7 +351,9 @@
       "voice": "Voice input",
       "voiceStop": "Stop voice input",
       "attach": "Attach files",
-      "pasteHint": "You can also paste images with Ctrl+V."
+      "pasteHint": "You can also paste images with Ctrl+V.",
+      "addFailed": "Some files could not be attached.",
+      "addFailedItem": "{{name}}: {{reason}}"
     },
     "drafts": {
       "label": "Files to send",

@@ -338,6 +338,7 @@
       "retry": "再試行",
       "attachments": "添付ファイル",
       "attachedFile": "添付ファイル",
+      "announce": "{{role}}: {{text}}",
       "notActive": "この要件整理は対話中ではありません。",
       "abandon": "要件整理を破棄",
       "abandonConfirm": "この要件整理を破棄しますか？添付したファイルも削除されます。"
@@ -350,7 +351,9 @@
       "voice": "音声入力",
       "voiceStop": "音声入力を停止",
       "attach": "ファイルを添付",
-      "pasteHint": "Ctrl+V で画像を貼り付けることもできます。"
+      "pasteHint": "Ctrl+V で画像を貼り付けることもできます。",
+      "addFailed": "添付できなかったファイルがあります。",
+      "addFailedItem": "{{name}}: {{reason}}"
     },
     "drafts": {
       "label": "送信するファイル",

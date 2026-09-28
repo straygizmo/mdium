@@ -42,7 +42,9 @@ import i18n from "@/shared/i18n";
 import { useSettingsStore } from "@/stores/settings-store";
 import { formatCode } from "@/features/workflow/lib/format";
 import { useIntakeStore } from "../../intake-store";
+import { showMessage } from "@/stores/dialog-store";
 import { IntakeConversation } from "../IntakeConversation";
+import { appendTranscript, pastedImageName } from "../ComposeBox";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -446,7 +448,7 @@ describe("IntakeConversation", () => {
     expect(voice.getAttribute("aria-label")).toBe(t("intake.compose.voice"));
     await click(voice);
     expect(speech.toggle).toHaveBeenCalled();
-    speech.transcript = " world";
+    speech.transcript = "world";
     // Any re-render picks up the hook's new transcript.
     await act(async () => useIntakeStore.setState({ session: session() }));
     expect(textarea().value).toBe("hello world");
@@ -456,5 +458,151 @@ describe("IntakeConversation", () => {
   it("hides the voice button when speech input is disabled", async () => {
     await mount(session());
     expect(container.querySelector(".intake-compose__voice")).toBeNull();
+  });
+
+  it("keeps typed text when answering with an option", async () => {
+    api.intakeSend.mockResolvedValue(session({ busy: true }));
+    await mount(
+      session({
+        messages: [message("assistant", "Which format?")],
+        lastQuestion: { text: "Which format?", options: ["CSV"] },
+      }),
+    );
+    await type("draft note");
+    await click(container.querySelector(".intake-question__option")!);
+    expect(api.intakeSend).toHaveBeenCalledWith(ROOT, "i1", "CSV", []);
+    expect(textarea().value).toBe("draft note");
+  });
+
+  it("disables retry while sending and send and options while retrying", async () => {
+    await mount(session({ messages: [message("assistant", "Q?"), message("error", "INTAKE_TURN_FAILED")] }));
+    await type("hello");
+    await act(async () => useIntakeStore.setState({ sending: true }));
+    expect(container.querySelector<HTMLButtonElement>(".intake-message__retry")!.disabled).toBe(true);
+    await act(async () => useIntakeStore.setState({ sending: false, retrying: true }));
+    expect(sendButton().disabled).toBe(true);
+    await act(async () =>
+      useIntakeStore.setState({
+        session: session({ messages: [message("assistant", "Q?")], lastQuestion: { text: "Q?", options: ["A"] } }),
+      }),
+    );
+    expect(container.querySelector<HTMLButtonElement>(".intake-question__option")!.disabled).toBe(true);
+  });
+
+  it("skips oversized pasted images and reports all failures at once", async () => {
+    api.intakeAddDraftBytes.mockRejectedValue({ code: "ATTACHMENT_TOO_MANY", message: "" });
+    const readAsDataURL = vi.fn(function (this: FileReader) {
+      Object.defineProperty(this, "result", { value: "data:image/png;base64,QUJD" });
+      this.onload?.({} as ProgressEvent<FileReader>);
+    });
+    const OriginalReader = globalThis.FileReader;
+    globalThis.FileReader = class {
+      result: string | null = null;
+      onload: ((e: ProgressEvent<FileReader>) => void) | null = null;
+      onerror: (() => void) | null = null;
+      readAsDataURL = readAsDataURL;
+    } as unknown as typeof FileReader;
+    try {
+      await mount(session());
+      const big = new File([new Uint8Array(1)], "big.png", { type: "image/png" });
+      Object.defineProperty(big, "size", { value: 20 * 1024 * 1024 + 1 });
+      const small = new File([new Uint8Array(1)], "", { type: "image/bmp" });
+      const paste = new Event("paste", { bubbles: true, cancelable: true }) as Event & { clipboardData: unknown };
+      paste.clipboardData = {
+        items: [
+          { kind: "file", type: "image/png", getAsFile: () => big },
+          { kind: "file", type: "image/bmp", getAsFile: () => small },
+        ],
+      };
+      await act(async () => {
+        textarea().dispatchEvent(paste);
+      });
+      // The oversized image is never read or sent.
+      expect(readAsDataURL).toHaveBeenCalledTimes(1);
+      expect(api.intakeAddDraftBytes).toHaveBeenCalledTimes(1);
+      expect(api.intakeAddDraftBytes).toHaveBeenCalledWith(ROOT, "i1", "image.png", "QUJD");
+      expect(showMessage).toHaveBeenCalledTimes(1);
+      const [text, options] = vi.mocked(showMessage).mock.calls[0];
+      expect(text).toBe(
+        [
+          t("intake.compose.addFailedItem", { name: "big.png", reason: formatCode("ATTACHMENT_TOO_LARGE") }),
+          t("intake.compose.addFailedItem", { name: "image.png", reason: formatCode("ATTACHMENT_TOO_MANY") }),
+        ].join("\n"),
+      );
+      expect(options).toEqual(expect.objectContaining({ title: t("intake.compose.addFailed"), kind: "error" }));
+    } finally {
+      globalThis.FileReader = OriginalReader;
+    }
+  });
+
+  it("reports failed attachments in one message", async () => {
+    dialogOpen.mockResolvedValue(["C:\\dir\\a.txt", "C:\\dir\\b.txt"]);
+    api.intakeAddDraftPath.mockRejectedValue({ code: "ATTACHMENT_NOT_A_FILE", message: "" });
+    await mount(session());
+    await click(container.querySelector(".intake-compose__attach")!);
+    expect(showMessage).toHaveBeenCalledTimes(1);
+    const text = vi.mocked(showMessage).mock.calls[0][0];
+    expect(text).toContain(t("intake.compose.addFailedItem", { name: "a.txt", reason: formatCode("ATTACHMENT_NOT_A_FILE") }));
+    expect(text).toContain(t("intake.compose.addFailedItem", { name: "b.txt", reason: formatCode("ATTACHMENT_NOT_A_FILE") }));
+  });
+
+  it("keeps voice stop enabled while recording in an inactive session", async () => {
+    useSettingsStore.setState({ speechEnabled: true });
+    speech.status = "recording";
+    await mount(session({ status: "finalizing" }));
+    const voice = container.querySelector<HTMLButtonElement>(".intake-compose__voice")!;
+    expect(voice.getAttribute("aria-label")).toBe(t("intake.compose.voiceStop"));
+    expect(voice.disabled).toBe(false);
+  });
+
+  it("announces new agent replies and errors, not the history", async () => {
+    await mount(session({ messages: [message("assistant", "Old reply")] }));
+    const live = container.querySelector("[aria-live='polite']")!;
+    expect(live.textContent).toBe("");
+    await act(async () =>
+      useIntakeStore.setState({
+        session: session({ messages: [message("assistant", "Old reply"), message("error", "INTAKE_TURN_TIMEOUT")] }),
+      }),
+    );
+    expect(live.textContent).toBe(
+      t("intake.conversation.announce", { role: t("intake.conversation.error"), text: formatCode("INTAKE_TURN_TIMEOUT") }),
+    );
+  });
+
+  it("follows new messages only while scrolled to the bottom", async () => {
+    const withMessages = (...texts: string[]) =>
+      act(async () => useIntakeStore.setState({ session: session({ messages: texts.map((x) => message("assistant", x)) }) }));
+    await mount(session({ messages: [message("assistant", "a")] }));
+    const list = container.querySelector<HTMLDivElement>(".intake-messages")!;
+    Object.defineProperty(list, "scrollHeight", { configurable: true, value: 1000 });
+    Object.defineProperty(list, "clientHeight", { configurable: true, value: 200 });
+    // Scrolled up: new content does not move the view.
+    list.scrollTop = 100;
+    await act(async () => list.dispatchEvent(new Event("scroll")));
+    await withMessages("a", "b");
+    expect(list.scrollTop).toBe(100);
+    // Back at the bottom: it follows again.
+    list.scrollTop = 800;
+    await act(async () => list.dispatchEvent(new Event("scroll")));
+    await withMessages("a", "b", "c");
+    expect(list.scrollTop).toBe(1000);
+  });
+});
+
+describe("compose helpers", () => {
+  it("names pasted images with a safe extension", () => {
+    expect(pastedImageName("image/png")).toBe("image.png");
+    expect(pastedImageName("image/jpeg")).toBe("image.jpg");
+    expect(pastedImageName("image/GIF")).toBe("image.gif");
+    expect(pastedImageName("image/webp")).toBe("image.webp");
+    expect(pastedImageName("image/svg+xml")).toBe("image.png");
+    expect(pastedImageName("image/../x")).toBe("image.png");
+  });
+
+  it("separates transcript chunks with a space when needed", () => {
+    expect(appendTranscript("", "hi")).toBe("hi");
+    expect(appendTranscript("hello", "world")).toBe("hello world");
+    expect(appendTranscript("hello ", "world")).toBe("hello world");
+    expect(appendTranscript("hello", " world")).toBe("hello world");
   });
 });

@@ -48,6 +48,7 @@ vi.mock("@/features/workflow/lib/workflow-api", () => ({
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ close: closeWindow }) }));
 vi.mock("@/stores/dialog-store", () => ({ showMessage }));
 
+import i18n from "@/shared/i18n";
 import { startIntakeEvents, useIntakeStore } from "../intake-store";
 
 const ROOT = "C:\\proj";
@@ -298,6 +299,34 @@ describe("intake-store", () => {
       await useIntakeStore.getState().cancelTurn();
       expect(api.intakeCancelTurn).toHaveBeenCalledWith(ROOT, "i1");
       expect(useIntakeStore.getState().session?.busy).toBe(false);
+    });
+
+    it("runs one turn request at a time (send or retry)", async () => {
+      let resolveSend!: (v: IntakeSessionView) => void;
+      api.intakeSend.mockReturnValue(new Promise((r) => (resolveSend = r)));
+      const sending = useIntakeStore.getState().send("a", []);
+      await useIntakeStore.getState().retry();
+      expect(api.intakeRetry).not.toHaveBeenCalled();
+      resolveSend(session("i1"));
+      await sending;
+
+      let resolveRetry!: (v: IntakeSessionView) => void;
+      api.intakeRetry.mockReturnValue(new Promise((r) => (resolveRetry = r)));
+      const retrying = useIntakeStore.getState().retry();
+      expect(useIntakeStore.getState().retrying).toBe(true);
+      expect(await useIntakeStore.getState().send("b", [])).toBe(false);
+      resolveRetry(session("i1"));
+      await retrying;
+      expect(useIntakeStore.getState().retrying).toBe(false);
+      expect(api.intakeSend).toHaveBeenCalledTimes(1);
+    });
+
+    it("reports draft failures to the caller instead of showing them", async () => {
+      api.intakeAddDraftBytes.mockRejectedValue({ code: "ATTACHMENT_TOO_MANY", message: "detail" });
+      const onError = vi.fn();
+      await useIntakeStore.getState().addDraftFromBytes("p.png", "AAAA", { onError });
+      expect(onError).toHaveBeenCalledWith(i18n.t("workflow:codes.ATTACHMENT_TOO_MANY"));
+      expect(showMessage).not.toHaveBeenCalled();
     });
 
     it("adds and removes drafts", async () => {
