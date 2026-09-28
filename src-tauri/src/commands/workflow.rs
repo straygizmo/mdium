@@ -946,15 +946,17 @@ pub fn cancel_intake_turns() {
     INTAKE_TURNS.cancel_all(CancelReason::Shutdown);
 }
 
-/// An intake session plus whether one of its agent turns is running and
-/// the paths of its applied doc updates (files written into the user's
-/// working tree that still need committing).
+/// An intake session plus whether one of its agent turns is running,
+/// whether its finalize is running in this process, and the paths of its
+/// applied doc updates (files written into the user's working tree that
+/// still need committing).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IntakeSessionView {
     #[serde(flatten)]
     pub session: IntakeSession,
     pub busy: bool,
+    pub finalize_running: bool,
     pub applied_doc_paths: Vec<String>,
 }
 
@@ -969,10 +971,12 @@ pub struct IntakeListView {
 
 fn session_view(store: &WorkflowStore, session: IntakeSession) -> IntakeSessionView {
     let busy = INTAKE_TURNS.is_busy(store.project_root(), &session.id);
+    let finalize_running = intake::finalize_running(store.project_root(), &session.id);
     let applied_doc_paths = intake::applied_doc_paths(&session);
     IntakeSessionView {
         session,
         busy,
+        finalize_running,
         applied_doc_paths,
     }
 }
@@ -1459,8 +1463,16 @@ pub async fn workflow_intake_finalize(
     skip_issue: bool,
 ) -> Result<IntakeSessionView, CommandError> {
     with_project_cmd(state, project_root, move |orch, root| {
-        let result = intake::finalize(orch, root, &intake_id, FinalizeOptions { skip_issue });
         let store = orch.store(root);
+        // Report the running finalize at once, so other views hide their actions.
+        let started = || emit_intake_reloaded(orch.sink().as_ref(), &store, &intake_id);
+        let result = intake::finalize_with(
+            orch,
+            root,
+            &intake_id,
+            FinalizeOptions { skip_issue },
+            &started,
+        );
         // Reported either way: a failure records its code on the session.
         emit_intake_reloaded(orch.sink().as_ref(), &store, &intake_id);
         Ok(session_view(&store, result?))
@@ -1858,13 +1870,39 @@ mod tests {
         let view = IntakeSessionView {
             session: session.clone(),
             busy: true,
+            finalize_running: false,
             applied_doc_paths: vec!["docs/a.md".into()],
         };
         let mut expected = serde_json::to_value(&session).unwrap();
         expected["busy"] = json!(true);
+        expected["finalizeRunning"] = json!(false);
         expected["appliedDocPaths"] = json!(["docs/a.md"]);
         assert_eq!(serde_json::to_value(&view).unwrap(), expected);
         assert_eq!(expected["workflowId"], json!("wf1"));
+    }
+
+    #[test]
+    fn intake_session_view_reports_a_running_finalize() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WorkflowStore::new(dir.path().to_path_buf());
+        let session = sample_session();
+        let view = session_view(&store, session.clone());
+        assert!(!view.finalize_running);
+        assert_eq!(
+            serde_json::to_value(&view).unwrap()["finalizeRunning"],
+            json!(false)
+        );
+        let slot =
+            crate::workflow::intake::FinalizeSlot::acquire(store.project_root(), &session.id)
+                .unwrap();
+        let view = session_view(&store, session.clone());
+        assert!(view.finalize_running);
+        assert_eq!(
+            serde_json::to_value(&view).unwrap()["finalizeRunning"],
+            json!(true)
+        );
+        drop(slot);
+        assert!(!session_view(&store, session).finalize_running);
     }
 
     #[test]
@@ -1873,6 +1911,7 @@ mod tests {
             sessions: vec![IntakeSessionView {
                 session: sample_session(),
                 busy: false,
+                finalize_running: false,
                 applied_doc_paths: vec![],
             }],
             warnings: vec![],

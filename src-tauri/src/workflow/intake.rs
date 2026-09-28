@@ -672,11 +672,20 @@ pub struct FinalizeOptions {
 /// Issues.
 static FINALIZING: Mutex<BTreeSet<(PathBuf, String)>> = Mutex::new(BTreeSet::new());
 
+/// Whether a finalize of `intake_id` of `project_root` is running in this
+/// process (the UI hides the finalize actions meanwhile).
+pub fn finalize_running(project_root: &Path, intake_id: &str) -> bool {
+    FinalizeSlot::is_running(project_root, intake_id)
+}
+
 /// Membership of an intake in [`FINALIZING`], released on drop.
-struct FinalizeSlot((PathBuf, String));
+pub(crate) struct FinalizeSlot((PathBuf, String));
 
 impl FinalizeSlot {
-    fn acquire(project_root: &Path, intake_id: &str) -> Result<FinalizeSlot, IntakeError> {
+    pub(crate) fn acquire(
+        project_root: &Path,
+        intake_id: &str,
+    ) -> Result<FinalizeSlot, IntakeError> {
         let key = (project_key(project_root), intake_id.to_string());
         let mut running = FINALIZING.lock().unwrap_or_else(PoisonError::into_inner);
         if !running.insert(key.clone()) {
@@ -742,8 +751,21 @@ pub fn finalize(
     intake_id: &str,
     opts: FinalizeOptions,
 ) -> Result<IntakeSession, IntakeError> {
+    finalize_with(orch, project_root, intake_id, opts, &|| {})
+}
+
+/// [`finalize`], calling `on_started` once this call holds the finalize
+/// slot (so the UI can report [`finalize_running`] at once).
+pub fn finalize_with(
+    orch: &Arc<Orchestrator>,
+    project_root: &Path,
+    intake_id: &str,
+    opts: FinalizeOptions,
+    on_started: &dyn Fn(),
+) -> Result<IntakeSession, IntakeError> {
     let store = orch.store(project_root);
     let _slot = FinalizeSlot::acquire(store.project_root(), intake_id)?;
+    on_started();
     let result = run_finalize(orch, &store, intake_id, opts);
     if let Err(err) = &result {
         record_finalize_error(&store, intake_id, err.code());
