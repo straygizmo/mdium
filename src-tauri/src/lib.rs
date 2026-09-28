@@ -385,6 +385,9 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                // Intake turns run outside the orchestrator; cancel them before
+                // its runner shuts down.
+                commands::workflow::cancel_intake_turns();
                 if let Some(state) = app.try_state::<commands::workflow::WorkflowState>() {
                     state.shutdown(workflow::orchestrator::SHUTDOWN_WAIT);
                 }

@@ -188,6 +188,8 @@ export interface AttemptRecord {
   outcome: AttemptOutcome | null;
   mode: AttemptMode;
   userInput: string | null;
+  /** Entry kind of the Issue entry being posted for this attempt's result (set during the post). */
+  issueSyncPending: string | null;
 }
 
 export interface FileFingerprint {

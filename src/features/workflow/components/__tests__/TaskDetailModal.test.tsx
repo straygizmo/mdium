@@ -110,6 +110,7 @@ function runOf(patch: Partial<WorkflowRun> = {}): WorkflowRun {
         outcome: "awaiting_user",
         mode: "plan",
         userInput: null,
+        issueSyncPending: null,
       },
       {
         attemptId: "a2",
@@ -122,6 +123,7 @@ function runOf(patch: Partial<WorkflowRun> = {}): WorkflowRun {
         outcome: "attention",
         mode: "execute",
         userInput: null,
+        issueSyncPending: null,
       },
       {
         attemptId: "other",
@@ -134,6 +136,7 @@ function runOf(patch: Partial<WorkflowRun> = {}): WorkflowRun {
         outcome: "completed",
         mode: "single",
         userInput: null,
+        issueSyncPending: null,
       },
     ],
     pendingTransition: null,

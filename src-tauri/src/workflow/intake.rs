@@ -28,7 +28,7 @@ use crate::workflow::runner_client::{
     RunnerError, RunnerEvent, RunnerPermission, StartSessionParams,
 };
 use crate::workflow::runner_host::RunnerApi;
-use crate::workflow::state::ProjectGuard;
+use crate::workflow::state::{project_key, ProjectGuard};
 use crate::workflow::store::{StoreError, StoreWarning, WorkflowStore};
 use crate::workflow::template;
 use serde::{Deserialize, Serialize};
@@ -342,7 +342,7 @@ pub fn abandon_session(
     let mut session = get_session(store, id)?;
     match session.status {
         IntakeStatus::Abandoned => {}
-        IntakeStatus::Finalizing if FinalizeSlot::is_running(id) => {
+        IntakeStatus::Finalizing if FinalizeSlot::is_running(store.project_root(), id) => {
             return Err(IntakeError::InvalidState(INTAKE_FINALIZE_IN_PROGRESS))
         }
         IntakeStatus::Finalizing
@@ -416,9 +416,10 @@ pub fn add_user_message(
 /// guard root are the project root; image drafts of the latest user
 /// message are attached to the turn. The reply is parsed and appended as an
 /// assistant message (updating the question, proposal and doc updates). A
-/// runner failure, cancellation or contract violation is appended as an
-/// `error` message whose text is the code, and the call still returns
-/// `Ok`, so the turn can be retried.
+/// runner failure, cancellation or contract violation, and a turn that
+/// cannot be prepared (e.g. unreadable drafts), is appended as an `error`
+/// message whose text is the code, and the call still returns `Ok`, so the
+/// turn can be retried.
 ///
 /// The project lock is held only to load and to save, never while the
 /// agent works. The reply belongs to the user message it answered: if the
@@ -433,10 +434,18 @@ pub fn run_turn(
     cancel: &CancelToken,
 ) -> Result<IntakeSession, IntakeError> {
     let turn = {
-        let _guard = store.lock();
-        let session = get_session(store, id)?;
+        let guard = store.lock();
+        let mut session = get_session(store, id)?;
         require_active(&session)?;
-        prepare_turn(store, &session)?
+        match prepare_turn(store, &session) {
+            Ok(turn) => turn,
+            // Without a pending message there is nothing to answer.
+            Err(err) if pending_message(&session).is_none() => return Err(err),
+            Err(err) => {
+                push_error(&mut session, err.code());
+                return save_session(store, &guard, &session);
+            }
+        }
     };
 
     let session_id = fsutil::new_id();
@@ -514,30 +523,32 @@ pub struct FinalizeOptions {
     pub skip_issue: bool,
 }
 
-/// Intakes whose finalize is running in this process. The forge is called
-/// without the project lock, so this is what keeps two concurrent
-/// finalizes of one session from creating two Issues. Intake ids are
-/// random, so the id alone is the key.
-static FINALIZING: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+/// Intakes whose finalize is running in this process, by project key and
+/// intake id. The forge is called without the project lock, so this is
+/// what keeps two concurrent finalizes of one session from creating two
+/// Issues.
+static FINALIZING: Mutex<BTreeSet<(PathBuf, String)>> = Mutex::new(BTreeSet::new());
 
-/// Membership of an intake id in [`FINALIZING`], released on drop.
-struct FinalizeSlot(String);
+/// Membership of an intake in [`FINALIZING`], released on drop.
+struct FinalizeSlot((PathBuf, String));
 
 impl FinalizeSlot {
-    fn acquire(intake_id: &str) -> Result<FinalizeSlot, IntakeError> {
+    fn acquire(project_root: &Path, intake_id: &str) -> Result<FinalizeSlot, IntakeError> {
+        let key = (project_key(project_root), intake_id.to_string());
         let mut running = FINALIZING.lock().unwrap_or_else(PoisonError::into_inner);
-        if !running.insert(intake_id.to_string()) {
+        if !running.insert(key.clone()) {
             return Err(IntakeError::InvalidState(INTAKE_FINALIZE_IN_PROGRESS));
         }
-        Ok(FinalizeSlot(intake_id.to_string()))
+        Ok(FinalizeSlot(key))
     }
 
-    /// Whether a finalize of `intake_id` is running in this process.
-    fn is_running(intake_id: &str) -> bool {
+    /// Whether a finalize of `intake_id` of `project_root` is running in
+    /// this process.
+    fn is_running(project_root: &Path, intake_id: &str) -> bool {
         FINALIZING
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .contains(intake_id)
+            .contains(&(project_key(project_root), intake_id.to_string()))
     }
 }
 
@@ -584,7 +595,7 @@ pub fn finalize(
     opts: FinalizeOptions,
 ) -> Result<IntakeSession, IntakeError> {
     let store = orch.store(project_root);
-    let _slot = FinalizeSlot::acquire(intake_id)?;
+    let _slot = FinalizeSlot::acquire(store.project_root(), intake_id)?;
     let result = run_finalize(orch, &store, intake_id, opts);
     if let Err(err) = &result {
         record_finalize_error(&store, intake_id, err.code());
@@ -798,6 +809,36 @@ fn update_session(
     let mut session = get_session(store, id)?;
     edit(&mut session);
     save_session(store, &guard, &session)
+}
+
+/// Records the failure `code` of a turn that ended abnormally (an error or
+/// a panic outside [`run_turn`]'s own recording) as an `error` message, so
+/// the UI can show why and offer a retry. Only an active session whose
+/// latest user message still awaits a reply gets one; returns the session
+/// when it was changed.
+pub fn record_turn_error(
+    store: &WorkflowStore,
+    id: &str,
+    code: &str,
+) -> Result<Option<IntakeSession>, IntakeError> {
+    let guard = store.lock();
+    let mut session = get_session(store, id)?;
+    if session.status != IntakeStatus::Active || pending_message(&session).is_none() {
+        return Ok(None);
+    }
+    push_error(&mut session, code);
+    save_session(store, &guard, &session).map(Some)
+}
+
+/// Appends an `error` message whose text is `code`.
+fn push_error(session: &mut IntakeSession, code: &str) {
+    session.messages.push(IntakeMessage {
+        id: fsutil::new_id(),
+        role: ROLE_ERROR.to_string(),
+        text: code.to_string(),
+        draft_ids: Vec::new(),
+        at: fsutil::now(),
+    });
 }
 
 /// Records a failed finalize step's `code` on a finalizing session. Failing
@@ -3189,7 +3230,7 @@ mod tests {
             let guard = env.store.lock();
             save_session(&env.store, &guard, &session).unwrap();
         }
-        let slot = FinalizeSlot::acquire(&running.id).unwrap();
+        let slot = FinalizeSlot::acquire(env.store.project_root(), &running.id).unwrap();
         assert_eq!(abandon(&running.id), Err(INTAKE_FINALIZE_IN_PROGRESS));
         drop(slot);
         assert_eq!(
@@ -3251,15 +3292,77 @@ mod tests {
 
     #[test]
     fn one_session_finalizes_at_a_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let (one, other) = (dir.path().join("one"), dir.path().join("other"));
+        std::fs::create_dir(&one).unwrap();
+        std::fs::create_dir(&other).unwrap();
         let id = fsutil::new_id();
-        let slot = FinalizeSlot::acquire(&id).unwrap();
+        let slot = FinalizeSlot::acquire(&one, &id).unwrap();
+        assert!(FinalizeSlot::is_running(&one, &id));
         assert_eq!(
-            FinalizeSlot::acquire(&id).err().map(|err| err.code()),
+            FinalizeSlot::acquire(&one, &id).err().map(|err| err.code()),
             Some(INTAKE_FINALIZE_IN_PROGRESS)
         );
-        FinalizeSlot::acquire(&fsutil::new_id()).unwrap();
+        // Another spelling of the same root is the same project.
+        assert!(FinalizeSlot::acquire(&one.join(""), &id).is_err());
+        FinalizeSlot::acquire(&one, &fsutil::new_id()).unwrap();
+        // The same id in another project is independent.
+        assert!(!FinalizeSlot::is_running(&other, &id));
+        FinalizeSlot::acquire(&other, &id).unwrap();
         drop(slot);
-        FinalizeSlot::acquire(&id).unwrap();
+        FinalizeSlot::acquire(&one, &id).unwrap();
+    }
+
+    #[test]
+    fn a_turn_that_cannot_be_prepared_records_its_code() {
+        let (_dir, store) = setup();
+        let session = new_session(&store, IntakeKind::Feature);
+        say(&store, &session.id, "hello", &[]);
+        // The drafts directory is a file, so listing the drafts fails.
+        let drafts = paths(&store).drafts_dir(&session.id).unwrap();
+        std::fs::create_dir_all(drafts.parent().unwrap()).unwrap();
+        std::fs::write(&drafts, "x").unwrap();
+        let runner = FakeRunner::new(&store, Vec::new());
+        let updated = run(&runner, &store, &session.id);
+        let last = updated.messages.last().unwrap();
+        assert_eq!(last.role, ROLE_ERROR);
+        assert!(last.text.starts_with("ATTACHMENT_"), "{}", last.text);
+        // The runner was never asked.
+        assert!(runner.seen().params.is_none());
+        // Nothing pending: the error is returned, nothing is recorded.
+        let quiet = new_session(&store, IntakeKind::Bug);
+        assert_eq!(
+            run_turn(&runner, &store, &quiet.id, &CancelToken::default()).map(|_| ()),
+            Err(IntakeError::InvalidState(INTAKE_NO_PENDING_MESSAGE))
+        );
+    }
+
+    #[test]
+    fn turn_errors_are_recorded_only_while_a_reply_is_pending() {
+        let (_dir, store) = setup();
+        let session = new_session(&store, IntakeKind::Feature);
+        assert_eq!(record_turn_error(&store, &session.id, "X_CODE"), Ok(None));
+        say(&store, &session.id, "hello", &[]);
+        let updated = record_turn_error(&store, &session.id, "X_CODE")
+            .unwrap()
+            .unwrap();
+        let last = updated.messages.last().unwrap();
+        assert_eq!(
+            (last.role.as_str(), last.text.as_str()),
+            (ROLE_ERROR, "X_CODE")
+        );
+        // Still pending (errors do not answer), so a second one is recorded.
+        assert!(record_turn_error(&store, &session.id, "Y_CODE")
+            .unwrap()
+            .is_some());
+        let guard = store.lock();
+        abandon_session(&store, &guard, &session.id).unwrap();
+        drop(guard);
+        assert_eq!(record_turn_error(&store, &session.id, "X_CODE"), Ok(None));
+        assert_eq!(
+            record_turn_error(&store, &fsutil::new_id(), "X_CODE"),
+            Err(IntakeError::NotFound)
+        );
     }
 
     #[test]

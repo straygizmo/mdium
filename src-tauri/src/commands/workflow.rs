@@ -31,11 +31,13 @@ use crate::workflow::model::{
 use crate::workflow::orchestrator::{EventSink, Orchestrator};
 use crate::workflow::runner_client::{RunnerError, RunnerEvent, StartSessionParams};
 use crate::workflow::runner_host::{RunnerApi, RunnerHost, SidecarSpawner};
+use crate::workflow::state::project_key;
 use crate::workflow::store::{
     RunList, StoreError, StoreWarning, TaskList, WorkflowList, WorkflowStore,
 };
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -60,6 +62,8 @@ pub const WORKFLOW_PROJECT_INVALID: &str = "WORKFLOW_PROJECT_INVALID";
 pub const WORKFLOW_COMMAND_FAILED: &str = "WORKFLOW_COMMAND_FAILED";
 /// An agent turn of the intake is already running.
 pub const INTAKE_TURN_BUSY: &str = "INTAKE_TURN_BUSY";
+/// An intake turn panicked (recorded as the turn's `error` message).
+pub const INTAKE_TURN_PANICKED: &str = "INTAKE_TURN_PANICKED";
 /// Pasted attachment content is not valid base64.
 pub const ATTACHMENT_INVALID_DATA: &str = "ATTACHMENT_INVALID_DATA";
 
@@ -839,10 +843,18 @@ pub async fn workflow_forge_probe(
 // Intake sessions
 // ---------------------------------------------------------------------------
 
-/// Intake agent turns running in this process, by intake id (ids are
-/// random, so the id alone is the key), with the token that cancels each.
+/// Key of a turn in [`IntakeTurns`]: the project's key (see
+/// [`project_key`]) and the intake id.
+type TurnKey = (PathBuf, String);
+
+fn turn_key(project_root: &Path, intake_id: &str) -> TurnKey {
+    (project_key(project_root), intake_id.to_string())
+}
+
+/// Intake agent turns running in this process, by project and intake id,
+/// with the token that cancels each.
 pub struct IntakeTurns {
-    running: Mutex<BTreeMap<String, CancelToken>>,
+    running: Mutex<BTreeMap<TurnKey, CancelToken>>,
 }
 
 impl IntakeTurns {
@@ -852,34 +864,42 @@ impl IntakeTurns {
         }
     }
 
-    fn running(&self) -> MutexGuard<'_, BTreeMap<String, CancelToken>> {
+    fn running(&self) -> MutexGuard<'_, BTreeMap<TurnKey, CancelToken>> {
         self.running.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Marks a turn of `intake_id` as running; [`INTAKE_TURN_BUSY`] when
-    /// one already is. The turn counts as running until the slot drops.
-    fn begin(&'static self, intake_id: &str) -> Result<TurnSlot, CommandError> {
+    /// Marks a turn of intake `intake_id` of `project_root` as running;
+    /// [`INTAKE_TURN_BUSY`] when one already is. The turn counts as running
+    /// until the slot drops.
+    fn begin(
+        &'static self,
+        project_root: &Path,
+        intake_id: &str,
+    ) -> Result<TurnSlot, CommandError> {
+        let key = turn_key(project_root, intake_id);
         let mut running = self.running();
-        if running.contains_key(intake_id) {
+        if running.contains_key(&key) {
             return Err(CommandError::code(INTAKE_TURN_BUSY));
         }
         let token = CancelToken::default();
-        running.insert(intake_id.to_string(), token.clone());
+        running.insert(key.clone(), token.clone());
         Ok(TurnSlot {
             turns: self,
-            intake_id: intake_id.to_string(),
+            key,
             token,
         })
     }
 
-    /// Whether a turn of `intake_id` is running.
-    fn is_busy(&self, intake_id: &str) -> bool {
-        self.running().contains_key(intake_id)
+    /// Whether a turn of intake `intake_id` of `project_root` is running.
+    fn is_busy(&self, project_root: &Path, intake_id: &str) -> bool {
+        self.running()
+            .contains_key(&turn_key(project_root, intake_id))
     }
 
-    /// Cancels the running turn of `intake_id`; false when none runs.
-    fn cancel(&self, intake_id: &str) -> bool {
-        match self.running().get(intake_id) {
+    /// Cancels the running turn of intake `intake_id` of `project_root`;
+    /// false when none runs.
+    fn cancel(&self, project_root: &Path, intake_id: &str) -> bool {
+        match self.running().get(&turn_key(project_root, intake_id)) {
             Some(token) => {
                 token.cancel(CancelReason::User);
                 true
@@ -887,12 +907,19 @@ impl IntakeTurns {
             None => false,
         }
     }
+
+    /// Cancels every running turn with `reason`.
+    fn cancel_all(&self, reason: CancelReason) {
+        for token in self.running().values() {
+            token.cancel(reason);
+        }
+    }
 }
 
 /// A running turn's membership in [`IntakeTurns`], released on drop.
 struct TurnSlot {
     turns: &'static IntakeTurns,
-    intake_id: String,
+    key: TurnKey,
     token: CancelToken,
 }
 
@@ -904,12 +931,18 @@ impl TurnSlot {
 
 impl Drop for TurnSlot {
     fn drop(&mut self) {
-        self.turns.running().remove(&self.intake_id);
+        self.turns.running().remove(&self.key);
     }
 }
 
 /// The process-wide intake turn registry.
 static INTAKE_TURNS: IntakeTurns = IntakeTurns::new();
+
+/// Cancels every running intake turn (on app exit, before the orchestrator
+/// and its runner shut down).
+pub fn cancel_intake_turns() {
+    INTAKE_TURNS.cancel_all(CancelReason::Shutdown);
+}
 
 /// An intake session plus whether one of its agent turns is running.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -929,8 +962,8 @@ pub struct IntakeListView {
     pub warnings: Vec<StoreWarning>,
 }
 
-fn session_view(session: IntakeSession) -> IntakeSessionView {
-    let busy = INTAKE_TURNS.is_busy(&session.id);
+fn session_view(store: &WorkflowStore, session: IntakeSession) -> IntakeSessionView {
+    let busy = INTAKE_TURNS.is_busy(store.project_root(), &session.id);
     IntakeSessionView { session, busy }
 }
 
@@ -940,7 +973,7 @@ fn emit_intake(sink: &dyn EventSink, store: &WorkflowStore, session: &IntakeSess
         store.project_root(),
         &session.id,
         session.status,
-        INTAKE_TURNS.is_busy(&session.id),
+        INTAKE_TURNS.is_busy(store.project_root(), &session.id),
     );
 }
 
@@ -951,6 +984,40 @@ fn emit_intake_reloaded(sink: &dyn EventSink, store: &WorkflowStore, intake_id: 
     if let Ok(session) = intake::get_session(store, intake_id) {
         emit_intake(sink, store, &session);
     }
+}
+
+/// Runs one turn and ends it: a turn that fails or panics records its code
+/// as an `error` message (when a reply is still pending), the slot is
+/// released, and the session is reported with `busy` false.
+fn run_turn_to_end(
+    runner: &dyn RunnerApi,
+    sink: &dyn EventSink,
+    store: &WorkflowStore,
+    intake_id: &str,
+    slot: TurnSlot,
+) {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        intake::run_turn(runner, store, intake_id, slot.token())
+    }));
+    let failure = match result {
+        Ok(Ok(_)) => None,
+        Ok(Err(err)) => {
+            eprintln!("[workflow] intake turn of {intake_id} failed: {err}");
+            Some(err.code())
+        }
+        Err(_) => {
+            eprintln!("[workflow] intake turn of {intake_id} panicked");
+            Some(INTAKE_TURN_PANICKED)
+        }
+    };
+    if let Some(code) = failure {
+        if let Err(err) = intake::record_turn_error(store, intake_id, code) {
+            eprintln!("[workflow] recording the turn failure of intake {intake_id} failed: {err}");
+        }
+    }
+    // Released before reporting, so the report says the turn ended.
+    drop(slot);
+    emit_intake_reloaded(sink, store, intake_id);
 }
 
 /// Reports the turn held by `slot` as started and runs it on its own
@@ -965,22 +1032,18 @@ fn start_turn(
     emit_intake(sink.as_ref(), &store, session);
     let runner = orch.runner().clone();
     let project_root = store.project_root().to_path_buf();
+    let intake_id = session.id.clone();
     let thread_sink = sink.clone();
-    let thread_store = store;
     let spawned = std::thread::Builder::new()
-        .name(format!("intake-turn-{}", session.id))
+        .name(format!("intake-turn-{intake_id}"))
         .spawn(move || {
-            let intake_id = slot.intake_id.clone();
-            let result = intake::run_turn(runner.as_ref(), &thread_store, &intake_id, slot.token());
-            // Released before reporting, so the report says the turn ended.
-            drop(slot);
-            match result {
-                Ok(session) => emit_intake(thread_sink.as_ref(), &thread_store, &session),
-                Err(err) => {
-                    eprintln!("[workflow] intake turn of {intake_id} failed: {err}");
-                    emit_intake_reloaded(thread_sink.as_ref(), &thread_store, &intake_id);
-                }
-            }
+            run_turn_to_end(
+                runner.as_ref(),
+                thread_sink.as_ref(),
+                &store,
+                &intake_id,
+                slot,
+            )
         });
     if let Err(err) = spawned {
         // The closure (and with it the slot) was dropped: the turn is over.
@@ -1010,7 +1073,7 @@ pub async fn workflow_intake_create(
             intake::create_session(&store, &guard, &workflow_id, kind, provider, model)?
         };
         emit_intake(orch.sink().as_ref(), &store, &session);
-        Ok(session_view(session))
+        Ok(session_view(&store, session))
     })
     .await
 }
@@ -1021,9 +1084,14 @@ pub async fn workflow_intake_list(
     project_root: String,
 ) -> Result<IntakeListView, CommandError> {
     with_project_cmd(state, project_root, |orch, root| {
-        let list = intake::list_sessions(&orch.store(root))?;
+        let store = orch.store(root);
+        let list = intake::list_sessions(&store)?;
         Ok(IntakeListView {
-            sessions: list.sessions.into_iter().map(session_view).collect(),
+            sessions: list
+                .sessions
+                .into_iter()
+                .map(|session| session_view(&store, session))
+                .collect(),
             warnings: list.warnings,
         })
     })
@@ -1037,8 +1105,9 @@ pub async fn workflow_intake_get(
     intake_id: String,
 ) -> Result<IntakeSessionView, CommandError> {
     with_project_cmd(state, project_root, move |orch, root| {
-        let session = intake::get_session(&orch.store(root), &intake_id)?;
-        Ok(session_view(session))
+        let store = orch.store(root);
+        let session = intake::get_session(&store, &intake_id)?;
+        Ok(session_view(&store, session))
     })
     .await
 }
@@ -1057,13 +1126,14 @@ pub async fn workflow_intake_send(
 ) -> Result<IntakeSessionView, CommandError> {
     with_project_cmd(state, project_root, move |orch, root| {
         let store = orch.store(root);
-        let slot = INTAKE_TURNS.begin(&intake_id)?;
+        let slot = INTAKE_TURNS.begin(store.project_root(), &intake_id)?;
         let session = {
             let guard = store.lock();
             intake::add_user_message(&guard, &store, &intake_id, &text, &draft_ids)?
         };
+        let view = session_view(&store, session.clone());
         start_turn(orch, store, &session, slot)?;
-        Ok(session_view(session))
+        Ok(view)
     })
     .await
 }
@@ -1079,7 +1149,7 @@ pub async fn workflow_intake_retry(
 ) -> Result<IntakeSessionView, CommandError> {
     with_project_cmd(state, project_root, move |orch, root| {
         let store = orch.store(root);
-        let slot = INTAKE_TURNS.begin(&intake_id)?;
+        let slot = INTAKE_TURNS.begin(store.project_root(), &intake_id)?;
         let session = {
             let _guard = store.lock();
             let session = intake::get_session(&store, &intake_id)?;
@@ -1091,8 +1161,9 @@ pub async fn workflow_intake_retry(
             }
             session
         };
+        let view = session_view(&store, session.clone());
         start_turn(orch, store, &session, slot)?;
-        Ok(session_view(session))
+        Ok(view)
     })
     .await
 }
@@ -1105,8 +1176,8 @@ pub async fn workflow_intake_cancel_turn(
     project_root: String,
     intake_id: String,
 ) -> Result<bool, CommandError> {
-    with_project_cmd(state, project_root, move |_orch, _root| {
-        Ok(INTAKE_TURNS.cancel(&intake_id))
+    with_project_cmd(state, project_root, move |orch, root| {
+        Ok(INTAKE_TURNS.cancel(orch.store(root).project_root(), &intake_id))
     })
     .await
 }
@@ -1124,9 +1195,9 @@ pub async fn workflow_intake_abandon(
             let guard = store.lock();
             intake::abandon_session(&store, &guard, &intake_id)?
         };
-        INTAKE_TURNS.cancel(&intake_id);
+        INTAKE_TURNS.cancel(store.project_root(), &intake_id);
         emit_intake(orch.sink().as_ref(), &store, &session);
-        Ok(session_view(session))
+        Ok(session_view(&store, session))
     })
     .await
 }
@@ -1146,8 +1217,8 @@ fn with_active_intake<T>(
     Ok(op(&MdiumPaths::new(store.project_root()))?)
 }
 
-/// Adds a copy of the file at `path` (a regular file of at most 20 MiB) as
-/// a draft attachment of the active intake.
+/// Adds a copy of the file at `path` (a regular file, not a link, of at
+/// most 20 MiB) as a draft attachment of the active intake.
 #[tauri::command]
 pub async fn workflow_intake_add_draft_path(
     state: tauri::State<'_, WorkflowState>,
@@ -1156,8 +1227,14 @@ pub async fn workflow_intake_add_draft_path(
     path: String,
 ) -> Result<AttachmentMeta, CommandError> {
     with_project_cmd(state, project_root, move |orch, root| {
-        with_active_intake(&orch.store(root), &intake_id, |paths| {
-            attachments::add_draft_from_path(paths, &intake_id, Path::new(&path))
+        let store = orch.store(root);
+        // Checked first so nothing is read for an inactive intake, and
+        // again when storing: the source (maybe on a slow drive) is read
+        // without holding the project lock.
+        with_active_intake(&store, &intake_id, |_| Ok(()))?;
+        let (name, bytes) = attachments::read_source(Path::new(&path))?;
+        with_active_intake(&store, &intake_id, |paths| {
+            attachments::add_draft_from_bytes(paths, &intake_id, &name, &bytes)
         })
     })
     .await
@@ -1252,7 +1329,7 @@ pub async fn workflow_intake_apply_doc_update(
             intake::apply_doc_update(&store, &guard, &intake_id, &proposal_id, accept)?
         };
         emit_intake(orch.sink().as_ref(), &store, &session);
-        Ok(session_view(session))
+        Ok(session_view(&store, session))
     })
     .await
 }
@@ -1269,9 +1346,10 @@ pub async fn workflow_intake_finalize(
 ) -> Result<IntakeSessionView, CommandError> {
     with_project_cmd(state, project_root, move |orch, root| {
         let result = intake::finalize(orch, root, &intake_id, FinalizeOptions { skip_issue });
+        let store = orch.store(root);
         // Reported either way: a failure records its code on the session.
-        emit_intake_reloaded(orch.sink().as_ref(), &orch.store(root), &intake_id);
-        Ok(session_view(result?))
+        emit_intake_reloaded(orch.sink().as_ref(), &store, &intake_id);
+        Ok(session_view(&store, result?))
     })
     .await
 }
@@ -1591,33 +1669,151 @@ mod tests {
         );
     }
 
+    /// Two existing project directories.
+    fn two_projects() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let (one, other) = (dir.path().join("one"), dir.path().join("other"));
+        std::fs::create_dir(&one).unwrap();
+        std::fs::create_dir(&other).unwrap();
+        (dir, one, other)
+    }
+
     #[test]
     fn a_second_turn_of_a_busy_intake_is_refused() {
         static TURNS: IntakeTurns = IntakeTurns::new();
-        let slot = TURNS.begin("a").unwrap();
-        assert!(TURNS.is_busy("a"));
+        let (_dir, one, other) = two_projects();
+        let slot = TURNS.begin(&one, "a").unwrap();
+        assert!(TURNS.is_busy(&one, "a"));
         assert_eq!(
-            TURNS.begin("a").map(|_| ()).unwrap_err().code,
+            TURNS.begin(&one, "a").map(|_| ()).unwrap_err().code,
             INTAKE_TURN_BUSY
         );
-        // Another intake is independent.
-        let other = TURNS.begin("b").unwrap();
-        drop(other);
+        // Another spelling of the same root is the same project.
+        assert!(TURNS.is_busy(&one.join(""), "a"));
+        // Another intake, or the same id in another project, is independent.
+        drop(TURNS.begin(&one, "b").unwrap());
+        assert!(!TURNS.is_busy(&other, "a"));
+        drop(TURNS.begin(&other, "a").unwrap());
         drop(slot);
-        assert!(!TURNS.is_busy("a"));
-        assert!(TURNS.begin("a").is_ok());
+        assert!(!TURNS.is_busy(&one, "a"));
+        assert!(TURNS.begin(&one, "a").is_ok());
     }
 
     #[test]
     fn cancelling_a_turn_sets_its_token() {
         static TURNS: IntakeTurns = IntakeTurns::new();
-        assert!(!TURNS.cancel("a"));
-        let slot = TURNS.begin("a").unwrap();
+        let (_dir, one, other) = two_projects();
+        assert!(!TURNS.cancel(&one, "a"));
+        let slot = TURNS.begin(&one, "a").unwrap();
         assert_eq!(slot.token().reason(), None);
-        assert!(TURNS.cancel("a"));
+        assert!(!TURNS.cancel(&other, "a"));
+        assert_eq!(slot.token().reason(), None);
+        assert!(TURNS.cancel(&one, "a"));
         assert_eq!(slot.token().reason(), Some(CancelReason::User));
         drop(slot);
-        assert!(!TURNS.cancel("a"));
+        assert!(!TURNS.cancel(&one, "a"));
+    }
+
+    /// A runner whose sessions panic when started.
+    struct PanickingRunner;
+
+    impl RunnerApi for PanickingRunner {
+        fn start_session(
+            &self,
+            _params: StartSessionParams,
+            _timeout: Duration,
+        ) -> Result<(Receiver<RunnerEvent>, Option<String>), RunnerError> {
+            panic!("runner panicked on purpose");
+        }
+
+        fn send(&self, _: &str, _: &str, _: &[String]) -> Result<(), RunnerError> {
+            Ok(())
+        }
+
+        fn cancel(&self, _: &str) -> Result<(), RunnerError> {
+            Ok(())
+        }
+
+        fn respond_permission(&self, _: &str, _: &str, _: bool) -> Result<(), RunnerError> {
+            Ok(())
+        }
+
+        fn close_session(&self, _: &str) -> Result<(), RunnerError> {
+            Ok(())
+        }
+
+        fn probe(&self, _: Provider, _: Duration) -> Result<serde_json::Value, RunnerError> {
+            Err(runner_missing())
+        }
+
+        fn shutdown(&self) {}
+    }
+
+    /// Records the intake-changed reports.
+    #[derive(Default)]
+    struct IntakeSink {
+        reports: Mutex<Vec<(String, IntakeStatus, bool)>>,
+    }
+
+    impl EventSink for IntakeSink {
+        fn task_changed(&self, _: &Path, _: &Task) {}
+        fn run_changed(&self, _: &Path, _: &WorkflowRun) {}
+        fn progress(&self, _: &Path, _: &str, _: &str, _: &ProgressUpdate) {}
+        fn intake_changed(&self, _: &Path, intake_id: &str, status: IntakeStatus, busy: bool) {
+            self.reports
+                .lock()
+                .unwrap()
+                .push((intake_id.to_string(), status, busy));
+        }
+        fn workflows_changed(&self, _: &Path) {}
+    }
+
+    #[test]
+    fn a_panicked_turn_records_its_code_and_ends() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WorkflowStore::new(dir.path().to_path_buf());
+        let session = {
+            let guard = store.lock();
+            let session = intake::create_session(
+                &store,
+                &guard,
+                "wf1",
+                IntakeKind::Feature,
+                Provider::Codex,
+                None,
+            )
+            .unwrap();
+            intake::add_user_message(&guard, &store, &session.id, "hello", &[]).unwrap()
+        };
+        let sink = IntakeSink::default();
+        let slot = INTAKE_TURNS
+            .begin(store.project_root(), &session.id)
+            .unwrap();
+
+        run_turn_to_end(&PanickingRunner, &sink, &store, &session.id, slot);
+
+        assert!(!INTAKE_TURNS.is_busy(store.project_root(), &session.id));
+        let updated = intake::get_session(&store, &session.id).unwrap();
+        let last = updated.messages.last().unwrap();
+        assert_eq!(
+            (last.role.as_str(), last.text.as_str()),
+            ("error", INTAKE_TURN_PANICKED)
+        );
+        assert_eq!(
+            *sink.reports.lock().unwrap(),
+            vec![(session.id.clone(), IntakeStatus::Active, false)]
+        );
+    }
+
+    #[test]
+    fn cancelling_all_turns_cancels_every_project() {
+        static TURNS: IntakeTurns = IntakeTurns::new();
+        let (_dir, one, other) = two_projects();
+        let first = TURNS.begin(&one, "a").unwrap();
+        let second = TURNS.begin(&other, "b").unwrap();
+        TURNS.cancel_all(CancelReason::Shutdown);
+        assert_eq!(first.token().reason(), Some(CancelReason::Shutdown));
+        assert_eq!(second.token().reason(), Some(CancelReason::Shutdown));
     }
 
     #[test]

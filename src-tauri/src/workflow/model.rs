@@ -346,8 +346,6 @@ pub struct WorkflowRun {
     pub issue_close_error: Option<String>,
 }
 
-// Consumed by the intake module (not wired up yet).
-#[allow(dead_code)]
 /// What an intake session is collecting. Serializes as snake_case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -356,8 +354,6 @@ pub enum IntakeKind {
     Bug,
 }
 
-// Consumed by the intake module (not wired up yet).
-#[allow(dead_code)]
 /// Lifecycle status of an intake session. Serializes as snake_case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -368,8 +364,6 @@ pub enum IntakeStatus {
     Abandoned,
 }
 
-// Consumed by the intake module (not wired up yet).
-#[allow(dead_code)]
 /// The last completed step of the resumable finalize pipeline. Serializes
 /// as snake_case; defaults to `Ready` (nothing done yet).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -383,8 +377,6 @@ pub enum FinalizeStage {
     Done,
 }
 
-// Consumed by the intake module (not wired up yet).
-#[allow(dead_code)]
 /// One message of an intake transcript.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -399,8 +391,6 @@ pub struct IntakeMessage {
     pub at: String,
 }
 
-// Consumed by the intake module (not wired up yet).
-#[allow(dead_code)]
 /// The agent's current proposal for the task/issue title and body.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -409,8 +399,6 @@ pub struct IntakeProposal {
     pub body: String,
 }
 
-// Consumed by the intake module (not wired up yet).
-#[allow(dead_code)]
 /// A proposed replacement of a project document's content.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -427,8 +415,6 @@ pub struct DocUpdateProposal {
     pub reason: Option<String>,
 }
 
-// Consumed by the intake module (not wired up yet).
-#[allow(dead_code)]
 /// A question the agent asked in its last turn, with optional choices.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -438,8 +424,6 @@ pub struct IntakeQuestion {
     pub options: Vec<String>,
 }
 
-// Consumed by the intake module (not wired up yet).
-#[allow(dead_code)]
 /// Progress of the finalize pipeline, persisted so a failed finalize resumes
 /// at the failed step without redoing completed ones.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -465,8 +449,6 @@ pub struct FinalizeState {
     pub last_error: Option<String>,
 }
 
-// Consumed by the intake module (not wired up yet).
-#[allow(dead_code)]
 /// On-disk shape of `.mdium/intakes/<intakeId>.json`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

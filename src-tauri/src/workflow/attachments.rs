@@ -249,13 +249,22 @@ pub fn add_draft_from_path(
     source: &Path,
 ) -> Result<AttachmentMeta, AttachmentError> {
     paths.drafts_dir(intake_id)?;
+    let (name, bytes) = read_source(source)?;
+    store_draft(paths, intake_id, &name, &bytes)
+}
+
+/// Reads a source file for [`add_draft_from_bytes`] under the same rules as
+/// [`add_draft_from_path`] (a regular file, never a link, of at most
+/// [`MAX_ATTACHMENT_BYTES`]); returns its file name and content. Needs no
+/// lock, so a slow source can be read before the project is locked.
+pub fn read_source(source: &Path) -> Result<(String, Vec<u8>), AttachmentError> {
     let mut file = open_regular_no_follow(source)?;
     let bytes = read_limited(&mut file, source)?;
     let name = source
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
-    store_draft(paths, intake_id, &name, &bytes)
+    Ok((name, bytes))
 }
 
 /// Adds a draft attachment to intake `intake_id` from in-memory content
