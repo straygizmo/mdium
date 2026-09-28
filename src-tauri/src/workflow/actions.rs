@@ -106,21 +106,13 @@ pub const WORKFLOW_DESIGN_DOC_FAILED: &str = "WORKFLOW_DESIGN_DOC_FAILED";
 /// them.
 pub const WORKFLOWS_HAVE_WARNINGS: &str = "WORKFLOWS_HAVE_WARNINGS";
 /// The task does not need attention for a failed Issue sync.
-// Not exposed as a command yet.
-#[allow(dead_code)]
 pub const ISSUE_SYNC_NOT_PENDING: &str = "ISSUE_SYNC_NOT_PENDING";
 /// The output of the attempt whose Issue sync failed is missing or no
 /// longer a stage result.
-// Not exposed as a command yet.
-#[allow(dead_code)]
 pub const ISSUE_SYNC_OUTPUT_INVALID: &str = "ISSUE_SYNC_OUTPUT_INVALID";
 /// The run has no Issue, or its workflow does not track Issues.
-// Not exposed as a command yet.
-#[allow(dead_code)]
 pub const ISSUE_NOT_TRACKED: &str = "ISSUE_NOT_TRACKED";
 /// The run's Issue is only closed once the run is merged.
-// Not exposed as a command yet.
-#[allow(dead_code)]
 pub const ISSUE_RUN_NOT_MERGED: &str = "ISSUE_RUN_NOT_MERGED";
 
 /// Why a user operation failed.
@@ -745,8 +737,6 @@ fn pending_sync(
 /// already carries the entry's marker counts as posted, so an entry that
 /// landed before the failure is never posted twice), then completes its
 /// stage as the attempt would have. If the post fails, nothing changes.
-// Not exposed as a command yet.
-#[allow(dead_code)]
 pub fn retry_issue_sync(
     orch: &Arc<Orchestrator>,
     project_root: &Path,
@@ -757,8 +747,6 @@ pub fn retry_issue_sync(
 
 /// Completes the stage of a task whose Issue sync failed without posting
 /// its Issue entry.
-// Not exposed as a command yet.
-#[allow(dead_code)]
 pub fn skip_issue_sync(
     orch: &Arc<Orchestrator>,
     project_root: &Path,
@@ -1305,8 +1293,6 @@ fn close_issue(
 
 /// Closes the Issue of a merged run whose earlier close failed. An Issue
 /// already closed is left alone.
-// Not exposed as a command yet.
-#[allow(dead_code)]
 pub fn retry_issue_close(
     orch: &Arc<Orchestrator>,
     project_root: &Path,
@@ -1441,6 +1427,7 @@ pub fn save_workflows(
         let _guard = store.lock();
         store.save_workflows(file)?;
     }
+    orch.sink().workflows_changed(store.project_root());
     orch.kick(project_root);
     Ok(())
 }
@@ -1468,6 +1455,7 @@ pub fn add_standard_workflow(
             workflows,
         })?;
     }
+    orch.sink().workflows_changed(store.project_root());
     orch.kick(project_root);
     Ok(workflow)
 }
@@ -1529,7 +1517,7 @@ mod tests {
     use crate::workflow::fsutil::MdiumPaths;
     use crate::workflow::gitops::test_support::{write_file, Fixture};
     use crate::workflow::model::AwaitingInfo;
-    use crate::workflow::model::{IssueRef, IssueTracking};
+    use crate::workflow::model::{IntakeStatus, IssueRef, IssueTracking};
     use crate::workflow::orchestrator::EventSink;
     use crate::workflow::runner_client::{RunnerError, RunnerEvent, StartSessionParams};
     use crate::workflow::runner_host::RunnerApi;
@@ -1653,6 +1641,12 @@ mod tests {
         }
 
         fn progress(&self, _: &Path, _: &str, _: &str, _: &ProgressUpdate) {}
+
+        fn intake_changed(&self, _: &Path, _: &str, _: IntakeStatus, _: bool) {}
+
+        fn workflows_changed(&self, _root: &Path) {
+            self.events.lock().unwrap().push("workflows".to_string());
+        }
     }
 
     fn completed(body: &str) -> String {
@@ -2923,7 +2917,9 @@ mod tests {
     fn workflows_are_listed_saved_and_counted() {
         let env = Env::new();
         let first = env.workflow();
+        let before = env.sink.events().len();
         let added = add_standard_workflow(&env.orch, env.root(), "Mine", Provider::Claude).unwrap();
+        assert_eq!(env.sink.events()[before..], ["workflows".to_string()]);
         assert!(!added.enabled);
         assert_eq!(added.name, "Mine");
         assert_eq!(added.validate(), Ok(()));
@@ -2941,6 +2937,8 @@ mod tests {
             code(save_workflows(&env.orch, env.root(), &file)),
             "STORE_INVALID"
         );
+        // A refused save reports no change.
+        assert_eq!(env.sink.events().len(), before + 1);
         assert_eq!(
             list_workflows(&env.orch, env.root())
                 .unwrap()
@@ -2957,6 +2955,10 @@ mod tests {
         assert_eq!(
             list_workflows(&env.orch, env.root()).unwrap().workflows,
             vec![first.clone()]
+        );
+        assert_eq!(
+            env.sink.events()[before..],
+            ["workflows".to_string(), "workflows".to_string()]
         );
 
         assert_eq!(

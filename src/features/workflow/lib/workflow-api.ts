@@ -1,11 +1,19 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
+  WORKFLOW_INTAKE_CHANGED_EVENT,
   WORKFLOW_PROGRESS_EVENT,
   WORKFLOW_RUN_CHANGED_EVENT,
   WORKFLOW_TASK_CHANGED_EVENT,
+  WORKFLOW_WORKFLOWS_CHANGED_EVENT,
+  type AttachmentMeta,
   type CommandError,
+  type ForgeProbe,
   type GitignoreStatus,
+  type IntakeChangedEvent,
+  type IntakeKind,
+  type IntakeList,
+  type IntakeSessionView,
   type MergePreview,
   type ProgressEvent,
   type Provider,
@@ -19,6 +27,7 @@ import {
   type Workflow,
   type WorkflowList,
   type WorkflowRun,
+  type WorkflowsChangedEvent,
   type WorkflowsFileInput,
 } from "@/shared/types/workflow";
 import { isCommandError } from "./errors";
@@ -114,6 +123,51 @@ export const workflowApi = {
     call<WorkflowRun>("workflow_discard_run", { projectRoot, rootTaskId }),
   probeProviders: () => call<ProviderProbe[]>("workflow_probe_providers"),
   gitignoreStatus: (projectRoot: string) => call<GitignoreStatus>("workflow_gitignore_status", { projectRoot }),
+  forgeProbe: (projectRoot: string) => call<ForgeProbe>("workflow_forge_probe", { projectRoot }),
+  intakeCreate: (
+    projectRoot: string,
+    workflowId: string,
+    kind: IntakeKind,
+    provider: Provider,
+    model: string | null,
+  ) => call<IntakeSessionView>("workflow_intake_create", { projectRoot, workflowId, kind, provider, model }),
+  intakeList: (projectRoot: string) => call<IntakeList>("workflow_intake_list", { projectRoot }),
+  intakeGet: (projectRoot: string, intakeId: string) =>
+    call<IntakeSessionView>("workflow_intake_get", { projectRoot, intakeId }),
+  /**
+   * Appends a user message and starts the agent's turn in the background
+   * (rejects with `INTAKE_TURN_BUSY` while one runs); the reply arrives with
+   * the `workflow://intake-changed` event that ends the turn.
+   */
+  intakeSend: (projectRoot: string, intakeId: string, text: string, draftIds: string[]) =>
+    call<IntakeSessionView>("workflow_intake_send", { projectRoot, intakeId, text, draftIds }),
+  /** Runs the turn answering the latest user message again, in the background. */
+  intakeRetry: (projectRoot: string, intakeId: string) =>
+    call<IntakeSessionView>("workflow_intake_retry", { projectRoot, intakeId }),
+  /** Cancels the running turn; resolves to false when none runs. */
+  intakeCancelTurn: (projectRoot: string, intakeId: string) =>
+    call<boolean>("workflow_intake_cancel_turn", { projectRoot, intakeId }),
+  intakeAbandon: (projectRoot: string, intakeId: string) =>
+    call<IntakeSessionView>("workflow_intake_abandon", { projectRoot, intakeId }),
+  intakeAddDraftPath: (projectRoot: string, intakeId: string, path: string) =>
+    call<AttachmentMeta>("workflow_intake_add_draft_path", { projectRoot, intakeId, path }),
+  /** Adds base64-encoded content (at most 20 MiB decoded) as a draft named `name`. */
+  intakeAddDraftBytes: (projectRoot: string, intakeId: string, name: string, bytesBase64: string) =>
+    call<AttachmentMeta>("workflow_intake_add_draft_bytes", { projectRoot, intakeId, name, bytesBase64 }),
+  intakeRemoveDraft: (projectRoot: string, intakeId: string, draftId: string) =>
+    call<void>("workflow_intake_remove_draft", { projectRoot, intakeId, draftId }),
+  intakeListDrafts: (projectRoot: string, intakeId: string) =>
+    call<AttachmentMeta[]>("workflow_intake_list_drafts", { projectRoot, intakeId }),
+  intakeApplyDocUpdate: (projectRoot: string, intakeId: string, proposalId: string, accept: boolean) =>
+    call<IntakeSessionView>("workflow_intake_apply_doc_update", { projectRoot, intakeId, proposalId, accept }),
+  intakeFinalize: (projectRoot: string, intakeId: string, skipIssue: boolean) =>
+    call<IntakeSessionView>("workflow_intake_finalize", { projectRoot, intakeId, skipIssue }),
+  listAttachments: (projectRoot: string, rootTaskId: string) =>
+    call<AttachmentMeta[]>("workflow_list_attachments", { projectRoot, rootTaskId }),
+  retryIssueSync: taskAction("workflow_retry_issue_sync"),
+  skipIssueSync: taskAction("workflow_skip_issue_sync"),
+  retryIssueClose: (projectRoot: string, rootTaskId: string) =>
+    call<WorkflowRun>("workflow_retry_issue_close", { projectRoot, rootTaskId }),
 };
 
 export interface WorkflowEventHandlers {
@@ -144,4 +198,20 @@ export async function subscribeWorkflowEvents(handlers: WorkflowEventHandlers): 
   return () => {
     for (const unlisten of unlisteners) unlisten();
   };
+}
+
+/**
+ * Listens to `workflow://intake-changed` (every intake session change, and
+ * the start and end of every agent turn); resolves to the unlisten function.
+ */
+export async function subscribeIntakeChanged(handler: (e: IntakeChangedEvent) => void): Promise<() => void> {
+  return listen<IntakeChangedEvent>(WORKFLOW_INTAKE_CHANGED_EVENT, (e) => handler(e.payload));
+}
+
+/**
+ * Listens to `workflow://workflows-changed` (`workflows.json` was rewritten,
+ * e.g. from another window); resolves to the unlisten function.
+ */
+export async function subscribeWorkflowsChanged(handler: (e: WorkflowsChangedEvent) => void): Promise<() => void> {
+  return listen<WorkflowsChangedEvent>(WORKFLOW_WORKFLOWS_CHANGED_EVENT, (e) => handler(e.payload));
 }

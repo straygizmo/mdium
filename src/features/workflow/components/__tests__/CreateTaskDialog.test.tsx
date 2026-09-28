@@ -82,6 +82,8 @@ function task(id: string): Task {
       planApproved: false,
       userInput: null,
       screeningAck: null,
+      issue: null,
+      pendingIssueEntry: null,
     },
     body: "",
   };

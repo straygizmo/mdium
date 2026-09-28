@@ -70,6 +70,8 @@ function task(id: string, patch: Partial<TaskMeta> = {}, body = "Body"): Task {
       planApproved: false,
       userInput: null,
       screeningAck: null,
+      issue: null,
+      pendingIssueEntry: null,
       ...patch,
     },
     body,
@@ -139,6 +141,9 @@ function runOf(patch: Partial<WorkflowRun> = {}): WorkflowRun {
     createdAt: "2026-09-01T00:00:00Z",
     updatedAt: "2026-09-03T01:00:00Z",
     acknowledgedAgentConfig: [],
+    issue: null,
+    issueClosed: false,
+    issueCloseError: null,
     ...patch,
   };
 }

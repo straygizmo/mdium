@@ -89,6 +89,10 @@ export interface TaskMeta {
   planApproved: boolean;
   userInput: string | null;
   screeningAck: string | null;
+  /** The forge Issue tracking this task (root tasks only). */
+  issue: IssueRef | null;
+  /** Entry kind (`design` | `implement` | `review`) whose Issue comment still awaits sync. */
+  pendingIssueEntry: string | null;
 }
 
 export interface Task {
@@ -226,6 +230,12 @@ export interface WorkflowRun {
   createdAt: string;
   updatedAt: string;
   acknowledgedAgentConfig: FileFingerprint[];
+  /** The forge Issue tracking this run (copied from the root task). */
+  issue: IssueRef | null;
+  /** True once the run's Issue was closed on the forge. */
+  issueClosed: boolean;
+  /** Error code of the last failed attempt to close the Issue. */
+  issueCloseError: string | null;
 }
 
 /** A record that could not be loaded while listing. */
@@ -299,6 +309,131 @@ export interface GitignoreStatus {
   missing: string[];
 }
 
+export type ForgeKind = "github" | "gitlab";
+
+/** A repository on a forge (`host` may carry a port; `path` has no `.git`). */
+export interface ForgeRepo {
+  kind: ForgeKind;
+  host: string;
+  path: string;
+}
+
+/** A forge Issue linked to a task, run or intake. */
+export interface IssueRef {
+  kind: ForgeKind;
+  host: string;
+  path: string;
+  number: number;
+  url: string;
+}
+
+/** Result of `workflow_forge_probe`: whether Issues can be tracked for the project. */
+export interface ForgeProbe {
+  /** The forge repository of `origin`, if it points at one. */
+  repo: ForgeRepo | null;
+  /** The detected forge's CLI is installed (with no repo: either CLI is). */
+  cliAvailable: boolean;
+  /** The detected forge's CLI is logged in to its host. */
+  authenticated: boolean;
+}
+
+/** A draft or committed attachment's metadata. */
+export interface AttachmentMeta {
+  schemaVersion: number;
+  id: string;
+  originalName: string;
+  /** Sanitized file name the content is stored under. */
+  storedName: string;
+  mime: string;
+  size: number;
+  sha256: string;
+  createdAt: string;
+}
+
+export type IntakeKind = "feature" | "bug";
+
+export type IntakeStatus = "active" | "finalizing" | "done" | "abandoned";
+
+/** The last completed step of the resumable finalize pipeline. */
+export type FinalizeStage = "ready" | "issue_created" | "attachments_committed" | "task_created" | "done";
+
+export type IntakeMessageRole = "user" | "assistant" | "error";
+
+export interface IntakeMessage {
+  id: string;
+  role: IntakeMessageRole;
+  /** For `error` messages: the failure code (e.g. `INTAKE_TURN_TIMEOUT`). */
+  text: string;
+  /** Draft attachments sent with this message. */
+  draftIds: string[];
+  at: string;
+}
+
+export interface IntakeQuestion {
+  text: string;
+  options: string[];
+}
+
+export interface IntakeProposal {
+  title: string;
+  body: string;
+}
+
+export type DocUpdateStatus = "pending" | "applied" | "rejected";
+
+/** A proposed replacement of a project document's content. */
+export interface DocUpdateProposal {
+  id: string;
+  /** Project-relative path of the document. */
+  path: string;
+  content: string;
+  status: DocUpdateStatus;
+  /** Why the update was rejected when proposed (an `INTAKE_*` code). */
+  reason: string | null;
+}
+
+export interface FinalizeState {
+  stage: FinalizeStage;
+  rootTaskId: string | null;
+  issue: IssueRef | null;
+  attachmentIds: string[];
+  skipIssue: boolean;
+  /** The Issue may have been created before a crash; a retry looks it up first. */
+  issueCreating: boolean;
+  /** Error code of the last failed finalize step. */
+  lastError: string | null;
+}
+
+/** An intake session (`.mdium/intakes/<intakeId>.json`). */
+export interface IntakeSession {
+  schemaVersion: number;
+  id: string;
+  workflowId: string;
+  kind: IntakeKind;
+  provider: Provider;
+  model: string | null;
+  status: IntakeStatus;
+  messages: IntakeMessage[];
+  lastQuestion: IntakeQuestion | null;
+  proposal: IntakeProposal | null;
+  docUpdates: DocUpdateProposal[];
+  finalize: FinalizeState;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** An intake session as the intake commands return it. */
+export interface IntakeSessionView extends IntakeSession {
+  /** An agent turn of the session is running. */
+  busy: boolean;
+}
+
+/** Result of `workflow_intake_list`: sessions newest first. */
+export interface IntakeList {
+  sessions: IntakeSessionView[];
+  warnings: StoreWarning[];
+}
+
 /** Rejection value of every workflow command. `message` is a log detail; localize by `code`. */
 export interface CommandError {
   code: string;
@@ -309,6 +444,8 @@ export interface CommandError {
 export const WORKFLOW_TASK_CHANGED_EVENT = "workflow://task-changed";
 export const WORKFLOW_RUN_CHANGED_EVENT = "workflow://run-changed";
 export const WORKFLOW_PROGRESS_EVENT = "workflow://progress";
+export const WORKFLOW_INTAKE_CHANGED_EVENT = "workflow://intake-changed";
+export const WORKFLOW_WORKFLOWS_CHANGED_EVENT = "workflow://workflows-changed";
 
 /** Payload of `workflow://task-changed`. `projectRoot` is the normalized root. */
 export interface TaskChangedEvent {
@@ -335,4 +472,21 @@ export interface ProgressEvent {
   attemptId: string;
   kind: "message" | "tool";
   text: string;
+}
+
+/**
+ * Payload of `workflow://intake-changed`: emitted on every session change
+ * and when an agent turn starts or ends. `projectRoot` is the normalized root.
+ */
+export interface IntakeChangedEvent {
+  projectRoot: string;
+  intakeId: string;
+  status: IntakeStatus;
+  /** An agent turn of the session is running. */
+  busy: boolean;
+}
+
+/** Payload of `workflow://workflows-changed` (`workflows.json` was rewritten). */
+export interface WorkflowsChangedEvent {
+  projectRoot: string;
 }

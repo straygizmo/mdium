@@ -48,6 +48,8 @@ function task(id: string, status: Task["meta"]["status"] = "inbox"): Task {
       planApproved: false,
       userInput: null,
       screeningAck: null,
+      issue: null,
+      pendingIssueEntry: null,
     },
     body: "",
   };

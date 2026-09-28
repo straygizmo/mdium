@@ -941,7 +941,7 @@ fn prepare_turn(
 
 /// The user message awaiting a reply: the newest message that is not an
 /// error, if it is the user's.
-fn pending_message(session: &IntakeSession) -> Option<&IntakeMessage> {
+pub fn pending_message(session: &IntakeSession) -> Option<&IntakeMessage> {
     session
         .messages
         .iter()
@@ -2640,6 +2640,8 @@ mod tests {
         fn task_changed(&self, _: &Path, _: &Task) {}
         fn run_changed(&self, _: &Path, _: &WorkflowRun) {}
         fn progress(&self, _: &Path, _: &str, _: &str, _: &ProgressUpdate) {}
+        fn intake_changed(&self, _: &Path, _: &str, _: IntakeStatus, _: bool) {}
+        fn workflows_changed(&self, _: &Path) {}
     }
 
     /// A git repo whose `origin` is a GitHub repository, one enabled

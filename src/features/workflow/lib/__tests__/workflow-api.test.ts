@@ -5,8 +5,12 @@ const listen = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen }));
 
-import { subscribeWorkflowEvents, workflowApi } from "../workflow-api";
+import { subscribeIntakeChanged, subscribeWorkflowEvents, subscribeWorkflowsChanged, workflowApi } from "../workflow-api";
 import {
+  WORKFLOW_INTAKE_CHANGED_EVENT,
+  WORKFLOW_WORKFLOWS_CHANGED_EVENT,
+  type IntakeChangedEvent,
+  type WorkflowsChangedEvent,
   WORKFLOW_PROGRESS_EVENT,
   WORKFLOW_RUN_CHANGED_EVENT,
   WORKFLOW_TASK_CHANGED_EVENT,
@@ -91,6 +95,95 @@ const cases: Case[] = [
   ["discardRun", () => workflowApi.discardRun(ROOT, "r1"), "workflow_discard_run", { projectRoot: ROOT, rootTaskId: "r1" }],
   ["probeProviders", () => workflowApi.probeProviders(), "workflow_probe_providers", undefined],
   ["gitignoreStatus", () => workflowApi.gitignoreStatus(ROOT), "workflow_gitignore_status", { projectRoot: ROOT }],
+  ["forgeProbe", () => workflowApi.forgeProbe(ROOT), "workflow_forge_probe", { projectRoot: ROOT }],
+  [
+    "intakeCreate",
+    () => workflowApi.intakeCreate(ROOT, "wf1", "bug", "claude", "sonnet"),
+    "workflow_intake_create",
+    { projectRoot: ROOT, workflowId: "wf1", kind: "bug", provider: "claude", model: "sonnet" },
+  ],
+  [
+    "intakeCreate (default model)",
+    () => workflowApi.intakeCreate(ROOT, "wf1", "feature", "codex", null),
+    "workflow_intake_create",
+    { projectRoot: ROOT, workflowId: "wf1", kind: "feature", provider: "codex", model: null },
+  ],
+  ["intakeList", () => workflowApi.intakeList(ROOT), "workflow_intake_list", { projectRoot: ROOT }],
+  ["intakeGet", () => workflowApi.intakeGet(ROOT, "i1"), "workflow_intake_get", { projectRoot: ROOT, intakeId: "i1" }],
+  [
+    "intakeSend",
+    () => workflowApi.intakeSend(ROOT, "i1", "hello", ["d1"]),
+    "workflow_intake_send",
+    { projectRoot: ROOT, intakeId: "i1", text: "hello", draftIds: ["d1"] },
+  ],
+  ["intakeRetry", () => workflowApi.intakeRetry(ROOT, "i1"), "workflow_intake_retry", { projectRoot: ROOT, intakeId: "i1" }],
+  [
+    "intakeCancelTurn",
+    () => workflowApi.intakeCancelTurn(ROOT, "i1"),
+    "workflow_intake_cancel_turn",
+    { projectRoot: ROOT, intakeId: "i1" },
+  ],
+  [
+    "intakeAbandon",
+    () => workflowApi.intakeAbandon(ROOT, "i1"),
+    "workflow_intake_abandon",
+    { projectRoot: ROOT, intakeId: "i1" },
+  ],
+  [
+    "intakeAddDraftPath",
+    () => workflowApi.intakeAddDraftPath(ROOT, "i1", "C:\\docs\\spec.pdf"),
+    "workflow_intake_add_draft_path",
+    { projectRoot: ROOT, intakeId: "i1", path: "C:\\docs\\spec.pdf" },
+  ],
+  [
+    "intakeAddDraftBytes",
+    () => workflowApi.intakeAddDraftBytes(ROOT, "i1", "paste.png", "aGk="),
+    "workflow_intake_add_draft_bytes",
+    { projectRoot: ROOT, intakeId: "i1", name: "paste.png", bytesBase64: "aGk=" },
+  ],
+  [
+    "intakeRemoveDraft",
+    () => workflowApi.intakeRemoveDraft(ROOT, "i1", "d1"),
+    "workflow_intake_remove_draft",
+    { projectRoot: ROOT, intakeId: "i1", draftId: "d1" },
+  ],
+  [
+    "intakeListDrafts",
+    () => workflowApi.intakeListDrafts(ROOT, "i1"),
+    "workflow_intake_list_drafts",
+    { projectRoot: ROOT, intakeId: "i1" },
+  ],
+  [
+    "intakeApplyDocUpdate",
+    () => workflowApi.intakeApplyDocUpdate(ROOT, "i1", "p1", true),
+    "workflow_intake_apply_doc_update",
+    { projectRoot: ROOT, intakeId: "i1", proposalId: "p1", accept: true },
+  ],
+  [
+    "intakeFinalize",
+    () => workflowApi.intakeFinalize(ROOT, "i1", false),
+    "workflow_intake_finalize",
+    { projectRoot: ROOT, intakeId: "i1", skipIssue: false },
+  ],
+  [
+    "listAttachments",
+    () => workflowApi.listAttachments(ROOT, "r1"),
+    "workflow_list_attachments",
+    { projectRoot: ROOT, rootTaskId: "r1" },
+  ],
+  [
+    "retryIssueSync",
+    () => workflowApi.retryIssueSync(ROOT, "t1"),
+    "workflow_retry_issue_sync",
+    { projectRoot: ROOT, taskId: "t1" },
+  ],
+  ["skipIssueSync", () => workflowApi.skipIssueSync(ROOT, "t1"), "workflow_skip_issue_sync", { projectRoot: ROOT, taskId: "t1" }],
+  [
+    "retryIssueClose",
+    () => workflowApi.retryIssueClose(ROOT, "r1"),
+    "workflow_retry_issue_close",
+    { projectRoot: ROOT, rootTaskId: "r1" },
+  ],
 ];
 
 describe("workflowApi", () => {
@@ -195,5 +288,43 @@ describe("subscribeWorkflowEvents", () => {
     });
     await subscribeWorkflowEvents({});
     expect(() => handlers.get(WORKFLOW_PROGRESS_EVENT)?.({ payload: {} })).not.toThrow();
+  });
+});
+
+describe.each([
+  {
+    name: "subscribeIntakeChanged",
+    subscribe: subscribeIntakeChanged,
+    event: WORKFLOW_INTAKE_CHANGED_EVENT,
+    payload: { projectRoot: ROOT, intakeId: "i1", status: "active", busy: true } satisfies IntakeChangedEvent,
+  },
+  {
+    name: "subscribeWorkflowsChanged",
+    subscribe: subscribeWorkflowsChanged,
+    event: WORKFLOW_WORKFLOWS_CHANGED_EVENT,
+    payload: { projectRoot: ROOT } satisfies WorkflowsChangedEvent,
+  },
+])("$name", ({ subscribe, event, payload }) => {
+  beforeEach(() => {
+    listen.mockReset();
+  });
+
+  it("listens to its event, forwards payloads and unlistens", async () => {
+    let handler: ((e: { payload: unknown }) => void) | undefined;
+    const un = vi.fn();
+    listen.mockImplementation(async (_name: string, h: (e: { payload: unknown }) => void) => {
+      handler = h;
+      return un;
+    });
+    const onEvent = vi.fn();
+
+    const unsubscribe = await (subscribe as (h: (e: unknown) => void) => Promise<() => void>)(onEvent);
+
+    expect(listen).toHaveBeenCalledTimes(1);
+    expect(listen).toHaveBeenCalledWith(event, expect.any(Function));
+    handler?.({ payload });
+    expect(onEvent).toHaveBeenCalledWith(payload);
+    unsubscribe();
+    expect(un).toHaveBeenCalledTimes(1);
   });
 });

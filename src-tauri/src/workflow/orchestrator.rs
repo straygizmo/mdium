@@ -19,7 +19,7 @@ use crate::workflow::flow::{
     IssueSyncError, PlannedAttempt, StageResult, WORKFLOW_ISSUE_SYNC_INTERRUPTED,
 };
 use crate::workflow::forge::ForgeCli;
-use crate::workflow::model::{RunStatus, Task, TaskStatus, Workflow, WorkflowRun};
+use crate::workflow::model::{IntakeStatus, RunStatus, Task, TaskStatus, Workflow, WorkflowRun};
 use crate::workflow::outcome::parse_outcome;
 use crate::workflow::runner_host::RunnerApi;
 use crate::workflow::state::{normalize_root, project_key};
@@ -42,7 +42,8 @@ const WORKFLOW_THREAD_SPAWN_FAILED: &str = "WORKFLOW_THREAD_SPAWN_FAILED";
 /// Code of an attempt whose thread panicked.
 const WORKFLOW_ATTEMPT_PANICKED: &str = "WORKFLOW_ATTEMPT_PANICKED";
 
-/// Receives every task/run change and attempt progress update.
+/// Receives every task/run change and attempt progress update, plus
+/// intake session and workflow definition changes.
 pub trait EventSink: Send + Sync {
     fn task_changed(&self, project_root: &Path, task: &Task);
     fn run_changed(&self, project_root: &Path, run: &WorkflowRun);
@@ -53,6 +54,17 @@ pub trait EventSink: Send + Sync {
         attempt_id: &str,
         update: &ProgressUpdate,
     );
+    /// An intake session changed, or one of its agent turns started or
+    /// ended (`busy`: a turn is running).
+    fn intake_changed(
+        &self,
+        project_root: &Path,
+        intake_id: &str,
+        status: IntakeStatus,
+        busy: bool,
+    );
+    /// `workflows.json` was rewritten.
+    fn workflows_changed(&self, project_root: &Path);
 }
 
 /// One attached project.
@@ -1165,6 +1177,9 @@ mod tests {
             _update: &ProgressUpdate,
         ) {
         }
+        fn intake_changed(&self, _: &Path, _: &str, _: IntakeStatus, _: bool) {}
+
+        fn workflows_changed(&self, _: &Path) {}
     }
 
     fn completed(body: &str) -> String {

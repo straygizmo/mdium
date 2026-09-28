@@ -16,20 +16,29 @@ use super::node_sidecar;
 use crate::workflow::actions::{
     self, ActionError, MergePreview, NewTask, RetryOptions, TaskDetail,
 };
-use crate::workflow::attempt::ProgressUpdate;
-use crate::workflow::forge::CliForge;
+use crate::workflow::attachments::{self, AttachmentError, AttachmentMeta, MAX_ATTACHMENT_BYTES};
+use crate::workflow::attempt::{CancelReason, CancelToken, ProgressUpdate};
+use crate::workflow::forge::{self, CliForge, ForgeProbe};
+use crate::workflow::fsutil::MdiumPaths;
 use crate::workflow::gitops;
+use crate::workflow::intake::{
+    self, FinalizeOptions, IntakeError, INTAKE_NOT_ACTIVE, INTAKE_NO_PENDING_MESSAGE,
+};
 use crate::workflow::model::{
-    Provider, RunStatus, Task, TaskStatus, Workflow, WorkflowRun, WorkflowsFile,
+    IntakeKind, IntakeSession, IntakeStatus, Provider, RunStatus, Task, TaskStatus, Workflow,
+    WorkflowRun, WorkflowsFile,
 };
 use crate::workflow::orchestrator::{EventSink, Orchestrator};
 use crate::workflow::runner_client::{RunnerError, RunnerEvent, StartSessionParams};
 use crate::workflow::runner_host::{RunnerApi, RunnerHost, SidecarSpawner};
-use crate::workflow::store::{RunList, StoreError, TaskList, WorkflowList};
+use crate::workflow::store::{
+    RunList, StoreError, StoreWarning, TaskList, WorkflowList, WorkflowStore,
+};
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
@@ -40,6 +49,8 @@ pub type WorkflowState = Arc<Orchestrator>;
 pub const TASK_CHANGED_EVENT: &str = "workflow://task-changed";
 pub const RUN_CHANGED_EVENT: &str = "workflow://run-changed";
 pub const PROGRESS_EVENT: &str = "workflow://progress";
+pub const INTAKE_CHANGED_EVENT: &str = "workflow://intake-changed";
+pub const WORKFLOWS_CHANGED_EVENT: &str = "workflow://workflows-changed";
 
 /// Code of every runner call when the bundled agent runner script is missing.
 pub const AGENT_RUNNER_MISSING: &str = "AGENT_RUNNER_MISSING";
@@ -47,6 +58,10 @@ pub const AGENT_RUNNER_MISSING: &str = "AGENT_RUNNER_MISSING";
 pub const WORKFLOW_PROJECT_INVALID: &str = "WORKFLOW_PROJECT_INVALID";
 /// Code of a command whose blocking task could not be joined.
 pub const WORKFLOW_COMMAND_FAILED: &str = "WORKFLOW_COMMAND_FAILED";
+/// An agent turn of the intake is already running.
+pub const INTAKE_TURN_BUSY: &str = "INTAKE_TURN_BUSY";
+/// Pasted attachment content is not valid base64.
+pub const ATTACHMENT_INVALID_DATA: &str = "ATTACHMENT_INVALID_DATA";
 
 /// A command failure as the UI receives it: `{ code, message }`. `message`
 /// is a log detail, never user-facing text (the UI localizes by `code`).
@@ -68,6 +83,34 @@ impl From<ActionError> for CommandError {
 impl From<StoreError> for CommandError {
     fn from(err: StoreError) -> Self {
         ActionError::from(err).into()
+    }
+}
+
+impl From<IntakeError> for CommandError {
+    fn from(err: IntakeError) -> Self {
+        CommandError {
+            code: err.code().to_string(),
+            message: err.to_string(),
+        }
+    }
+}
+
+impl From<AttachmentError> for CommandError {
+    fn from(err: AttachmentError) -> Self {
+        CommandError {
+            code: err.code().to_string(),
+            message: err.to_string(),
+        }
+    }
+}
+
+impl CommandError {
+    /// An error whose message is its code.
+    fn code(code: &str) -> Self {
+        CommandError {
+            code: code.to_string(),
+            message: code.to_string(),
+        }
     }
 }
 
@@ -145,6 +188,43 @@ impl ProgressPayload {
     }
 }
 
+/// Payload of [`INTAKE_CHANGED_EVENT`].
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntakeChangedPayload {
+    pub project_root: String,
+    pub intake_id: String,
+    pub status: IntakeStatus,
+    /// An agent turn of the intake is running.
+    pub busy: bool,
+}
+
+impl IntakeChangedPayload {
+    fn new(project_root: &Path, intake_id: &str, status: IntakeStatus, busy: bool) -> Self {
+        IntakeChangedPayload {
+            project_root: root_string(project_root),
+            intake_id: intake_id.to_string(),
+            status,
+            busy,
+        }
+    }
+}
+
+/// Payload of [`WORKFLOWS_CHANGED_EVENT`].
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowsChangedPayload {
+    pub project_root: String,
+}
+
+impl WorkflowsChangedPayload {
+    fn new(project_root: &Path) -> Self {
+        WorkflowsChangedPayload {
+            project_root: root_string(project_root),
+        }
+    }
+}
+
 /// A project root as sent to the UI.
 fn root_string(project_root: &Path) -> String {
     project_root.to_string_lossy().into_owned()
@@ -185,6 +265,26 @@ impl EventSink for TauriSink {
         self.emit(
             PROGRESS_EVENT,
             ProgressPayload::new(project_root, task_id, attempt_id, update),
+        );
+    }
+
+    fn intake_changed(
+        &self,
+        project_root: &Path,
+        intake_id: &str,
+        status: IntakeStatus,
+        busy: bool,
+    ) {
+        self.emit(
+            INTAKE_CHANGED_EVENT,
+            IntakeChangedPayload::new(project_root, intake_id, status, busy),
+        );
+    }
+
+    fn workflows_changed(&self, project_root: &Path) {
+        self.emit(
+            WORKFLOWS_CHANGED_EVENT,
+            WorkflowsChangedPayload::new(project_root),
         );
     }
 }
@@ -323,13 +423,30 @@ where
     T: Send + 'static,
     F: FnOnce(&Arc<Orchestrator>, &Path) -> Result<T, ActionError> + Send + 'static,
 {
+    with_project_cmd(state, project_root, move |orch, root| {
+        op(orch, root).map_err(CommandError::from)
+    })
+    .await
+}
+
+/// [`with_project`] for operations that fail with a [`CommandError`]
+/// (intake and attachment errors convert into one with `?`).
+async fn with_project_cmd<T, F>(
+    state: tauri::State<'_, WorkflowState>,
+    project_root: String,
+    op: F,
+) -> Result<T, CommandError>
+where
+    T: Send + 'static,
+    F: FnOnce(&Arc<Orchestrator>, &Path) -> Result<T, CommandError> + Send + 'static,
+{
     let orch = state.inner().clone();
     blocking(move || {
         let root = validate_project_root(&project_root)?;
         if orch.attach(&root).1 {
             orch.kick(&root);
         }
-        op(&orch, &root).map_err(CommandError::from)
+        op(&orch, &root)
     })
     .await
 }
@@ -704,6 +821,516 @@ pub async fn workflow_probe_providers(
     .await
 }
 
+/// The forge of the project's `origin` and whether its CLI can be used,
+/// so the UI can tell before an intake starts whether Issues will be
+/// tracked.
+#[tauri::command]
+pub async fn workflow_forge_probe(
+    state: tauri::State<'_, WorkflowState>,
+    project_root: String,
+) -> Result<ForgeProbe, CommandError> {
+    with_project_cmd(state, project_root, |orch, root| {
+        Ok(forge::probe(root, orch.forge().as_ref()))
+    })
+    .await
+}
+
+// ---------------------------------------------------------------------------
+// Intake sessions
+// ---------------------------------------------------------------------------
+
+/// Intake agent turns running in this process, by intake id (ids are
+/// random, so the id alone is the key), with the token that cancels each.
+pub struct IntakeTurns {
+    running: Mutex<BTreeMap<String, CancelToken>>,
+}
+
+impl IntakeTurns {
+    pub const fn new() -> Self {
+        IntakeTurns {
+            running: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    fn running(&self) -> MutexGuard<'_, BTreeMap<String, CancelToken>> {
+        self.running.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Marks a turn of `intake_id` as running; [`INTAKE_TURN_BUSY`] when
+    /// one already is. The turn counts as running until the slot drops.
+    fn begin(&'static self, intake_id: &str) -> Result<TurnSlot, CommandError> {
+        let mut running = self.running();
+        if running.contains_key(intake_id) {
+            return Err(CommandError::code(INTAKE_TURN_BUSY));
+        }
+        let token = CancelToken::default();
+        running.insert(intake_id.to_string(), token.clone());
+        Ok(TurnSlot {
+            turns: self,
+            intake_id: intake_id.to_string(),
+            token,
+        })
+    }
+
+    /// Whether a turn of `intake_id` is running.
+    fn is_busy(&self, intake_id: &str) -> bool {
+        self.running().contains_key(intake_id)
+    }
+
+    /// Cancels the running turn of `intake_id`; false when none runs.
+    fn cancel(&self, intake_id: &str) -> bool {
+        match self.running().get(intake_id) {
+            Some(token) => {
+                token.cancel(CancelReason::User);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// A running turn's membership in [`IntakeTurns`], released on drop.
+struct TurnSlot {
+    turns: &'static IntakeTurns,
+    intake_id: String,
+    token: CancelToken,
+}
+
+impl TurnSlot {
+    fn token(&self) -> &CancelToken {
+        &self.token
+    }
+}
+
+impl Drop for TurnSlot {
+    fn drop(&mut self) {
+        self.turns.running().remove(&self.intake_id);
+    }
+}
+
+/// The process-wide intake turn registry.
+static INTAKE_TURNS: IntakeTurns = IntakeTurns::new();
+
+/// An intake session plus whether one of its agent turns is running.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntakeSessionView {
+    #[serde(flatten)]
+    pub session: IntakeSession,
+    pub busy: bool,
+}
+
+/// Result of [`workflow_intake_list`]: sessions newest first, plus one
+/// warning per file that did not load.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntakeListView {
+    pub sessions: Vec<IntakeSessionView>,
+    pub warnings: Vec<StoreWarning>,
+}
+
+fn session_view(session: IntakeSession) -> IntakeSessionView {
+    let busy = INTAKE_TURNS.is_busy(&session.id);
+    IntakeSessionView { session, busy }
+}
+
+/// Reports `session` (with its live busy state) as changed.
+fn emit_intake(sink: &dyn EventSink, store: &WorkflowStore, session: &IntakeSession) {
+    sink.intake_changed(
+        store.project_root(),
+        &session.id,
+        session.status,
+        INTAKE_TURNS.is_busy(&session.id),
+    );
+}
+
+/// Reports session `intake_id` as changed after an operation that may have
+/// changed it even though it failed (e.g. a finalize that recorded its
+/// error); nothing is reported when the session cannot be loaded.
+fn emit_intake_reloaded(sink: &dyn EventSink, store: &WorkflowStore, intake_id: &str) {
+    if let Ok(session) = intake::get_session(store, intake_id) {
+        emit_intake(sink, store, &session);
+    }
+}
+
+/// Reports the turn held by `slot` as started and runs it on its own
+/// thread, which reports the session again when the turn ends.
+fn start_turn(
+    orch: &Arc<Orchestrator>,
+    store: WorkflowStore,
+    session: &IntakeSession,
+    slot: TurnSlot,
+) -> Result<(), CommandError> {
+    let sink = orch.sink().clone();
+    emit_intake(sink.as_ref(), &store, session);
+    let runner = orch.runner().clone();
+    let project_root = store.project_root().to_path_buf();
+    let thread_sink = sink.clone();
+    let thread_store = store;
+    let spawned = std::thread::Builder::new()
+        .name(format!("intake-turn-{}", session.id))
+        .spawn(move || {
+            let intake_id = slot.intake_id.clone();
+            let result = intake::run_turn(runner.as_ref(), &thread_store, &intake_id, slot.token());
+            // Released before reporting, so the report says the turn ended.
+            drop(slot);
+            match result {
+                Ok(session) => emit_intake(thread_sink.as_ref(), &thread_store, &session),
+                Err(err) => {
+                    eprintln!("[workflow] intake turn of {intake_id} failed: {err}");
+                    emit_intake_reloaded(thread_sink.as_ref(), &thread_store, &intake_id);
+                }
+            }
+        });
+    if let Err(err) = spawned {
+        // The closure (and with it the slot) was dropped: the turn is over.
+        emit_intake_reloaded(sink.as_ref(), &orch.store(&project_root), &session.id);
+        return Err(CommandError {
+            code: WORKFLOW_COMMAND_FAILED.to_string(),
+            message: format!("{WORKFLOW_COMMAND_FAILED}: intake turn thread: {err}"),
+        });
+    }
+    Ok(())
+}
+
+/// Starts a new intake session for workflow `workflow_id`.
+#[tauri::command]
+pub async fn workflow_intake_create(
+    state: tauri::State<'_, WorkflowState>,
+    project_root: String,
+    workflow_id: String,
+    kind: IntakeKind,
+    provider: Provider,
+    model: Option<String>,
+) -> Result<IntakeSessionView, CommandError> {
+    with_project_cmd(state, project_root, move |orch, root| {
+        let store = orch.store(root);
+        let session = {
+            let guard = store.lock();
+            intake::create_session(&store, &guard, &workflow_id, kind, provider, model)?
+        };
+        emit_intake(orch.sink().as_ref(), &store, &session);
+        Ok(session_view(session))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn workflow_intake_list(
+    state: tauri::State<'_, WorkflowState>,
+    project_root: String,
+) -> Result<IntakeListView, CommandError> {
+    with_project_cmd(state, project_root, |orch, root| {
+        let list = intake::list_sessions(&orch.store(root))?;
+        Ok(IntakeListView {
+            sessions: list.sessions.into_iter().map(session_view).collect(),
+            warnings: list.warnings,
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn workflow_intake_get(
+    state: tauri::State<'_, WorkflowState>,
+    project_root: String,
+    intake_id: String,
+) -> Result<IntakeSessionView, CommandError> {
+    with_project_cmd(state, project_root, move |orch, root| {
+        let session = intake::get_session(&orch.store(root), &intake_id)?;
+        Ok(session_view(session))
+    })
+    .await
+}
+
+/// Appends a user message (text and/or drafts) and starts the agent's turn
+/// in the background; returns the session with the message. The reply (or
+/// an `error` message) arrives with the `intake-changed` event that ends
+/// the turn. Refused with [`INTAKE_TURN_BUSY`] while a turn runs.
+#[tauri::command]
+pub async fn workflow_intake_send(
+    state: tauri::State<'_, WorkflowState>,
+    project_root: String,
+    intake_id: String,
+    text: String,
+    draft_ids: Vec<String>,
+) -> Result<IntakeSessionView, CommandError> {
+    with_project_cmd(state, project_root, move |orch, root| {
+        let store = orch.store(root);
+        let slot = INTAKE_TURNS.begin(&intake_id)?;
+        let session = {
+            let guard = store.lock();
+            intake::add_user_message(&guard, &store, &intake_id, &text, &draft_ids)?
+        };
+        start_turn(orch, store, &session, slot)?;
+        Ok(session_view(session))
+    })
+    .await
+}
+
+/// Runs the turn answering the latest user message again (after a failed,
+/// cancelled or interrupted turn), in the background like
+/// [`workflow_intake_send`].
+#[tauri::command]
+pub async fn workflow_intake_retry(
+    state: tauri::State<'_, WorkflowState>,
+    project_root: String,
+    intake_id: String,
+) -> Result<IntakeSessionView, CommandError> {
+    with_project_cmd(state, project_root, move |orch, root| {
+        let store = orch.store(root);
+        let slot = INTAKE_TURNS.begin(&intake_id)?;
+        let session = {
+            let _guard = store.lock();
+            let session = intake::get_session(&store, &intake_id)?;
+            if session.status != IntakeStatus::Active {
+                return Err(IntakeError::InvalidState(INTAKE_NOT_ACTIVE).into());
+            }
+            if intake::pending_message(&session).is_none() {
+                return Err(IntakeError::InvalidState(INTAKE_NO_PENDING_MESSAGE).into());
+            }
+            session
+        };
+        start_turn(orch, store, &session, slot)?;
+        Ok(session_view(session))
+    })
+    .await
+}
+
+/// Cancels the running turn of the intake; false when none runs. The turn
+/// ends with an `INTAKE_TURN_CANCELLED` error message.
+#[tauri::command]
+pub async fn workflow_intake_cancel_turn(
+    state: tauri::State<'_, WorkflowState>,
+    project_root: String,
+    intake_id: String,
+) -> Result<bool, CommandError> {
+    with_project_cmd(state, project_root, move |_orch, _root| {
+        Ok(INTAKE_TURNS.cancel(&intake_id))
+    })
+    .await
+}
+
+/// Abandons the intake (deleting its drafts) and cancels its running turn.
+#[tauri::command]
+pub async fn workflow_intake_abandon(
+    state: tauri::State<'_, WorkflowState>,
+    project_root: String,
+    intake_id: String,
+) -> Result<IntakeSessionView, CommandError> {
+    with_project_cmd(state, project_root, move |orch, root| {
+        let store = orch.store(root);
+        let session = {
+            let guard = store.lock();
+            intake::abandon_session(&store, &guard, &intake_id)?
+        };
+        INTAKE_TURNS.cancel(&intake_id);
+        emit_intake(orch.sink().as_ref(), &store, &session);
+        Ok(session_view(session))
+    })
+    .await
+}
+
+/// Runs `op` on the attachment paths under the project lock, after
+/// checking that intake `intake_id` exists and is active.
+fn with_active_intake<T>(
+    store: &WorkflowStore,
+    intake_id: &str,
+    op: impl FnOnce(&MdiumPaths) -> Result<T, AttachmentError>,
+) -> Result<T, CommandError> {
+    let _guard = store.lock();
+    let session = intake::get_session(store, intake_id)?;
+    if session.status != IntakeStatus::Active {
+        return Err(IntakeError::InvalidState(INTAKE_NOT_ACTIVE).into());
+    }
+    Ok(op(&MdiumPaths::new(store.project_root()))?)
+}
+
+/// Adds a copy of the file at `path` (a regular file of at most 20 MiB) as
+/// a draft attachment of the active intake.
+#[tauri::command]
+pub async fn workflow_intake_add_draft_path(
+    state: tauri::State<'_, WorkflowState>,
+    project_root: String,
+    intake_id: String,
+    path: String,
+) -> Result<AttachmentMeta, CommandError> {
+    with_project_cmd(state, project_root, move |orch, root| {
+        with_active_intake(&orch.store(root), &intake_id, |paths| {
+            attachments::add_draft_from_path(paths, &intake_id, Path::new(&path))
+        })
+    })
+    .await
+}
+
+/// The longest base64 text that can decode to [`MAX_ATTACHMENT_BYTES`].
+fn max_base64_len() -> usize {
+    (MAX_ATTACHMENT_BYTES as usize).div_ceil(3) * 4
+}
+
+/// Decodes pasted base64 content, refusing text too long for an
+/// attachment before decoding it.
+fn decode_draft_bytes(bytes_base64: &str) -> Result<Vec<u8>, CommandError> {
+    use base64::Engine;
+    if bytes_base64.len() > max_base64_len() {
+        return Err(AttachmentError::TooLarge.into());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(bytes_base64)
+        .map_err(|err| CommandError {
+            code: ATTACHMENT_INVALID_DATA.to_string(),
+            message: format!("{ATTACHMENT_INVALID_DATA}: {err}"),
+        })?;
+    if bytes.len() as u64 > MAX_ATTACHMENT_BYTES {
+        return Err(AttachmentError::TooLarge.into());
+    }
+    Ok(bytes)
+}
+
+/// Adds in-memory content (e.g. a pasted image), base64-encoded, as a draft
+/// attachment named `name` of the active intake.
+#[tauri::command]
+pub async fn workflow_intake_add_draft_bytes(
+    state: tauri::State<'_, WorkflowState>,
+    project_root: String,
+    intake_id: String,
+    name: String,
+    bytes_base64: String,
+) -> Result<AttachmentMeta, CommandError> {
+    with_project_cmd(state, project_root, move |orch, root| {
+        let bytes = decode_draft_bytes(&bytes_base64)?;
+        with_active_intake(&orch.store(root), &intake_id, |paths| {
+            attachments::add_draft_from_bytes(paths, &intake_id, &name, &bytes)
+        })
+    })
+    .await
+}
+
+/// Deletes a draft of the active intake (a missing draft is a no-op).
+#[tauri::command]
+pub async fn workflow_intake_remove_draft(
+    state: tauri::State<'_, WorkflowState>,
+    project_root: String,
+    intake_id: String,
+    draft_id: String,
+) -> Result<(), CommandError> {
+    with_project_cmd(state, project_root, move |orch, root| {
+        with_active_intake(&orch.store(root), &intake_id, |paths| {
+            attachments::remove_draft(paths, &intake_id, &draft_id)
+        })
+    })
+    .await
+}
+
+/// The drafts of the intake, oldest first.
+#[tauri::command]
+pub async fn workflow_intake_list_drafts(
+    state: tauri::State<'_, WorkflowState>,
+    project_root: String,
+    intake_id: String,
+) -> Result<Vec<AttachmentMeta>, CommandError> {
+    with_project_cmd(state, project_root, move |orch, root| {
+        let paths = MdiumPaths::new(orch.store(root).project_root());
+        Ok(attachments::list_drafts(&paths, &intake_id)?)
+    })
+    .await
+}
+
+/// Accepts (writes) or rejects a pending documentation update.
+#[tauri::command]
+pub async fn workflow_intake_apply_doc_update(
+    state: tauri::State<'_, WorkflowState>,
+    project_root: String,
+    intake_id: String,
+    proposal_id: String,
+    accept: bool,
+) -> Result<IntakeSessionView, CommandError> {
+    with_project_cmd(state, project_root, move |orch, root| {
+        let store = orch.store(root);
+        let session = {
+            let guard = store.lock();
+            intake::apply_doc_update(&store, &guard, &intake_id, &proposal_id, accept)?
+        };
+        emit_intake(orch.sink().as_ref(), &store, &session);
+        Ok(session_view(session))
+    })
+    .await
+}
+
+/// Turns the intake's proposal into a root task (creating its Issue unless
+/// `skip_issue`); after a failure, calling it again resumes at the failed
+/// stage.
+#[tauri::command]
+pub async fn workflow_intake_finalize(
+    state: tauri::State<'_, WorkflowState>,
+    project_root: String,
+    intake_id: String,
+    skip_issue: bool,
+) -> Result<IntakeSessionView, CommandError> {
+    with_project_cmd(state, project_root, move |orch, root| {
+        let result = intake::finalize(orch, root, &intake_id, FinalizeOptions { skip_issue });
+        // Reported either way: a failure records its code on the session.
+        emit_intake_reloaded(orch.sink().as_ref(), &orch.store(root), &intake_id);
+        Ok(session_view(result?))
+    })
+    .await
+}
+
+/// The committed attachments of root task `root_task_id`, oldest first.
+#[tauri::command]
+pub async fn workflow_list_attachments(
+    state: tauri::State<'_, WorkflowState>,
+    project_root: String,
+    root_task_id: String,
+) -> Result<Vec<AttachmentMeta>, CommandError> {
+    with_project_cmd(state, project_root, move |orch, root| {
+        let paths = MdiumPaths::new(orch.store(root).project_root());
+        Ok(attachments::list_attachments(&paths, &root_task_id)?)
+    })
+    .await
+}
+
+/// Posts the pending Issue entry of a task whose Issue sync failed, then
+/// completes its stage.
+#[tauri::command]
+pub async fn workflow_retry_issue_sync(
+    state: tauri::State<'_, WorkflowState>,
+    project_root: String,
+    task_id: String,
+) -> Result<Task, CommandError> {
+    with_project(state, project_root, move |orch, root| {
+        actions::retry_issue_sync(orch, root, &task_id)
+    })
+    .await
+}
+
+/// Completes the stage of a task whose Issue sync failed without posting
+/// its Issue entry.
+#[tauri::command]
+pub async fn workflow_skip_issue_sync(
+    state: tauri::State<'_, WorkflowState>,
+    project_root: String,
+    task_id: String,
+) -> Result<Task, CommandError> {
+    with_project(state, project_root, move |orch, root| {
+        actions::skip_issue_sync(orch, root, &task_id)
+    })
+    .await
+}
+
+/// Closes the Issue of a merged run whose earlier close failed.
+#[tauri::command]
+pub async fn workflow_retry_issue_close(
+    state: tauri::State<'_, WorkflowState>,
+    project_root: String,
+    root_task_id: String,
+) -> Result<WorkflowRun, CommandError> {
+    with_project(state, project_root, move |orch, root| {
+        actions::retry_issue_close(orch, root, &root_task_id)
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -842,6 +1469,155 @@ mod tests {
         std::fs::write(&excludes, "").unwrap();
         fixture.run(&["config", "core.excludesFile", &excludes.to_string_lossy()]);
         fixture
+    }
+
+    #[test]
+    fn intake_changed_payload_shape() {
+        let payload = IntakeChangedPayload::new(
+            Path::new("C:/repo"),
+            "0123456789abcdef",
+            IntakeStatus::Finalizing,
+            true,
+        );
+        assert_eq!(
+            serde_json::to_value(&payload).unwrap(),
+            json!({
+                "projectRoot": "C:/repo",
+                "intakeId": "0123456789abcdef",
+                "status": "finalizing",
+                "busy": true,
+            })
+        );
+    }
+
+    #[test]
+    fn workflows_changed_payload_shape() {
+        let payload = WorkflowsChangedPayload::new(Path::new("C:/repo"));
+        assert_eq!(
+            serde_json::to_value(&payload).unwrap(),
+            json!({ "projectRoot": "C:/repo" })
+        );
+    }
+
+    fn sample_session() -> IntakeSession {
+        IntakeSession {
+            schema_version: 1,
+            id: "0123456789abcdef".into(),
+            workflow_id: "wf1".into(),
+            kind: IntakeKind::Feature,
+            provider: Provider::Codex,
+            model: None,
+            status: IntakeStatus::Active,
+            messages: vec![],
+            last_question: None,
+            proposal: None,
+            doc_updates: vec![],
+            finalize: Default::default(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            updated_at: "2026-01-01T00:00:00Z".into(),
+        }
+    }
+
+    #[test]
+    fn intake_session_view_flattens_the_session_and_adds_busy() {
+        let session = sample_session();
+        let view = IntakeSessionView {
+            session: session.clone(),
+            busy: true,
+        };
+        let mut expected = serde_json::to_value(&session).unwrap();
+        expected["busy"] = json!(true);
+        assert_eq!(serde_json::to_value(&view).unwrap(), expected);
+        assert_eq!(expected["workflowId"], json!("wf1"));
+    }
+
+    #[test]
+    fn intake_list_view_shape() {
+        let list = IntakeListView {
+            sessions: vec![IntakeSessionView {
+                session: sample_session(),
+                busy: false,
+            }],
+            warnings: vec![],
+        };
+        let value = serde_json::to_value(&list).unwrap();
+        assert_eq!(value["sessions"][0]["busy"], json!(false));
+        assert_eq!(value["sessions"][0]["id"], json!("0123456789abcdef"));
+        assert_eq!(value["warnings"], json!([]));
+    }
+
+    #[test]
+    fn command_error_keeps_intake_and_attachment_codes() {
+        let err = CommandError::from(IntakeError::InvalidState(
+            crate::workflow::intake::INTAKE_NOT_ACTIVE,
+        ));
+        assert_eq!(err.code, "INTAKE_NOT_ACTIVE");
+        let err = CommandError::from(IntakeError::Attachment(AttachmentError::TooLarge));
+        assert_eq!(err.code, "ATTACHMENT_TOO_LARGE");
+        let err = CommandError::from(AttachmentError::NotFound);
+        assert_eq!(
+            serde_json::to_value(&err).unwrap(),
+            json!({ "code": "ATTACHMENT_NOT_FOUND", "message": "ATTACHMENT_NOT_FOUND" })
+        );
+    }
+
+    #[test]
+    fn draft_bytes_are_decoded_within_the_size_limit() {
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(b"hello");
+        assert_eq!(decode_draft_bytes(&encoded).unwrap(), b"hello");
+        assert_eq!(decode_draft_bytes("").unwrap(), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn draft_bytes_over_the_limit_are_refused_before_decoding() {
+        // One base64 quantum more than the limit allows; not valid base64
+        // either, so only the size check can have refused it.
+        let too_long = "!".repeat(max_base64_len() + 4);
+        assert_eq!(
+            decode_draft_bytes(&too_long).unwrap_err().code,
+            "ATTACHMENT_TOO_LARGE"
+        );
+        // The largest decodable size is exactly the attachment limit.
+        assert!(max_base64_len() / 4 * 3 >= MAX_ATTACHMENT_BYTES as usize);
+        assert!((max_base64_len() / 4 - 1) * 3 < MAX_ATTACHMENT_BYTES as usize);
+    }
+
+    #[test]
+    fn invalid_draft_bytes_are_refused() {
+        assert_eq!(
+            decode_draft_bytes("not base64!").unwrap_err().code,
+            ATTACHMENT_INVALID_DATA
+        );
+    }
+
+    #[test]
+    fn a_second_turn_of_a_busy_intake_is_refused() {
+        static TURNS: IntakeTurns = IntakeTurns::new();
+        let slot = TURNS.begin("a").unwrap();
+        assert!(TURNS.is_busy("a"));
+        assert_eq!(
+            TURNS.begin("a").map(|_| ()).unwrap_err().code,
+            INTAKE_TURN_BUSY
+        );
+        // Another intake is independent.
+        let other = TURNS.begin("b").unwrap();
+        drop(other);
+        drop(slot);
+        assert!(!TURNS.is_busy("a"));
+        assert!(TURNS.begin("a").is_ok());
+    }
+
+    #[test]
+    fn cancelling_a_turn_sets_its_token() {
+        static TURNS: IntakeTurns = IntakeTurns::new();
+        assert!(!TURNS.cancel("a"));
+        let slot = TURNS.begin("a").unwrap();
+        assert_eq!(slot.token().reason(), None);
+        assert!(TURNS.cancel("a"));
+        assert_eq!(slot.token().reason(), Some(CancelReason::User));
+        drop(slot);
+        assert!(!TURNS.cancel("a"));
     }
 
     #[test]

@@ -44,6 +44,8 @@ function task(id: string, patch: Partial<TaskMeta> = {}): Task {
       planApproved: false,
       userInput: null,
       screeningAck: null,
+      issue: null,
+      pendingIssueEntry: null,
       ...patch,
     },
     // A Markdown body that must never be rendered on a card.
@@ -66,6 +68,9 @@ function run(rootTaskId: string, status: WorkflowRun["status"], currentTaskId = 
     createdAt: "2026-09-01T00:00:00Z",
     updatedAt: "2026-09-01T00:00:00Z",
     acknowledgedAgentConfig: [],
+    issue: null,
+    issueClosed: false,
+    issueCloseError: null,
   };
 }
 

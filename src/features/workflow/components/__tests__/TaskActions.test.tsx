@@ -64,6 +64,8 @@ function task(patch: Partial<TaskMeta> = {}): Task {
       planApproved: false,
       userInput: null,
       screeningAck: null,
+      issue: null,
+      pendingIssueEntry: null,
       ...patch,
     },
     body: "",
