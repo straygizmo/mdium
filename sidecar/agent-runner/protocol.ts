@@ -177,6 +177,16 @@ export function parseInbound(line: string): ParsedInbound {
       };
     case "close_session":
       return { type: "close_session", sessionId: str(m.sessionId, "sessionId") };
+    case "convert_document": {
+      const requestId = str(m.requestId, "requestId");
+      const inputPath = str(m.inputPath, "inputPath");
+      const outputPath = str(m.outputPath, "outputPath");
+      if (!isLocalAbsolutePath(inputPath)) throw new Error("Invalid inputPath");
+      if (!isLocalAbsolutePath(outputPath) || !outputPath.toLowerCase().endsWith(".md")) {
+        throw new Error("Invalid outputPath");
+      }
+      return { type: "convert_document", requestId, inputPath, outputPath };
+    }
     default:
       throw new Error("Unknown message type");
   }

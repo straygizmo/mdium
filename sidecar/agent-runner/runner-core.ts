@@ -37,6 +37,12 @@ export interface RunnerCoreDeps {
   adapters: Partial<Record<RunnerProvider, ProviderAdapter>>;
   send: (message: RunnerOutbound) => void;
   newId?: () => string;
+  /**
+   * Converts an Office/PDF document to Markdown at `outputPath` (images next
+   * to it) and resolves with the Markdown path. Omitted: convert_document
+   * answers CONVERT_UNAVAILABLE.
+   */
+  convertDocument?: (inputPath: string, outputPath: string) => Promise<string>;
 }
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -126,6 +132,20 @@ export class RunnerCore {
           availability = { kind: "error", detail: message(error) };
         }
         this.deps.send({ type: "availability", requestId: msg.requestId, provider: msg.provider, availability });
+        return;
+      }
+      case "convert_document": {
+        const convert = this.deps.convertDocument;
+        if (!convert) {
+          this.deps.send({ type: "error", requestId: msg.requestId, message: "CONVERT_UNAVAILABLE" });
+          return;
+        }
+        try {
+          const markdownPath = await convert(msg.inputPath, msg.outputPath);
+          this.deps.send({ type: "document_converted", requestId: msg.requestId, markdownPath });
+        } catch (error) {
+          this.deps.send({ type: "error", requestId: msg.requestId, message: `CONVERT_FAILED: ${message(error)}` });
+        }
         return;
       }
       case "start_session":

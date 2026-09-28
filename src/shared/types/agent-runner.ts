@@ -88,7 +88,17 @@ export type RunnerInbound =
   | { type: "cancel"; sessionId: string }
   | { type: "respond_permission"; sessionId: string; permissionId: string; allow: boolean }
   | { type: "list_sessions"; requestId: string; provider: RunnerProvider; workingDirectory: string }
-  | { type: "close_session"; sessionId: string };
+  | { type: "close_session"; sessionId: string }
+  | {
+      /**
+       * Convert an Office/PDF document to Markdown: the Markdown is written to
+       * outputPath and its images next to it. Both are local absolute paths.
+       */
+      type: "convert_document";
+      requestId: string;
+      inputPath: string;
+      outputPath: string;
+    };
 
 /** runner -> mdium (one JSON object per stdout line). */
 export type RunnerOutbound =
@@ -102,4 +112,5 @@ export type RunnerOutbound =
   | { type: "turn_cancelled"; sessionId: string }
   | { type: "session_list"; requestId: string; sessions: AgentSessionSummary[] }
   | { type: "guard_violation"; sessionId: string; rule: GuardRule; summary: string }
+  | { type: "document_converted"; requestId: string; markdownPath: string }
   | { type: "error"; message: string; requestId?: string; sessionId?: string };

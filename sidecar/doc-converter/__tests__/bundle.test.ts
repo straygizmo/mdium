@@ -7,10 +7,15 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { build } from "esbuild";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { convertInWorker } from "../convert-worker";
 import { buildPdf } from "./fixtures";
 
 let dir: string;
 let bundle: string;
+let workerBundle: string;
+
+const BANNER =
+  'import { createRequire as createDocsRequire } from "node:module"; const require = createDocsRequire(import.meta.url);';
 
 beforeAll(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "mdium-docs-bundle-"));
@@ -22,9 +27,18 @@ beforeAll(async () => {
     target: "node20",
     format: "esm",
     outfile: bundle,
-    banner: {
-      js: 'import { createRequire as createDocsRequire } from "node:module"; const require = createDocsRequire(import.meta.url);',
-    },
+    banner: { js: BANNER },
+    logLevel: "silent",
+  });
+  workerBundle = path.join(dir, "worker.mjs");
+  await build({
+    entryPoints: [path.resolve(__dirname, "worker-entry.ts")],
+    bundle: true,
+    platform: "node",
+    target: "node20",
+    format: "esm",
+    outfile: workerBundle,
+    banner: { js: BANNER },
     logLevel: "silent",
   });
   fs.writeFileSync(path.join(dir, "paper.pdf"), buildPdf([[{ text: "Standalone", size: 12 }]]));
@@ -59,5 +73,19 @@ describe("mdium-docs bundle", () => {
     const replies = stdout.trim().split("\n").map((l) => JSON.parse(l));
     expect(replies.map((r) => r.id)).toEqual([1, 2]);
     expect(replies[1].result.content[0].text).toBe("Standalone\n");
+  });
+});
+
+describe("convertInWorker", () => {
+  it("converts on a worker thread started from a bundle", async () => {
+    const out = path.join(dir, "worker-out", "paper.md");
+    await expect(convertInWorker(workerBundle, path.join(dir, "paper.pdf"), out)).resolves.toBe(out);
+    expect(fs.readFileSync(out, "utf8")).toBe("Standalone\n");
+  });
+
+  it("rejects with the conversion error", async () => {
+    const txt = path.join(dir, "notes.txt");
+    fs.writeFileSync(txt, "x");
+    await expect(convertInWorker(workerBundle, txt, path.join(dir, "notes.md"))).rejects.toThrow(/Unsupported/);
   });
 });
