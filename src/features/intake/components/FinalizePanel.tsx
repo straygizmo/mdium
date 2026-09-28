@@ -1,11 +1,9 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { invoke } from "@tauri-apps/api/core";
-import type { IntakeSessionView, IssueRef } from "@/shared/types/workflow";
-import { externalUrl } from "@/features/workflow/components/SafeMarkdown";
-import i18n from "@/shared/i18n";
-import { formatCode, formatCommandError } from "@/features/workflow/lib/format";
-import { showConfirm, showMessage } from "@/stores/dialog-store";
+import type { IntakeSessionView } from "@/shared/types/workflow";
+import { formatCode } from "@/features/workflow/lib/format";
+import { openExternal } from "@/features/workflow/lib/open-external";
+import { showConfirm } from "@/stores/dialog-store";
 import { ISSUE_TRACKING_UNAVAILABLE, turnRequestInFlight, useIntakeStore } from "../intake-store";
 import { issueTarget } from "./IntakeStartForm";
 import "./FinalizePanel.css";
@@ -38,6 +36,10 @@ export function FinalizePanel({ session }: { session: IntakeSessionView }) {
   const target = issueTarget(forge);
   const inFlight = action !== null;
   const finalizing = session.status === "finalizing";
+  // A finalize is running (from this window or before it was reopened):
+  // nothing can be done until it ends.
+  const running = session.finalizeRunning;
+  const showProgress = running || (finalizing && inFlight);
   // This window's latest failure, unless the session changed since. It is
   // newer than the recorded one, and some failures (e.g. a finalize already
   // in progress) are not recorded at all.
@@ -67,7 +69,7 @@ export function FinalizePanel({ session }: { session: IntakeSessionView }) {
   const canStepBack = f.stage === "ready" && !f.issue && !f.issueCreating;
 
   const issueStep = f.issue
-    ? t("intake.finalize.issueLink", { number: f.issue.number, host: f.issue.host, path: f.issue.path })
+    ? t("intake.issue.link", { number: f.issue.number, host: f.issue.host, path: f.issue.path })
     : tracksIssues && !f.skipIssue
       ? "repo" in target
         ? t("intake.finalize.stepIssue", { host: target.repo.host, path: target.repo.path })
@@ -122,89 +124,80 @@ export function FinalizePanel({ session }: { session: IntakeSessionView }) {
         </p>
       )}
 
-      {finalizing && inFlight && (
+      {showProgress && (
         <p className="intake-finalize__progress" role="status">
           {t("intake.finalize.finalizing")}
         </p>
       )}
-      {finalizing && !inFlight && <p className="intake-finalize__failed">{t("intake.finalize.failed")}</p>}
-      {errorText && !(finalizing && inFlight) && (
+      {finalizing && !showProgress && <p className="intake-finalize__failed">{t("intake.finalize.failed")}</p>}
+      {errorText && !showProgress && (
         <p className="intake-finalize__error" role="alert">
           {errorText}
         </p>
       )}
       {finalizing && f.issueCreating && <p className="intake-finalize__note">{t("intake.finalize.issueCreating")}</p>}
 
-      <div className="intake-finalize__buttons">
-        {finalizing ? (
-          <>
-            <button
-              type="button"
-              className="intake-finalize__retry"
-              disabled={inFlight}
-              onClick={() => void finalize(false)}
-            >
-              {t("intake.finalize.retry")}
-            </button>
-            {canSkip && skipButton}
-            {canStepBack && (
-              <>
-                <button
-                  type="button"
-                  className="intake-finalize__reopen"
-                  disabled={inFlight}
-                  onClick={() => void reopen()}
-                >
-                  {t("intake.finalize.reopen")}
-                </button>
-                <button
-                  type="button"
-                  className="intake-finalize__abandon"
-                  disabled={inFlight}
-                  onClick={() => void confirmAbandon()}
-                >
-                  {t("intake.finalize.abandon")}
-                </button>
-              </>
-            )}
-          </>
-        ) : (
-          <>
-            <button
-              type="button"
-              className="intake-finalize__submit"
-              disabled={inFlight || session.busy || turnInFlight}
-              onClick={() => void finalize(false)}
-            >
-              {action === "finalize" || action === "skipIssue"
-                ? t("intake.finalize.finalizing")
-                : t("intake.finalize.finalize")}
-            </button>
-            {/* Tracking turned out unavailable before finalizing started. */}
-            {errorCode === ISSUE_TRACKING_UNAVAILABLE && canSkip && skipButton}
-          </>
-        )}
-      </div>
+      {!running && (
+        <div className="intake-finalize__buttons">
+          {finalizing ? (
+            <>
+              <button
+                type="button"
+                className="intake-finalize__retry"
+                disabled={inFlight}
+                onClick={() => void finalize(false)}
+              >
+                {t("intake.finalize.retry")}
+              </button>
+              {canSkip && skipButton}
+              {canStepBack && (
+                <>
+                  <button
+                    type="button"
+                    className="intake-finalize__reopen"
+                    disabled={inFlight}
+                    onClick={() => void reopen()}
+                  >
+                    {t("intake.finalize.reopen")}
+                  </button>
+                  <button
+                    type="button"
+                    className="intake-finalize__abandon"
+                    disabled={inFlight}
+                    onClick={() => void confirmAbandon()}
+                  >
+                    {t("intake.finalize.abandon")}
+                  </button>
+                </>
+              )}
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="intake-finalize__submit"
+                disabled={inFlight || session.busy || turnInFlight}
+                onClick={() => void finalize(false)}
+              >
+                {action === "finalize" || action === "skipIssue"
+                  ? t("intake.finalize.finalizing")
+                  : t("intake.finalize.finalize")}
+              </button>
+              {/* Tracking turned out unavailable before finalizing started. */}
+              {errorCode === ISSUE_TRACKING_UNAVAILABLE && canSkip && skipButton}
+            </>
+          )}
+        </div>
+      )}
     </section>
   );
-}
-
-/** Opens an Issue's page in the external browser; failures are shown. */
-function openIssue(issue: IssueRef) {
-  const fail = (detail: string) =>
-    void showMessage(detail, { title: i18n.t("workflow:intake.finalize.issueLinkFailed"), kind: "error" });
-  const url = externalUrl(issue.url);
-  if (!url) {
-    fail(issue.url);
-    return;
-  }
-  invoke("open_external_url", { url }).catch((err: unknown) => fail(formatCommandError(err)));
 }
 
 /** The finished intake: the Issue link and "Open task". */
 function FinalizeDone({ session }: { session: IntakeSessionView }) {
   const { t } = useTranslation("workflow");
   const openTask = useIntakeStore((s) => s.openTask);
+  const unhandled = useIntakeStore((s) => s.openTaskUnhandled);
   const [opening, setOpening] = useState(false);
   const { issue, rootTaskId } = session.finalize;
 
@@ -225,8 +218,8 @@ function FinalizeDone({ session }: { session: IntakeSessionView }) {
         {t("intake.finalize.done")}
       </p>
       {issue && (
-        <button type="button" className="intake-finalize__issue-link" onClick={() => openIssue(issue)}>
-          {t("intake.finalize.issueLink", { number: issue.number, host: issue.host, path: issue.path })}
+        <button type="button" className="intake-finalize__issue-link" onClick={() => void openExternal(issue.url, "workflow:intake.issue.openFailed")}>
+          {t("intake.issue.link", { number: issue.number, host: issue.host, path: issue.path })}
         </button>
       )}
       {rootTaskId && (
@@ -241,6 +234,11 @@ function FinalizeDone({ session }: { session: IntakeSessionView }) {
           </button>
         </div>
       )}
+      {unhandled && (
+        <p className="intake-finalize__unhandled" role="alert">
+          {t("intake.finalize.openTaskUnhandled")}
+        </p>
+      )}
     </section>
   );
 }
@@ -249,10 +247,13 @@ function FinalizeDone({ session }: { session: IntakeSessionView }) {
 export function AbandonIntakeButton() {
   const { t } = useTranslation("workflow");
   const status = useIntakeStore((s) => s.session?.status);
+  const running = useIntakeStore((s) => s.session?.finalizeRunning ?? false);
   const inFlight = useIntakeStore((s) => s.finalizeAction !== null);
   const abandon = useIntakeStore((s) => s.abandon);
 
-  if (status !== "active") return null;
+  // Also offered while the agent replies (the backend cancels the turn), but
+  // not while a finalize runs (the backend refuses it).
+  if (status !== "active" || running) return null;
 
   const onClick = async () => {
     if (inFlight) return;

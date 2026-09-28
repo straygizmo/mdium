@@ -58,6 +58,7 @@ function session(id: string, patch: Partial<IntakeSessionView> = {}): IntakeSess
     createdAt: "2026-09-28T09:00:00Z",
     updatedAt: "2026-09-28T10:00:00Z",
     busy: false,
+    finalizeRunning: false,
     appliedDocPaths: [],
     ...patch,
   };
@@ -266,6 +267,7 @@ describe("IntakeList", () => {
         }),
         session("creating", { status: "finalizing", finalize: finalize({ issueCreating: true }) }),
         session("busy", { busy: true }),
+        session("running", { status: "finalizing", finalizeRunning: true }),
       ],
     });
     await render();
@@ -274,10 +276,13 @@ describe("IntakeList", () => {
     expect(button(item("ready")!, label)).toBeDefined();
     expect(button(item("issued")!, label)).toBeUndefined();
     expect(button(item("creating")!, label)).toBeUndefined();
-    // Not while the agent is replying.
-    expect(button(item("busy")!, label)).toBeUndefined();
+    // Also while the agent is replying: the backend cancels the turn.
+    expect(button(item("busy")!, label)).toBeDefined();
+    // Not while a finalize is running.
+    expect(button(item("running")!, label)).toBeUndefined();
+    expect(item("running")!.textContent).toContain(i18n.t("workflow:intake.list.finalizeRunning"));
     // Every listed session can be opened.
-    for (const id of ["active", "ready", "issued", "creating", "busy"]) {
+    for (const id of ["active", "ready", "issued", "creating", "busy", "running"]) {
       expect(button(item(id)!, i18n.t("workflow:intake.list.open"))).toBeDefined();
     }
   });

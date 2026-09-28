@@ -5,9 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+const showMessage = vi.hoisted(() => vi.fn());
+vi.mock("@/stores/dialog-store", () => ({ showMessage }));
 
 import i18n from "@/shared/i18n";
-import { SafeMarkdown, externalUrl } from "../SafeMarkdown";
+import { externalUrl } from "../../lib/open-external";
+import { SafeMarkdown } from "../SafeMarkdown";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -75,6 +78,7 @@ describe("SafeMarkdown", () => {
     // DOMPurify may drop the data: href; the anchor still must not navigate.
     expect(click(link("data"))).toBe(true);
     expect(invoke).not.toHaveBeenCalled();
+    expect(showMessage).not.toHaveBeenCalled();
   });
 
   it("prevents middle-click navigation", async () => {
@@ -83,14 +87,16 @@ describe("SafeMarkdown", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it("logs a failed open without throwing", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  it("shows a failed open", async () => {
     invoke.mockRejectedValue("boom");
     await render("[secure](https://example.com/)");
     await act(async () => {
       click(link("secure"));
     });
-    expect(warn).toHaveBeenCalled();
+    expect(showMessage).toHaveBeenCalledWith(expect.any(String), {
+      title: i18n.t("workflow:intake.linkOpenFailed"),
+      kind: "error",
+    });
   });
 });
 

@@ -9,11 +9,27 @@ const api = vi.hoisted(() => ({
   intakeList: vi.fn(),
 }));
 const listen = vi.hoisted(() => vi.fn());
+const emitTo = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+const mainWindow = vi.hoisted(() => ({
+  unminimize: vi.fn(() => Promise.resolve()),
+  setFocus: vi.fn(() => Promise.resolve()),
+}));
 vi.mock("../lib/workflow-api", () => ({ workflowApi: api, subscribeWorkflowEvents: vi.fn() }));
 vi.mock("@/stores/dialog-store", () => ({ showMessage: vi.fn() }));
-vi.mock("@tauri-apps/api/event", () => ({ listen }));
+vi.mock("@tauri-apps/api/event", () => ({ listen, emitTo }));
+vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => mainWindow }));
+// Switching folders loads the folder's opencode config.
+vi.mock("@/stores/opencode-config-store", () => ({
+  useOpencodeConfigStore: {
+    getState: () => ({ loadConfig: vi.fn(async () => {}), loadProjectMcpServers: vi.fn(async () => {}) }),
+  },
+}));
 
-import { WORKFLOW_OPEN_TASK_EVENT, type OpenTaskEvent } from "@/shared/types/workflow";
+import {
+  WORKFLOW_OPEN_TASK_ACK_EVENT,
+  WORKFLOW_OPEN_TASK_EVENT,
+  type OpenTaskEvent,
+} from "@/shared/types/workflow";
 import { useTabStore } from "@/stores/tab-store";
 import { useUiStore } from "@/stores/ui-store";
 import { startWorkflowFolderSync, startWorkflowOpenTaskListener } from "../folder-sync";
@@ -68,13 +84,17 @@ describe("startWorkflowFolderSync", () => {
 });
 
 describe("startWorkflowOpenTaskListener", () => {
-  let emit: (payload: OpenTaskEvent) => void;
+  let emit: (payload: Omit<OpenTaskEvent, "sender">) => void;
   const unlisten = vi.fn();
+  const SENDER = "intake-i1";
+  const acked = (taskId: string, handled: boolean) =>
+    expect(emitTo).toHaveBeenCalledWith(SENDER, WORKFLOW_OPEN_TASK_ACK_EVENT, { taskId, handled });
+  const waitAck = (taskId: string, handled: boolean) => vi.waitFor(() => acked(taskId, handled));
 
   beforeEach(() => {
     vi.clearAllMocks();
     useWorkflowStore.setState(initialState, true);
-    useTabStore.setState({ activeFolderPath: "C:/a", folderLeftPanel: {} });
+    useTabStore.setState({ activeFolderPath: "C:/a", openFolderPaths: ["C:/a"], folderLeftPanel: {} });
     useUiStore.getState().setLeftPanel("folder");
     api.attach.mockImplementation(async (folder: string) => folder);
     api.listWorkflows.mockResolvedValue({ workflows: [], warnings: [] });
@@ -82,13 +102,13 @@ describe("startWorkflowOpenTaskListener", () => {
     api.listRuns.mockResolvedValue({ runs: [], warnings: [] });
     api.intakeList.mockResolvedValue({ sessions: [], warnings: [] });
     listen.mockImplementation(async (_event: string, handler: (e: { payload: OpenTaskEvent }) => void) => {
-      emit = (payload) => handler({ payload });
+      emit = (payload) => handler({ payload: { ...payload, sender: SENDER } });
       return unlisten;
     });
   });
 
   afterEach(() => {
-    useTabStore.setState({ activeFolderPath: null });
+    useTabStore.setState({ activeFolderPath: null, openFolderPaths: [] });
   });
 
   it("opens the task of the active project in the workflow view", async () => {
@@ -102,6 +122,9 @@ describe("startWorkflowOpenTaskListener", () => {
     expect(useTabStore.getState().folderLeftPanel["C:/a"]).toBe("workflow");
     // The created task is listed at once.
     expect(api.listTasks).toHaveBeenCalledWith("C:/a");
+    await waitAck("t9", true);
+    expect(mainWindow.unminimize).toHaveBeenCalled();
+    expect(mainWindow.setFocus).toHaveBeenCalled();
     release();
     expect(unlisten).toHaveBeenCalledTimes(1);
   });
@@ -139,22 +162,52 @@ describe("startWorkflowOpenTaskListener", () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(useWorkflowStore.getState().selectedTaskId).toBeNull();
     expect(useUiStore.getState().leftPanel).toBe("folder");
+    await waitAck("t9", false);
   });
 
-  it("ignores a task of another project", async () => {
+  it("ignores a task of a project that is not open", async () => {
     await useWorkflowStore.getState().activate("C:/a");
     await startWorkflowOpenTaskListener();
     emit({ projectRoot: "C:/b", taskId: "t9" });
-    await new Promise((r) => setTimeout(r, 10));
+    await waitAck("t9", false);
     expect(useWorkflowStore.getState().selectedTaskId).toBeNull();
     expect(useUiStore.getState().leftPanel).toBe("folder");
+    expect(useTabStore.getState().activeFolderPath).toBe("C:/a");
+  });
+
+  it("switches to another open folder of the project and opens the task there", async () => {
+    // The folder path differs from the normalized root the intake passed.
+    api.attach.mockImplementation(async (folder: string) => (folder === "C:/b/" ? "C:/b" : folder));
+    useTabStore.setState({ openFolderPaths: ["C:/a", "C:/b/"] });
+    await useWorkflowStore.getState().activate("C:/a");
+    await startWorkflowOpenTaskListener();
+    emit({ projectRoot: "C:/b", taskId: "t9" });
+    await waitAck("t9", true);
+    expect(useTabStore.getState().activeFolderPath).toBe("C:/b/");
+    expect(useWorkflowStore.getState().activeRoot).toBe("C:/b");
+    expect(useWorkflowStore.getState().selectedTaskId).toBe("t9");
+    expect(useUiStore.getState().leftPanel).toBe("workflow");
+    expect(useTabStore.getState().folderLeftPanel["C:/b/"]).toBe("workflow");
+  });
+
+  it("still opens the task when the main window cannot be focused", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mainWindow.unminimize.mockRejectedValueOnce(new Error("not allowed"));
+    mainWindow.setFocus.mockRejectedValueOnce(new Error("not allowed"));
+    await useWorkflowStore.getState().activate("C:/a");
+    await startWorkflowOpenTaskListener();
+    emit({ projectRoot: "C:/a", taskId: "t9" });
+    await waitAck("t9", true);
+    expect(useWorkflowStore.getState().selectedTaskId).toBe("t9");
+    expect(warn).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
   });
 
   it("ignores the event while no folder is open", async () => {
-    useTabStore.setState({ activeFolderPath: null });
+    useTabStore.setState({ activeFolderPath: null, openFolderPaths: [] });
     await startWorkflowOpenTaskListener();
     emit({ projectRoot: "C:/a", taskId: "t9" });
-    await new Promise((r) => setTimeout(r, 10));
+    await waitAck("t9", false);
     expect(api.attach).not.toHaveBeenCalled();
     expect(useWorkflowStore.getState().selectedTaskId).toBeNull();
   });

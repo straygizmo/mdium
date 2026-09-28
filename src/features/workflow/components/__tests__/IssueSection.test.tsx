@@ -13,7 +13,8 @@ vi.mock("../../lib/workflow-api", () => ({
   },
   subscribeWorkflowEvents: vi.fn(),
 }));
-vi.mock("@/stores/dialog-store", () => ({ showMessage: vi.fn(), showConfirm: vi.fn() }));
+const dialogs = vi.hoisted(() => ({ showMessage: vi.fn(), showConfirm: vi.fn() }));
+vi.mock("@/stores/dialog-store", () => dialogs);
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
@@ -89,6 +90,17 @@ describe("IssueSection", () => {
     await act(async () => link.dispatchEvent(event));
     expect(event.defaultPrevented).toBe(true);
     expect(invoke).toHaveBeenCalledWith("open_external_url", { url: issue.url });
+    expect(dialogs.showMessage).not.toHaveBeenCalled();
+  });
+
+  it("shows a failure to open the Issue", async () => {
+    invoke.mockRejectedValueOnce(new Error("no browser"));
+    await render(null);
+    await act(async () => container.querySelector<HTMLAnchorElement>("a.workflow-issue__link")!.click());
+    expect(dialogs.showMessage).toHaveBeenCalledWith(expect.any(String), {
+      title: i18n.t("workflow:intake.issue.openFailed"),
+      kind: "error",
+    });
   });
 
   it("shows a non-http Issue URL as text without a link", async () => {

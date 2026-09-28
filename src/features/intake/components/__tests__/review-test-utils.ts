@@ -26,6 +26,7 @@ export function reviewSession(patch: Partial<IntakeSessionView> = {}): IntakeSes
     createdAt: "",
     updatedAt: "u1",
     busy: false,
+    finalizeRunning: false,
     appliedDocPaths: [],
     ...patch,
   };

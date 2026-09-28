@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { emitTo } from "@tauri-apps/api/event";
+import { emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import i18n from "@/shared/i18n";
 import { showMessage } from "@/stores/dialog-store";
@@ -12,7 +12,13 @@ import type {
   ProviderProbe,
   Workflow,
 } from "@/shared/types/workflow";
-import { WORKFLOW_OPEN_TASK_EVENT, type OpenTaskEvent } from "@/shared/types/workflow";
+import {
+  WORKFLOW_OPEN_TASK_ACK_EVENT,
+  WORKFLOW_OPEN_TASK_EVENT,
+  type OpenTaskAck,
+  type OpenTaskEvent,
+} from "@/shared/types/workflow";
+import { TRANSITION_CONFLICT } from "@/features/workflow/lib/errors";
 import { formatCode, formatCommandError, isCommandError, sameRoot } from "@/features/workflow/lib/format";
 import {
   subscribeIntakeChanged,
@@ -20,8 +26,11 @@ import {
   workflowApi,
 } from "@/features/workflow/lib/workflow-api";
 
-const TRANSITION_CONFLICT = "TRANSITION_CONFLICT";
 export const ISSUE_TRACKING_UNAVAILABLE = "ISSUE_TRACKING_UNAVAILABLE";
+/** How long "Open task" waits for the main window's acknowledgement. */
+export const OPEN_TASK_ACK_TIMEOUT_MS = 3000;
+/** Focus changes within this delay trigger one provider and forge recheck. */
+export const FOCUS_RECHECK_DEBOUNCE_MS = 500;
 
 export interface IntakeCreateInput {
   workflowId: string;
@@ -93,6 +102,8 @@ export interface IntakeWindowState {
   /** Forge probe; null while loading or when the probe failed. */
   forge: ForgeProbe | null;
   loading: boolean;
+  /** A provider and forge recheck is in flight. */
+  rechecking: boolean;
   /** A message send is in flight. */
   sending: boolean;
   /** A turn retry is in flight. */
@@ -107,6 +118,11 @@ export interface IntakeWindowState {
   finalizeAction: FinalizeAction | null;
   /** Failure of this window's last finalize request (see `FinalizeFailure`). */
   finalizeError: FinalizeFailure | null;
+  /**
+   * The main window did not show the created task (its project is not open
+   * there, or it did not answer in time); this window stays open.
+   */
+  openTaskUnhandled: boolean;
   /** Attaches the project and loads workflows, providers, forge and (with an id) the session and drafts. */
   init(root: string, intakeId: string | null): Promise<void>;
   /**
@@ -145,10 +161,18 @@ export interface IntakeWindowState {
   reopen(): Promise<void>;
   /** Abandons the session (the caller confirms first). */
   abandon(): Promise<void>;
-  /** Asks the main window to open the created task and closes this window. */
+  /**
+   * Asks the main window to open the created task; closes this window once
+   * the main window acknowledges it, else sets `openTaskUnhandled`.
+   */
   openTask(): Promise<void>;
   /** Probes the forge again (after Issue tracking turned out unavailable). */
   refreshForge(): Promise<void>;
+  /**
+   * Probes the providers and the forge again (e.g. after the user installed
+   * or signed in to a CLI); failed probes keep the previous results.
+   */
+  recheck(): Promise<void>;
 }
 
 /**
@@ -176,6 +200,7 @@ function initialState() {
     providers: [],
     forge: null,
     loading: false,
+    rechecking: false,
     sending: false,
     retrying: false,
     creating: false,
@@ -183,6 +208,7 @@ function initialState() {
     error: null,
     finalizeAction: null,
     finalizeError: null,
+    openTaskUnhandled: false,
   } satisfies Partial<IntakeWindowState>;
 }
 
@@ -463,14 +489,30 @@ export const useIntakeStore = create<IntakeWindowState>((set, get) => {
       const { root, session } = get();
       const taskId = session?.finalize.rootTaskId;
       if (!taskId) return;
-      const payload: OpenTaskEvent = { projectRoot: root, taskId };
+      set({ openTaskUnhandled: false });
+      let answer!: (handled: boolean) => void;
+      const acknowledged = new Promise<boolean>((resolve) => (answer = resolve));
+      let unlisten: (() => void) | null = null;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let handled: boolean;
       try {
+        // Listen before asking, so an immediate answer is not missed.
+        unlisten = await listen<OpenTaskAck>(WORKFLOW_OPEN_TASK_ACK_EVENT, (e) => {
+          if (e.payload.taskId === taskId) answer(e.payload.handled);
+        });
+        const payload: OpenTaskEvent = { projectRoot: root, taskId, sender: getCurrentWindow().label };
         await emitTo("main", WORKFLOW_OPEN_TASK_EVENT, payload);
+        timer = setTimeout(() => answer(false), OPEN_TASK_ACK_TIMEOUT_MS);
+        handled = await acknowledged;
       } catch (err) {
         void showMessage(formatCommandError(err), { title: i18n.t("workflow:intake.actionFailed"), kind: "error" });
         return;
+      } finally {
+        clearTimeout(timer);
+        unlisten?.();
       }
-      await get().closeWindow();
+      if (handled) await get().closeWindow();
+      else set({ openTaskUnhandled: true });
     },
 
     async refreshForge() {
@@ -484,6 +526,32 @@ export const useIntakeStore = create<IntakeWindowState>((set, get) => {
         forge = null;
       }
       if (sameRoot(get().root, root)) set({ forge });
+    },
+
+    async recheck() {
+      const { root, loading, rechecking } = get();
+      // `init` probes anyway; nothing to recheck before it attached the project.
+      if (!root || loading || rechecking) return;
+      set({ rechecking: true });
+      try {
+        const [providers, forge] = await Promise.all([
+          workflowApi.probeProviders().catch((err: unknown) => {
+            console.error("[intake] probing the providers failed", err);
+            return null;
+          }),
+          workflowApi.forgeProbe(root).catch((err: unknown) => {
+            console.error("[intake] probing the forge failed", err);
+            return undefined;
+          }),
+        ]);
+        if (!sameRoot(get().root, root)) return;
+        set((s) => ({
+          providers: providers ?? s.providers,
+          forge: forge === undefined ? s.forge : forge,
+        }));
+      } finally {
+        set({ rechecking: false });
+      }
     },
 
     async removeDraft(draftId) {
@@ -523,5 +591,23 @@ export async function startIntakeEvents(): Promise<() => void> {
   return () => {
     stopIntake();
     stopWorkflows();
+  };
+}
+
+/**
+ * Rechecks the providers and the forge when the window gains focus (the user
+ * may have installed or signed in to a CLI meanwhile), debounced so quick
+ * focus changes probe once. Returns the function removing the listener.
+ */
+export function startFocusRecheck(): () => void {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const onFocus = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => void useIntakeStore.getState().recheck(), FOCUS_RECHECK_DEBOUNCE_MS);
+  };
+  window.addEventListener("focus", onFocus);
+  return () => {
+    clearTimeout(timer);
+    window.removeEventListener("focus", onFocus);
   };
 }

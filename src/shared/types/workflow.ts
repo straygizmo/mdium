@@ -439,6 +439,8 @@ export interface IntakeSession {
 export interface IntakeSessionView extends IntakeSession {
   /** An agent turn of the session is running. */
   busy: boolean;
+  /** A finalize of the session is running (its actions are unavailable meanwhile). */
+  finalizeRunning: boolean;
   /** Paths of the applied doc updates: files written into the working tree that still need committing. */
   appliedDocPaths: string[];
 }
@@ -509,6 +511,7 @@ export interface WorkflowsChangedEvent {
 /**
  * Sent by an intake window to the main window (`emitTo("main", …)`) after
  * finalizing: open the created task. `projectRoot` is the normalized root.
+ * The main window answers with `workflow://open-task-ack`.
  */
 export const WORKFLOW_OPEN_TASK_EVENT = "workflow://open-task";
 
@@ -516,4 +519,19 @@ export const WORKFLOW_OPEN_TASK_EVENT = "workflow://open-task";
 export interface OpenTaskEvent {
   projectRoot: string;
   taskId: string;
+  /** Label of the sending intake window (the acknowledgement goes there). */
+  sender: string;
+}
+
+/**
+ * Sent by the main window to the intake window that sent
+ * `workflow://open-task` (`emitTo(sender, …)`).
+ */
+export const WORKFLOW_OPEN_TASK_ACK_EVENT = "workflow://open-task-ack";
+
+/** Payload of `workflow://open-task-ack`. */
+export interface OpenTaskAck {
+  taskId: string;
+  /** The task's project is open in the main window and the task is shown. */
+  handled: boolean;
 }

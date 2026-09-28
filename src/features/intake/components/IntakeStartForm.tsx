@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ForgeProbe, ForgeRepo, IntakeKind, Provider, Workflow } from "@/shared/types/workflow";
 import {
@@ -47,12 +47,14 @@ export function IntakeStartForm({ initialWorkflowId }: IntakeStartFormProps) {
   const probes = useIntakeStore((s) => s.providers);
   const forge = useIntakeStore((s) => s.forge);
   const creating = useIntakeStore((s) => s.creating);
+  const rechecking = useIntakeStore((s) => s.rechecking);
   const handOff = useIntakeStore((s) => s.handOff);
   // Nothing can be changed or started once a session was created here.
   const locked = creating || handOff !== null;
   const ids = useId();
   const titleId = `${ids}-title`;
   const providerWarningId = `${ids}-provider-warning`;
+  const noticeId = `${ids}-workflow-notice`;
   const usable = useMemo(() => workflows.filter((w) => w.enabled && !w.archived), [workflows]);
   // Re-localize the reasons when the language changes.
   const availability = useMemo(() => availabilityFromProbes(probes), [probes, t]);
@@ -60,8 +62,16 @@ export function IntakeStartForm({ initialWorkflowId }: IntakeStartFormProps) {
   const [kind, setKind] = useState<IntakeKind>("feature");
   const [choice, setChoice] = useState<AgentChoice | null>(null);
 
-  // Fall back to the first usable workflow when none (or an unusable or vanished one) is selected.
-  const selected = usable.find((w) => w.id === workflowId) ?? usable[0] ?? null;
+  // Without a preselection the first usable workflow is shown, and kept as
+  // the choice from then on.
+  const shownId = workflowId ?? usable[0]?.id ?? null;
+  useEffect(() => {
+    if (workflowId === null && shownId !== null) setWorkflowId(shownId);
+  }, [workflowId, shownId]);
+  // A chosen workflow that became unusable (disabled, archived or deleted) is
+  // never replaced silently: the user has to choose again.
+  const selected = usable.find((w) => w.id === shownId) ?? null;
+  const unavailable = shownId !== null && selected === null && usable.length > 0;
   const agent = selected
     ? choice?.workflowId === selected.id
       ? choice
@@ -96,11 +106,21 @@ export function IntakeStartForm({ initialWorkflowId }: IntakeStartFormProps) {
       <p className="intake-start__description">{t("intake.start.description")}</p>
 
       <fieldset className="intake-start__fields" disabled={locked}>
-        {selected && agent ? (
+        {usable.length > 0 ? (
           <>
             <label className="intake-start__field">
               <span>{t("intake.start.workflow")}</span>
-              <select name="workflow" value={selected.id} onChange={(e) => setWorkflowId(e.target.value)}>
+              <select
+                name="workflow"
+                value={selected?.id ?? ""}
+                aria-describedby={unavailable ? noticeId : undefined}
+                onChange={(e) => setWorkflowId(e.target.value)}
+              >
+                {!selected && (
+                  <option value="" disabled>
+                    {t("intake.start.chooseWorkflow")}
+                  </option>
+                )}
                 {usable.map((w) => (
                   <option key={w.id} value={w.id}>
                     {w.name}
@@ -108,6 +128,11 @@ export function IntakeStartForm({ initialWorkflowId }: IntakeStartFormProps) {
                 ))}
               </select>
             </label>
+            {unavailable && (
+              <p id={noticeId} className="intake-start__notice" role="alert">
+                {t("intake.start.workflowUnavailable")}
+              </p>
+            )}
 
             <fieldset className="intake-start__kinds">
               <legend>{t("intake.start.kind")}</legend>
@@ -129,45 +154,49 @@ export function IntakeStartForm({ initialWorkflowId }: IntakeStartFormProps) {
               ))}
             </fieldset>
 
-            <div className="intake-start__row">
-              <label className="intake-start__field">
-                <span>{t("intake.start.provider")}</span>
-                <select
-                  name="provider"
-                  value={agent.provider}
-                  aria-describedby={availability[agent.provider] ? providerWarningId : undefined}
-                  onChange={(e) => patchAgent({ provider: e.target.value as Provider })}
-                >
-                  {PROVIDERS.map((p) => (
-                    <option key={p} value={p}>
-                      {providerLabel(p, availability)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="intake-start__field">
-                <span>{t("intake.start.model")}</span>
-                <input
-                  type="text"
-                  name="model"
-                  value={agent.model}
-                  placeholder={t("intake.start.modelPlaceholder")}
-                  onChange={(e) => patchAgent({ model: e.target.value })}
-                />
-              </label>
-            </div>
-            {availability[agent.provider] && (
-              <p id={providerWarningId} className="intake-start__warning">
-                {providerLabel(agent.provider, availability)}
-              </p>
-            )}
+            {selected && agent && (
+              <>
+              <div className="intake-start__row">
+                <label className="intake-start__field">
+                  <span>{t("intake.start.provider")}</span>
+                  <select
+                    name="provider"
+                    value={agent.provider}
+                    aria-describedby={availability[agent.provider] ? providerWarningId : undefined}
+                    onChange={(e) => patchAgent({ provider: e.target.value as Provider })}
+                  >
+                    {PROVIDERS.map((p) => (
+                      <option key={p} value={p}>
+                        {providerLabel(p, availability)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="intake-start__field">
+                  <span>{t("intake.start.model")}</span>
+                  <input
+                    type="text"
+                    name="model"
+                    value={agent.model}
+                    placeholder={t("intake.start.modelPlaceholder")}
+                    onChange={(e) => patchAgent({ model: e.target.value })}
+                  />
+                </label>
+              </div>
+              {availability[agent.provider] && (
+                <p id={providerWarningId} className="intake-start__warning">
+                  {providerLabel(agent.provider, availability)}
+                </p>
+              )}
 
-            {selected.issueTracking === "auto" && (
-              <p className={`intake-start__issue${"reason" in issue ? " intake-start__issue--unavailable" : ""}`}>
-                {"reason" in issue
-                  ? t("intake.start.issueUnavailable", { reason: t(`intake.start.forgeReason.${issue.reason}`) })
-                  : t("intake.start.issueWillCreate", { host: issue.repo.host, path: issue.repo.path })}
-              </p>
+              {selected.issueTracking === "auto" && (
+                <p className={`intake-start__issue${"reason" in issue ? " intake-start__issue--unavailable" : ""}`}>
+                  {"reason" in issue
+                    ? t("intake.start.issueUnavailable", { reason: t(`intake.start.forgeReason.${issue.reason}`) })
+                    : t("intake.start.issueWillCreate", { host: issue.repo.host, path: issue.repo.path })}
+                </p>
+              )}
+              </>
             )}
           </>
         ) : (
@@ -175,6 +204,14 @@ export function IntakeStartForm({ initialWorkflowId }: IntakeStartFormProps) {
         )}
 
         <div className="intake-start__buttons">
+          <button
+            type="button"
+            className="intake-start__recheck"
+            disabled={rechecking}
+            onClick={() => void useIntakeStore.getState().recheck()}
+          >
+            {rechecking ? t("intake.start.rechecking") : t("intake.start.recheck")}
+          </button>
           <button type="submit" className="intake-start__submit" disabled={locked || !selected}>
             {creating ? t("intake.start.starting") : t("intake.start.start")}
           </button>

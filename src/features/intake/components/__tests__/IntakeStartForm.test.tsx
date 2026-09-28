@@ -115,9 +115,56 @@ describe("IntakeStartForm", () => {
     expect(workflowSelect().value).toBe("b");
   });
 
-  it("falls back to the first usable workflow for an unusable preselection", async () => {
+  const notice = () => container.querySelector(".intake-start__notice")?.textContent ?? null;
+
+  it("asks for an explicit choice when the preselected workflow is unusable", async () => {
     await mount("off");
+    expect(workflowSelect().value).toBe("");
+    expect(notice()).toBe(t("intake.start.workflowUnavailable"));
+    expect(startButton().disabled).toBe(true);
+    await act(async () => startButton().click());
+    expect(create).not.toHaveBeenCalled();
+
+    await act(async () => setValue(workflowSelect(), "b"));
+    expect(notice()).toBeNull();
+    expect(startButton().disabled).toBe(false);
+    await act(async () => startButton().click());
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ workflowId: "b" }));
+  });
+
+  it("does not switch silently when the chosen workflow becomes unusable", async () => {
+    await mount("b");
+    await act(async () => {
+      useIntakeStore.setState({ workflows: WORKFLOWS.map((w) => (w.id === "b" ? { ...w, enabled: false } : w)) });
+    });
+    expect(workflowSelect().value).toBe("");
+    expect([...workflowSelect().options].map((o) => o.value)).toEqual(["", "a"]);
+    expect(notice()).toBe(t("intake.start.workflowUnavailable"));
+    expect(startButton().disabled).toBe(true);
+  });
+
+  it("keeps the default workflow once shown, even when it becomes unusable", async () => {
+    await mount();
     expect(workflowSelect().value).toBe("a");
+    expect(notice()).toBeNull();
+    await act(async () => {
+      useIntakeStore.setState({ workflows: WORKFLOWS.map((w) => (w.id === "a" ? { ...w, archived: true } : w)) });
+    });
+    expect(workflowSelect().value).toBe("");
+    expect(notice()).toBe(t("intake.start.workflowUnavailable"));
+  });
+
+  it("rechecks the providers and the forge on request", async () => {
+    const recheck = vi.fn(() => Promise.resolve());
+    useIntakeStore.setState({ recheck });
+    await mount();
+    const button = () => container.querySelector<HTMLButtonElement>(".intake-start__recheck")!;
+    expect(button().textContent).toBe(t("intake.start.recheck"));
+    await act(async () => button().click());
+    expect(recheck).toHaveBeenCalledTimes(1);
+    await act(async () => useIntakeStore.setState({ rechecking: true }));
+    expect(button().disabled).toBe(true);
+    expect(button().textContent).toBe(t("intake.start.rechecking"));
   });
 
   it("defaults provider and model from the design stage and follows the workflow", async () => {

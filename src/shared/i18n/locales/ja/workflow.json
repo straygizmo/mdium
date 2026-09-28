@@ -309,7 +309,11 @@
       },
       "start": "開始",
       "starting": "開始しています…",
-      "failed": "要件整理を開始できませんでした。"
+      "failed": "要件整理を開始できませんでした。",
+      "workflowUnavailable": "選択していたワークフローは使用できなくなりました。ワークフローを選択してください。",
+      "chooseWorkflow": "ワークフローを選択",
+      "recheck": "再確認",
+      "rechecking": "確認中…"
     },
     "conversation": {
       "title": "対話",
@@ -411,8 +415,7 @@
       "pendingDocs": "まだ承認・却下していない文書更新提案があります。",
       "done": "タスクを作成しました。",
       "openTask": "タスクを開く",
-      "issueLink": "Issue #{{number}}（{{host}}/{{path}}）",
-      "issueLinkFailed": "Issue を開けませんでした。"
+      "openTaskUnhandled": "タスクを表示するには、メインウィンドウでプロジェクトを開いてください。"
     },
     "list": {
       "title": "要件整理",
@@ -426,7 +429,8 @@
       "warnings": "読み込み時の警告（{{count}} 件）",
       "loadFailed": "要件整理の一覧を読み込めませんでした。",
       "openFailed": "要件整理のウィンドウを開けませんでした。",
-      "abandonFailed": "要件整理を破棄できませんでした。"
+      "abandonFailed": "要件整理を破棄できませんでした。",
+      "finalizeRunning": "確定処理を実行中"
     },
     "attachments": {
       "title": "添付",
@@ -442,13 +446,14 @@
     },
     "issue": {
       "title": "Issue",
-      "link": "#{{number}}（{{host}}/{{path}}）",
+      "link": "Issue #{{number}}（{{host}}/{{path}}）",
       "openLink": "Issue を開く",
       "stateOpen": "オープン",
       "closed": "クローズ済み",
       "closeFailed": "Issue をクローズできませんでした。{{error}}",
       "retryClose": "Issue のクローズを再試行",
-      "retryCloseFailed": "Issue をクローズできませんでした。"
+      "retryCloseFailed": "Issue をクローズできませんでした。",
+      "openFailed": "Issue を開けませんでした。"
     },
     "issueSync": {
       "entry": "未記録の内容: {{entry}}",
@@ -461,7 +466,8 @@
       "acceptRetry": "リポジトリの変更を承認して同期を再試行",
       "acceptSkip": "リポジトリの変更を承認して続行",
       "dismiss": "閉じる"
-    }
+    },
+    "linkOpenFailed": "リンクを開けませんでした。"
   },
   "codes": {
     "ATTENTION_INTERRUPTED": "実行中にアプリが終了しました。",

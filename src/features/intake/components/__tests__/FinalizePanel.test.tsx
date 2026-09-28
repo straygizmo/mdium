@@ -19,10 +19,27 @@ vi.mock("@/features/workflow/lib/workflow-api", () => ({
 }));
 const invoke = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
-const emitTo = vi.hoisted(() => vi.fn(() => Promise.resolve()));
-vi.mock("@tauri-apps/api/event", () => ({ emitTo }));
+/** The acknowledgement the main window sends for the next open-task request. */
+const mainWindow = vi.hoisted(() => ({
+  ack: null as ((e: { payload: unknown }) => void) | null,
+  answer: { handled: true } as { handled: boolean },
+}));
+const emitTo = vi.hoisted(() =>
+  vi.fn(async (_target: string, _event: string, payload: { taskId: string }) => {
+    mainWindow.ack?.({ payload: { taskId: payload.taskId, handled: mainWindow.answer.handled } });
+  }),
+);
+const listen = vi.hoisted(() =>
+  vi.fn(async (_event: string, handler: (e: { payload: unknown }) => void) => {
+    mainWindow.ack = handler;
+    return () => {
+      mainWindow.ack = null;
+    };
+  }),
+);
+vi.mock("@tauri-apps/api/event", () => ({ emitTo, listen }));
 const closeWindow = vi.hoisted(() => vi.fn(() => Promise.resolve()));
-vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ close: closeWindow }) }));
+vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ close: closeWindow, label: "intake-i1" }) }));
 const dialogs = vi.hoisted(() => ({ showMessage: vi.fn(), showConfirm: vi.fn() }));
 vi.mock("@/stores/dialog-store", () => dialogs);
 
@@ -66,6 +83,7 @@ describe("FinalizePanel", () => {
     document.body.appendChild(container);
     useIntakeStore.setState(useIntakeStore.getInitialState(), true);
     dialogs.showConfirm.mockResolvedValue(true);
+    mainWindow.answer.handled = true;
   });
 
   afterEach(async () => {
@@ -152,12 +170,40 @@ describe("FinalizePanel", () => {
     await click(q(".intake-finalize__issue-link"));
     expect(dialogs.showMessage).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ title: t("intake.finalize.issueLinkFailed"), kind: "error" }),
+      expect.objectContaining({ title: t("intake.issue.openFailed"), kind: "error" }),
     );
 
     await click(q(".intake-finalize__open-task"));
-    expect(emitTo).toHaveBeenCalledWith("main", "workflow://open-task", { projectRoot: ROOT, taskId: "t1" });
+    expect(emitTo).toHaveBeenCalledWith("main", "workflow://open-task", {
+      projectRoot: ROOT,
+      taskId: "t1",
+      sender: "intake-i1",
+    });
     expect(closeWindow).toHaveBeenCalled();
+    expect(q(".intake-finalize__unhandled")).toBeNull();
+  });
+
+  it("stays open and explains when the main window cannot show the task", async () => {
+    mainWindow.answer.handled = false;
+    await mount(finalizing({ stage: "done" }, { status: "done" }));
+    await click(q(".intake-finalize__open-task"));
+    expect(closeWindow).not.toHaveBeenCalled();
+    expect(q(".intake-finalize__unhandled")?.textContent).toBe(t("intake.finalize.openTaskUnhandled"));
+    expect(q<HTMLButtonElement>(".intake-finalize__open-task")?.disabled).toBe(false);
+  });
+
+  it("shows a finalize running elsewhere and hides every action", async () => {
+    await mount(finalizing({ lastError: "FORGE_TIMEOUT" }, { finalizeRunning: true }));
+    expect(q(".intake-finalize__progress")?.textContent).toBe(t("intake.finalize.finalizing"));
+    expect(q(".intake-finalize__error")).toBeNull();
+    expect(container.textContent).not.toContain(t("intake.finalize.failed"));
+    expect(shownActions()).toEqual([]);
+  });
+
+  it("shows a finalize that is starting while the session is still active", async () => {
+    await mount(reviewSession({ finalizeRunning: true }));
+    expect(q(".intake-finalize__progress")?.textContent).toBe(t("intake.finalize.finalizing"));
+    expect(shownActions()).toEqual([]);
   });
 
   it("offers continuing without an Issue when tracking is unavailable before finalizing starts", async () => {
@@ -296,6 +342,15 @@ describe("FinalizePanel", () => {
     await click(button);
     expect(dialogs.showConfirm).toHaveBeenCalledWith(t("intake.conversation.abandonConfirm"), expect.anything());
     expect(api.intakeAbandon).toHaveBeenCalledWith(ROOT, "i1");
+    expect(q(".intake-abandon")).toBeNull();
+  });
+
+  it("offers abandoning while the agent replies, but not while finalizing runs", async () => {
+    useIntakeStore.setState({ root: ROOT, intakeId: "i1", session: reviewSession({ busy: true }) });
+    root = createRoot(container);
+    await act(async () => root?.render(<AbandonIntakeButton />));
+    expect(q<HTMLButtonElement>(".intake-abandon")?.disabled).toBe(false);
+    await act(async () => useIntakeStore.setState({ session: reviewSession({ finalizeRunning: true }) }));
     expect(q(".intake-abandon")).toBeNull();
   });
 });

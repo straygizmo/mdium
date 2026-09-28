@@ -1,11 +1,10 @@
 import { type MouseEvent, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { invoke } from "@tauri-apps/api/core";
 import type { IssueRef, WorkflowRun } from "@/shared/types/workflow";
 import { formatCode } from "../lib/format";
 import { workflowApi } from "../lib/workflow-api";
 import { useWorkflowStore } from "../workflow-store";
-import { externalUrl } from "./SafeMarkdown";
+import { externalUrl, openExternal } from "../lib/open-external";
 import "./IssueSection.css";
 
 interface IssueSectionProps {
@@ -30,8 +29,7 @@ export function IssueSection({ issue, run, standalone = false }: IssueSectionPro
   const onOpen = (e: MouseEvent<HTMLAnchorElement>) => {
     // Never navigate the app: the link opens in the external browser.
     e.preventDefault();
-    if (!url) return;
-    invoke("open_external_url", { url }).catch((err: unknown) => console.warn("[workflow] open Issue failed", err));
+    if (url) void openExternal(url, "workflow:intake.issue.openFailed");
   };
   const label = t("intake.issue.link", { number: issue.number, host: issue.host, path: issue.path });
 

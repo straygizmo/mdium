@@ -309,7 +309,11 @@
       },
       "start": "Start",
       "starting": "Starting…",
-      "failed": "The requirement intake could not be started."
+      "failed": "The requirement intake could not be started.",
+      "workflowUnavailable": "The selected workflow can no longer be used. Choose a workflow.",
+      "chooseWorkflow": "Choose a workflow",
+      "recheck": "Recheck",
+      "rechecking": "Checking…"
     },
     "conversation": {
       "title": "Conversation",
@@ -411,8 +415,7 @@
       "pendingDocs": "Some document updates have not been applied or rejected yet.",
       "done": "The task was created.",
       "openTask": "Open task",
-      "issueLink": "Issue #{{number}} ({{host}}/{{path}})",
-      "issueLinkFailed": "The Issue could not be opened."
+      "openTaskUnhandled": "Open the project in the main window to see the task."
     },
     "list": {
       "title": "Requirement intakes",
@@ -426,7 +429,8 @@
       "warnings": "Load warnings ({{count}})",
       "loadFailed": "The requirement intakes could not be loaded.",
       "openFailed": "The requirement intake window could not be opened.",
-      "abandonFailed": "The requirement intake could not be abandoned."
+      "abandonFailed": "The requirement intake could not be abandoned.",
+      "finalizeRunning": "Finalize in progress"
     },
     "attachments": {
       "title": "Attachments",
@@ -442,13 +446,14 @@
     },
     "issue": {
       "title": "Issue",
-      "link": "#{{number}} ({{host}}/{{path}})",
+      "link": "Issue #{{number}} ({{host}}/{{path}})",
       "openLink": "Open the Issue",
       "stateOpen": "Open",
       "closed": "Closed",
       "closeFailed": "The Issue could not be closed. {{error}}",
       "retryClose": "Retry closing the Issue",
-      "retryCloseFailed": "The Issue could not be closed."
+      "retryCloseFailed": "The Issue could not be closed.",
+      "openFailed": "The Issue could not be opened."
     },
     "issueSync": {
       "entry": "Unrecorded entry: {{entry}}",
@@ -461,7 +466,8 @@
       "acceptRetry": "Accept the repository changes and retry the sync",
       "acceptSkip": "Accept the repository changes and continue",
       "dismiss": "Close"
-    }
+    },
+    "linkOpenFailed": "The link could not be opened."
   },
   "codes": {
     "ATTENTION_INTERRUPTED": "The app quit while this task was running.",

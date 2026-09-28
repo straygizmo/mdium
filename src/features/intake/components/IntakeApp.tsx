@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { startIntakeEvents, useIntakeStore } from "../intake-store";
+import { startFocusRecheck, startIntakeEvents, useIntakeStore } from "../intake-store";
 import { DocUpdateList } from "./DocUpdateList";
 import { AbandonIntakeButton, FinalizePanel } from "./FinalizePanel";
 import { IntakeConversation } from "./IntakeConversation";
@@ -54,6 +54,9 @@ export function IntakeApp({ root, intakeId, workflowId }: IntakeAppProps) {
       stop?.();
     };
   }, [root, intakeId]);
+
+  // Provider and forge availability may change while the window is in the background.
+  useEffect(() => startFocusRecheck(), []);
 
   // An intake window keeps loading until a session is applied or loading
   // failed (an outdated load dropped by a racing reload is no failure).

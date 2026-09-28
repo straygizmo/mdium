@@ -26,6 +26,7 @@
 .intake-finalize__note,
 .intake-finalize__progress,
 .intake-finalize__failed,
+.intake-finalize__unhandled,
 .intake-finalize__done {
   margin: 0;
   font-size: 12px;
@@ -33,6 +34,7 @@
 
 .intake-finalize__description,
 .intake-finalize__note,
+.intake-finalize__unhandled,
 .intake-finalize__progress {
   color: var(--text-secondary);
 }

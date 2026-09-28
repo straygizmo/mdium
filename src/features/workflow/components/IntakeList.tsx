@@ -13,12 +13,13 @@ function isOpen(session: IntakeSessionView): boolean {
 }
 
 /**
- * Whether the session can be abandoned: no agent turn is running, and it is
- * in conversation or its finalize has not created (or started creating)
- * anything yet (what the backend accepts).
+ * Whether the session can be abandoned (what the backend accepts): no
+ * finalize is running, and it is in conversation or its finalize has not
+ * created (or started creating) anything yet. A running agent turn does not
+ * prevent it; the backend cancels the turn.
  */
 function canAbandon(session: IntakeSessionView): boolean {
-  if (session.busy) return false;
+  if (session.finalizeRunning) return false;
   if (session.status === "active") return true;
   const f = session.finalize;
   return session.status === "finalizing" && f.stage === "ready" && f.issue === null && !f.issueCreating;
@@ -118,6 +119,11 @@ export function IntakeList() {
                   {session.busy && (
                     <span className="intake-list__busy" role="status">
                       {t("intake.list.busy")}
+                    </span>
+                  )}
+                  {session.finalizeRunning && (
+                    <span className="intake-list__busy" role="status">
+                      {t("intake.list.finalizeRunning")}
                     </span>
                   )}
                 </div>

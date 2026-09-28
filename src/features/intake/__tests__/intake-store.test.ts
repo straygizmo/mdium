@@ -50,13 +50,25 @@ vi.mock("@/features/workflow/lib/workflow-api", () => ({
     return events.unlistenWorkflows;
   }),
 }));
-vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ close: closeWindow }) }));
+vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ close: closeWindow, label: "intake-i1" }) }));
 vi.mock("@/stores/dialog-store", () => ({ showMessage }));
-const emitTo = vi.hoisted(() => vi.fn(() => Promise.resolve()));
-vi.mock("@tauri-apps/api/event", () => ({ emitTo }));
+const emitTo = vi.hoisted(() => vi.fn((..._args: unknown[]) => Promise.resolve()));
+/** Acknowledgement listeners registered with `listen`, by event. */
+const ackListeners = vi.hoisted(() => new Map<string, (e: { payload: unknown }) => void>());
+const unlistenAck = vi.hoisted(() => vi.fn());
+const listen = vi.hoisted(() =>
+  vi.fn(async (event: string, handler: (e: { payload: unknown }) => void) => {
+    ackListeners.set(event, handler);
+    return () => {
+      unlistenAck();
+      ackListeners.delete(event);
+    };
+  }),
+);
+vi.mock("@tauri-apps/api/event", () => ({ emitTo, listen }));
 
 import i18n from "@/shared/i18n";
-import { startIntakeEvents, useIntakeStore } from "../intake-store";
+import { startFocusRecheck, startIntakeEvents, useIntakeStore } from "../intake-store";
 
 const ROOT = "C:\\proj";
 const WORKFLOW = { id: "wf1", name: "WF", enabled: true, archived: false, stages: [] } as unknown as Workflow;
@@ -87,6 +99,7 @@ function session(id: string, patch: Partial<IntakeSessionView> = {}): IntakeSess
     createdAt: "",
     updatedAt: "",
     busy: false,
+    finalizeRunning: false,
     appliedDocPaths: [],
     ...patch,
   };
@@ -542,16 +555,149 @@ describe("intake-store", () => {
       expect(useIntakeStore.getState().finalizeAction).toBeNull();
     });
 
-    it("hands the created task to the main window and closes this one", async () => {
-      useIntakeStore.setState({
-        session: session("i1", {
-          status: "done",
-          finalize: { ...session("i1").finalize, stage: "done", rootTaskId: "t1" },
-        }),
+    describe("openTask", () => {
+      const done = () =>
+        session("i1", { status: "done", finalize: { ...session("i1").finalize, stage: "done", rootTaskId: "t1" } });
+      /** Answers the open-task request like the main window. */
+      const answer = (payload: unknown) => {
+        emitTo.mockImplementationOnce(async () => {
+          ackListeners.get("workflow://open-task-ack")?.({ payload });
+        });
+      };
+
+      /** Settles microtasks until the acknowledgement timeout is armed. */
+      const timeoutStarted = async () => {
+        for (let i = 0; i < 50 && vi.getTimerCount() === 0; i++) await Promise.resolve();
+        expect(vi.getTimerCount()).toBe(1);
+      };
+
+      beforeEach(() => {
+        ackListeners.clear();
+        useIntakeStore.setState({ session: done() });
       });
-      await useIntakeStore.getState().openTask();
-      expect(emitTo).toHaveBeenCalledWith("main", "workflow://open-task", { projectRoot: ROOT, taskId: "t1" });
-      expect(closeWindow).toHaveBeenCalled();
+
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      it("closes this window once the main window shows the task", async () => {
+        answer({ taskId: "t1", handled: true });
+        await useIntakeStore.getState().openTask();
+        expect(emitTo).toHaveBeenCalledWith("main", "workflow://open-task", {
+          projectRoot: ROOT,
+          taskId: "t1",
+          sender: "intake-i1",
+        });
+        expect(closeWindow).toHaveBeenCalled();
+        expect(useIntakeStore.getState().openTaskUnhandled).toBe(false);
+        expect(unlistenAck).toHaveBeenCalledTimes(1);
+      });
+
+      it("ignores acknowledgements of other tasks", async () => {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        answer({ taskId: "other", handled: true });
+        const opening = useIntakeStore.getState().openTask();
+        await timeoutStarted();
+        await vi.advanceTimersByTimeAsync(3000);
+        await opening;
+        expect(closeWindow).not.toHaveBeenCalled();
+        expect(useIntakeStore.getState().openTaskUnhandled).toBe(true);
+      });
+
+      it("keeps the window and explains when the project is not open in the main window", async () => {
+        answer({ taskId: "t1", handled: false });
+        await useIntakeStore.getState().openTask();
+        expect(closeWindow).not.toHaveBeenCalled();
+        expect(useIntakeStore.getState().openTaskUnhandled).toBe(true);
+        expect(unlistenAck).toHaveBeenCalledTimes(1);
+      });
+
+      it("keeps the window when the main window does not answer in time", async () => {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const opening = useIntakeStore.getState().openTask();
+        await timeoutStarted();
+        await vi.advanceTimersByTimeAsync(2999);
+        expect(useIntakeStore.getState().openTaskUnhandled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        await opening;
+        expect(closeWindow).not.toHaveBeenCalled();
+        expect(useIntakeStore.getState().openTaskUnhandled).toBe(true);
+        expect(unlistenAck).toHaveBeenCalledTimes(1);
+      });
+
+      it("shows a failure to send the request", async () => {
+        emitTo.mockRejectedValueOnce(new Error("no main window"));
+        await useIntakeStore.getState().openTask();
+        expect(showMessage).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ kind: "error" }));
+        expect(closeWindow).not.toHaveBeenCalled();
+        expect(unlistenAck).toHaveBeenCalledTimes(1);
+      });
+    });
+  });
+
+  describe("recheck", () => {
+    const OK_FORGE: ForgeProbe = { repo: { kind: "github", host: "github.com", path: "o/r" }, cliAvailable: true, authenticated: true };
+
+    beforeEach(async () => {
+      await useIntakeStore.getState().init(ROOT, null);
+      api.probeProviders.mockClear();
+      api.forgeProbe.mockClear();
+    });
+
+    it("probes the providers and the forge again", async () => {
+      api.probeProviders.mockResolvedValue([{ provider: "codex", result: { kind: "available" } }]);
+      api.forgeProbe.mockResolvedValue(OK_FORGE);
+      await useIntakeStore.getState().recheck();
+      expect(api.forgeProbe).toHaveBeenCalledWith(ROOT);
+      const s = useIntakeStore.getState();
+      expect(s.providers).toEqual([{ provider: "codex", result: { kind: "available" } }]);
+      expect(s.forge).toEqual(OK_FORGE);
+      expect(s.rechecking).toBe(false);
+    });
+
+    it("keeps the previous results when a probe fails", async () => {
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      const before = useIntakeStore.getState();
+      api.probeProviders.mockRejectedValue(new Error("x"));
+      api.forgeProbe.mockRejectedValue(new Error("y"));
+      await useIntakeStore.getState().recheck();
+      expect(useIntakeStore.getState().providers).toBe(before.providers);
+      expect(useIntakeStore.getState().forge).toBe(before.forge);
+      expect(errors).toHaveBeenCalledTimes(2);
+      errors.mockRestore();
+    });
+
+    it("runs one recheck at a time and not before init", async () => {
+      let resolve!: (v: unknown[]) => void;
+      api.probeProviders.mockReturnValue(new Promise((r) => (resolve = r)));
+      const first = useIntakeStore.getState().recheck();
+      expect(useIntakeStore.getState().rechecking).toBe(true);
+      await useIntakeStore.getState().recheck();
+      expect(api.probeProviders).toHaveBeenCalledTimes(1);
+      resolve([]);
+      await first;
+
+      useIntakeStore.setState(useIntakeStore.getInitialState(), true);
+      await useIntakeStore.getState().recheck();
+      expect(api.probeProviders).toHaveBeenCalledTimes(1);
+    });
+
+    it("rechecks once after focus changes settle", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const stop = startFocusRecheck();
+      window.dispatchEvent(new Event("focus"));
+      await vi.advanceTimersByTimeAsync(300);
+      window.dispatchEvent(new Event("focus"));
+      await vi.advanceTimersByTimeAsync(499);
+      expect(api.probeProviders).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(api.probeProviders).toHaveBeenCalledTimes(1);
+      expect(api.forgeProbe).toHaveBeenCalledTimes(1);
+
+      stop();
+      window.dispatchEvent(new Event("focus"));
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(api.probeProviders).toHaveBeenCalledTimes(1);
     });
   });
 });
