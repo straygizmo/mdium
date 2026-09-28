@@ -10,19 +10,23 @@ import type {
   Workflow,
   WorkflowInput,
 } from "@/shared/types/workflow";
-import { isCommandError, isRecord } from "../lib/errors";
+import { isCommandError } from "../lib/errors";
 import { formatCode, formatCommandError } from "../lib/format";
+import {
+  availabilityFromProbes,
+  PROVIDERS,
+  providerLabel as formatProviderLabel,
+  type ProviderAvailability,
+} from "../lib/provider-options";
 import { workflowApi } from "../lib/workflow-api";
 import { showConfirm } from "@/stores/dialog-store";
 import { useWorkflowStore } from "../workflow-store";
 import { DialogShell } from "./DialogShell";
 import "./WorkflowEditDialog.css";
 
-const PROVIDERS: readonly Provider[] = ["codex", "copilot", "opencode", "claude"];
 const ROLES: readonly Role[] = ["design", "implement", "review"];
 const RETURN_TARGETS: readonly Role[] = ["design", "implement"];
 const ISSUE_TRACKING: readonly IssueTracking[] = ["auto", "off"];
-const AVAILABILITY_KINDS = new Set(["missing", "unauthenticated", "too_old", "error"]);
 
 /** Schema version of the workflows file written by the UI. */
 const WORKFLOWS_SCHEMA_VERSION = 1;
@@ -32,9 +36,6 @@ export const DEFAULT_DESIGN_DOC_PATH = "docs/designs/{date}-{slug}-design.md";
 
 const STORE_INVALID = "STORE_INVALID";
 const WORKFLOW_NOT_FOUND = "WORKFLOW_NOT_FOUND";
-
-/** Machine code shape used by the backend (`WORKFLOW_NAME_EMPTY`, ...). */
-const CODE_PATTERN = /^[A-Z][A-Z0-9_]+$/;
 
 export interface ValidationIssue {
   code: string;
@@ -54,16 +55,6 @@ export function parseValidationErrors(message: string): ValidationIssue[] {
     .map((part) => /^([A-Z][A-Z0-9_]+)(?::\s(.*))?$/s.exec(part.trim()))
     .filter((m): m is RegExpExecArray => m !== null)
     .map(([, code, detail]) => ({ code, detail: detail ?? null }));
-}
-
-/** Localized reason a provider cannot be used, or null when it is available. */
-function unavailableReason(result: unknown, t: (key: string) => string): string | null {
-  if (!isRecord(result)) return t("edit.availability.error");
-  const kind = typeof result.kind === "string" ? result.kind : "";
-  if (kind === "available") return null;
-  const detail = typeof result.detail === "string" ? result.detail : "";
-  const label = AVAILABILITY_KINDS.has(kind) ? t(`edit.availability.${kind}`) : formatCode(kind);
-  return CODE_PATTERN.test(detail) ? `${label}: ${formatCode(detail)}` : label;
 }
 
 /** Largest value the backend accepts for a count (`u32`). */
@@ -120,7 +111,7 @@ export function WorkflowEditDialog({ workflow, confirmEnable, onClose }: Workflo
     enabledChoice !== null ||
     JSON.stringify(draft) !== JSON.stringify(workflow) ||
     JSON.stringify(numbers) !== JSON.stringify(numberFields(workflow));
-  const [availability, setAvailability] = useState<Partial<Record<Provider, string | null>>>({});
+  const [availability, setAvailability] = useState<ProviderAvailability>({});
   const [errors, setErrors] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const confirmingRef = useRef(false);
@@ -130,19 +121,17 @@ export function WorkflowEditDialog({ workflow, confirmEnable, onClose }: Workflo
     workflowApi
       .probeProviders()
       .then((probes: ProviderProbe[]) => {
-        if (cancelled) return;
-        const next: Partial<Record<Provider, string | null>> = {};
-        for (const probe of probes) next[probe.provider] = unavailableReason(probe.result, t);
-        setAvailability(next);
+        if (!cancelled) setAvailability(availabilityFromProbes(probes));
       })
       // Without a probe result the options are simply shown without availability.
       .catch(() => undefined);
     return () => {
       cancelled = true;
     };
+    // Probe again when the language changes so the reasons are localized anew.
   }, [t]);
 
-  const patch = (p: Partial<Workflow>) => setDraft((d) => ({ ...d, ...p }));
+  const patch =(p: Partial<Workflow>) => setDraft((d) => ({ ...d, ...p }));
   const patchStage = (role: Role, p: Partial<Stage>) =>
     setDraft((d) => ({ ...d, stages: d.stages.map((s) => (s.role === role ? { ...s, ...p } : s)) }));
 
@@ -255,11 +244,7 @@ export function WorkflowEditDialog({ workflow, confirmEnable, onClose }: Workflo
     }
   };
 
-  const providerLabel = (provider: Provider) => {
-    const name = t(`provider.${provider}`);
-    const reason = availability[provider];
-    return reason ? t("edit.unavailable", { provider: name, reason }) : name;
-  };
+  const providerLabel = (provider: Provider) => formatProviderLabel(provider, availability);
 
   const stages = ROLES.flatMap((role) => draft.stages.filter((s) => s.role === role));
 

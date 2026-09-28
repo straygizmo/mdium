@@ -287,6 +287,7 @@
     "windowTitle": "Requirement intake",
     "loading": "Loading…",
     "loadFailed": "The requirement intake could not be loaded.",
+    "actionFailed": "The operation failed.",
     "kind": {
       "feature": "Feature request",
       "bug": "Bug report"
@@ -318,7 +319,8 @@
         "checkFailed": "the check failed"
       },
       "start": "Start",
-      "starting": "Starting…"
+      "starting": "Starting…",
+      "failed": "The requirement intake could not be started."
     },
     "conversation": {
       "title": "Conversation",

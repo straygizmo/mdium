@@ -4,6 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useSettingsStore } from "@/stores/settings-store";
 import { startSettingsSync } from "@/shared/lib/settings-sync";
 import { AppDialog } from "@/shared/components/AppDialog";
+import { IntakeApp } from "./components/IntakeApp";
 import "./IntakeRoot.css";
 
 export interface IntakeRootProps {
@@ -11,10 +12,12 @@ export interface IntakeRootProps {
   root: string;
   /** Existing intake to open, or null to start a new one. */
   intakeId: string | null;
+  /** Workflow the start form preselects, if any. */
+  workflowId: string | null;
 }
 
 /** Top-level component of the intake window. */
-export function IntakeRoot({ root, intakeId }: IntakeRootProps) {
+export function IntakeRoot({ root, intakeId, workflowId }: IntakeRootProps) {
   const { t } = useTranslation("workflow");
 
   useEffect(() => {
@@ -32,9 +35,8 @@ export function IntakeRoot({ root, intakeId }: IntakeRootProps) {
   }, [t]);
 
   return (
-    <div className="intake-root" data-root={root} data-intake-id={intakeId ?? ""}>
-      {/* Placeholder until the intake app is mounted here. */}
-      <h1 className="intake-root__placeholder">{t("intake.windowTitle")}</h1>
+    <div className="intake-root">
+      <IntakeApp root={root} intakeId={intakeId} workflowId={workflowId} />
       <AppDialog />
     </div>
   );

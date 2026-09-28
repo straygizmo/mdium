@@ -12,7 +12,7 @@ const selection = selectRoot(window.location.search);
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     {selection.view === "intake" ? (
-      <IntakeRoot root={selection.root} intakeId={selection.intakeId} />
+      <IntakeRoot root={selection.root} intakeId={selection.intakeId} workflowId={selection.workflowId} />
     ) : (
       <App />
     )}

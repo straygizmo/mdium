@@ -11,6 +11,9 @@ const stopSync = vi.fn();
 const startSettingsSync = vi.fn(() => stopSync);
 vi.mock("@/shared/lib/settings-sync", () => ({ startSettingsSync: () => startSettingsSync() }));
 
+const intakeApp = vi.fn((_props: unknown) => null);
+vi.mock("../components/IntakeApp", () => ({ IntakeApp: (props: unknown) => intakeApp(props) }));
+
 import i18n from "@/shared/i18n";
 import { showMessage, useDialogStore } from "@/stores/dialog-store";
 import { useSettingsStore } from "@/stores/settings-store";
@@ -30,6 +33,7 @@ describe("IntakeRoot", () => {
     setTitle.mockClear();
     startSettingsSync.mockClear();
     stopSync.mockClear();
+    intakeApp.mockClear();
   });
 
   afterEach(async () => {
@@ -42,7 +46,7 @@ describe("IntakeRoot", () => {
   async function mount() {
     root = createRoot(container);
     await act(async () => {
-      root?.render(<IntakeRoot root="C:\proj" intakeId={null} />);
+      root?.render(<IntakeRoot root="C:\proj" intakeId={null} workflowId="wf1" />);
     });
   }
 
@@ -67,6 +71,11 @@ describe("IntakeRoot", () => {
     await act(async () => root?.unmount());
     root = undefined;
     expect(stopSync).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders the intake app for the window's root, intake and workflow", async () => {
+    await mount();
+    expect(intakeApp).toHaveBeenLastCalledWith({ root: "C:\\proj", intakeId: null, workflowId: "wf1" });
   });
 
   it("mounts AppDialog so command failures can be shown", async () => {

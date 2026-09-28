@@ -1,6 +1,6 @@
 export type RootSelection =
   | { view: "main" }
-  | { view: "intake"; root: string; intakeId: string | null };
+  | { view: "intake"; root: string; intakeId: string | null; workflowId: string | null };
 
 /** Decide which top-level UI a window renders from its URL query string. */
 export function selectRoot(search: string): RootSelection {
@@ -10,5 +10,6 @@ export function selectRoot(search: string): RootSelection {
     view: "intake",
     root: params.get("root") ?? "",
     intakeId: params.get("intake") || null,
+    workflowId: params.get("workflow") || null,
   };
 }

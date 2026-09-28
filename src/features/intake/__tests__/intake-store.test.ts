@@ -1,0 +1,341 @@
+// @vitest-environment happy-dom
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  AttachmentMeta,
+  ForgeProbe,
+  IntakeChangedEvent,
+  IntakeSessionView,
+  Workflow,
+  WorkflowsChangedEvent,
+} from "@/shared/types/workflow";
+
+const api = vi.hoisted(() => ({
+  attach: vi.fn(),
+  listWorkflows: vi.fn(),
+  probeProviders: vi.fn(),
+  forgeProbe: vi.fn(),
+  intakeGet: vi.fn(),
+  intakeListDrafts: vi.fn(),
+  intakeCreate: vi.fn(),
+  openIntakeWindow: vi.fn(),
+  intakeSend: vi.fn(),
+  intakeRetry: vi.fn(),
+  intakeCancelTurn: vi.fn(),
+  intakeAddDraftPath: vi.fn(),
+  intakeAddDraftBytes: vi.fn(),
+  intakeRemoveDraft: vi.fn(),
+}));
+const events = vi.hoisted(() => ({
+  intake: null as ((e: IntakeChangedEvent) => void) | null,
+  workflows: null as ((e: WorkflowsChangedEvent) => void) | null,
+  unlistenIntake: vi.fn(),
+  unlistenWorkflows: vi.fn(),
+}));
+const closeWindow = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+const showMessage = vi.hoisted(() => vi.fn());
+
+vi.mock("@/features/workflow/lib/workflow-api", () => ({
+  workflowApi: api,
+  subscribeIntakeChanged: vi.fn(async (handler: (e: IntakeChangedEvent) => void) => {
+    events.intake = handler;
+    return events.unlistenIntake;
+  }),
+  subscribeWorkflowsChanged: vi.fn(async (handler: (e: WorkflowsChangedEvent) => void) => {
+    events.workflows = handler;
+    return events.unlistenWorkflows;
+  }),
+}));
+vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ close: closeWindow }) }));
+vi.mock("@/stores/dialog-store", () => ({ showMessage }));
+
+import { startIntakeEvents, useIntakeStore } from "../intake-store";
+
+const ROOT = "C:\\proj";
+const WORKFLOW = { id: "wf1", name: "WF", enabled: true, archived: false, stages: [] } as unknown as Workflow;
+const FORGE: ForgeProbe = { repo: null, cliAvailable: false, authenticated: false };
+
+function session(id: string, patch: Partial<IntakeSessionView> = {}): IntakeSessionView {
+  return {
+    schemaVersion: 1,
+    id,
+    workflowId: "wf1",
+    kind: "feature",
+    provider: "claude",
+    model: null,
+    status: "active",
+    messages: [],
+    lastQuestion: null,
+    proposal: null,
+    docUpdates: [],
+    finalize: {
+      stage: "ready",
+      rootTaskId: null,
+      issue: null,
+      attachmentIds: [],
+      skipIssue: false,
+      issueCreating: false,
+      lastError: null,
+    },
+    createdAt: "",
+    updatedAt: "",
+    busy: false,
+    appliedDocPaths: [],
+    ...patch,
+  };
+}
+
+function draft(id: string): AttachmentMeta {
+  return {
+    schemaVersion: 1,
+    id,
+    originalName: `${id}.png`,
+    storedName: `${id}.png`,
+    mime: "image/png",
+    size: 1,
+    sha256: "",
+    createdAt: "",
+  };
+}
+
+const flush = () => new Promise((r) => setTimeout(r, 0));
+
+describe("intake-store", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    events.intake = null;
+    events.workflows = null;
+    useIntakeStore.setState(useIntakeStore.getInitialState(), true);
+    api.attach.mockResolvedValue(ROOT);
+    api.listWorkflows.mockResolvedValue({ workflows: [WORKFLOW], warnings: [] });
+    api.probeProviders.mockResolvedValue([{ provider: "claude", result: { kind: "available" } }]);
+    api.forgeProbe.mockResolvedValue(FORGE);
+    api.intakeGet.mockResolvedValue(session("i1"));
+    api.intakeListDrafts.mockResolvedValue([draft("d1")]);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  describe("init", () => {
+    it("loads workflows, providers and the forge without a session for a new intake", async () => {
+      await useIntakeStore.getState().init("c:\\proj", null);
+      const s = useIntakeStore.getState();
+      expect(api.attach).toHaveBeenCalledWith("c:\\proj");
+      expect(s.root).toBe(ROOT);
+      expect(s.intakeId).toBeNull();
+      expect(s.workflows).toEqual([WORKFLOW]);
+      expect(s.providers).toEqual([{ provider: "claude", result: { kind: "available" } }]);
+      expect(s.forge).toEqual(FORGE);
+      expect(s.session).toBeNull();
+      expect(s.loading).toBe(false);
+      expect(s.error).toBeNull();
+      expect(api.intakeGet).not.toHaveBeenCalled();
+    });
+
+    it("loads the session and its drafts for an existing intake", async () => {
+      api.intakeGet.mockResolvedValue(session("i1", { busy: true }));
+      await useIntakeStore.getState().init(ROOT, "i1");
+      const s = useIntakeStore.getState();
+      expect(api.intakeGet).toHaveBeenCalledWith(ROOT, "i1");
+      expect(api.intakeListDrafts).toHaveBeenCalledWith(ROOT, "i1");
+      expect(s.session?.id).toBe("i1");
+      expect(s.session?.busy).toBe(true);
+      expect(s.drafts.map((d) => d.id)).toEqual(["d1"]);
+    });
+
+    it("keeps going without provider or forge probes", async () => {
+      api.probeProviders.mockRejectedValue(new Error("x"));
+      api.forgeProbe.mockRejectedValue({ code: "FORGE_COMMAND_FAILED", message: "" });
+      await useIntakeStore.getState().init(ROOT, null);
+      const s = useIntakeStore.getState();
+      expect(s.providers).toEqual([]);
+      expect(s.forge).toBeNull();
+      expect(s.error).toBeNull();
+    });
+
+    it("records a load failure", async () => {
+      api.intakeGet.mockRejectedValue({ code: "INTAKE_NOT_FOUND", message: "i1" });
+      await useIntakeStore.getState().init(ROOT, "i1");
+      const s = useIntakeStore.getState();
+      expect(s.loading).toBe(false);
+      expect(s.session).toBeNull();
+      expect(s.error).toContain("i1");
+    });
+  });
+
+  describe("create", () => {
+    it("opens the new session's own window and closes this one", async () => {
+      await useIntakeStore.getState().init(ROOT, null);
+      api.intakeCreate.mockResolvedValue(session("new1"));
+      api.openIntakeWindow.mockResolvedValue("intake-new1");
+      await useIntakeStore
+        .getState()
+        .create({ workflowId: "wf1", kind: "bug", provider: "codex", model: "m" });
+      expect(api.intakeCreate).toHaveBeenCalledWith(ROOT, "wf1", "bug", "codex", "m");
+      expect(api.openIntakeWindow).toHaveBeenCalledWith(ROOT, "new1");
+      expect(closeWindow).toHaveBeenCalledTimes(1);
+      expect(api.openIntakeWindow.mock.invocationCallOrder[0]).toBeLessThan(
+        closeWindow.mock.invocationCallOrder[0],
+      );
+    });
+
+    it("shows the error and keeps the form when creating fails", async () => {
+      await useIntakeStore.getState().init(ROOT, null);
+      api.intakeCreate.mockRejectedValue({ code: "WORKFLOW_NOT_FOUND", message: "wf1" });
+      await useIntakeStore.getState().create({ workflowId: "wf1", kind: "feature", provider: "claude", model: null });
+      expect(showMessage).toHaveBeenCalledWith(expect.stringContaining("wf1"), expect.objectContaining({ kind: "error" }));
+      expect(api.openIntakeWindow).not.toHaveBeenCalled();
+      expect(closeWindow).not.toHaveBeenCalled();
+      expect(useIntakeStore.getState().creating).toBe(false);
+    });
+
+    it("serves the session here when its window cannot be opened", async () => {
+      await useIntakeStore.getState().init(ROOT, null);
+      api.intakeCreate.mockResolvedValue(session("new1"));
+      api.openIntakeWindow.mockRejectedValue({ code: "WORKFLOW_PROJECT_INVALID", message: "" });
+      await useIntakeStore.getState().create({ workflowId: "wf1", kind: "feature", provider: "claude", model: null });
+      expect(showMessage).toHaveBeenCalled();
+      expect(closeWindow).not.toHaveBeenCalled();
+      expect(useIntakeStore.getState().intakeId).toBe("new1");
+      expect(useIntakeStore.getState().session?.id).toBe("new1");
+    });
+
+    it("ignores a second create while one is in flight", async () => {
+      await useIntakeStore.getState().init(ROOT, null);
+      let resolve!: (v: IntakeSessionView) => void;
+      api.intakeCreate.mockReturnValue(new Promise((r) => (resolve = r)));
+      api.openIntakeWindow.mockResolvedValue("intake-new1");
+      const input = { workflowId: "wf1", kind: "feature", provider: "claude", model: null } as const;
+      const first = useIntakeStore.getState().create(input);
+      await useIntakeStore.getState().create(input);
+      resolve(session("new1"));
+      await first;
+      expect(api.intakeCreate).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("conversation actions", () => {
+    beforeEach(async () => {
+      api.intakeListDrafts.mockResolvedValue([draft("d1"), draft("d2")]);
+      await useIntakeStore.getState().init(ROOT, "i1");
+    });
+
+    it("sends with draft ids, stores the session and drops the sent drafts", async () => {
+      api.intakeSend.mockResolvedValue(session("i1", { busy: true }));
+      const ok = await useIntakeStore.getState().send("hello", ["d1"]);
+      expect(ok).toBe(true);
+      expect(api.intakeSend).toHaveBeenCalledWith(ROOT, "i1", "hello", ["d1"]);
+      const s = useIntakeStore.getState();
+      expect(s.session?.busy).toBe(true);
+      expect(s.drafts.map((d) => d.id)).toEqual(["d2"]);
+      expect(s.sending).toBe(false);
+    });
+
+    it("does not send twice while a send is in flight", async () => {
+      let resolve!: (v: IntakeSessionView) => void;
+      api.intakeSend.mockReturnValue(new Promise((r) => (resolve = r)));
+      const first = useIntakeStore.getState().send("a", []);
+      expect(useIntakeStore.getState().sending).toBe(true);
+      expect(await useIntakeStore.getState().send("a", [])).toBe(false);
+      resolve(session("i1"));
+      await first;
+      expect(api.intakeSend).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows a failed send and reports it", async () => {
+      api.intakeSend.mockRejectedValue({ code: "INTAKE_TURN_BUSY", message: "" });
+      expect(await useIntakeStore.getState().send("a", [])).toBe(false);
+      expect(showMessage).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ kind: "error" }));
+    });
+
+    it("reloads silently on TRANSITION_CONFLICT", async () => {
+      api.intakeRetry.mockRejectedValue({ code: "TRANSITION_CONFLICT", message: "" });
+      api.intakeGet.mockClear();
+      await useIntakeStore.getState().retry();
+      expect(showMessage).not.toHaveBeenCalled();
+      expect(api.intakeGet).toHaveBeenCalledWith(ROOT, "i1");
+    });
+
+    it("retries and cancels the turn", async () => {
+      api.intakeRetry.mockResolvedValue(session("i1", { busy: true }));
+      await useIntakeStore.getState().retry();
+      expect(useIntakeStore.getState().session?.busy).toBe(true);
+      api.intakeCancelTurn.mockResolvedValue(true);
+      api.intakeGet.mockResolvedValue(session("i1", { busy: false }));
+      await useIntakeStore.getState().cancelTurn();
+      expect(api.intakeCancelTurn).toHaveBeenCalledWith(ROOT, "i1");
+      expect(useIntakeStore.getState().session?.busy).toBe(false);
+    });
+
+    it("adds and removes drafts", async () => {
+      api.intakeAddDraftPath.mockResolvedValue(draft("d3"));
+      api.intakeAddDraftBytes.mockResolvedValue(draft("d4"));
+      api.intakeRemoveDraft.mockResolvedValue(undefined);
+      await useIntakeStore.getState().addDraftFromPath("C:\\a.png");
+      await useIntakeStore.getState().addDraftFromBytes("p.png", "AAAA");
+      await useIntakeStore.getState().removeDraft("d1");
+      expect(api.intakeAddDraftPath).toHaveBeenCalledWith(ROOT, "i1", "C:\\a.png");
+      expect(api.intakeAddDraftBytes).toHaveBeenCalledWith(ROOT, "i1", "p.png", "AAAA");
+      expect(api.intakeRemoveDraft).toHaveBeenCalledWith(ROOT, "i1", "d1");
+      expect(useIntakeStore.getState().drafts.map((d) => d.id)).toEqual(["d2", "d3", "d4"]);
+    });
+  });
+
+  describe("events", () => {
+    it("reloads on intake-changed for this intake only", async () => {
+      await useIntakeStore.getState().init(ROOT, "i1");
+      const stop = await startIntakeEvents();
+      api.intakeGet.mockClear();
+      api.intakeGet.mockResolvedValue(session("i1", { busy: true }));
+
+      events.intake?.({ projectRoot: ROOT, intakeId: "other", status: "active", busy: true });
+      events.intake?.({ projectRoot: "C:\\elsewhere", intakeId: "i1", status: "active", busy: true });
+      await flush();
+      expect(api.intakeGet).not.toHaveBeenCalled();
+
+      events.intake?.({ projectRoot: ROOT, intakeId: "i1", status: "active", busy: true });
+      await flush();
+      expect(api.intakeGet).toHaveBeenCalledWith(ROOT, "i1");
+      expect(useIntakeStore.getState().session?.busy).toBe(true);
+
+      stop();
+      expect(events.unlistenIntake).toHaveBeenCalled();
+      expect(events.unlistenWorkflows).toHaveBeenCalled();
+    });
+
+    it("keeps the newest session when reloads finish out of order", async () => {
+      await useIntakeStore.getState().init(ROOT, "i1");
+      const stop = await startIntakeEvents();
+      let resolveOld!: (v: IntakeSessionView) => void;
+      api.intakeGet
+        .mockReturnValueOnce(new Promise((r) => (resolveOld = r)))
+        .mockResolvedValueOnce(session("i1", { busy: false, updatedAt: "new" }));
+      events.intake?.({ projectRoot: ROOT, intakeId: "i1", status: "active", busy: true });
+      events.intake?.({ projectRoot: ROOT, intakeId: "i1", status: "active", busy: false });
+      await flush();
+      resolveOld(session("i1", { busy: true, updatedAt: "old" }));
+      await flush();
+      expect(useIntakeStore.getState().session?.updatedAt).toBe("new");
+      stop();
+    });
+
+    it("reloads workflows on workflows-changed for this project", async () => {
+      await useIntakeStore.getState().init(ROOT, null);
+      const stop = await startIntakeEvents();
+      const renamed = { ...WORKFLOW, name: "Renamed" };
+      api.listWorkflows.mockClear();
+      api.listWorkflows.mockResolvedValue({ workflows: [renamed], warnings: [] });
+
+      events.workflows?.({ projectRoot: "C:\\elsewhere" });
+      await flush();
+      expect(api.listWorkflows).not.toHaveBeenCalled();
+
+      events.workflows?.({ projectRoot: ROOT });
+      await flush();
+      expect(api.listWorkflows).toHaveBeenCalledWith(ROOT);
+      expect(useIntakeStore.getState().workflows).toEqual([renamed]);
+      stop();
+    });
+  });
+});

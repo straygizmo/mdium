@@ -287,6 +287,7 @@
     "windowTitle": "要件整理",
     "loading": "読み込み中…",
     "loadFailed": "要件整理を読み込めませんでした。",
+    "actionFailed": "操作に失敗しました。",
     "kind": {
       "feature": "機能要望",
       "bug": "バグ報告"
@@ -318,7 +319,8 @@
         "checkFailed": "確認に失敗しました"
       },
       "start": "開始",
-      "starting": "開始しています…"
+      "starting": "開始しています…",
+      "failed": "要件整理を開始できませんでした。"
     },
     "conversation": {
       "title": "対話",

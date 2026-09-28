@@ -1,0 +1,55 @@
+.intake-app__status {
+  margin: 0;
+  padding: 16px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.intake-app__failed {
+  display: flex;
+  flex-direction: column;
+}
+
+.intake-app__detail {
+  margin: 0 16px 16px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--text);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.intake-app__session {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.intake-app__header {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.intake-app__kind {
+  font-weight: 600;
+}
+
+.intake-app__state {
+  color: var(--text-secondary);
+}
+
+.intake-app__error {
+  margin: 0;
+  padding: 6px 16px;
+  color: var(--accent-red);
+  font-size: 12px;
+  white-space: pre-wrap;
+}

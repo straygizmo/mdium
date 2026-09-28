@@ -5,10 +5,3 @@
   background: var(--bg-base);
   color: var(--text);
 }
-
-.intake-root__placeholder {
-  margin: 0;
-  padding: 16px;
-  font-size: 16px;
-  font-weight: 600;
-}
