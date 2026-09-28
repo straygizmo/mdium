@@ -52,6 +52,17 @@ pub trait RunnerApi: Send + Sync {
         provider: Provider,
         timeout: Duration,
     ) -> Result<serde_json::Value, RunnerError>;
+    /// Converts the Office/PDF document at `input` to Markdown at `output`
+    /// (images next to it) and returns the Markdown path. Runners that
+    /// cannot convert (e.g. test fakes) keep this default.
+    fn convert_document(
+        &self,
+        _input: &str,
+        _output: &str,
+        _timeout: Duration,
+    ) -> Result<String, RunnerError> {
+        Err(RunnerError::Unavailable("RUNNER_CONVERT_UNSUPPORTED"))
+    }
     fn shutdown(&self);
 }
 
@@ -247,6 +258,15 @@ impl RunnerApi for RunnerHost {
         timeout: Duration,
     ) -> Result<serde_json::Value, RunnerError> {
         self.client()?.probe(provider, timeout)
+    }
+
+    fn convert_document(
+        &self,
+        input: &str,
+        output: &str,
+        timeout: Duration,
+    ) -> Result<String, RunnerError> {
+        self.client()?.convert_document(input, output, timeout)
     }
 
     /// Kills the runner (including one still starting up) and refuses every

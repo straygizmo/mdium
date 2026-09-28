@@ -41,6 +41,9 @@ pub struct AttachmentView {
     pub size: u64,
     /// Absolute path of the attachment's content.
     pub path: String,
+    /// Absolute path of the attachment's Markdown rendition (an Office or
+    /// PDF document converted by MDium), if there is one.
+    pub markdown_path: Option<String>,
 }
 
 /// Context carried over from the task's previous attempt.
@@ -58,6 +61,9 @@ pub enum PreviousAttempt {
         output: String,
     },
 }
+
+/// Added to the attachments intro when an attachment has a Markdown version.
+const MARKDOWN_VERSION_NOTE: &str = " For a file with a Markdown version (an Office or PDF document converted by MDium), read the Markdown version instead of the binary file.";
 
 /// Maximum size of a diff embedded in a prompt.
 pub const MAX_DIFF_BYTES: usize = 200 * 1024;
@@ -321,6 +327,10 @@ fn previous_block(previous: &PreviousAttempt) -> Option<String> {
 /// The body of the "Attachments" section: a lead sentence and a data block
 /// with one line per attachment (absolute path, name, type and size).
 /// `None` when there are none.
+///
+/// An attachment with a Markdown rendition gets an indented
+/// `Markdown version:` line, and the intro asks agents to read it instead
+/// of the binary file.
 fn attachments_block(attachments: &[AttachmentView]) -> Option<String> {
     if attachments.is_empty() {
         return None;
@@ -328,20 +338,29 @@ fn attachments_block(attachments: &[AttachmentView]) -> Option<String> {
     let lines: Vec<String> = attachments
         .iter()
         .map(|a| {
-            format!(
+            let line = format!(
                 "- {} ({}, {}, {} bytes)",
                 a.path,
                 collapse_whitespace(&a.name),
                 a.mime,
                 a.size
-            )
+            );
+            match &a.markdown_path {
+                Some(markdown) => format!("{line}\n  Markdown version: {markdown}"),
+                None => line,
+            }
         })
         .collect();
+    let markdown_note = if attachments.iter().any(|a| a.markdown_path.is_some()) {
+        MARKDOWN_VERSION_NOTE
+    } else {
+        ""
+    };
     // File names and paths are user-controlled: they go into a data block
     // whose fence no backtick run in them can close.
     let list = lines.join("\n");
     Some(format!(
-        "The user attached these files to the task. Read these files if they are relevant.\n\n{}",
+        "The user attached these files to the task. Read these files if they are relevant.{markdown_note}\n\n{}",
         data_block(Some(&list))?
     ))
 }
@@ -494,6 +513,7 @@ mod tests {
                 mime: "application/pdf".to_string(),
                 size: 2048,
                 path: "C:/project/.mdium/task-attachments/r/0123456789abcdef/spec.pdf".to_string(),
+                markdown_path: None,
             },
             AttachmentView {
                 id: "fedcba9876543210".to_string(),
@@ -501,6 +521,7 @@ mod tests {
                 mime: "image/png".to_string(),
                 size: 10,
                 path: "/abs/screen.png".to_string(),
+                markdown_path: None,
             },
         ];
         let input = PromptInput {
@@ -526,6 +547,46 @@ mod tests {
         // No attachments: no section.
         let prompt = build_prompt(&full_input(&s));
         assert!(!prompt.contains("## Attachments"), "{prompt}");
+        // No Markdown versions: no note about them.
+        let prompt = build_prompt(&input);
+        assert!(!prompt.contains("Markdown version"), "{prompt}");
+    }
+
+    #[test]
+    fn markdown_versions_are_listed_under_their_attachment() {
+        let s = stage(Role::Design);
+        let attachments = [
+            AttachmentView {
+                id: "0123456789abcdef".to_string(),
+                name: "spec.docx".to_string(),
+                mime: "application/octet-stream".to_string(),
+                size: 4096,
+                path: "C:/p/.mdium/task-attachments/r/0123456789abcdef/spec.docx".to_string(),
+                markdown_path: Some(
+                    "C:/p/.mdium/task-attachments/r/0123456789abcdef/markdown/spec.md".to_string(),
+                ),
+            },
+            AttachmentView {
+                id: "fedcba9876543210".to_string(),
+                name: "screen.png".to_string(),
+                mime: "image/png".to_string(),
+                size: 10,
+                path: "/abs/screen.png".to_string(),
+                markdown_path: None,
+            },
+        ];
+        let input = PromptInput {
+            attachments: &attachments,
+            ..full_input(&s)
+        };
+        let prompt = build_prompt(&input);
+        assert!(prompt.contains(MARKDOWN_VERSION_NOTE.trim()), "{prompt}");
+        assert!(
+            prompt.contains(
+                "- C:/p/.mdium/task-attachments/r/0123456789abcdef/spec.docx (spec.docx, application/octet-stream, 4096 bytes)\n  Markdown version: C:/p/.mdium/task-attachments/r/0123456789abcdef/markdown/spec.md\n- /abs/screen.png (screen.png, image/png, 10 bytes)"
+            ),
+            "{prompt}"
+        );
     }
 
     #[test]
@@ -537,6 +598,7 @@ mod tests {
             mime: "text/plain".to_string(),
             size: 1,
             path: "/abs/a```b.txt".to_string(),
+            markdown_path: None,
         }];
         let input = PromptInput {
             attachments: &attachments,

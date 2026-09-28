@@ -13,6 +13,7 @@ pub mod attempt;
 #[allow(dead_code)]
 pub mod checks;
 pub mod containment;
+pub mod doc_markdown;
 pub mod errors;
 pub mod flow;
 #[allow(dead_code)]

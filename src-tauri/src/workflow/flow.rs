@@ -11,6 +11,7 @@
 use crate::workflow::attachments;
 use crate::workflow::attempt::{AttemptEnd, AttemptRequest};
 use crate::workflow::checks::CheckResult;
+use crate::workflow::doc_markdown;
 use crate::workflow::errors::to_attention;
 use crate::workflow::forge::{ForgeCli, ForgeError, ForgeRepo};
 use crate::workflow::fsutil::{self, new_id, MdiumPaths};
@@ -651,12 +652,19 @@ fn root_attachments(project_root: &Path, root_id: &str) -> Vec<AttachmentView> {
                 );
                 return None;
             }
+            let path = path?;
+            // Prepared before the attempt by the orchestrator's dispatch pass.
+            let markdown_path = path
+                .parent()
+                .and_then(|dir| doc_markdown::existing_rendition(dir, &meta.stored_name))
+                .map(|p| p.display().to_string());
             Some(AttachmentView {
                 id: meta.id,
                 name: meta.stored_name,
                 mime: meta.mime,
                 size: meta.size,
-                path: path?.display().to_string(),
+                path: path.display().to_string(),
+                markdown_path,
             })
         })
         .collect()
