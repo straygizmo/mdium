@@ -18,9 +18,9 @@ function designDefaults(workflow: Workflow): { provider: Provider; model: string
 }
 
 /** Where the Issue would be created, or the i18n key suffix of why it cannot be. */
-type IssueTarget = { repo: ForgeRepo } | { reason: "checkFailed" | "noRepo" | "cliMissing" | "unauthenticated" };
+export type IssueTarget = { repo: ForgeRepo } | { reason: "checkFailed" | "noRepo" | "cliMissing" | "unauthenticated" };
 
-function issueTarget(forge: ForgeProbe | null): IssueTarget {
+export function issueTarget(forge: ForgeProbe | null): IssueTarget {
   if (!forge) return { reason: "checkFailed" };
   if (!forge.repo) return { reason: "noRepo" };
   if (!forge.cliAvailable) return { reason: "cliMissing" };

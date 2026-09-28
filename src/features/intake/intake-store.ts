@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { emitTo } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import i18n from "@/shared/i18n";
 import { showMessage } from "@/stores/dialog-store";
@@ -11,6 +12,7 @@ import type {
   ProviderProbe,
   Workflow,
 } from "@/shared/types/workflow";
+import { WORKFLOW_OPEN_TASK_EVENT, type OpenTaskEvent } from "@/shared/types/workflow";
 import { formatCode, formatCommandError, isCommandError, sameRoot } from "@/features/workflow/lib/format";
 import {
   subscribeIntakeChanged,
@@ -19,6 +21,7 @@ import {
 } from "@/features/workflow/lib/workflow-api";
 
 const TRANSITION_CONFLICT = "TRANSITION_CONFLICT";
+export const ISSUE_TRACKING_UNAVAILABLE = "ISSUE_TRACKING_UNAVAILABLE";
 
 export interface IntakeCreateInput {
   workflowId: string;
@@ -39,13 +42,37 @@ export interface IntakeHandOff {
   error: string | null;
 }
 
+/**
+ * Receives a failure the caller shows itself: the localized reason and the
+ * error code (null when the failure carries none).
+ */
+export type ActionErrorHandler = (reason: string, code: string | null) => void;
+
 /** Options of the draft actions. */
 export interface AddDraftOptions {
   /**
    * Report a failure to the caller instead of showing it, so a batch of
    * files can show its failures in one message.
    */
-  onError?: (reason: string) => void;
+  onError?: ActionErrorHandler;
+}
+
+/** A finalize-panel request in flight (at most one at a time). */
+export type FinalizeAction = "finalize" | "skipIssue" | "reopen" | "abandon";
+
+/**
+ * The failure of this window's last finalize request. A session that is
+ * finalizing records its failure in `finalize.lastError`; this covers the
+ * failures returned before the session switched to finalizing (e.g.
+ * `ISSUE_TRACKING_UNAVAILABLE`, which leaves it active).
+ */
+export interface FinalizeFailure {
+  /** Error code; null when the failure carries none. */
+  code: string | null;
+  /** Localized text. */
+  text: string;
+  /** `updatedAt` of the session when it failed; any later change makes it stale. */
+  updatedAt: string | null;
 }
 
 /** State of the one intake session this window serves. */
@@ -76,6 +103,10 @@ export interface IntakeWindowState {
   handOff: IntakeHandOff | null;
   /** Localized load failure; null when the last load succeeded. */
   error: string | null;
+  /** The finalize-panel request in flight, if any. */
+  finalizeAction: FinalizeAction | null;
+  /** Failure of this window's last finalize request (see `FinalizeFailure`). */
+  finalizeError: FinalizeFailure | null;
   /** Attaches the project and loads workflows, providers, forge and (with an id) the session and drafts. */
   init(root: string, intakeId: string | null): Promise<void>;
   /**
@@ -98,6 +129,26 @@ export interface IntakeWindowState {
   addDraftFromPath(path: string, options?: AddDraftOptions): Promise<void>;
   addDraftFromBytes(name: string, base64: string, options?: AddDraftOptions): Promise<void>;
   removeDraft(id: string): Promise<void>;
+  /** Saves the user's edit of the proposal; failures go to `onError`. Resolves to whether it was saved. */
+  updateProposal(title: string, body: string, onError: ActionErrorHandler): Promise<boolean>;
+  /**
+   * Applies (`accept`) or rejects a proposed doc update. Failures go to
+   * `onError` when given, else to a dialog. Resolves to whether it succeeded.
+   */
+  applyDocUpdate(proposalId: string, accept: boolean, onError?: ActionErrorHandler): Promise<boolean>;
+  /**
+   * Starts or resumes finalizing, optionally without an Issue. Failures are
+   * kept in `finalizeError` / `finalize.lastError` and shown by the panel.
+   */
+  finalize(skipIssue: boolean): Promise<void>;
+  /** Returns a stopped finalize to the conversation. */
+  reopen(): Promise<void>;
+  /** Abandons the session (the caller confirms first). */
+  abandon(): Promise<void>;
+  /** Asks the main window to open the created task and closes this window. */
+  openTask(): Promise<void>;
+  /** Probes the forge again (after Issue tracking turned out unavailable). */
+  refreshForge(): Promise<void>;
 }
 
 /**
@@ -130,6 +181,8 @@ function initialState() {
     creating: false,
     handOff: null,
     error: null,
+    finalizeAction: null,
+    finalizeError: null,
   } satisfies Partial<IntakeWindowState>;
 }
 
@@ -189,7 +242,7 @@ export const useIntakeStore = create<IntakeWindowState>((set, get) => {
    */
   const act = async <T>(
     fn: (root: string, intakeId: string) => Promise<T>,
-    onError?: (reason: string) => void,
+    onError?: ActionErrorHandler,
   ): Promise<T | undefined> => {
     const { root, intakeId } = get();
     if (!intakeId) return undefined;
@@ -200,7 +253,8 @@ export const useIntakeStore = create<IntakeWindowState>((set, get) => {
         // The session changed underneath: show its real state instead of an error.
         await get().reload();
       } else if (onError) {
-        onError(isCommandError(err) ? formatCode(err.code) : formatCommandError(err));
+        if (isCommandError(err)) onError(formatCode(err.code), err.code);
+        else onError(formatCommandError(err), null);
       } else {
         void showMessage(formatCommandError(err), {
           title: i18n.t("workflow:intake.actionFailed"),
@@ -208,6 +262,40 @@ export const useIntakeStore = create<IntakeWindowState>((set, get) => {
         });
       }
       return undefined;
+    }
+  };
+
+  /** Stores a session a command returned (newer than any load in flight). */
+  const applySession = (view: IntakeSessionView) => {
+    sessionSeq++;
+    set({ session: view });
+  };
+
+  /**
+   * Runs one finalize-panel request at a time. On success the returned
+   * session is applied; on failure the session is reloaded, since the
+   * request may have changed it before failing. Failures go to `onError`
+   * when given, else to a dialog.
+   */
+  const runFinalizeAction = async (
+    action: FinalizeAction,
+    fn: (root: string, intakeId: string) => Promise<IntakeSessionView>,
+    onError?: ActionErrorHandler,
+  ) => {
+    if (get().finalizeAction || !get().intakeId) return;
+    set({ finalizeAction: action, finalizeError: null });
+    try {
+      // An object, since a flag assigned in the callback would stay narrowed to false.
+      const outcome = { failed: false };
+      const view = await act(fn, (reason, code) => {
+        outcome.failed = true;
+        if (onError) onError(reason, code);
+        else void showMessage(reason, { title: i18n.t("workflow:intake.actionFailed"), kind: "error" });
+      });
+      if (view) applySession(view);
+      else if (outcome.failed) await get().reload();
+    } finally {
+      set({ finalizeAction: null });
     }
   };
 
@@ -332,6 +420,70 @@ export const useIntakeStore = create<IntakeWindowState>((set, get) => {
     async addDraftFromBytes(name, base64, options) {
       const meta = await act((root, id) => workflowApi.intakeAddDraftBytes(root, id, name, base64), options?.onError);
       if (meta) set((s) => ({ drafts: [...s.drafts, meta] }));
+    },
+
+    async updateProposal(title, body, onError) {
+      const view = await act((root, id) => workflowApi.intakeUpdateProposal(root, id, title, body), onError);
+      if (!view) return false;
+      applySession(view);
+      return true;
+    },
+
+    async applyDocUpdate(proposalId, accept, onError) {
+      const view = await act((root, id) => workflowApi.intakeApplyDocUpdate(root, id, proposalId, accept), onError);
+      if (!view) return false;
+      applySession(view);
+      return true;
+    },
+
+    async finalize(skipIssue) {
+      const outcome: { failure: { code: string | null; text: string } | null } = { failure: null };
+      await runFinalizeAction(
+        skipIssue ? "skipIssue" : "finalize",
+        (root, id) => workflowApi.intakeFinalize(root, id, skipIssue),
+        (text, code) => {
+          outcome.failure = { code, text };
+        },
+      );
+      if (!outcome.failure) return;
+      const { code, text } = outcome.failure;
+      set({ finalizeError: { code, text, updatedAt: get().session?.updatedAt ?? null } });
+      if (code === ISSUE_TRACKING_UNAVAILABLE) await get().refreshForge();
+    },
+
+    async reopen() {
+      await runFinalizeAction("reopen", (root, id) => workflowApi.intakeReopen(root, id));
+    },
+
+    async abandon() {
+      await runFinalizeAction("abandon", (root, id) => workflowApi.intakeAbandon(root, id));
+    },
+
+    async openTask() {
+      const { root, session } = get();
+      const taskId = session?.finalize.rootTaskId;
+      if (!taskId) return;
+      const payload: OpenTaskEvent = { projectRoot: root, taskId };
+      try {
+        await emitTo("main", WORKFLOW_OPEN_TASK_EVENT, payload);
+      } catch (err) {
+        void showMessage(formatCommandError(err), { title: i18n.t("workflow:intake.actionFailed"), kind: "error" });
+        return;
+      }
+      await get().closeWindow();
+    },
+
+    async refreshForge() {
+      const root = get().root;
+      let forge: ForgeProbe | null;
+      try {
+        forge = await workflowApi.forgeProbe(root);
+      } catch (err) {
+        // The panel then reports the check as failed.
+        console.error("[intake] probing the forge failed", err);
+        forge = null;
+      }
+      if (sameRoot(get().root, root)) set({ forge });
     },
 
     async removeDraft(draftId) {

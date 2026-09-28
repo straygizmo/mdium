@@ -1,7 +1,10 @@
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { startIntakeEvents, useIntakeStore } from "../intake-store";
+import { DocUpdateList } from "./DocUpdateList";
+import { AbandonIntakeButton, FinalizePanel } from "./FinalizePanel";
 import { IntakeConversation } from "./IntakeConversation";
+import { ProposalCard } from "./ProposalCard";
 import { IntakeStartForm } from "./IntakeStartForm";
 import "./IntakeApp.css";
 
@@ -73,19 +76,33 @@ export function IntakeApp({ root, intakeId, workflowId }: IntakeAppProps) {
 
   if (!session) return <LoadFailed error={error} />;
 
-  // The proposal and finalize views are mounted next to the conversation.
+  // The proposal, document updates and finalize are shown next to the conversation.
+  const hasReview = !!session.proposal || session.docUpdates.length > 0 || session.appliedDocPaths.length > 0;
+
   return (
     <section className="intake-app__session" aria-label={t("intake.conversation.title")}>
       <header className="intake-app__header">
         <span className="intake-app__kind">{t(`intake.kind.${session.kind}`)}</span>
         <span className="intake-app__state">{t(`intake.status.${session.status}`)}</span>
+        <span className="intake-app__actions">
+          <AbandonIntakeButton />
+        </span>
       </header>
       {error && (
         <p className="intake-app__error" role="alert">
           {error}
         </p>
       )}
-      <IntakeConversation session={session} />
+      <div className="intake-app__body">
+        <IntakeConversation session={session} />
+        {hasReview && (
+          <aside className="intake-app__review">
+            <ProposalCard session={session} />
+            <DocUpdateList session={session} />
+            <FinalizePanel session={session} />
+          </aside>
+        )}
+      </div>
     </section>
   );
 }

@@ -24,6 +24,11 @@ const api = vi.hoisted(() => ({
   intakeAddDraftPath: vi.fn(),
   intakeAddDraftBytes: vi.fn(),
   intakeRemoveDraft: vi.fn(),
+  intakeUpdateProposal: vi.fn(),
+  intakeApplyDocUpdate: vi.fn(),
+  intakeFinalize: vi.fn(),
+  intakeReopen: vi.fn(),
+  intakeAbandon: vi.fn(),
 }));
 const events = vi.hoisted(() => ({
   intake: null as ((e: IntakeChangedEvent) => void) | null,
@@ -47,6 +52,8 @@ vi.mock("@/features/workflow/lib/workflow-api", () => ({
 }));
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ close: closeWindow }) }));
 vi.mock("@/stores/dialog-store", () => ({ showMessage }));
+const emitTo = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+vi.mock("@tauri-apps/api/event", () => ({ emitTo }));
 
 import i18n from "@/shared/i18n";
 import { startIntakeEvents, useIntakeStore } from "../intake-store";
@@ -325,7 +332,7 @@ describe("intake-store", () => {
       api.intakeAddDraftBytes.mockRejectedValue({ code: "ATTACHMENT_TOO_MANY", message: "detail" });
       const onError = vi.fn();
       await useIntakeStore.getState().addDraftFromBytes("p.png", "AAAA", { onError });
-      expect(onError).toHaveBeenCalledWith(i18n.t("workflow:codes.ATTACHMENT_TOO_MANY"));
+      expect(onError).toHaveBeenCalledWith(i18n.t("workflow:codes.ATTACHMENT_TOO_MANY"), "ATTACHMENT_TOO_MANY");
       expect(showMessage).not.toHaveBeenCalled();
     });
 
@@ -448,6 +455,103 @@ describe("intake-store", () => {
       expect(api.listWorkflows).toHaveBeenCalledWith(ROOT);
       expect(useIntakeStore.getState().workflows).toEqual([renamed]);
       stop();
+    });
+  });
+
+  describe("review and finalize actions", () => {
+    beforeEach(async () => {
+      api.intakeGet.mockResolvedValue(session("i1", { proposal: { title: "T", body: "B" }, updatedAt: "u1" }));
+      await useIntakeStore.getState().init(ROOT, "i1");
+    });
+
+    it("saves the proposal and reports validation failures inline", async () => {
+      api.intakeUpdateProposal.mockResolvedValue(session("i1", { proposal: { title: "New", body: "Body" } }));
+      const onError = vi.fn();
+      expect(await useIntakeStore.getState().updateProposal("New", "Body", onError)).toBe(true);
+      expect(api.intakeUpdateProposal).toHaveBeenCalledWith(ROOT, "i1", "New", "Body");
+      expect(useIntakeStore.getState().session?.proposal?.title).toBe("New");
+
+      api.intakeUpdateProposal.mockRejectedValue({ code: "INTAKE_PROPOSAL_TITLE_INVALID", message: "" });
+      expect(await useIntakeStore.getState().updateProposal("", "Body", onError)).toBe(false);
+      expect(onError).toHaveBeenCalledWith(expect.any(String), "INTAKE_PROPOSAL_TITLE_INVALID");
+      expect(showMessage).not.toHaveBeenCalled();
+    });
+
+    it("applies or rejects a doc update and passes the failure code to the caller", async () => {
+      api.intakeApplyDocUpdate.mockResolvedValue(session("i1", { appliedDocPaths: ["docs/a.md"] }));
+      expect(await useIntakeStore.getState().applyDocUpdate("p1", true)).toBe(true);
+      expect(api.intakeApplyDocUpdate).toHaveBeenCalledWith(ROOT, "i1", "p1", true);
+      expect(useIntakeStore.getState().session?.appliedDocPaths).toEqual(["docs/a.md"]);
+
+      api.intakeApplyDocUpdate.mockRejectedValue({ code: "INTAKE_DOC_CHANGED_SINCE_PROPOSAL", message: "" });
+      const onError = vi.fn();
+      expect(await useIntakeStore.getState().applyDocUpdate("p1", true, onError)).toBe(false);
+      expect(onError).toHaveBeenCalledWith(expect.any(String), "INTAKE_DOC_CHANGED_SINCE_PROPOSAL");
+    });
+
+    it("finalizes once at a time and stores the finished session", async () => {
+      let resolve!: (v: IntakeSessionView) => void;
+      api.intakeFinalize.mockReturnValue(new Promise((r) => (resolve = r)));
+      const first = useIntakeStore.getState().finalize(false);
+      expect(useIntakeStore.getState().finalizeAction).toBe("finalize");
+      await useIntakeStore.getState().finalize(true);
+      await useIntakeStore.getState().reopen();
+      expect(api.intakeFinalize).toHaveBeenCalledTimes(1);
+      expect(api.intakeReopen).not.toHaveBeenCalled();
+      resolve(session("i1", { status: "done" }));
+      await first;
+      expect(api.intakeFinalize).toHaveBeenCalledWith(ROOT, "i1", false);
+      expect(useIntakeStore.getState().session?.status).toBe("done");
+      expect(useIntakeStore.getState().finalizeAction).toBeNull();
+      expect(useIntakeStore.getState().finalizeError).toBeNull();
+    });
+
+    it("keeps an early ISSUE_TRACKING_UNAVAILABLE inline and probes the forge again", async () => {
+      api.intakeFinalize.mockRejectedValue({ code: "ISSUE_TRACKING_UNAVAILABLE", message: "" });
+      api.forgeProbe.mockClear();
+      api.intakeGet.mockClear();
+      await useIntakeStore.getState().finalize(false);
+      expect(showMessage).not.toHaveBeenCalled();
+      expect(api.intakeGet).toHaveBeenCalledWith(ROOT, "i1");
+      expect(api.forgeProbe).toHaveBeenCalledWith(ROOT);
+      expect(useIntakeStore.getState().finalizeError).toEqual({
+        code: "ISSUE_TRACKING_UNAVAILABLE",
+        text: expect.any(String),
+        updatedAt: "u1",
+      });
+
+      api.intakeFinalize.mockResolvedValue(session("i1", { status: "done" }));
+      await useIntakeStore.getState().finalize(true);
+      expect(api.intakeFinalize).toHaveBeenLastCalledWith(ROOT, "i1", true);
+      expect(useIntakeStore.getState().finalizeError).toBeNull();
+    });
+
+    it("reopens and abandons; failures are shown and reload the session", async () => {
+      api.intakeReopen.mockResolvedValue(session("i1", { status: "active" }));
+      await useIntakeStore.getState().reopen();
+      expect(api.intakeReopen).toHaveBeenCalledWith(ROOT, "i1");
+      api.intakeAbandon.mockResolvedValue(session("i1", { status: "abandoned" }));
+      await useIntakeStore.getState().abandon();
+      expect(useIntakeStore.getState().session?.status).toBe("abandoned");
+
+      api.intakeReopen.mockRejectedValue({ code: "INTAKE_NOT_REOPENABLE", message: "" });
+      api.intakeGet.mockClear();
+      await useIntakeStore.getState().reopen();
+      expect(showMessage).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ kind: "error" }));
+      expect(api.intakeGet).toHaveBeenCalledWith(ROOT, "i1");
+      expect(useIntakeStore.getState().finalizeAction).toBeNull();
+    });
+
+    it("hands the created task to the main window and closes this one", async () => {
+      useIntakeStore.setState({
+        session: session("i1", {
+          status: "done",
+          finalize: { ...session("i1").finalize, stage: "done", rootTaskId: "t1" },
+        }),
+      });
+      await useIntakeStore.getState().openTask();
+      expect(emitTo).toHaveBeenCalledWith("main", "workflow://open-task", { projectRoot: ROOT, taskId: "t1" });
+      expect(closeWindow).toHaveBeenCalled();
     });
   });
 });

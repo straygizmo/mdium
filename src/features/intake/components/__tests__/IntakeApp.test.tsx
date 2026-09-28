@@ -41,6 +41,10 @@ const SESSION = {
   busy: false,
   messages: [{ id: "m1", role: "user", text: "It crashes", draftIds: [], at: "2026-09-28T00:00:00Z", detail: null }],
   lastQuestion: null,
+  proposal: null,
+  docUpdates: [],
+  appliedDocPaths: [],
+  finalize: { stage: "ready", issue: null, skipIssue: false, issueCreating: false, lastError: null },
 } as unknown as IntakeSessionView;
 const WORKFLOW = {
   id: "wf1",
@@ -97,6 +101,23 @@ describe("IntakeApp", () => {
     expect(container.textContent).toContain(t("intake.kind.bug"));
     expect(container.querySelector(".intake-conversation")).not.toBeNull();
     expect(container.querySelector(".intake-message--user")?.textContent).toContain("It crashes");
+  });
+
+  it("shows the proposal, document updates and finalize next to the conversation", async () => {
+    api.intakeGet.mockResolvedValue(SESSION);
+    await mount("i1");
+    expect(container.querySelector(".intake-app__review")).toBeNull();
+    expect(container.querySelector(".intake-abandon")?.textContent).toBe(t("intake.conversation.abandon"));
+
+    await act(async () =>
+      useIntakeStore.setState({
+        session: { ...SESSION, proposal: { title: "Fix crash", body: "Details" }, appliedDocPaths: ["docs/a.md"] },
+      }),
+    );
+    const review = container.querySelector(".intake-app__review")!;
+    expect(review.querySelector(".intake-proposal__title")?.textContent).toBe("Fix crash");
+    expect(review.querySelector(".intake-docs__applied")).not.toBeNull();
+    expect(review.querySelector(".intake-finalize__submit")).not.toBeNull();
   });
 
   it("shows a load failure", async () => {

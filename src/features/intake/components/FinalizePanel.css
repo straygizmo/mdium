@@ -1,0 +1,142 @@
+.intake-finalize {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-surface);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.intake-finalize--done {
+  border-color: var(--accent-green);
+}
+
+.intake-finalize__title {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.intake-finalize__description,
+.intake-finalize__stage,
+.intake-finalize__note,
+.intake-finalize__progress,
+.intake-finalize__failed,
+.intake-finalize__done {
+  margin: 0;
+  font-size: 12px;
+}
+
+.intake-finalize__description,
+.intake-finalize__note,
+.intake-finalize__progress {
+  color: var(--text-secondary);
+}
+
+.intake-finalize__stage {
+  font-weight: 600;
+}
+
+.intake-finalize__plan {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.intake-finalize__steps-label {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.intake-finalize__steps {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.intake-finalize__failed,
+.intake-finalize__error {
+  color: var(--accent-red);
+}
+
+.intake-finalize__error {
+  margin: 0;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.intake-finalize__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.intake-finalize__submit,
+.intake-finalize__retry,
+.intake-finalize__skip,
+.intake-finalize__reopen,
+.intake-finalize__abandon,
+.intake-finalize__open-task {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.intake-finalize__submit,
+.intake-finalize__retry,
+.intake-finalize__open-task {
+  border-color: var(--primary);
+}
+
+.intake-finalize__abandon {
+  color: var(--accent-red);
+}
+
+.intake-finalize__submit:disabled,
+.intake-finalize__retry:disabled,
+.intake-finalize__skip:disabled,
+.intake-finalize__reopen:disabled,
+.intake-finalize__abandon:disabled,
+.intake-finalize__open-task:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.intake-finalize__issue-link {
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--primary);
+  font: inherit;
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.intake-abandon {
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent-red);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.intake-abandon:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

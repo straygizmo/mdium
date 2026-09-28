@@ -1,0 +1,116 @@
+.intake-proposal {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--primary);
+  border-radius: 6px;
+  background: var(--bg-surface);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.intake-proposal__header {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.intake-proposal__heading {
+  flex: 1;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.intake-proposal__title {
+  margin: 0;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.intake-proposal__body {
+  overflow-wrap: anywhere;
+}
+
+.intake-proposal__body > :first-child {
+  margin-top: 0;
+}
+
+.intake-proposal__body > :last-child {
+  margin-bottom: 0;
+}
+
+.intake-proposal__form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.intake-proposal__field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.intake-proposal__title-input,
+.intake-proposal__body-input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-base);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.intake-proposal__body-input {
+  resize: vertical;
+}
+
+.intake-proposal__error {
+  margin: 0;
+  color: var(--accent-red);
+  font-size: 12px;
+}
+
+.intake-proposal__buttons {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.intake-proposal__edit,
+.intake-proposal__save,
+.intake-proposal__cancel {
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.intake-proposal__save {
+  border-color: var(--primary);
+}
+
+.intake-proposal__edit:disabled,
+.intake-proposal__save:disabled,
+.intake-proposal__cancel:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.intake-proposal__hint {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}

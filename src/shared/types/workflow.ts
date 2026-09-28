@@ -505,3 +505,15 @@ export interface IntakeChangedEvent {
 export interface WorkflowsChangedEvent {
   projectRoot: string;
 }
+
+/**
+ * Sent by an intake window to the main window (`emitTo("main", …)`) after
+ * finalizing: open the created task. `projectRoot` is the normalized root.
+ */
+export const WORKFLOW_OPEN_TASK_EVENT = "workflow://open-task";
+
+/** Payload of `workflow://open-task`. */
+export interface OpenTaskEvent {
+  projectRoot: string;
+  taskId: string;
+}

@@ -1,0 +1,146 @@
+.intake-docs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.intake-docs__title,
+.intake-docs__applied-title {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.intake-docs__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.intake-doc {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--text);
+}
+
+.intake-doc__header {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.intake-doc__path {
+  flex: 1;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.intake-doc__status,
+.intake-doc__new {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.intake-doc--applied .intake-doc__status {
+  color: var(--accent-green);
+}
+
+.intake-doc__reason {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* Large diffs scroll inside the item; UnifiedDiffView truncates very long ones. */
+.intake-doc__diff {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-base);
+}
+
+.intake-doc__note {
+  margin: 0;
+  padding: 6px 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.intake-doc__failure {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.intake-doc__error {
+  flex: 1;
+  margin: 0;
+  color: var(--accent-red);
+  font-size: 12px;
+}
+
+.intake-doc__buttons {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.intake-doc__apply,
+.intake-doc__reject,
+.intake-doc__reload {
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.intake-doc__apply {
+  border-color: var(--primary);
+}
+
+.intake-doc__apply:disabled,
+.intake-doc__reject:disabled,
+.intake-doc__reload:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.intake-docs__applied {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--accent-green);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--text);
+}
+
+.intake-docs__applied-notice {
+  margin: 0;
+  font-size: 12px;
+}
+
+.intake-docs__applied-list {
+  margin: 0;
+  padding-left: 18px;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}

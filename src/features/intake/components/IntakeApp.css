@@ -53,3 +53,37 @@
   font-size: 12px;
   white-space: pre-wrap;
 }
+
+.intake-app__actions {
+  margin-left: auto;
+}
+
+.intake-app__body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.intake-app__review {
+  display: flex;
+  flex: 0 0 380px;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+/* Narrow windows stack the review below the conversation. */
+@media (max-width: 760px) {
+  .intake-app__body {
+    flex-direction: column;
+  }
+
+  .intake-app__review {
+    flex: 0 1 45%;
+    border-top: 1px solid var(--border);
+    border-left: none;
+  }
+}
