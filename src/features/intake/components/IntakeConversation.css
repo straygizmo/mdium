@@ -1,0 +1,20 @@
+.intake-conversation {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.intake-conversation__footer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.intake-conversation__inactive {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}

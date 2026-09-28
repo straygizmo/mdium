@@ -34,6 +34,14 @@ import { IntakeApp } from "../IntakeApp";
 
 const t = (key: string, opts?: Record<string, unknown>) => i18n.t(key, { ns: "workflow", ...opts });
 const ROOT = "C:\\proj";
+const SESSION = {
+  id: "i1",
+  status: "active",
+  kind: "bug",
+  busy: false,
+  messages: [{ id: "m1", role: "user", text: "It crashes", draftIds: [], at: "2026-09-28T00:00:00Z", detail: null }],
+  lastQuestion: null,
+} as unknown as IntakeSessionView;
 const WORKFLOW = {
   id: "wf1",
   name: "Flow",
@@ -81,12 +89,14 @@ describe("IntakeApp", () => {
   });
 
   it("shows the session of an existing intake", async () => {
-    api.intakeGet.mockResolvedValue({ id: "i1", status: "active", kind: "bug", busy: false } as IntakeSessionView);
+    api.intakeGet.mockResolvedValue(SESSION);
     await mount("i1");
     expect(api.intakeGet).toHaveBeenCalledWith(ROOT, "i1");
     expect(container.querySelector(".intake-start")).toBeNull();
     expect(container.querySelector(".intake-app__session")).not.toBeNull();
     expect(container.textContent).toContain(t("intake.kind.bug"));
+    expect(container.querySelector(".intake-conversation")).not.toBeNull();
+    expect(container.querySelector(".intake-message--user")?.textContent).toContain("It crashes");
   });
 
   it("shows a load failure", async () => {
@@ -126,7 +136,7 @@ describe("IntakeApp", () => {
     const handler = subscribe.intake.mock.calls[0][0] as (e: IntakeChangedEvent) => void;
     await act(async () => handler({ projectRoot: ROOT, intakeId: "i1", status: "active", busy: true }));
     // init's own load finishes after the reload started, so it is outdated.
-    await act(async () => resolveInit({ id: "i1", status: "active", kind: "bug", busy: false } as IntakeSessionView));
+    await act(async () => resolveInit(SESSION));
     expect(useIntakeStore.getState().loading).toBe(false);
     expect(container.querySelector("[role='status']")?.textContent).toBe(t("intake.loading"));
     expect(container.textContent).not.toContain(t("intake.loadFailed"));

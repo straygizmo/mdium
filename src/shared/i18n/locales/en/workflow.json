@@ -337,6 +337,7 @@
       "cancel": "Cancel",
       "retry": "Retry",
       "attachments": "Attached files",
+      "attachedFile": "Attached file",
       "notActive": "This requirement intake is no longer in conversation.",
       "abandon": "Abandon intake",
       "abandonConfirm": "Abandon this requirement intake? Files attached to it are deleted."

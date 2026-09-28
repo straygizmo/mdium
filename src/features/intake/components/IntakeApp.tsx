@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { startIntakeEvents, useIntakeStore } from "../intake-store";
+import { IntakeConversation } from "./IntakeConversation";
 import { IntakeStartForm } from "./IntakeStartForm";
 import "./IntakeApp.css";
 
@@ -72,7 +73,7 @@ export function IntakeApp({ root, intakeId, workflowId }: IntakeAppProps) {
 
   if (!session) return <LoadFailed error={error} />;
 
-  // The conversation, proposal and finalize views are mounted here.
+  // The proposal and finalize views are mounted next to the conversation.
   return (
     <section className="intake-app__session" aria-label={t("intake.conversation.title")}>
       <header className="intake-app__header">
@@ -84,6 +85,7 @@ export function IntakeApp({ root, intakeId, workflowId }: IntakeAppProps) {
           {error}
         </p>
       )}
+      <IntakeConversation session={session} />
     </section>
   );
 }

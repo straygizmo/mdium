@@ -1,0 +1,61 @@
+.intake-compose {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.intake-compose__input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+
+.intake-compose__input:disabled {
+  opacity: 0.6;
+}
+
+.intake-compose__actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.intake-compose__attach,
+.intake-compose__voice,
+.intake-compose__send {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.intake-compose__attach {
+  margin-right: auto;
+}
+
+.intake-compose__voice--recording {
+  border-color: var(--accent-red);
+  color: var(--accent-red);
+}
+
+.intake-compose__send {
+  border-color: var(--primary);
+}
+
+.intake-compose__attach:disabled,
+.intake-compose__voice:disabled,
+.intake-compose__send:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
