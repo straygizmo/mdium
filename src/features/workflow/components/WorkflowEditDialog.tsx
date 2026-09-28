@@ -131,7 +131,7 @@ export function WorkflowEditDialog({ workflow, confirmEnable, onClose }: Workflo
     // Probe again when the language changes so the reasons are localized anew.
   }, [t]);
 
-  const patch =(p: Partial<Workflow>) => setDraft((d) => ({ ...d, ...p }));
+  const patch = (p: Partial<Workflow>) => setDraft((d) => ({ ...d, ...p }));
   const patchStage = (role: Role, p: Partial<Stage>) =>
     setDraft((d) => ({ ...d, stages: d.stages.map((s) => (s.role === role ? { ...s, ...p } : s)) }));
 

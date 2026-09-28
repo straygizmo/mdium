@@ -19,6 +19,8 @@ export interface IntakeAppProps {
  * start form and, once the session is created, hands it to its own
  * `intake-<id>` window and closes (`useIntakeStore.create`), so every session
  * has one window, which the main window focuses instead of opening another.
+ * The start window never serves the created session itself, not even when
+ * opening its window fails (it offers a retry instead).
  */
 export function IntakeApp({ root, intakeId, workflowId }: IntakeAppProps) {
   const { t } = useTranslation("workflow");
@@ -49,7 +51,16 @@ export function IntakeApp({ root, intakeId, workflowId }: IntakeAppProps) {
     };
   }, [root, intakeId]);
 
-  if (loading || !initialized) return <p className="intake-app__status">{t("intake.loading")}</p>;
+  // An intake window keeps loading until a session is applied or loading
+  // failed (an outdated load dropped by a racing reload is no failure).
+  const waiting = loading || !initialized || (servedId !== null && !session && !error);
+  if (waiting) {
+    return (
+      <p className="intake-app__status" role="status">
+        {t("intake.loading")}
+      </p>
+    );
+  }
 
   if (servedId === null) {
     return error ? (

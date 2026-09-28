@@ -93,6 +93,7 @@
 
 .intake-start__buttons {
   display: flex;
+  gap: 6px;
   justify-content: flex-end;
 }
 
@@ -108,6 +109,59 @@
 }
 
 .intake-start__submit:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.intake-start__fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.intake-start__handoff {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-surface);
+}
+
+.intake-start__handoff-text {
+  margin: 0;
+}
+
+.intake-start__handoff-detail {
+  margin: 0;
+  color: var(--accent-red);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.intake-start__retry,
+.intake-start__close {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.intake-start__retry {
+  border-color: var(--primary);
+}
+
+.intake-start__retry:disabled {
   opacity: 0.6;
   cursor: default;
 }

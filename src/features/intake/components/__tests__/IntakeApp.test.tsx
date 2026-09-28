@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { act, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { IntakeSessionView, Workflow } from "@/shared/types/workflow";
+import type { IntakeChangedEvent, IntakeSessionView, Workflow } from "@/shared/types/workflow";
 
 const api = vi.hoisted(() => ({
   attach: vi.fn(),
@@ -14,10 +14,14 @@ const api = vi.hoisted(() => ({
 }));
 const unlistenIntake = vi.hoisted(() => vi.fn());
 const unlistenWorkflows = vi.hoisted(() => vi.fn());
+const subscribe = vi.hoisted(() => ({
+  intake: vi.fn(async (_handler: unknown) => unlistenIntake),
+  workflows: vi.fn(async (_handler: unknown) => unlistenWorkflows),
+}));
 vi.mock("@/features/workflow/lib/workflow-api", () => ({
   workflowApi: api,
-  subscribeIntakeChanged: vi.fn(async () => unlistenIntake),
-  subscribeWorkflowsChanged: vi.fn(async () => unlistenWorkflows),
+  subscribeIntakeChanged: (handler: unknown) => subscribe.intake(handler),
+  subscribeWorkflowsChanged: (handler: unknown) => subscribe.workflows(handler),
 }));
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ close: vi.fn() }) }));
 vi.mock("@/stores/dialog-store", () => ({ showMessage: vi.fn() }));
@@ -61,10 +65,11 @@ describe("IntakeApp", () => {
     container.remove();
   });
 
-  async function mount(intakeId: string | null, workflowId: string | null = null) {
+  async function mount(intakeId: string | null, workflowId: string | null = null, strict = false) {
     root = createRoot(container);
+    const app = <IntakeApp root={ROOT} intakeId={intakeId} workflowId={workflowId} />;
     await act(async () => {
-      root?.render(<IntakeApp root={ROOT} intakeId={intakeId} workflowId={workflowId} />);
+      root?.render(strict ? <StrictMode>{app}</StrictMode> : app);
     });
   }
 
@@ -97,5 +102,33 @@ describe("IntakeApp", () => {
     root = undefined;
     expect(unlistenIntake).toHaveBeenCalledTimes(1);
     expect(unlistenWorkflows).toHaveBeenCalledTimes(1);
+  });
+
+  it("initializes once and keeps listeners balanced under StrictMode", async () => {
+    await mount(null, null, true);
+    expect(api.attach).toHaveBeenCalledTimes(1);
+    expect(subscribe.intake).toHaveBeenCalledTimes(2);
+    // The discarded first mount removed its listeners; the live one keeps them.
+    expect(unlistenIntake).toHaveBeenCalledTimes(1);
+    expect(unlistenWorkflows).toHaveBeenCalledTimes(1);
+    await act(async () => root?.unmount());
+    root = undefined;
+    expect(unlistenIntake).toHaveBeenCalledTimes(2);
+    expect(unlistenWorkflows).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps loading while a racing reload has not applied the session yet", async () => {
+    let resolveInit!: (v: IntakeSessionView) => void;
+    api.intakeGet
+      .mockReturnValueOnce(new Promise((r) => (resolveInit = r)))
+      .mockReturnValueOnce(new Promise(() => undefined));
+    await mount("i1");
+    const handler = subscribe.intake.mock.calls[0][0] as (e: IntakeChangedEvent) => void;
+    await act(async () => handler({ projectRoot: ROOT, intakeId: "i1", status: "active", busy: true }));
+    // init's own load finishes after the reload started, so it is outdated.
+    await act(async () => resolveInit({ id: "i1", status: "active", kind: "bug", busy: false } as IntakeSessionView));
+    expect(useIntakeStore.getState().loading).toBe(false);
+    expect(container.querySelector("[role='status']")?.textContent).toBe(t("intake.loading"));
+    expect(container.textContent).not.toContain(t("intake.loadFailed"));
   });
 });

@@ -190,15 +190,47 @@ describe("intake-store", () => {
       expect(useIntakeStore.getState().creating).toBe(false);
     });
 
-    it("serves the session here when its window cannot be opened", async () => {
+    it("keeps the start form locked and offers a retry when the session window cannot be opened", async () => {
       await useIntakeStore.getState().init(ROOT, null);
       api.intakeCreate.mockResolvedValue(session("new1"));
-      api.openIntakeWindow.mockRejectedValue({ code: "WORKFLOW_PROJECT_INVALID", message: "" });
+      api.openIntakeWindow.mockRejectedValueOnce({ code: "WORKFLOW_PROJECT_INVALID", message: "boom" });
       await useIntakeStore.getState().create({ workflowId: "wf1", kind: "feature", provider: "claude", model: null });
-      expect(showMessage).toHaveBeenCalled();
+      let s = useIntakeStore.getState();
       expect(closeWindow).not.toHaveBeenCalled();
-      expect(useIntakeStore.getState().intakeId).toBe("new1");
-      expect(useIntakeStore.getState().session?.id).toBe("new1");
+      // The session is never served by the start window.
+      expect(s.intakeId).toBeNull();
+      expect(s.session).toBeNull();
+      expect(s.creating).toBe(false);
+      expect(s.handOff).toEqual({ intakeId: "new1", windowOpened: false, error: expect.stringContaining("boom") });
+
+      // A second Start is ignored: the session already exists.
+      await useIntakeStore.getState().create({ workflowId: "wf1", kind: "feature", provider: "claude", model: null });
+      expect(api.intakeCreate).toHaveBeenCalledTimes(1);
+
+      api.openIntakeWindow.mockResolvedValueOnce("intake-new1");
+      await useIntakeStore.getState().retryHandOff();
+      s = useIntakeStore.getState();
+      expect(api.openIntakeWindow).toHaveBeenLastCalledWith(ROOT, "new1");
+      expect(s.handOff).toEqual({ intakeId: "new1", windowOpened: true, error: null });
+      expect(closeWindow).toHaveBeenCalledTimes(1);
+    });
+
+    it("stays locked when closing fails after the session window opened", async () => {
+      await useIntakeStore.getState().init(ROOT, null);
+      api.intakeCreate.mockResolvedValue(session("new1"));
+      api.openIntakeWindow.mockResolvedValue("intake-new1");
+      closeWindow.mockRejectedValueOnce(new Error("no"));
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      await useIntakeStore.getState().create({ workflowId: "wf1", kind: "feature", provider: "claude", model: null });
+      consoleError.mockRestore();
+      const s = useIntakeStore.getState();
+      expect(s.creating).toBe(false);
+      expect(s.handOff).toEqual({ intakeId: "new1", windowOpened: true, error: null });
+      expect(s.intakeId).toBeNull();
+      await useIntakeStore.getState().retryHandOff();
+      await useIntakeStore.getState().create({ workflowId: "wf1", kind: "feature", provider: "claude", model: null });
+      expect(api.openIntakeWindow).toHaveBeenCalledTimes(1);
+      expect(api.intakeCreate).toHaveBeenCalledTimes(1);
     });
 
     it("ignores a second create while one is in flight", async () => {
@@ -318,6 +350,57 @@ describe("intake-store", () => {
       await flush();
       expect(useIntakeStore.getState().session?.updatedAt).toBe("new");
       stop();
+    });
+
+    it("applies an event reload that races init and ignores init's outdated result", async () => {
+      const stop = await startIntakeEvents();
+      let resolveInit!: (v: IntakeSessionView) => void;
+      api.intakeGet
+        .mockReturnValueOnce(new Promise((r) => (resolveInit = r)))
+        .mockResolvedValueOnce(session("i1", { busy: false, updatedAt: "new" }));
+      const init = useIntakeStore.getState().init(ROOT, "i1");
+      await flush();
+      events.intake?.({ projectRoot: ROOT, intakeId: "i1", status: "active", busy: false });
+      await flush();
+      resolveInit(session("i1", { busy: true, updatedAt: "old" }));
+      await init;
+      const s = useIntakeStore.getState();
+      expect(s.session?.updatedAt).toBe("new");
+      expect(s.loading).toBe(false);
+      expect(s.error).toBeNull();
+      stop();
+    });
+
+    it("ignores a failure of an outdated load", async () => {
+      const stop = await startIntakeEvents();
+      let rejectInit!: (e: unknown) => void;
+      api.intakeGet
+        .mockReturnValueOnce(new Promise((_, r) => (rejectInit = r)))
+        .mockResolvedValueOnce(session("i1", { updatedAt: "new" }));
+      const init = useIntakeStore.getState().init(ROOT, "i1");
+      await flush();
+      events.intake?.({ projectRoot: ROOT, intakeId: "i1", status: "active", busy: false });
+      await flush();
+      rejectInit({ code: "STORE_IO", message: "old" });
+      await init;
+      const s = useIntakeStore.getState();
+      expect(s.session?.updatedAt).toBe("new");
+      expect(s.error).toBeNull();
+      stop();
+    });
+
+    it("ignores a failed reload overtaken by a newer one", async () => {
+      await useIntakeStore.getState().init(ROOT, "i1");
+      let rejectOld!: (e: unknown) => void;
+      api.intakeGet
+        .mockReturnValueOnce(new Promise((_, r) => (rejectOld = r)))
+        .mockResolvedValueOnce(session("i1", { updatedAt: "new" }));
+      const first = useIntakeStore.getState().reload();
+      await useIntakeStore.getState().reload();
+      rejectOld({ code: "STORE_IO", message: "old" });
+      await first;
+      expect(useIntakeStore.getState().error).toBeNull();
+      expect(useIntakeStore.getState().session?.updatedAt).toBe("new");
     });
 
     it("reloads workflows on workflows-changed for this project", async () => {

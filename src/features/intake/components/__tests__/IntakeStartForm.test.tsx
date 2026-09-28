@@ -9,7 +9,8 @@ vi.mock("@/features/workflow/lib/workflow-api", () => ({
   subscribeIntakeChanged: vi.fn(),
   subscribeWorkflowsChanged: vi.fn(),
 }));
-vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ close: vi.fn() }) }));
+const closeWindow = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ close: closeWindow }) }));
 vi.mock("@/stores/dialog-store", () => ({ showMessage: vi.fn() }));
 
 import i18n from "@/shared/i18n";
@@ -74,6 +75,7 @@ describe("IntakeStartForm", () => {
     container = document.createElement("div");
     document.body.appendChild(container);
     create.mockClear();
+    closeWindow.mockClear();
     useIntakeStore.setState({
       ...useIntakeStore.getInitialState(),
       root: "C:\\proj",
@@ -187,6 +189,56 @@ describe("IntakeStartForm", () => {
     await mount();
     expect(startButton().disabled).toBe(true);
     expect(startButton().textContent).toBe(t("intake.start.starting"));
+  });
+
+  it("keeps the provider and model choice when the workflow list reloads", async () => {
+    await mount("a");
+    await act(async () => setValue(providerSelect(), "claude"));
+    await act(async () => setValue(modelInput(), "opus"));
+    await act(async () => {
+      useIntakeStore.setState({ workflows: WORKFLOWS.map((w) => ({ ...w, name: `${w.name} renamed` })) });
+    });
+    expect(workflowSelect().value).toBe("a");
+    expect(providerSelect().value).toBe("claude");
+    expect(modelInput().value).toBe("opus");
+  });
+
+  it("disables the form while creating", async () => {
+    useIntakeStore.setState({ creating: true });
+    await mount();
+    expect(container.querySelector<HTMLFieldSetElement>(".intake-start__fields")!.disabled).toBe(true);
+  });
+
+  it("links the provider warning and the kind help to their controls", async () => {
+    await mount();
+    await act(async () => setValue(providerSelect(), "claude"));
+    const warning = container.querySelector(".intake-start__warning")!;
+    expect(providerSelect().getAttribute("aria-describedby")).toBe(warning.id);
+    const bug = container.querySelector<HTMLInputElement>("input[name='kind'][value='bug']")!;
+    const help = document.getElementById(bug.getAttribute("aria-describedby")!);
+    expect(help?.textContent).toBe(t("intake.start.bugHelp"));
+  });
+
+  it("offers a retry and close when the created session's window could not be opened", async () => {
+    const retryHandOff = vi.fn(() => Promise.resolve());
+    useIntakeStore.setState({ handOff: { intakeId: "new1", windowOpened: false, error: "boom" }, retryHandOff });
+    await mount();
+    expect(container.querySelector<HTMLFieldSetElement>(".intake-start__fields")!.disabled).toBe(true);
+    expect(container.textContent).toContain(t("intake.start.handOffFailed"));
+    expect(container.textContent).toContain("boom");
+    await act(async () => container.querySelector<HTMLButtonElement>(".intake-start__retry")!.click());
+    expect(retryHandOff).toHaveBeenCalledTimes(1);
+    await act(async () => container.querySelector<HTMLButtonElement>(".intake-start__close")!.click());
+    expect(closeWindow).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays disabled with a short notice when only closing this window failed", async () => {
+    useIntakeStore.setState({ handOff: { intakeId: "new1", windowOpened: true, error: null } });
+    await mount();
+    expect(startButton().disabled).toBe(true);
+    expect(container.textContent).toContain(t("intake.start.handedOff"));
+    expect(container.querySelector(".intake-start__retry")).toBeNull();
+    expect(container.querySelector(".intake-start__close")).not.toBeNull();
   });
 
   it("explains when no workflow is usable", async () => {

@@ -27,6 +27,18 @@ export interface IntakeCreateInput {
   model: string | null;
 }
 
+/**
+ * A session created in this start window and handed to its own window.
+ * While set, the start form stays disabled: the session already exists.
+ */
+export interface IntakeHandOff {
+  intakeId: string;
+  /** The session's own window was opened (only closing this one failed). */
+  windowOpened: boolean;
+  /** Localized failure of opening the session's window, if it failed. */
+  error: string | null;
+}
+
 /** State of the one intake session this window serves. */
 export interface IntakeWindowState {
   /** Normalized project root (the `workflow_attach_project` result). */
@@ -47,8 +59,10 @@ export interface IntakeWindowState {
   loading: boolean;
   /** A message send is in flight. */
   sending: boolean;
-  /** `create` is in flight. */
+  /** `create` (or a hand-off retry) is in flight. */
   creating: boolean;
+  /** Set once `create` created a session (see `IntakeHandOff`). */
+  handOff: IntakeHandOff | null;
   /** Localized load failure; null when the last load succeeded. */
   error: string | null;
   /** Attaches the project and loads workflows, providers, forge and (with an id) the session and drafts. */
@@ -58,6 +72,10 @@ export interface IntakeWindowState {
    * comment in the implementation).
    */
   create(input: IntakeCreateInput): Promise<void>;
+  /** Opens the created session's window again after that failed. */
+  retryHandOff(): Promise<void>;
+  /** Closes this window. */
+  closeWindow(): Promise<void>;
   /** Reloads the session and its drafts. */
   reload(): Promise<void>;
   /** Reloads the workflow list. */
@@ -90,20 +108,58 @@ function initialState() {
     loading: false,
     sending: false,
     creating: false,
+    handOff: null,
     error: null,
   } satisfies Partial<IntakeWindowState>;
 }
 
 export const useIntakeStore = create<IntakeWindowState>((set, get) => {
-  /** Loads the session and drafts, applying the result only if no newer load started. */
+  /**
+   * Loads the session and drafts. Only the newest load applies its result or
+   * rejects; an outdated one (a newer load started, e.g. an event reload
+   * racing `init`) resolves without effect.
+   */
   const loadSession = async (root: string, intakeId: string) => {
     const seq = ++sessionSeq;
-    const [session, drafts] = await Promise.all([
-      workflowApi.intakeGet(root, intakeId),
-      workflowApi.intakeListDrafts(root, intakeId),
-    ]);
-    if (seq !== sessionSeq || get().intakeId !== intakeId) return;
-    set({ session, drafts });
+    const isCurrent = () => seq === sessionSeq && get().intakeId === intakeId;
+    let session: IntakeSessionView;
+    let drafts: AttachmentMeta[];
+    try {
+      [session, drafts] = await Promise.all([
+        workflowApi.intakeGet(root, intakeId),
+        workflowApi.intakeListDrafts(root, intakeId),
+      ]);
+    } catch (err) {
+      if (isCurrent()) throw err;
+      return;
+    }
+    if (isCurrent()) set({ session, drafts, error: null });
+  };
+
+  /**
+   * Hands a created session to its own `intake-<id>` window and closes this
+   * one. Windows are keyed by label and this one is `intake-new-*`: if it
+   * kept serving the session, opening the session from the main window would
+   * create a second window for it. On failure the session is not served
+   * here either; the user retries or opens it from the main window.
+   */
+  const handOff = async (intakeId: string) => {
+    const root = get().root;
+    set({ creating: true, handOff: { intakeId, windowOpened: false, error: null } });
+    try {
+      await workflowApi.openIntakeWindow(root, intakeId);
+    } catch (err) {
+      set({ creating: false, handOff: { intakeId, windowOpened: false, error: formatCommandError(err) } });
+      return;
+    }
+    set({ handOff: { intakeId, windowOpened: true, error: null } });
+    try {
+      await getCurrentWindow().close();
+    } catch (err) {
+      // The session has its window; this one just stays open with Start disabled.
+      console.error("[intake] closing the start window failed", err);
+      set({ creating: false });
+    }
   };
 
   /**
@@ -158,8 +214,8 @@ export const useIntakeStore = create<IntakeWindowState>((set, get) => {
     },
 
     async create(input) {
-      const { root, creating } = get();
-      if (creating) return;
+      const { root, creating, handOff: current } = get();
+      if (creating || current) return;
       set({ creating: true });
       let view: IntakeSessionView;
       try {
@@ -169,25 +225,20 @@ export const useIntakeStore = create<IntakeWindowState>((set, get) => {
         void showMessage(formatCommandError(err), { title: i18n.t("workflow:intake.start.failed"), kind: "error" });
         return;
       }
-      // Windows are keyed by label and this one is `intake-new-*`: if it kept
-      // serving the new session, opening the session from the main window
-      // would create a second `intake-<id>` window for it. So the session is
-      // handed to its own `intake-<id>` window (which loads it) and this one
-      // closes.
-      try {
-        await workflowApi.openIntakeWindow(root, view.id);
-      } catch (err) {
-        // The session exists but has no window: serve it here rather than lose it.
-        sessionSeq++;
-        set({ creating: false, intakeId: view.id, session: view, drafts: [] });
-        void showMessage(formatCommandError(err), { title: i18n.t("workflow:intake.start.failed"), kind: "error" });
-        return;
-      }
+      await handOff(view.id);
+    },
+
+    async retryHandOff() {
+      const { creating, handOff: current } = get();
+      if (creating || !current || current.windowOpened) return;
+      await handOff(current.intakeId);
+    },
+
+    async closeWindow() {
       try {
         await getCurrentWindow().close();
       } catch (err) {
-        console.error("[intake] closing the start window failed", err);
-        set({ creating: false });
+        console.error("[intake] closing the window failed", err);
       }
     },
 
@@ -196,8 +247,8 @@ export const useIntakeStore = create<IntakeWindowState>((set, get) => {
       if (!intakeId) return;
       try {
         await loadSession(root, intakeId);
-        if (get().intakeId === intakeId) set({ error: null });
       } catch (err) {
+        // Only the newest load rejects, so this failure is current.
         if (get().intakeId === intakeId) set({ error: formatCommandError(err) });
       }
     },
