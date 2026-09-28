@@ -23,6 +23,7 @@ use crate::workflow::fsutil::{self, MdiumPaths};
 use crate::workflow::gitops;
 use crate::workflow::intake::{
     self, FinalizeOptions, IntakeError, INTAKE_NOT_ACTIVE, INTAKE_NO_PENDING_MESSAGE,
+    INTAKE_WORKFLOW_UNAVAILABLE,
 };
 use crate::workflow::model::{
     IntakeKind, IntakeSession, IntakeStatus, Provider, RunStatus, Task, TaskStatus, Workflow,
@@ -1555,6 +1556,32 @@ fn intake_window_spec(
     Ok((label, url))
 }
 
+/// Checks the target of an intake window: intake `intake_id` must exist
+/// and workflow `workflow_id` must be one of the project's workflows
+/// (`INTAKE_WORKFLOW_UNAVAILABLE` otherwise). Workflow ids are not checked
+/// against the generated-id format: hand-written `workflows.json` files
+/// may use any id, and the URL percent-encodes it.
+fn check_intake_window_target(
+    store: &WorkflowStore,
+    intake_id: Option<&str>,
+    workflow_id: Option<&str>,
+) -> Result<(), CommandError> {
+    if let Some(id) = intake_id {
+        intake::get_session(store, id)?;
+    }
+    if let Some(id) = workflow_id {
+        let found = store
+            .load_workflows()?
+            .workflows
+            .iter()
+            .any(|workflow| workflow.id == id);
+        if !found {
+            return Err(CommandError::code(INTAKE_WORKFLOW_UNAVAILABLE));
+        }
+    }
+    Ok(())
+}
+
 /// Brings an existing window to the front.
 fn focus_window(window: &WebviewWindow) -> Result<(), CommandError> {
     window.unminimize()?;
@@ -1563,11 +1590,25 @@ fn focus_window(window: &WebviewWindow) -> Result<(), CommandError> {
     Ok(())
 }
 
+/// Focuses the open window `label`; true when it exists and took focus.
+fn focus_existing(app: &AppHandle, label: &str) -> bool {
+    match app.get_webview_window(label) {
+        Some(window) => match focus_window(&window) {
+            Ok(()) => true,
+            Err(err) => {
+                eprintln!("[workflow] focusing window {label} failed: {}", err.message);
+                false
+            }
+        },
+        None => false,
+    }
+}
+
 /// Opens the intake window of `intake_id` (which must exist), or a window
-/// for a new intake of `workflow_id` when it is `None`; an already open
-/// window of the intake is focused instead. Returns the window label.
-/// `project_root` should be the normalized root (the value
-/// [`workflow_attach_project`] returns): the window uses it as is.
+/// for a new intake of `workflow_id` (which must exist) when it is `None`;
+/// an already open window of the intake is focused instead. Returns the
+/// window label. The window receives the normalized project root (the
+/// value [`workflow_attach_project`] returns).
 #[tauri::command]
 pub async fn workflow_open_intake_window(
     app: AppHandle,
@@ -1576,18 +1617,23 @@ pub async fn workflow_open_intake_window(
     intake_id: Option<String>,
     workflow_id: Option<String>,
 ) -> Result<String, CommandError> {
-    let (label, url) =
-        intake_window_spec(&project_root, intake_id.as_deref(), workflow_id.as_deref())?;
-    with_project_cmd(state, project_root, move |orch, root| {
-        if let Some(id) = intake_id {
-            intake::get_session(&orch.store(root), &id)?;
-        }
-        Ok(())
+    let (label, url) = with_project_cmd(state, project_root, move |orch, root| {
+        let store = orch.store(root);
+        check_intake_window_target(&store, intake_id.as_deref(), workflow_id.as_deref())?;
+        intake_window_spec(
+            &root_string(store.project_root()),
+            intake_id.as_deref(),
+            workflow_id.as_deref(),
+        )
     })
     .await?;
-    if let Some(window) = app.get_webview_window(&label) {
-        focus_window(&window)?;
+    if focus_existing(&app, &label) {
         return Ok(label);
+    }
+    // A window that exists but failed to take focus is replaced: destroy
+    // it and build a new one (once).
+    if let Some(window) = app.get_webview_window(&label) {
+        window.destroy()?;
     }
     let built = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(url.into()))
         .title("MDium")
@@ -1598,13 +1644,8 @@ pub async fn workflow_open_intake_window(
     match built {
         Ok(_) => Ok(label),
         // A concurrent call created the same intake's window first.
-        Err(err) => match app.get_webview_window(&label) {
-            Some(window) => {
-                focus_window(&window)?;
-                Ok(label)
-            }
-            None => Err(err.into()),
-        },
+        Err(_) if focus_existing(&app, &label) => Ok(label),
+        Err(err) => Err(err.into()),
     }
 }
 
@@ -2163,6 +2204,37 @@ mod tests {
     fn intake_window_spec_without_a_workflow_leaves_it_empty() {
         let (_, url) = intake_window_spec("/repo", Some("0123456789abcdef"), None).unwrap();
         assert!(url.ends_with("&workflow="));
+    }
+
+    #[test]
+    fn intake_window_target_accepts_an_existing_intake_and_workflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, workflow_id) = store_with_workflow(dir.path());
+        let session = intake::create_session(
+            &store,
+            &store.lock(),
+            &workflow_id,
+            IntakeKind::Feature,
+            Provider::Codex,
+            None,
+        )
+        .unwrap();
+        check_intake_window_target(&store, Some(&session.id), Some(&workflow_id)).unwrap();
+        check_intake_window_target(&store, None, Some(&workflow_id)).unwrap();
+        check_intake_window_target(&store, None, None).unwrap();
+    }
+
+    #[test]
+    fn intake_window_target_rejects_a_missing_intake_or_workflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, workflow_id) = store_with_workflow(dir.path());
+        let err = check_intake_window_target(&store, Some("0123456789abcdef"), Some(&workflow_id))
+            .unwrap_err();
+        assert_eq!(err.code, "INTAKE_NOT_FOUND");
+        let err = check_intake_window_target(&store, None, Some("missing")).unwrap_err();
+        assert_eq!(err.code, INTAKE_WORKFLOW_UNAVAILABLE);
+        let err = check_intake_window_target(&store, Some("../x"), None).unwrap_err();
+        assert_eq!(err.code, "STORE_INVALID_ID");
     }
 
     #[test]
