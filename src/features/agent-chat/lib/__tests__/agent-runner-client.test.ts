@@ -15,15 +15,21 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 // `spawn_agent_runner` emits the "ready" line (or an exit) relative to its
 // own resolution, which is what the race/ownership/timeout tests below need
 // to control precisely.
+/** Process id of the latest `loadClient`; unique per call so a late event of an earlier test's process never matches. */
+let spawnId = 0;
+let nextSpawnId = 100;
+
 async function loadClient(spawnBehavior: (id: number) => void = (id) => { setTimeout(() => emitLine(id, { type: "ready" }), 0); }) {
   vi.resetModules();
   handlers.clear();
+  const id = ++nextSpawnId;
+  spawnId = id;
   invoke.mockReset();
   invoke.mockImplementation(async (cmd: string) => {
     if (cmd === "resolve_agent_runner_path") return "C:/runner.mjs";
     if (cmd === "spawn_agent_runner") {
-      spawnBehavior(7);
-      return 7;
+      spawnBehavior(id);
+      return id;
     }
     return undefined;
   });
@@ -43,7 +49,7 @@ describe("agent runner client", () => {
     await client.sendToRunner({ type: "cancel", sessionId: "s1" });
     await client.sendToRunner({ type: "cancel", sessionId: "s2" });
     expect(invoke.mock.calls.filter(([c]) => c === "spawn_agent_runner")).toHaveLength(1);
-    expect(invoke).toHaveBeenCalledWith("write_agent_runner", { id: 7, line: JSON.stringify({ type: "cancel", sessionId: "s1" }) });
+    expect(invoke).toHaveBeenCalledWith("write_agent_runner", { id: spawnId, line: JSON.stringify({ type: "cancel", sessionId: "s1" }) });
   });
 
   it("resolves requests by requestId and rejects on matching errors", async () => {
@@ -51,8 +57,8 @@ describe("agent runner client", () => {
     const ok = client.requestRunner({ type: "probe", requestId: "r1", provider: "codex" }, "availability");
     const bad = client.requestRunner({ type: "list_sessions", requestId: "r2", provider: "codex", workingDirectory: "C:/w" }, "session_list");
     await flush();
-    emitLine(7, { type: "availability", requestId: "r1", provider: "codex", availability: { kind: "available", version: "1" } });
-    emitLine(7, { type: "error", requestId: "r2", message: "LIST_UNSUPPORTED" });
+    emitLine(spawnId, { type: "availability", requestId: "r1", provider: "codex", availability: { kind: "available", version: "1" } });
+    emitLine(spawnId, { type: "error", requestId: "r2", message: "LIST_UNSUPPORTED" });
     await expect(ok).resolves.toMatchObject({ requestId: "r1" });
     await expect(bad).rejects.toThrow("LIST_UNSUPPORTED");
   });
@@ -62,7 +68,7 @@ describe("agent runner client", () => {
     const seen: unknown[] = [];
     client.onRunnerMessage((m) => seen.push(m));
     await client.sendToRunner({ type: "cancel", sessionId: "s1" });
-    emitLine(7, { type: "turn_cancelled", sessionId: "s1" });
+    emitLine(spawnId, { type: "turn_cancelled", sessionId: "s1" });
     emitLine(8, { type: "turn_cancelled", sessionId: "other" });
     expect(seen).toContainEqual({ type: "turn_cancelled", sessionId: "s1" });
     expect(seen).not.toContainEqual({ type: "turn_cancelled", sessionId: "other" });
@@ -74,7 +80,7 @@ describe("agent runner client", () => {
     client.onRunnerMessage((m) => seen.push(m));
     const pending = client.requestRunner({ type: "probe", requestId: "r1", provider: "codex" }, "availability");
     await flush();
-    emitExit(7, 1);
+    emitExit(spawnId, 1);
     await expect(pending).rejects.toThrow("RUNNER_EXITED");
     expect(seen).toContainEqual({ type: "error", message: "RUNNER_EXITED" });
     await client.sendToRunner({ type: "cancel", sessionId: "s1" });
@@ -83,43 +89,48 @@ describe("agent runner client", () => {
 
   it("does not drop a ready that arrives before spawn_agent_runner resolves", async () => {
     // Emit "ready" synchronously from inside the spawn_agent_runner mock,
-    // i.e. before the id (7) is assigned to runnerId in the client. A naive
+    // i.e. before the id is assigned to runnerId in the client. A naive
     // `if (payload.id !== runnerId) return;` check would drop this line
     // forever (runnerId is still null), hanging ensureRunner/sendToRunner.
     const client = await loadClient((id) => emitLine(id, { type: "ready" }));
     await expect(client.sendToRunner({ type: "cancel", sessionId: "s1" })).resolves.toBeUndefined();
-    expect(invoke).toHaveBeenCalledWith("write_agent_runner", { id: 7, line: JSON.stringify({ type: "cancel", sessionId: "s1" }) });
+    expect(invoke).toHaveBeenCalledWith("write_agent_runner", { id: spawnId, line: JSON.stringify({ type: "cancel", sessionId: "s1" }) });
   });
 
   it("times out a start that never gets ready, kills the process, and resets for the next call", async () => {
-    vi.useFakeTimers();
+    // Load with real timers; only the start timeout itself runs on fake time.
+    // spawn_agent_runner resolves but never emits a "ready" line.
+    const client = await loadClient(() => undefined);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
-      // spawn_agent_runner resolves but never emits a "ready" line.
-      const client = await loadClient(() => undefined);
       const pending = client.sendToRunner({ type: "cancel", sessionId: "s1" });
       // Attach the rejection assertion before advancing time so the promise
-      // is never briefly unobserved (fake-timer time jumps can otherwise
-      // trip Node's unhandled-rejection detector between the two awaits).
+      // is never briefly unobserved.
       const rejection = expect(pending).rejects.toThrow("RUNNER_START_TIMEOUT");
-      await vi.advanceTimersByTimeAsync(15_000);
+      // Wait (on real macrotasks) until the start has registered its timeout.
+      for (let i = 0; i < 100 && vi.getTimerCount() === 0; i++) {
+        await new Promise((r) => setImmediate(r));
+      }
+      expect(vi.getTimerCount()).toBe(1);
+      vi.advanceTimersByTime(15_000);
       await rejection;
-      expect(invoke).toHaveBeenCalledWith("kill_agent_runner", { id: 7 });
-
-      // State must be reset so the next call starts a fresh process.
-      invoke.mockClear();
-      invoke.mockImplementation(async (cmd: string) => {
-        if (cmd === "resolve_agent_runner_path") return "C:/runner.mjs";
-        if (cmd === "spawn_agent_runner") {
-          emitLine(7, { type: "ready" });
-          return 7;
-        }
-        return undefined;
-      });
-      await client.sendToRunner({ type: "cancel", sessionId: "s2" });
-      expect(invoke.mock.calls.filter(([c]) => c === "spawn_agent_runner")).toHaveLength(1);
+      expect(invoke).toHaveBeenCalledWith("kill_agent_runner", { id: spawnId });
     } finally {
       vi.useRealTimers();
     }
+
+    // State must be reset so the next call starts a fresh process.
+    invoke.mockClear();
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "resolve_agent_runner_path") return "C:/runner.mjs";
+      if (cmd === "spawn_agent_runner") {
+        emitLine(spawnId, { type: "ready" });
+        return spawnId;
+      }
+      return undefined;
+    });
+    await client.sendToRunner({ type: "cancel", sessionId: "s2" });
+    expect(invoke.mock.calls.filter(([c]) => c === "spawn_agent_runner")).toHaveLength(1);
   });
 
   // --- Fix round 1 ---------------------------------------------------
@@ -139,7 +150,7 @@ describe("agent runner client", () => {
   it("clears a stale start's 15s timer so it cannot reject a newer, still-waiting start", async () => {
     vi.useFakeTimers();
     try {
-      // Old start (id 7): spawn resolves, then the process exits before ready.
+      // Old start (the loaded client's id): spawn resolves, then the process exits before ready.
       const client = await loadClient((id) => emitExit(id, 1));
       await expect(client.sendToRunner({ type: "cancel", sessionId: "s1" })).rejects.toThrow("RUNNER_EXITED");
 
@@ -181,7 +192,7 @@ describe("agent runner client", () => {
     await flush();
     await client.shutdownRunner();
     await expect(pending).rejects.toThrow("RUNNER_EXITED");
-    expect(invoke).toHaveBeenCalledWith("kill_agent_runner", { id: 7 });
+    expect(invoke).toHaveBeenCalledWith("kill_agent_runner", { id: spawnId });
   });
 
   it("retries subscribing to runner events after a failed subscribe attempt", async () => {
@@ -229,8 +240,8 @@ describe("agent runner client", () => {
       if (cmd === "spawn_agent_runner") {
         spawnCalls += 1;
         if (spawnCalls === 1) throw new Error("SPAWN_FAILED");
-        setTimeout(() => emitLine(7, { type: "ready" }), 0);
-        return 7;
+        setTimeout(() => emitLine(spawnId, { type: "ready" }), 0);
+        return spawnId;
       }
       return undefined;
     });
@@ -266,8 +277,8 @@ describe("agent runner client", () => {
     invoke.mockImplementation(async (cmd: string) => {
       if (cmd === "resolve_agent_runner_path") return "C:/runner.mjs";
       if (cmd === "spawn_agent_runner") {
-        emitLine(7, { type: "ready" });
-        return 7;
+        emitLine(spawnId, { type: "ready" });
+        return spawnId;
       }
       return undefined;
     });
