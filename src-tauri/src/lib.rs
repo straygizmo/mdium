@@ -384,7 +384,17 @@ pub fn run() {
             commands::workflow::workflow_retry_issue_sync,
             commands::workflow::workflow_skip_issue_sync,
             commands::workflow::workflow_retry_issue_close,
+            commands::workflow::workflow_open_intake_window,
         ])
+        .on_window_event(|window, event| {
+            // Intake windows do not outlive the main window: closing it
+            // closes them and exits (the Exit hook cancels intake turns).
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
+                let app = window.app_handle();
+                commands::workflow::close_intake_windows(app);
+                app.exit(0);
+            }
+        })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {

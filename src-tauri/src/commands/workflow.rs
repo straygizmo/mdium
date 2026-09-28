@@ -19,7 +19,7 @@ use crate::workflow::actions::{
 use crate::workflow::attachments::{self, AttachmentError, AttachmentMeta, MAX_ATTACHMENT_BYTES};
 use crate::workflow::attempt::{CancelReason, CancelToken, ProgressUpdate};
 use crate::workflow::forge::{self, CliForge, ForgeProbe};
-use crate::workflow::fsutil::MdiumPaths;
+use crate::workflow::fsutil::{self, MdiumPaths};
 use crate::workflow::gitops;
 use crate::workflow::intake::{
     self, FinalizeOptions, IntakeError, INTAKE_NOT_ACTIVE, INTAKE_NO_PENDING_MESSAGE,
@@ -35,6 +35,7 @@ use crate::workflow::state::project_key;
 use crate::workflow::store::{
     RunList, StoreError, StoreWarning, TaskList, WorkflowList, WorkflowStore,
 };
+use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -42,7 +43,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 /// The process-wide orchestrator, managed as Tauri state.
 pub type WorkflowState = Arc<Orchestrator>;
@@ -1521,6 +1522,104 @@ pub async fn workflow_retry_issue_close(
     .await
 }
 
+/// Label prefix of every intake window (matched by the `intake`
+/// capability; these windows close together with the main window).
+pub const INTAKE_WINDOW_PREFIX: &str = "intake-";
+
+/// The label and app URL of the intake window of `intake_id`, or of a new
+/// intake (a fresh `intake-new-<nonce>` label) when it is `None`. The query
+/// carries the percent-encoded root, intake id and workflow id (empty when
+/// absent). Rejects an invalid intake id with `STORE_INVALID_ID`.
+fn intake_window_spec(
+    project_root: &str,
+    intake_id: Option<&str>,
+    workflow_id: Option<&str>,
+) -> Result<(String, String), CommandError> {
+    let label = match intake_id {
+        Some(id) => {
+            fsutil::validate_id(id).map_err(|err| CommandError {
+                code: err.code().to_string(),
+                message: err.to_string(),
+            })?;
+            format!("{INTAKE_WINDOW_PREFIX}{id}")
+        }
+        None => format!("{INTAKE_WINDOW_PREFIX}new-{}", fsutil::new_id()),
+    };
+    let encode = |value: &str| utf8_percent_encode(value, NON_ALPHANUMERIC).to_string();
+    let url = format!(
+        "index.html?view=intake&root={}&intake={}&workflow={}",
+        encode(project_root),
+        encode(intake_id.unwrap_or("")),
+        encode(workflow_id.unwrap_or("")),
+    );
+    Ok((label, url))
+}
+
+/// Brings an existing window to the front.
+fn focus_window(window: &WebviewWindow) -> Result<(), CommandError> {
+    window.unminimize()?;
+    window.show()?;
+    window.set_focus()?;
+    Ok(())
+}
+
+/// Opens the intake window of `intake_id` (which must exist), or a window
+/// for a new intake of `workflow_id` when it is `None`; an already open
+/// window of the intake is focused instead. Returns the window label.
+/// `project_root` should be the normalized root (the value
+/// [`workflow_attach_project`] returns): the window uses it as is.
+#[tauri::command]
+pub async fn workflow_open_intake_window(
+    app: AppHandle,
+    state: tauri::State<'_, WorkflowState>,
+    project_root: String,
+    intake_id: Option<String>,
+    workflow_id: Option<String>,
+) -> Result<String, CommandError> {
+    let (label, url) =
+        intake_window_spec(&project_root, intake_id.as_deref(), workflow_id.as_deref())?;
+    with_project_cmd(state, project_root, move |orch, root| {
+        if let Some(id) = intake_id {
+            intake::get_session(&orch.store(root), &id)?;
+        }
+        Ok(())
+    })
+    .await?;
+    if let Some(window) = app.get_webview_window(&label) {
+        focus_window(&window)?;
+        return Ok(label);
+    }
+    let built = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(url.into()))
+        .title("MDium")
+        .inner_size(900.0, 760.0)
+        .min_inner_size(640.0, 480.0)
+        .decorations(true)
+        .build();
+    match built {
+        Ok(_) => Ok(label),
+        // A concurrent call created the same intake's window first.
+        Err(err) => match app.get_webview_window(&label) {
+            Some(window) => {
+                focus_window(&window)?;
+                Ok(label)
+            }
+            None => Err(err.into()),
+        },
+    }
+}
+
+/// Closes every intake window; called when the main window is gone, just
+/// before the app exits.
+pub fn close_intake_windows(app: &AppHandle) {
+    for (label, window) in app.webview_windows() {
+        if label.starts_with(INTAKE_WINDOW_PREFIX) {
+            if let Err(err) = window.destroy() {
+                eprintln!("[workflow] closing intake window {label} failed: {err}");
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2034,5 +2133,43 @@ mod tests {
     fn gitignore_status_lists_every_path_outside_git() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(gitignore_missing(dir.path()), GITIGNORE_PATHS);
+    }
+
+    #[test]
+    fn intake_window_spec_of_an_existing_intake() {
+        let (label, url) =
+            intake_window_spec(r"C:\my proj&x", Some("0123456789abcdef"), Some("wf 1")).unwrap();
+        assert_eq!(label, "intake-0123456789abcdef");
+        assert_eq!(
+            url,
+            "index.html?view=intake&root=C%3A%5Cmy%20proj%26x&intake=0123456789abcdef&workflow=wf%201"
+        );
+    }
+
+    #[test]
+    fn intake_window_spec_of_a_new_intake_uses_a_fresh_label() {
+        let (label, url) = intake_window_spec("/repo", None, Some("wf1")).unwrap();
+        let nonce = label.strip_prefix("intake-new-").unwrap();
+        assert!(crate::workflow::fsutil::is_valid_id(nonce));
+        assert_eq!(
+            url,
+            "index.html?view=intake&root=%2Frepo&intake=&workflow=wf1"
+        );
+        let (other, _) = intake_window_spec("/repo", None, None).unwrap();
+        assert_ne!(label, other);
+    }
+
+    #[test]
+    fn intake_window_spec_without_a_workflow_leaves_it_empty() {
+        let (_, url) = intake_window_spec("/repo", Some("0123456789abcdef"), None).unwrap();
+        assert!(url.ends_with("&workflow="));
+    }
+
+    #[test]
+    fn intake_window_spec_rejects_invalid_intake_ids() {
+        for id in ["", "../x", "0123456789ABCDEF", "0123456789abcdef0"] {
+            let err = intake_window_spec("/repo", Some(id), None).unwrap_err();
+            assert_eq!(err.code, "STORE_INVALID_ID", "{id:?}");
+        }
     }
 }

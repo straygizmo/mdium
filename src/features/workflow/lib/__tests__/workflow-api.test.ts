@@ -203,6 +203,18 @@ const cases: Case[] = [
     "workflow_retry_issue_close",
     { projectRoot: ROOT, rootTaskId: "r1" },
   ],
+  [
+    "openIntakeWindow",
+    () => workflowApi.openIntakeWindow(ROOT, "i1", "wf1"),
+    "workflow_open_intake_window",
+    { projectRoot: ROOT, intakeId: "i1", workflowId: "wf1" },
+  ],
+  [
+    "openIntakeWindow (new)",
+    () => workflowApi.openIntakeWindow(ROOT, null),
+    "workflow_open_intake_window",
+    { projectRoot: ROOT, intakeId: null, workflowId: null },
+  ],
 ];
 
 describe("workflowApi", () => {

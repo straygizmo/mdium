@@ -180,6 +180,13 @@ export const workflowApi = {
   skipIssueSync: taskAction("workflow_skip_issue_sync"),
   retryIssueClose: (projectRoot: string, rootTaskId: string) =>
     call<WorkflowRun>("workflow_retry_issue_close", { projectRoot, rootTaskId }),
+  /**
+   * Opens the intake window of `intakeId` (focusing it when already open), or
+   * a window for a new intake of `workflowId` when `intakeId` is null;
+   * resolves to the window label.
+   */
+  openIntakeWindow: (projectRoot: string, intakeId: string | null, workflowId: string | null = null) =>
+    call<string>("workflow_open_intake_window", { projectRoot, intakeId, workflowId }),
 };
 
 export interface WorkflowEventHandlers {
