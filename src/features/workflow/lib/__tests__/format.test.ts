@@ -1,7 +1,9 @@
 // @vitest-environment happy-dom
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import i18n from "@/shared/i18n";
-import { formatAttention, formatCode, formatCommandError } from "../format";
+import { formatAttention, formatCode, formatCommandError, formatIssueEntry } from "../format";
 
 const ATTENTION_CODES = [
   "ATTENTION_INTERRUPTED",
@@ -19,7 +21,30 @@ const ATTENTION_CODES = [
   "ATTENTION_DESIGN_DOC_FAILED",
   "ATTENTION_NOT_A_REPO",
   "ATTENTION_WORKFLOW_MISSING",
+  "ATTENTION_ISSUE_SYNC_FAILED",
 ];
+
+const RUST_SRC = join(__dirname, "..", "..", "..", "..", "..", "src-tauri", "src");
+
+/**
+ * Every quoted backend code of the workflow modules that reaches the UI:
+ * attention reasons and the intake, attachment, forge and Issue codes.
+ */
+function backendCodes(): string[] {
+  const workflowDir = join(RUST_SRC, "workflow");
+  const files = [
+    ...readdirSync(workflowDir)
+      .filter((f) => f.endsWith(".rs"))
+      .map((f) => join(workflowDir, f)),
+    join(RUST_SRC, "commands", "workflow.rs"),
+  ];
+  const pattern = /"((?:ATTENTION|INTAKE|ATTACHMENT|FORGE|ISSUE|WORKFLOW_ISSUE)_[A-Z0-9_]+)"/g;
+  const codes = new Set<string>();
+  for (const file of files) {
+    for (const match of readFileSync(file, "utf8").matchAll(pattern)) codes.add(match[1]);
+  }
+  return [...codes].sort();
+}
 
 describe("workflow format", () => {
   beforeAll(async () => {
@@ -32,6 +57,18 @@ describe("workflow format", () => {
         for (const code of ATTENTION_CODES) {
           expect(i18n.exists(`workflow:codes.${code}`, { lng }), `${lng} ${code}`).toBe(true);
         }
+      }
+    });
+
+    it("has a translation for every attention, intake, attachment, forge and Issue code of the backend", () => {
+      const codes = backendCodes();
+      expect(codes).toContain("INTAKE_TURN_BUSY");
+      expect(codes).toContain("ATTACHMENT_INVALID_DATA");
+      expect(codes).toContain("FORGE_TIMEOUT");
+      expect(codes).toContain("WORKFLOW_ISSUE_SYNC_INTERRUPTED");
+      for (const lng of ["en", "ja"]) {
+        const missing = codes.filter((code) => !i18n.exists(`workflow:codes.${code}`, { lng }));
+        expect(missing, lng).toEqual([]);
       }
     });
 
@@ -153,6 +190,46 @@ describe("workflow format", () => {
       expect(result.text).not.toContain("{{");
       expect(result.text).not.toContain("message");
       expect(formatCode("ATTENTION_REENTRY_LIMIT")).not.toContain("{{");
+    });
+
+    it("localizes the entry kind and the failure code of an Issue sync failure", () => {
+      const result = formatAttention({
+        code: "ATTENTION_ISSUE_SYNC_FAILED",
+        params: { code: "FORGE_TIMEOUT", message: "gh api timed out", entry: "implement" },
+      });
+      expect(result.text).toContain(i18n.t("workflow:entry.implement"));
+      expect(result.text).toContain(formatCode("FORGE_TIMEOUT"));
+      expect(result.text).toContain("gh api timed out");
+      expect(result.text).not.toContain("FORGE_TIMEOUT");
+      expect(result.text).not.toContain("implement");
+      expect(result.text).not.toContain("{{");
+    });
+
+    it("localizes the Issue sync entry kind in Japanese", async () => {
+      await i18n.changeLanguage("ja");
+      try {
+        const result = formatAttention({
+          code: "ATTENTION_ISSUE_SYNC_FAILED",
+          params: { code: "FORGE_NOT_AUTHENTICATED", message: "", entry: "review" },
+        });
+        expect(result.text).toContain("レビュー");
+        expect(result.text).toContain(formatCode("FORGE_NOT_AUTHENTICATED"));
+      } finally {
+        await i18n.changeLanguage("en");
+      }
+    });
+
+    it("shows an unknown or missing Issue sync entry kind without a key path", () => {
+      expect(formatIssueEntry("design")).toBe(i18n.t("workflow:entry.design"));
+      expect(formatIssueEntry("future")).toBe("future");
+      expect(formatIssueEntry(undefined)).toBe("");
+      const result = formatAttention({
+        code: "ATTENTION_ISSUE_SYNC_FAILED",
+        params: { code: "WORKFLOW_ISSUE_SYNC_INTERRUPTED", entry: "future" },
+      });
+      expect(result.text).toContain("future");
+      expect(result.text).not.toContain("workflow:");
+      expect(result.text).not.toContain("{{");
     });
 
     it("shows an unknown code inside an integrity item", () => {

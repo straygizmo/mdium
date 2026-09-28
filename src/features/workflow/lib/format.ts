@@ -31,6 +31,16 @@ function formatGuardRule(rule: string | undefined): string {
   return i18n.exists(key) ? i18n.t(key) : `${unknown} (${rule})`;
 }
 
+/**
+ * Localizes the stage an Issue entry records (`design|implement|review`, the
+ * `entry` param of `ATTENTION_ISSUE_SYNC_FAILED`); unknown kinds stay raw.
+ */
+export function formatIssueEntry(entry: string | undefined): string {
+  if (!entry) return "";
+  const key = `workflow:entry.${entry}`;
+  return i18n.exists(key) ? i18n.t(key) : entry;
+}
+
 /** Renders one entry of an `items` JSON array as a display line. */
 function formatItem(item: unknown): string {
   if (typeof item === "string") return item;
@@ -75,8 +85,9 @@ function parseItems(raw: string | undefined): string[] {
 /**
  * Localizes an attention reason; list params become `items` (max 20, plus
  * an "and N more" line).
- * Code-bearing params are localized too: `codeText` from `params.code` and
- * `ruleText` from `params.rule` (guard rules).
+ * Code-bearing params are localized too: `codeText` from `params.code`,
+ * `ruleText` from `params.rule` (guard rules) and `entryText` from
+ * `params.entry` (Issue entry kinds).
  */
 export function formatAttention(reason: AttentionReason): { text: string; items: string[] } {
   const params = reason.params ?? {};
@@ -84,6 +95,7 @@ export function formatAttention(reason: AttentionReason): { text: string; items:
     ...params,
     codeText: params.code ? formatCode(params.code) : "",
     ruleText: formatGuardRule(params.rule),
+    entryText: formatIssueEntry(params.entry),
   };
   return {
     text: formatCode(reason.code, derived),
