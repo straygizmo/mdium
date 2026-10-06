@@ -411,6 +411,7 @@ pub fn run() {
             commands::flow_run::flow_run_mark_succeeded,
             commands::flow_run::flow_run_delete,
             commands::flow_run::flow_run_log,
+            commands::flow_run::flow_gitignore_status,
         ])
         .on_window_event(|window, event| {
             // Intake windows do not outlive the main window: closing it
