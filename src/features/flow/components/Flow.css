@@ -481,3 +481,335 @@ button.flow-issue__button:hover {
 .flow-issue__code {
   font-family: monospace;
 }
+
+/* Runs (PR 3c) */
+
+.flow-runs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.flow-runs__toolbar {
+  display: flex;
+  gap: 6px;
+}
+
+.flow-runs__start,
+.flow-run__actions button,
+.flow-run__node-actions button,
+.flow-dialog__button,
+.flow-dialog__tab {
+  font-size: 12px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-base);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.flow-runs__start {
+  border-color: var(--primary);
+}
+
+.flow-runs__start:disabled,
+.flow-dialog__button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.flow-runs__notice {
+  text-align: left;
+  font-size: 12px;
+  padding: 6px;
+  border: 1px solid var(--primary);
+  border-radius: 4px;
+  background: var(--bg-base);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.flow-runs__hint {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.flow-runs__error,
+.flow-dialog__error {
+  font-size: 12px;
+  color: var(--accent-red);
+}
+
+.flow-runs__list,
+.flow-run__nodes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.flow-runs__item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-base);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.flow-runs__item--selected {
+  border-color: var(--primary);
+}
+
+.flow-runs__status {
+  font-weight: 600;
+}
+
+.flow-runs__status--completed { color: var(--accent-green); }
+.flow-runs__status--failed,
+.flow-runs__status--interrupted { color: var(--accent-red); }
+.flow-runs__status--running,
+.flow-runs__status--stopping { color: var(--accent-blue); }
+.flow-runs__status--awaiting_approval { color: var(--primary); }
+
+.flow-runs__when,
+.flow-run__muted {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.flow-runs__badge {
+  margin-left: auto;
+  font-size: 10px;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--primary);
+  color: var(--bg-base);
+}
+
+.flow-run {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.flow-run__head,
+.flow-run__actions,
+.flow-run__node-head,
+.flow-run__node-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.flow-run__reason {
+  font-size: 11px;
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+.flow-run__heading {
+  margin: 4px 0 0;
+  font-size: 12px;
+}
+
+.flow-run__node {
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.flow-run__node--failed,
+.flow-run__node--interrupted { border-color: var(--accent-red); }
+.flow-run__node--running { border-color: var(--accent-blue); }
+.flow-run__node--awaiting_approval { border-color: var(--primary); }
+
+.flow-run__node-name {
+  font-weight: 600;
+}
+
+.flow-run__node-status {
+  color: var(--text-secondary);
+}
+
+.flow-run__approval {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--primary);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.flow-run__approval-title {
+  font-weight: 600;
+}
+
+/* Dialogs */
+
+.flow-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg-base) 40%, transparent);
+}
+
+.flow-dialog {
+  width: min(560px, 92vw);
+  max-height: 86vh;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface);
+  color: var(--text);
+  box-shadow: 0 8px 24px var(--shadow-strong);
+}
+
+.flow-dialog--wide {
+  width: min(900px, 94vw);
+}
+
+.flow-dialog__title {
+  margin: 0;
+  font-size: 15px;
+}
+
+.flow-dialog__heading {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.flow-dialog__section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.flow-dialog__field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+}
+
+.flow-dialog__label {
+  font-weight: 600;
+}
+
+.flow-dialog__input {
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text);
+  font: inherit;
+}
+
+.flow-dialog__muted {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.flow-dialog__commands {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.flow-dialog__command {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.flow-dialog__command-head {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+}
+
+.flow-dialog__badge {
+  font-size: 10px;
+  padding: 0 6px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
+.flow-dialog__code {
+  display: block;
+  font-size: 11px;
+  padding: 4px;
+  border-radius: 4px;
+  background: var(--code-bg);
+  color: var(--code-text);
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
+.flow-dialog__confirm {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  font-size: 12px;
+}
+
+.flow-dialog__footer,
+.flow-dialog__tabs {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.flow-dialog__tabs {
+  justify-content: flex-start;
+}
+
+.flow-dialog__tab--active,
+.flow-dialog__button--primary {
+  border-color: var(--primary);
+}
+
+.flow-dialog__log {
+  margin: 0;
+  min-height: 200px;
+  max-height: 60vh;
+  overflow: auto;
+  padding: 8px;
+  font-size: 11px;
+  background: var(--code-bg);
+  color: var(--code-text);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

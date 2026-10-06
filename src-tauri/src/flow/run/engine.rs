@@ -12,6 +12,7 @@ use crate::flow::run::prepare::{
 };
 use crate::flow::run::process::tail_file;
 use crate::flow::run::store::{RunMeta, RunStore, StoreError, RUN_SCHEMA_VERSION};
+use crate::flow::run::supervise::DetachedProcess;
 use crate::workflow::fsutil;
 use crate::workflow::state::project_key;
 use serde::{Deserialize, Serialize};
@@ -270,6 +271,27 @@ impl FlowEngine {
             match state.status {
                 RunStatus::Running | RunStatus::Stopping => {
                     let mut editor = self.editor(root, &run_id)?;
+                    // Detached commands may still run (or have left their exit
+                    // record): a driver reconnects to them, provided this
+                    // machine confirmed the run's commands (spec 7.2).
+                    let reconnectable = editor.state().nodes.values().any(|n| {
+                        n.status == NodeStatus::Running
+                            && n.process.as_ref().is_some_and(|p| {
+                                p.exit_file.as_ref().is_some_and(|exit| {
+                                    DetachedProcess::reconnect(
+                                        p.pid,
+                                        &p.started_at,
+                                        Path::new(exit),
+                                    )
+                                    .is_some()
+                                })
+                            })
+                    });
+                    if reconnectable && self.require_confirmed(root, editor.meta()).is_ok() {
+                        drop(editor);
+                        self.spawn_driver(&mut inner, root, &run_id, None)?;
+                        continue;
+                    }
                     let running: Vec<String> = editor
                         .state()
                         .nodes

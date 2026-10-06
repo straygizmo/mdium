@@ -8,6 +8,7 @@ pub mod model;
 pub mod prepare;
 pub mod process;
 pub mod store;
+pub mod supervise;
 
 #[cfg(test)]
 mod test_helper;
