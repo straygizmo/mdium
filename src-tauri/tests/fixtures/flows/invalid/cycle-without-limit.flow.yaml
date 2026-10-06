@@ -1,0 +1,11 @@
+schemaVersion: 1
+id: t
+name: T
+nodes:
+  - { id: s, kind: command, run: [x] }
+  - { id: a, kind: command, run: [x] }
+  - { id: b, kind: command, run: [x] }
+edges:
+  - { from: s, to: a }
+  - { from: a, to: b }
+  - { from: b, to: a }

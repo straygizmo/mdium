@@ -1,0 +1,51 @@
+schemaVersion: 1
+id: dev-workflow
+name: Standard development workflow
+params:
+  title: { type: string, required: true }
+  requirement: { type: string, required: true }   # intake result
+  issue: { type: string, default: "" }            # empty = no issue tracking for this run
+  designDocPath: { type: string, default: "" }
+limits: { maxConcurrentNodes: 1, maxTraversals: 5 } # = maxReentryCount
+nodes:
+  - { id: screen, kind: action, uses: mdium/screen-input, with: { text: "${{ params.requirement }}" } }
+  - { id: worktree, kind: action, uses: mdium/git-worktree-create, with: { title: "${{ params.title }}" } }
+  - id: design
+    kind: agent
+    provider: codex
+    permission: read-only
+    promptRef: builtin:design            # built-in English prompt
+    outputContract: outcome
+    workingDir: "${{ nodes.worktree.outputs.path }}"   # all agents run in the run's worktree (3.6)
+    timeout: 60m
+  - { id: design_doc, kind: action, uses: mdium/design-doc-commit, when: { ref: params.designDocPath, op: "!=", value: "" } }
+  - { id: issue_design, kind: action, uses: mdium/issue-entry, with: { entry: design }, when: { ref: params.issue, op: "!=", value: "" } }
+  - { id: plan, kind: agent, provider: codex, permission: read-only, promptRef: builtin:implement-plan, outputContract: outcome, workingDir: "${{ nodes.worktree.outputs.path }}" }
+  - { id: approve_plan, kind: approval, options: [approve, revise] }
+  - { id: implement, kind: agent, provider: codex, permission: full-access, promptRef: builtin:implement, outputContract: outcome, workingDir: "${{ nodes.worktree.outputs.path }}" }
+  - { id: issue_impl, kind: action, uses: mdium/issue-entry, with: { entry: implement }, when: { ref: params.issue, op: "!=", value: "" } }
+  - { id: review, kind: agent, provider: codex, permission: read-only, promptRef: builtin:review, outputContract: outcome, workingDir: "${{ nodes.worktree.outputs.path }}" }
+  - { id: issue_review, kind: action, uses: mdium/issue-entry, with: { entry: review }, when: { ref: params.issue, op: "!=", value: "" } }
+  - { id: issue_review_return, kind: action, uses: mdium/issue-entry, with: { entry: review }, when: { ref: params.issue, op: "!=", value: "" } }
+  - { id: merge_gate, kind: approval, options: [merge, discard] }
+  - { id: merge, kind: action, uses: mdium/git-merge-local }
+  - { id: close_issue, kind: action, uses: mdium/issue-close, when: { ref: params.issue, op: "!=", value: "" } }
+  - { id: discard, kind: action, uses: mdium/git-worktree-discard }
+edges:
+  - { from: screen, to: worktree }
+  - { from: worktree, to: design }
+  - { from: design, to: design_doc }
+  - { from: design_doc, to: issue_design }
+  - { from: issue_design, to: plan }
+  - { from: plan, to: approve_plan }
+  - { from: approve_plan, to: implement, port: approve }
+  - { from: approve_plan, to: plan, port: revise, maxTraversals: 10 }
+  - { from: implement, to: issue_impl }
+  - { from: issue_impl, to: review }
+  - { from: review, to: issue_review }
+  - { from: issue_review, to: merge_gate }
+  - { from: review, to: issue_review_return, port: attention }
+  - { from: issue_review_return, to: design, maxTraversals: 5 }   # reviewReturnTo / maxReentryCount
+  - { from: merge_gate, to: merge, port: merge }
+  - { from: merge, to: close_issue }
+  - { from: merge_gate, to: discard, port: discard }

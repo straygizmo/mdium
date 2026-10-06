@@ -1,0 +1,8 @@
+schemaVersion: 1
+id: t
+name: T
+nodes:
+  - { id: a, kind: command, run: [x] }
+  - { id: b, kind: command, run: [x] }
+edges:
+  - { from: a, to: b, maxTraversals: 2 }

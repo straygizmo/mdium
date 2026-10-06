@@ -1,0 +1,5 @@
+schemaVersion: 1
+id: t
+name: T
+nodes:
+  - { id: Bad-Id, kind: command, run: [x] }

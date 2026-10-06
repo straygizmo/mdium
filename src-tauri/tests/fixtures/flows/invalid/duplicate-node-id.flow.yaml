@@ -1,0 +1,15 @@
+schemaVersion: 1
+id: t
+name: T
+nodes:
+  - { id: a, kind: command, run: [x] }
+  - id: l
+    kind: loop
+    mode: foreach
+    items: [1, 2]
+    maxIterations: 2
+    body:
+      nodes:
+        - { id: a, kind: command, run: [y] }
+edges:
+  - { from: a, to: l }

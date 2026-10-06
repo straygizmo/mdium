@@ -1,5 +1,6 @@
 mod commands;
 mod file_watcher;
+mod flow;
 mod http_bridge;
 mod markdown_parser;
 mod workflow;
@@ -385,6 +386,10 @@ pub fn run() {
             commands::workflow::workflow_skip_issue_sync,
             commands::workflow::workflow_retry_issue_close,
             commands::workflow::workflow_open_intake_window,
+            // Generic flow engine (definitions only; UI gated by experimentalFlows)
+            commands::flow::flow_list,
+            commands::flow::flow_load,
+            commands::flow::flow_validate,
         ])
         .on_window_event(|window, event| {
             // Intake windows do not outlive the main window: closing it

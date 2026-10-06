@@ -1,0 +1,6 @@
+schemaVersion: 1
+id: t
+name: T
+labels: [x]
+nodes:
+  - { id: a, kind: command, run: [x] }

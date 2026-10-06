@@ -46,6 +46,8 @@ interface SettingsState {
   mediumSettings: MediumSettings;
   allowLlmVbaImport: boolean;
   replacement: ReplacementSettings;
+  /** Shows the experimental generic flow engine UI (off by default). */
+  experimentalFlows: boolean;
 
   setThemeId: (id: string) => void;
   setLanguage: (lang: Language) => void;
@@ -64,6 +66,7 @@ interface SettingsState {
   setMediumSettings: (settings: MediumSettings) => void;
   setAllowLlmVbaImport: (enabled: boolean) => void;
   setReplacement: (settings: ReplacementSettings) => void;
+  setExperimentalFlows: (enabled: boolean) => void;
   initializeTheme: () => void;
 }
 
@@ -87,6 +90,7 @@ export const useSettingsStore = create<SettingsState>()(
       mediumSettings: DEFAULT_MEDIUM_SETTINGS,
       allowLlmVbaImport: false,
       replacement: DEFAULT_REPLACEMENT_SETTINGS,
+      experimentalFlows: false,
 
       setThemeId: (id) => {
         const theme = getThemeById(id);
@@ -128,6 +132,7 @@ export const useSettingsStore = create<SettingsState>()(
       setMediumSettings: (settings) => set({ mediumSettings: settings }),
       setAllowLlmVbaImport: (enabled) => set({ allowLlmVbaImport: enabled }),
       setReplacement: (settings) => set({ replacement: settings }),
+      setExperimentalFlows: (enabled) => set({ experimentalFlows: enabled }),
 
       initializeTheme: () => {
         const theme = getThemeById(get().themeId);
@@ -153,6 +158,7 @@ export const useSettingsStore = create<SettingsState>()(
         mediumSettings: state.mediumSettings,
         allowLlmVbaImport: state.allowLlmVbaImport,
         replacement: state.replacement,
+        experimentalFlows: state.experimentalFlows,
       }),
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<SettingsState>;

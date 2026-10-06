@@ -5,6 +5,7 @@ pub mod claude_config;
 pub mod claude_sidecar;
 pub mod env;
 pub mod file;
+pub mod flow;
 pub mod fs_search;
 pub mod git;
 pub mod image_gen;

@@ -1,0 +1,180 @@
+{
+  "schemaVersion": 1,
+  "id": "doc-digest",
+  "name": "Document digest",
+  "params": {
+    "sourceDir": {
+      "type": "path",
+      "required": true
+    },
+    "minScore": {
+      "type": "number",
+      "default": 7
+    },
+    "reviewBeforePublish": {
+      "type": "bool",
+      "default": true
+    }
+  },
+  "limits": {
+    "maxConcurrentNodes": 2,
+    "budgetUsd": 10
+  },
+  "defaults": {
+    "timeout": "30m",
+    "workingDir": "${{ project.root }}"
+  },
+  "nodes": [
+    {
+      "id": "collect",
+      "kind": "command",
+      "run": [
+        "docsflow",
+        "collect",
+        "${{ params.sourceDir }}"
+      ]
+    },
+    {
+      "id": "docs",
+      "kind": "loop",
+      "mode": "foreach",
+      "items": "${{ nodes.collect.outputs.docs }}",
+      "maxIterations": 200,
+      "parallelism": 2,
+      "as": "doc",
+      "onItemFailure": "continue",
+      "body": {
+        "nodes": [
+          {
+            "id": "summarize",
+            "kind": "agent",
+            "provider": "claude",
+            "permission": "read-only",
+            "promptRef": "./prompts/summarize.md",
+            "outputContract": "outcome",
+            "cost": {
+              "estimateUsd": 0.05
+            }
+          },
+          {
+            "id": "check",
+            "kind": "command",
+            "run": [
+              "docsflow",
+              "score",
+              "${{ doc }}",
+              "${{ nodes.summarize.outputs.summaryPath }}"
+            ],
+            "retry": {
+              "max": 2
+            }
+          },
+          {
+            "id": "quality_gate",
+            "kind": "branch",
+            "cases": [
+              {
+                "when": {
+                  "ref": "nodes.check.outputs.score",
+                  "op": "<",
+                  "value": 7
+                },
+                "port": "low"
+              }
+            ],
+            "default": "ok"
+          }
+        ],
+        "edges": [
+          {
+            "from": "summarize",
+            "to": "check"
+          },
+          {
+            "from": "check",
+            "to": "quality_gate"
+          },
+          {
+            "from": "quality_gate",
+            "to": "summarize",
+            "port": "low",
+            "maxTraversals": 2
+          }
+        ]
+      }
+    },
+    {
+      "id": "compile",
+      "kind": "command",
+      "run": [
+        "docsflow",
+        "compile",
+        "--out",
+        "${{ node.dir }}/digest.md"
+      ]
+    },
+    {
+      "id": "review",
+      "kind": "approval",
+      "when": {
+        "ref": "params.reviewBeforePublish",
+        "op": "==",
+        "value": true
+      },
+      "message": "Review the digest before publishing",
+      "show": [
+        "nodes.compile.outputs.digest"
+      ],
+      "options": [
+        "publish",
+        "reject"
+      ]
+    },
+    {
+      "id": "publish",
+      "kind": "command",
+      "run": [
+        "docsflow",
+        "publish",
+        "${{ nodes.compile.outputs.digest }}"
+      ]
+    },
+    {
+      "id": "notify_failure",
+      "kind": "command",
+      "run": [
+        "docsflow",
+        "notify",
+        "--status",
+        "failed"
+      ]
+    }
+  ],
+  "outputs": {
+    "digest": "${{ nodes.compile.outputs.digest }}"
+  },
+  "edges": [
+    {
+      "from": "collect",
+      "to": "docs"
+    },
+    {
+      "from": "docs",
+      "to": "compile"
+    },
+    {
+      "from": "docs",
+      "to": "notify_failure",
+      "port": "failure"
+    },
+    {
+      "from": "compile",
+      "to": "review"
+    },
+    {
+      "from": "review",
+      "to": "publish",
+      "port": "publish"
+    }
+  ]
+}
