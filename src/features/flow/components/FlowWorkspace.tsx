@@ -8,6 +8,7 @@ import { layoutFlowGraph, savedPositions, type FlowLayout } from "../lib/flow-la
 import { useFlowViewStore } from "../flow-store";
 import { FlowCanvas } from "./FlowCanvas";
 import { FlowIssueList } from "./FlowIssueList";
+import { RunPanel } from "./RunPanel";
 import "./Flow.css";
 
 type LoadState =
@@ -143,6 +144,16 @@ export function FlowWorkspace() {
             )}
           </div>
           <aside className="flow-workspace__side">
+            {folder && (
+              <section className="flow-workspace__section">
+                <h3 className="flow-workspace__section-title">{t("run.title")}</h3>
+                <RunPanel
+                  projectRoot={folder}
+                  flowPath={result.path}
+                  flow={result.flow && result.errors.length === 0 ? result.flow : null}
+                />
+              </section>
+            )}
             <section className="flow-workspace__section">
               <h3 className="flow-workspace__section-title">{t("workspace.issues")}</h3>
               <FlowIssueList errors={result.errors} warnings={result.warnings} onSelectNode={selectNode} />

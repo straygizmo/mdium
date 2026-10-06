@@ -382,10 +382,70 @@ pub async fn flow_run_log(
     .await
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitignoreStatus {
+    /// `.mdium/flow-runs/` is ignored by git (or the folder is not a git repository).
+    pub ignored: bool,
+}
+
+/// Whether git ignores `.mdium/flow-runs/` in `root` (the UI suggests
+/// adding it otherwise; nothing is written automatically).
+fn flow_runs_ignored(root: &Path) -> bool {
+    let mut command = std::process::Command::new("git");
+    command
+        .args(["check-ignore", "-q", ".mdium/flow-runs/probe"])
+        .current_dir(root)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    match command.status() {
+        Ok(status) => status.code() != Some(1),
+        // No git: nothing to suggest.
+        Err(_) => true,
+    }
+}
+
+#[tauri::command]
+pub async fn flow_gitignore_status(
+    project_root: String,
+) -> Result<GitignoreStatus, FlowCommandError> {
+    blocking(move || {
+        let root = super::flow::project_root(&project_root)?;
+        Ok(GitignoreStatus {
+            ignored: flow_runs_ignored(&root),
+        })
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::flow::run::engine::{EngineError, FLOW_RUN_INVALID_ID};
+
+    #[test]
+    fn detects_whether_flow_runs_are_ignored() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Not a repository: nothing to suggest.
+        assert!(flow_runs_ignored(tmp.path()));
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(tmp.path())
+                .output()
+                .unwrap()
+        };
+        git(&["init", "-q"]);
+        assert!(!flow_runs_ignored(tmp.path()));
+        std::fs::write(tmp.path().join(".gitignore"), ".mdium/flow-runs/\n").unwrap();
+        assert!(flow_runs_ignored(tmp.path()));
+    }
 
     #[test]
     fn engine_errors_keep_code_and_details() {
