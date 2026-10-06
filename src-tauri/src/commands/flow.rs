@@ -26,13 +26,27 @@ pub const FLOW_COMMAND_FAILED: &str = "FLOW_COMMAND_FAILED";
 pub struct FlowCommandError {
     pub code: String,
     pub message: String,
+    /// Machine-readable details (validation problems, nodes needing action, ...).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub details: Vec<crate::flow::run::model::Reason>,
 }
 
 impl FlowCommandError {
-    fn new(code: &str, detail: impl std::fmt::Display) -> Self {
+    pub(crate) fn new(code: &str, detail: impl std::fmt::Display) -> Self {
         Self {
             code: code.to_string(),
             message: format!("{code}: {detail}"),
+            details: Vec::new(),
+        }
+    }
+}
+
+impl From<crate::flow::run::engine::EngineError> for FlowCommandError {
+    fn from(err: crate::flow::run::engine::EngineError) -> Self {
+        Self {
+            message: format!("{}: {}", err.code, err.message),
+            code: err.code,
+            details: err.details,
         }
     }
 }
@@ -48,7 +62,7 @@ pub struct FlowLoadResult {
     pub report: FlowReport,
 }
 
-async fn blocking<T, F>(op: F) -> Result<T, FlowCommandError>
+pub(crate) async fn blocking<T, F>(op: F) -> Result<T, FlowCommandError>
 where
     T: Send + 'static,
     F: FnOnce() -> Result<T, FlowCommandError> + Send + 'static,
@@ -58,7 +72,7 @@ where
         .map_err(|err| FlowCommandError::new(FLOW_COMMAND_FAILED, err))?
 }
 
-fn project_root(project_root: &str) -> Result<PathBuf, FlowCommandError> {
+pub(crate) fn project_root(project_root: &str) -> Result<PathBuf, FlowCommandError> {
     let root = PathBuf::from(project_root);
     if project_root.trim().is_empty() || !root.is_absolute() || !root.is_dir() {
         return Err(FlowCommandError::new(FLOW_PROJECT_INVALID, project_root));
