@@ -431,10 +431,12 @@ impl FlowEdge {
 /// Parses a duration written as `<n>s`, `<n>m` or `<n>h` (e.g. `30s`, `2h`).
 pub fn parse_duration(text: &str) -> Option<Duration> {
     let text = text.trim();
-    if text.len() < 2 {
+    // Split before the last char (not byte): input may be non-ASCII ("30分").
+    let (last_index, _) = text.char_indices().last()?;
+    let (digits, unit) = text.split_at(last_index);
+    if digits.is_empty() {
         return None;
     }
-    let (digits, unit) = text.split_at(text.len() - 1);
     if !digits.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
@@ -474,6 +476,9 @@ mod tests {
             "0s",
             "h1",
             "99999999999999999999h",
+            "30分",
+            "1時間",
+            "分",
         ] {
             assert_eq!(parse_duration(bad), None, "{bad}");
         }

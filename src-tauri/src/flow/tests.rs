@@ -278,6 +278,24 @@ fn agent_prompt_rules() {
 }
 
 #[test]
+fn retry_on_key_survives_yaml_parsing() {
+    // YAML 1.1 would read a bare `on` as boolean true; serde_yaml_ng keeps it a string.
+    let yaml = flow(
+        "nodes:
+  - { id: a, kind: command, run: [x], timeout: 30分, retry: { max: 1, backoff: 10s, on: [failed, timeout] } }
+",
+    );
+    let (_, issues) = check_text(&yaml, FlowFormat::Yaml);
+    // Only the non-ASCII timeout is rejected (as a value, not a panic).
+    assert_eq!(codes(&issues.errors), vec![FLOW_INVALID_VALUE]);
+    assert_eq!(issues.errors[0].path, "nodes[0].timeout");
+    let (flow_def, issues) = check_text(&yaml.replace("30分", "30m"), FlowFormat::Yaml);
+    assert!(issues.errors.is_empty(), "{issues:#?}");
+    let retry = flow_def.unwrap().nodes[0].retry.clone().unwrap();
+    assert_eq!(retry.on, Some(vec![RetryOn::Failed, RetryOn::Timeout]));
+}
+
+#[test]
 fn command_run_rules() {
     let cmd = |attrs: &str| {
         flow(&format!(
