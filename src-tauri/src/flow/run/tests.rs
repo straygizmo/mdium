@@ -1008,6 +1008,7 @@ fn crash_recovery_marks_running_runs_interrupted() {
         started_by: "user".into(),
     };
     store.create(&meta).unwrap();
+    let meta = store.load_meta(&run_id).unwrap();
     let mut log = store.open_log(&run_id).unwrap();
     let events = [
         (
@@ -1056,7 +1057,19 @@ fn crash_recovery_marks_running_runs_interrupted() {
         node(&snap, "a").reason.as_ref().unwrap().code,
         FLOW_APP_EXITED
     );
-    // Rerun after confirming (the flow file is confirmed separately from the run).
+    // Re-running needs this machine's confirmation of the snapshot's content.
+    assert_eq!(
+        f.engine.rerun_node(&f.root, &run_id, "a").unwrap_err().code,
+        FLOW_COMMANDS_UNCONFIRMED
+    );
+    assert_eq!(
+        f.engine.get(&f.root, &run_id).unwrap().state.nodes["a"].status,
+        NodeStatus::Interrupted,
+        "nothing changed"
+    );
+    f.engine
+        .confirm_commands(&f.root, &rel, &meta.flow_sha256)
+        .unwrap();
     f.engine.rerun_node(&f.root, &run_id, "a").unwrap();
     f.wait_settled(&run_id, RunStatus::Completed);
 }
@@ -1140,4 +1153,57 @@ fn operations_validate_ids_and_states() {
     f.engine.cancel(&f.root, &run_id).unwrap();
     f.wait_settled(&run_id, RunStatus::Cancelled);
     let _ = f.wait_status(&run_id, RunStatus::Cancelled);
+}
+
+#[test]
+fn run_data_from_elsewhere_never_executes_without_confirmation() {
+    // A repository could ship `.mdium/flow-runs/` with a pending run.
+    let f = fixture();
+    let marker = f.root.join("executed.txt");
+    let rel = write_flow(
+        &f.root,
+        "cloned",
+        json!({}),
+        vec![cmd("a", json!([{ "dump_env": marker.to_string_lossy() }]))],
+        vec![],
+    );
+    let review = f.engine.review_commands(&f.root, &rel).unwrap();
+    let (flow, _) = crate::flow::load::check_text(
+        &std::fs::read_to_string(f.root.join(&rel)).unwrap(),
+        crate::flow::parse::FlowFormat::Json,
+    );
+    let store = RunStore::new(&f.root);
+    let run_id = "00000000000000bb".to_string();
+    store
+        .create(&RunMeta {
+            schema_version: RUN_SCHEMA_VERSION,
+            run_id: run_id.clone(),
+            flow_path: rel.clone(),
+            flow_sha256: review.sha256.clone(),
+            flow: flow.unwrap(),
+            params: BTreeMap::new(),
+            created_at: "2026-10-06T00:00:00.000Z".into(),
+            started_by: "someone".into(),
+        })
+        .unwrap();
+    // Listing (first contact with the project) does not start it.
+    assert_eq!(
+        f.engine.list(&f.root).unwrap()[0].status,
+        RunStatus::Pending
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!marker.exists());
+    assert!(f.events(&run_id).is_empty());
+    assert_eq!(
+        f.engine.resume(&f.root, &run_id).unwrap_err().code,
+        FLOW_COMMANDS_UNCONFIRMED
+    );
+    assert!(!marker.exists());
+    // After the user reviews and confirms the commands, it can run.
+    f.engine
+        .confirm_commands(&f.root, &rel, &review.sha256)
+        .unwrap();
+    f.engine.resume(&f.root, &run_id).unwrap();
+    f.wait_settled(&run_id, RunStatus::Completed);
+    assert!(marker.exists());
 }

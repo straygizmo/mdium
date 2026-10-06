@@ -288,7 +288,8 @@ impl FlowEngine {
                     editor.set_run(RunStatus::Interrupted, Some(Reason::new(FLOW_APP_EXITED)));
                     editor.finish();
                 }
-                RunStatus::Pending => self.spawn_driver(&mut inner, root, &run_id, None)?,
+                // A pending run is never started automatically: run data may come from a
+                // cloned repository and must not execute without this machine's confirmation.
                 // Approvals survive restarts; a driver starts when one is answered.
                 _ => {}
             }
@@ -314,6 +315,23 @@ impl FlowEngine {
             .entries
             .iter()
             .any(|c| c.project_key == key && c.flow_path == rel && c.sha256 == sha256)
+    }
+
+    /// Every driver that is not started by [`Self::start`] runs a stored
+    /// snapshot: it needs this machine's confirmation of that exact content.
+    fn require_confirmed(&self, root: &Path, meta: &RunMeta) -> Result<()> {
+        let has_commands = meta
+            .flow
+            .nodes
+            .iter()
+            .any(|n| matches!(n.kind, NodeKind::Command(_)));
+        if has_commands && !self.is_confirmed(root, &meta.flow_path, &meta.flow_sha256) {
+            return Err(EngineError::new(
+                FLOW_COMMANDS_UNCONFIRMED,
+                "the commands of this run's flow were not confirmed on this machine",
+            ));
+        }
+        Ok(())
     }
 
     /// The commands of a flow file as written, for the confirmation dialog.
@@ -600,7 +618,8 @@ impl FlowEngine {
         let status = editor.state().status;
         if !matches!(
             status,
-            RunStatus::Paused
+            RunStatus::Pending
+                | RunStatus::Paused
                 | RunStatus::Interrupted
                 | RunStatus::Failed
                 | RunStatus::AwaitingApproval
@@ -618,6 +637,7 @@ impl FlowEngine {
             )
             .with_details(blocked));
         }
+        self.require_confirmed(root, editor.meta())?;
         drop(editor);
         let stop_file = RunStore::new(root).stop_file(run_id)?;
         let _ = std::fs::remove_file(stop_file);
@@ -659,6 +679,7 @@ impl FlowEngine {
         }
         if state.status == RunStatus::AwaitingApproval {
             // After a restart: a driver picks the waiting run up again.
+            self.require_confirmed(root, &RunStore::new(root).load_meta(run_id)?)?;
             self.spawn_driver(&mut inner, root, run_id, None)?;
             Self::send(&inner, root, run_id, control);
             return Ok(());
@@ -686,6 +707,7 @@ impl FlowEngine {
                 format!("{run_status:?}"),
             ));
         }
+        self.require_confirmed(root, editor.meta())?;
         let node = editor
             .state()
             .nodes

@@ -1160,6 +1160,10 @@ impl Editor {
         self.driver.state()
     }
 
+    pub fn meta(&self) -> &RunMeta {
+        &self.driver.meta
+    }
+
     pub fn has_failure_edge(&self, key: &str) -> bool {
         self.driver.has_failure_edge(key)
     }
