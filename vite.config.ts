@@ -93,7 +93,9 @@ export default defineConfig({
   test: {
     // Exclude git worktrees under .claude/ so their duplicated test files are
     // not discovered alongside the real ones (which double-counts failures).
-    exclude: [...configDefaults.exclude, "**/.claude/**"],
+    // Also exclude Cargo build output: tauri-build copies the frontend into
+    // src-tauri/target/**/_up_/, which would otherwise be collected as tests.
+    exclude: [...configDefaults.exclude, "**/.claude/**", "**/src-tauri/target/**"],
     // Gives happy-dom browser semantics that DOMPurify relies on (no-op elsewhere).
     setupFiles: ["src/shared/lib/markdown/__tests__/dompurify-happy-dom-shim.ts"],
   },

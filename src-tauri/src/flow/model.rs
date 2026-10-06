@@ -120,8 +120,6 @@ pub struct FlowLimits {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget_usd: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_traversals: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_grace: Option<String>,
 }
 

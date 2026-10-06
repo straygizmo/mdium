@@ -33,6 +33,13 @@ const CSS_VAR_MAP: Record<string, string> = {
   taskStatusOnHoldBackground: "--task-status-on-hold-background",
   taskStatusCompletedBackground: "--task-status-completed-background",
   taskStatusCancelledBackground: "--task-status-cancelled-background",
+  flowNodeAgent: "--flow-node-agent",
+  flowNodeCommand: "--flow-node-command",
+  flowNodeApproval: "--flow-node-approval",
+  flowNodeLoop: "--flow-node-loop",
+  flowNodeBranch: "--flow-node-branch",
+  flowNodeSubflow: "--flow-node-subflow",
+  flowNodeAction: "--flow-node-action",
 };
 
 type TaskStatusColorKey =
@@ -43,6 +50,15 @@ type TaskStatusColorKey =
   | "taskStatusOnHoldBackground"
   | "taskStatusCompletedBackground"
   | "taskStatusCancelledBackground";
+
+type FlowNodeColorKey =
+  | "flowNodeAgent"
+  | "flowNodeCommand"
+  | "flowNodeApproval"
+  | "flowNodeLoop"
+  | "flowNodeBranch"
+  | "flowNodeSubflow"
+  | "flowNodeAction";
 
 function tint(accent: string, percent: number, surface: string): string {
   return `color-mix(in srgb, ${accent} ${percent}%, ${surface})`;
@@ -62,10 +78,26 @@ export function taskStatusDefaults(colors: ThemeColors): Required<Pick<ThemeColo
   };
 }
 
+/** Derives the flow viewer's per-kind node accents from a preset's existing tokens. */
+export function flowNodeDefaults(colors: ThemeColors): Required<Pick<ThemeColors, FlowNodeColorKey>> {
+  return {
+    flowNodeAgent: colors.primary,
+    flowNodeCommand: colors.accentBlue,
+    flowNodeApproval: colors.accentRed,
+    flowNodeLoop: colors.accentGreen,
+    flowNodeBranch: colors.secondary,
+    flowNodeSubflow: colors.textSecondary,
+    flowNodeAction: colors.textMuted,
+  };
+}
+
 export function applyTheme(theme: ThemePreset): void {
   const root = document.documentElement;
   // Explicit preset values win over the derived task status defaults.
-  const defaults: Partial<ThemeColors> = taskStatusDefaults(theme.colors);
+  const defaults: Partial<ThemeColors> = {
+    ...taskStatusDefaults(theme.colors),
+    ...flowNodeDefaults(theme.colors),
+  };
 
   for (const [key, cssVar] of Object.entries(CSS_VAR_MAP)) {
     const value = theme.colors[key as keyof ThemeColors] || defaults[key as keyof ThemeColors];

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it } from "vitest";
-import { applyTheme, taskStatusDefaults } from "./apply-theme";
+import { applyTheme, flowNodeDefaults, taskStatusDefaults } from "./apply-theme";
 import { themePresets } from "./index";
 
 const switchVariables = {
@@ -80,5 +80,32 @@ describe("task status theme tokens", () => {
       expect(defaults.taskStatusCancelledBackground).toContain(theme.colors.textMuted);
       expect(defaults.taskStatusRunningBackground).toContain(theme.colors.bgSurface);
     }
+  });
+});
+
+describe("flow node theme tokens", () => {
+  afterEach(() => {
+    document.documentElement.removeAttribute("data-theme-type");
+    document.documentElement.removeAttribute("data-theme-id");
+    document.documentElement.style.cssText = "";
+  });
+
+  const kinds = ["agent", "command", "approval", "loop", "branch", "subflow", "action"];
+
+  it("publishes a variable per node kind for every preset", () => {
+    for (const theme of themePresets) {
+      applyTheme(theme);
+      for (const kind of kinds) {
+        const value = document.documentElement.style.getPropertyValue(`--flow-node-${kind}`).trim();
+        expect(value, `${theme.id} ${kind}`).not.toBe("");
+      }
+    }
+  });
+
+  it("derives defaults from accent tokens and lets presets override them", () => {
+    const base = themePresets[0];
+    expect(flowNodeDefaults(base.colors).flowNodeCommand).toBe(base.colors.accentBlue);
+    applyTheme({ ...base, colors: { ...base.colors, flowNodeLoop: "#abcdef" } });
+    expect(document.documentElement.style.getPropertyValue("--flow-node-loop")).toBe("#abcdef");
   });
 });

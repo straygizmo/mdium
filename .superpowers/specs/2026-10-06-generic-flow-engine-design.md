@@ -77,7 +77,6 @@ defaults:                   # inherited by every node unless overridden
 limits:
   maxConcurrentNodes: 1     # per run
   budgetUsd: 30             # pause for approval when actual cost exceeds this
-  maxTraversals: 5          # default guard for back-edges (2.5)
 env:                        # non-secret env for command nodes
   PYTHONUTF8: "1"
 nodes: [ ... ]
@@ -129,11 +128,12 @@ edges:
 - `agent` で `outputContract: outcome` の場合、工程結果 `completed` は `success`、`attention` は出口 `attention`（エッジがなければ `failure` と同じ扱い）、`awaiting_user` は承認待ち（4.3）になる。
 - 出口 `port` の既定は `success`。ノードの失敗は `failure` 出口へ進む。`failure` 出口のエッジがなければ、失敗したノードはフロー実行を `failed` にする（ただし `retry` を使い切った後）。
 - `branch` と `approval` の出口名は `cases[].port` / `options` で定義した名前。定義にない出口名のエッジは検証エラー。
-- 入口: 入るエッジのないノードが開始ノード。複数あれば並行に開始する（`maxConcurrentNodes` の範囲で）。
+- 入口: 入る**前進エッジ**（後退エッジ以外）のないノードが開始ノード。後退エッジだけで入られるノード（例: 9.2 の `summarize`）も開始ノードになる。複数あれば並行に開始する（`maxConcurrentNodes` の範囲で）。
 - 合流: 複数の入りエッジを持つノードは、**前進エッジ**（後退エッジ以外）のうち実際に通ったものがすべて確定してから開始する（通らなかった分岐は `skipped` として伝播する）。後退エッジは合流の待ち合わせに数えない。
-- 後退エッジ（閉路を作るエッジ）は `maxTraversals`（既定は `limits.maxTraversals`）を必須とし、上限に達したら遷移せずにノードを `failed`（理由 `FLOW_TRAVERSAL_LIMIT`）にする。閉路は後退エッジを除くと DAG になることを検証する。
+- 後退エッジ（閉路を作るエッジ）は、**エッジ自身に** `maxTraversals` を書く（既定値はない。2026-10-06 決定）。`maxTraversals` を書いたエッジが後退エッジとして扱われ、上限に達したら遷移せずにノードを `failed`（理由 `FLOW_TRAVERSAL_LIMIT`）にする。閉路は後退エッジを除くと DAG になることを検証する（違反は `FLOW_CYCLE_WITHOUT_LIMIT`）。`maxTraversals` を書いたのに閉路を作らないエッジは警告（`FLOW_TRAVERSAL_LIMIT_UNUSED`）とする。
+- 旧版にあった `limits.maxTraversals` は廃止した。書かれていても無視し、警告（`FLOW_DEPRECATED_FIELD`）を出す。
 - 後退エッジの通過は、その閉路の**新しい周回（pass）**を開く。行き先のノードと、そこから閉路内で前進エッジだけで到達できるノードを `pending` に戻し、`nodeKey` に周回番号を付ける（例: `design@2`）。閉路外のノードと、前の周回の記録・出力はそのまま残る。参照 `nodes.<id>.outputs` は最新の周回の出力を指す。重ね表示はこの周回番号を再入回数として表示する。
-- どの開始ノードからも到達できないノードは警告とする。
+- 前進エッジのグラフが DAG であれば、すべてのノードはいずれかの開始ノードから到達できる。そのため「開始ノードがない」「到達できない」は検査しない。
 
 ### 2.5 値の参照（テンプレート）
 
@@ -247,6 +247,23 @@ export interface NodeRunView { nodeKey: string; status: NodeRunStatus; attempt: 
 | `FLOW_TEMPLATE_INVALID` | `${{ }}` の構文誤り、許されない参照 |
 | `FLOW_ACTION_UNKNOWN` | 存在しない `uses` |
 | `FLOW_PROVIDER_UNAVAILABLE` | 実行開始時のみ: `agent` のプロバイダーが使えない |
+| `FLOW_UNKNOWN_FIELD` | ノード・エッジ・入れ子のオブジェクトに未定義の属性がある |
+| `FLOW_UNKNOWN_NODE_KIND` | `kind` がない、または未定義の種別 |
+| `FLOW_INVALID_VALUE` | 型・範囲の誤り（理由は `params.reason`） |
+| `FLOW_INVALID_ID` | フロー・ノード・引数・出口・変数の名前の形式が不正 |
+| `FLOW_CONDITION_INVALID` | `when` / `until` / `cases[].when` の形式が不正 |
+| `FLOW_REF_NOT_FOUND` | 参照したプロンプト・フローのファイルがない |
+| `FLOW_SUBFLOW_INVALID` | 参照したフローファイルにエラーがある |
+| `FLOW_PARAM_MISMATCH` | サブフローに渡す引数が `params` と合わない |
+| `FLOW_FILE_TOO_LARGE` | フローファイルが 1 MiB を超える |
+
+警告（実行は妨げない）:
+
+| コード | 内容 |
+|---|---|
+| `FLOW_UNKNOWN_KEY` | 未知のトップレベルキー（無視する） |
+| `FLOW_DEPRECATED_FIELD` | 廃止した属性（無視する。`params.replacement` に後継） |
+| `FLOW_TRAVERSAL_LIMIT_UNUSED` | `maxTraversals` を書いたエッジが閉路を作らない |
 
 ---
 
@@ -450,7 +467,7 @@ export interface NodeRunView { nodeKey: string; status: NodeRunStatus; attempt: 
 ### 6.2 キャンバス（ReactFlow）
 
 - `@xyflow/react` v12（既存の依存。`features/mindmap` と同じく `ReactFlow` と独自のノード・エッジコンポーネントを使う）。
-- レイアウト: マインドマップの配置（`mindmap/lib/layout.ts`）は木構造専用で、合流と後退エッジを持つフローには使えない。**elkjs の layered レイアウト**（左 → 右、後退エッジは `elk.layered.cycleBreaking` に任せる）を追加の依存として使い、Web Worker で計算する。`ui.positions` に位置があるノードはその位置を使い、ない場合だけ自動配置する。
+- レイアウト: マインドマップの配置（`mindmap/lib/layout.ts`）は木構造専用で、合流と後退エッジを持つフローには使えない。**elkjs の layered レイアウト**（左 → 右、後退エッジは `elk.layered.cycleBreaking` に任せる）を追加の依存として使い、Web Worker（`elkjs/lib/elk-api` ＋ `elk-worker.min.js`）で計算する（Worker を使えないテスト環境では同梱版を同じスレッドで使う）。`ui.positions` に位置があるノードはその位置を使い、ない場合だけ自動配置する。
 - ノードの表示: 種別ごとのアイコンと色（テーマ変数のトークン `flowNode*` を全テーマプリセットに追加）、名前、要点（agent はプロバイダーとモデル、command は実行ファイル名、loop は `foreach` の対象と並列度、承認はメッセージの先頭）、見積もり費用。
 - `loop` と `subflow` は折りたたみ可能なグループノードとして描き、展開すると本体を中に描く（サブフローは読み取り専用で、編集は元ファイルを開く）。
 - エッジ: 出口名をラベル表示し、`failure` は破線、後退エッジは曲線で `maxTraversals` を表示する。
@@ -530,7 +547,7 @@ params:
   requirement: { type: string, required: true }   # intake result
   issue: { type: string, default: "" }            # empty = no issue tracking for this run
   designDocPath: { type: string, default: "" }
-limits: { maxConcurrentNodes: 1, maxTraversals: 5 } # = maxReentryCount
+limits: { maxConcurrentNodes: 1 }
 nodes:
   - { id: screen, kind: action, uses: mdium/screen-input, with: { text: "${{ params.requirement }}" } }
   - { id: worktree, kind: action, uses: mdium/git-worktree-create, with: { title: "${{ params.title }}" } }

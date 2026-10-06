@@ -95,5 +95,8 @@
   "mediumTestConnection": "Test Connection",
   "mediumTestTesting": "Testing...",
   "mediumConnectionSuccess": "Authenticated: @{{username}}",
-  "mediumConnectionFailed": "Connection failed"
+  "mediumConnectionFailed": "Connection failed",
+  "experimentalSection": "Experimental features",
+  "experimentalFlows": "Flows (generic flow engine)",
+  "experimentalFlowsDescription": "Shows the Flows view, a read-only viewer for *.flow.yaml files in .mdium/flows/. Still under development."
 }

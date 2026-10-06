@@ -2,9 +2,18 @@ import { create } from "zustand";
 import type { OpencodeConfigTab, OpencodeTopTab, ClaudeTopTab, ClaudeSettingsTab } from "@/shared/types";
 import type { TerminalKind, TerminalSession } from "@/features/terminal/terminal-session";
 
-export type LeftPanel = "folder" | "outline" | "rag" | "opencode-config" | "git" | "replacement" | "workflow";
+export type LeftPanel = "folder" | "outline" | "rag" | "opencode-config" | "git" | "replacement" | "workflow" | "flow";
 
-const LEFT_PANELS: readonly LeftPanel[] = ["folder", "outline", "rag", "opencode-config", "git", "replacement", "workflow"];
+const LEFT_PANELS: readonly LeftPanel[] = [
+  "folder",
+  "outline",
+  "rag",
+  "opencode-config",
+  "git",
+  "replacement",
+  "workflow",
+  "flow",
+];
 
 /**
  * Normalize a persisted left panel id. The standalone Claude panel now lives

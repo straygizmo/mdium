@@ -6,7 +6,7 @@ params:
   requirement: { type: string, required: true }   # intake result
   issue: { type: string, default: "" }            # empty = no issue tracking for this run
   designDocPath: { type: string, default: "" }
-limits: { maxConcurrentNodes: 1, maxTraversals: 5 } # = maxReentryCount
+limits: { maxConcurrentNodes: 1 }
 nodes:
   - { id: screen, kind: action, uses: mdium/screen-input, with: { text: "${{ params.requirement }}" } }
   - { id: worktree, kind: action, uses: mdium/git-worktree-create, with: { title: "${{ params.title }}" } }
