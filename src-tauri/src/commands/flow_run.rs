@@ -11,7 +11,8 @@ use crate::flow::run::engine::{CommandReview, FlowEngine, RunSnapshot, RunSummar
 use crate::flow::run::model::{
     ApprovalRequest, NodeState, NodeStatus, Progress, Reason, RunState, RunStatus,
 };
-use crate::flow::run::process::AttachedLauncher;
+use crate::flow::run::process::{AttachedLauncher, Launcher};
+use crate::flow::run::supervise::DetachedLauncher;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -173,6 +174,14 @@ pub fn create_state(app: &AppHandle) -> FlowEngineState {
         .join("mdium");
     let env = DriverEnv {
         launcher: Arc::new(AttachedLauncher),
+        // `detach: true` commands run under the supervisor mode of this executable.
+        detached: match DetachedLauncher::for_current_exe() {
+            Ok(launcher) => Some(Arc::new(launcher) as Arc<dyn Launcher>),
+            Err(err) => {
+                eprintln!("[flow] detached commands unavailable: {err}");
+                None
+            }
+        },
         sink: Arc::new(TauriSink { app: app.clone() }),
         notifiers: Arc::new(vec![
             Arc::new(InAppNotifier { app: app.clone() }) as Arc<dyn ApprovalNotifier>

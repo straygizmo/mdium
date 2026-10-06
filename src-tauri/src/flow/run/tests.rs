@@ -6,7 +6,7 @@ use crate::flow::run::engine::*;
 use crate::flow::run::model::*;
 use crate::flow::run::process::AttachedLauncher;
 use crate::flow::run::store::{RunMeta, RunStore, RUN_SCHEMA_VERSION};
-use crate::flow::run::test_helper::{helper_argv, helper_env, process_alive};
+use crate::flow::run::test_helper::{detached_launcher, helper_argv, helper_env, process_alive};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -61,6 +61,8 @@ struct Fixture {
 fn make_engine(config: &Path, sink: Arc<Sink>, notifier: Arc<Notifier>) -> FlowEngine {
     let env = DriverEnv {
         launcher: Arc::new(AttachedLauncher),
+        // Commands run detached by default, as in the app.
+        detached: Some(Arc::new(detached_launcher())),
         sink,
         notifiers: Arc::new(vec![notifier as Arc<dyn ApprovalNotifier>]),
         process_env: Arc::new(std::env::vars().collect()),
@@ -952,10 +954,15 @@ fn app_exit_interrupts_and_rerun_continues_after_restart() {
         "exit",
         json!({}),
         vec![
-            cmd(
-                "long",
-                json!([{ "succeed_from_attempt": 2 }, { "sleep_ms": 30000 }]),
-            ),
+            {
+                // Attached on purpose: such processes end with the app.
+                let mut n = cmd(
+                    "long",
+                    json!([{ "succeed_from_attempt": 2 }, { "sleep_ms": 30000 }]),
+                );
+                n["detach"] = json!(false);
+                n
+            },
             cmd("next", json!([])),
         ],
         vec![json!({ "from": "long", "to": "next" })],
@@ -1206,4 +1213,302 @@ fn run_data_from_elsewhere_never_executes_without_confirmation() {
     f.engine.resume(&f.root, &run_id).unwrap();
     f.wait_settled(&run_id, RunStatus::Completed);
     assert!(marker.exists());
+}
+
+// ------------------------------------------------ detached + reconnect
+
+fn count_events(f: &Fixture, run_id: &str, pred: impl Fn(&EventBody) -> bool) -> usize {
+    f.events(run_id).iter().filter(|e| pred(&e.body)).count()
+}
+
+fn wait_engine(
+    engine: &FlowEngine,
+    root: &Path,
+    run_id: &str,
+    pred: impl Fn(&RunSnapshot) -> bool,
+) -> RunSnapshot {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let snap = engine.get(root, run_id).unwrap();
+        if pred(&snap) {
+            return snap;
+        }
+        if Instant::now() > deadline {
+            panic!("timed out: {:#?}", snap.state);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn detached_commands_record_identity_and_exit_file() {
+    let f = fixture();
+    let rel = write_flow(
+        &f.root,
+        "det",
+        json!({}),
+        vec![cmd("a", json!([{ "exit": 0 }]))],
+        vec![],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    f.wait_settled(&run_id, RunStatus::Completed);
+    let process = f.events(&run_id).into_iter().find_map(|e| match e.body {
+        EventBody::Process {
+            pid,
+            started_at,
+            exit_file,
+        } => Some((pid, started_at, exit_file)),
+        _ => None,
+    });
+    let (_, identity, exit_file) = process.expect("process event");
+    assert!(
+        identity.contains(':'),
+        "creation-time identity, got {identity}"
+    );
+    let exit_file = PathBuf::from(exit_file.expect("exit file"));
+    let record = crate::flow::run::supervise::read_exit(&exit_file).expect("exit.json");
+    assert_eq!(record.code, 0);
+    assert!(exit_file.parent().unwrap().join("supervise.json").exists());
+}
+
+#[test]
+fn detached_command_survives_app_exit_and_is_reconnected() {
+    let f = fixture();
+    let rel = write_flow(
+        &f.root,
+        "survive",
+        json!({}),
+        vec![
+            cmd(
+                "long",
+                json!([
+                    ev(json!({ "v": 1, "type": "output", "key": "first", "value": 1 })),
+                    ev(json!({ "v": 1, "type": "cost", "usd": 0.5, "kind": "actual" })),
+                    { "sleep_ms": 1500 },
+                    ev(json!({ "v": 1, "type": "output", "key": "second", "value": 2 })),
+                    ev(json!({ "v": 1, "type": "outcome", "status": "ok" })),
+                ]),
+            ),
+            cmd("next", json!([])),
+        ],
+        vec![json!({ "from": "long", "to": "next" })],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_for(&run_id, "first output", |s| {
+        node(s, "long").outputs.contains_key("first") && s.state.cost.actual > 0.0
+    });
+    let pid = node(&snap, "long").process.unwrap().pid;
+    f.engine.shutdown(Duration::from_secs(10));
+    // The app is gone; the command keeps running.
+    let after = f.snapshot(&run_id);
+    assert_eq!(after.state.status, RunStatus::Running);
+    assert_eq!(node(&after, "long").status, NodeStatus::Running);
+    assert!(process_alive(pid), "the supervisor outlives the app");
+    // Restart: the engine reconnects and the run finishes.
+    let restarted = make_engine(&f.config, f.sink.clone(), f.notifier.clone());
+    assert!(
+        restarted.get(&f.root, &run_id).unwrap().active,
+        "a driver reconnected"
+    );
+    assert!(restarted.wait_idle(&f.root, &run_id, Duration::from_secs(30)));
+    let snap = restarted.get(&f.root, &run_id).unwrap();
+    assert_eq!(snap.state.status, RunStatus::Completed, "{:#?}", snap.state);
+    let long = node(&snap, "long");
+    assert_eq!(long.attempt, 1, "not re-run");
+    assert_eq!(long.outputs["second"], json!(2));
+    // Events read before the exit are not applied twice.
+    assert_eq!(
+        count_events(
+            &f,
+            &run_id,
+            |b| matches!(b, EventBody::NodeOutput { key, .. } if key == "first")
+        ),
+        1
+    );
+    assert_eq!(
+        count_events(&f, &run_id, |b| matches!(b, EventBody::Cost { .. })),
+        1
+    );
+    assert_eq!(snap.state.cost.actual, 0.5);
+    assert_eq!(node(&snap, "next").status, NodeStatus::Succeeded);
+}
+
+#[test]
+fn command_that_finished_while_the_app_was_down_is_settled_from_exit_json() {
+    let f = fixture();
+    let rel = write_flow(
+        &f.root,
+        "finished",
+        json!({}),
+        vec![cmd(
+            "quick",
+            json!([
+                { "sleep_ms": 400 },
+                ev(json!({ "v": 1, "type": "output", "key": "done", "value": true })),
+                ev(json!({ "v": 1, "type": "outcome", "status": "needs_approval", "message": "check" })),
+            ]),
+        )],
+        vec![],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    f.wait_for(&run_id, "running", |s| node(s, "quick").process.is_some());
+    f.engine.shutdown(Duration::from_secs(10));
+    let exit_file = PathBuf::from(
+        node(&f.snapshot(&run_id), "quick")
+            .process
+            .unwrap()
+            .exit_file
+            .unwrap(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !exit_file.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(exit_file.exists());
+    let restarted = make_engine(&f.config, f.sink.clone(), f.notifier.clone());
+    let snap = wait_engine(&restarted, &f.root, &run_id, |s| {
+        s.state.status == RunStatus::AwaitingApproval
+    });
+    assert_eq!(node(&snap, "quick").outputs["done"], json!(true));
+    assert_eq!(snap.state.approvals[0].message.as_deref(), Some("check"));
+}
+
+#[test]
+fn reconnect_rejects_a_reused_pid_and_marks_the_node_interrupted() {
+    let f = fixture();
+    let rel = write_flow(
+        &f.root,
+        "reused",
+        json!({}),
+        vec![cmd("a", json!([]))],
+        vec![],
+    );
+    let review = f.engine.review_commands(&f.root, &rel).unwrap();
+    f.engine
+        .confirm_commands(&f.root, &rel, &review.sha256)
+        .unwrap();
+    let (flow, _) = crate::flow::load::check_text(
+        &std::fs::read_to_string(f.root.join(&rel)).unwrap(),
+        crate::flow::parse::FlowFormat::Json,
+    );
+    let store = RunStore::new(&f.root);
+    let run_id = "00000000000000cc".to_string();
+    store
+        .create(&RunMeta {
+            schema_version: RUN_SCHEMA_VERSION,
+            run_id: run_id.clone(),
+            flow_path: rel.clone(),
+            flow_sha256: review.sha256,
+            flow: flow.unwrap(),
+            params: BTreeMap::new(),
+            created_at: "2026-10-06T00:00:00.000Z".into(),
+            started_by: "user".into(),
+        })
+        .unwrap();
+    // `a` "runs" under this test process's pid, but with another creation time.
+    let exit_file = store
+        .node_attempt_dir(&run_id, "a", 1)
+        .unwrap()
+        .join("exit.json");
+    let mut log = store.open_log(&run_id).unwrap();
+    let events = [
+        (
+            None,
+            EventBody::RunStatus {
+                from: RunStatus::Pending,
+                to: RunStatus::Running,
+                reason: None,
+            },
+        ),
+        (
+            Some("a"),
+            EventBody::NodeStatus {
+                from: NodeStatus::Pending,
+                to: NodeStatus::Ready,
+                attempt: 0,
+                reason: None,
+                port: None,
+            },
+        ),
+        (
+            Some("a"),
+            EventBody::NodeStatus {
+                from: NodeStatus::Ready,
+                to: NodeStatus::Running,
+                attempt: 1,
+                reason: None,
+                port: None,
+            },
+        ),
+        (
+            Some("a"),
+            EventBody::Process {
+                pid: std::process::id(),
+                started_at: "win:1".into(),
+                exit_file: Some(exit_file.to_string_lossy().into_owned()),
+            },
+        ),
+    ];
+    for (i, (key, body)) in events.into_iter().enumerate() {
+        log.append(&FlowEvent {
+            seq: i as u64 + 1,
+            ts: "t".into(),
+            node_key: key.map(String::from),
+            body,
+        })
+        .unwrap();
+    }
+    drop(log);
+    let snap = f.engine.get(&f.root, &run_id).unwrap();
+    assert_eq!(snap.state.status, RunStatus::Interrupted);
+    assert_eq!(node(&snap, "a").status, NodeStatus::Interrupted);
+    assert!(
+        process_alive(std::process::id()),
+        "the unrelated process was not killed"
+    );
+}
+
+#[test]
+fn cancel_after_reconnect_kills_the_detached_tree() {
+    let f = fixture();
+    let pid_file = f.root.join("gc.pid");
+    let rel = write_flow(
+        &f.root,
+        "cancel2",
+        json!({}),
+        vec![cmd(
+            "tree",
+            json!([{ "spawn_sleeper_pid_file": pid_file.to_string_lossy() }, { "sleep_ms": 30000 }]),
+        )],
+        vec![],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !pid_file.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    std::thread::sleep(Duration::from_millis(100));
+    let grandchild: u32 = std::fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    f.engine.shutdown(Duration::from_secs(10));
+    assert!(process_alive(grandchild));
+    let restarted = make_engine(&f.config, f.sink.clone(), f.notifier.clone());
+    assert!(restarted.get(&f.root, &run_id).unwrap().active);
+    restarted.cancel(&f.root, &run_id).unwrap();
+    assert!(restarted.wait_idle(&f.root, &run_id, Duration::from_secs(30)));
+    assert_eq!(
+        restarted.get(&f.root, &run_id).unwrap().state.status,
+        RunStatus::Cancelled
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while process_alive(grandchild) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        !process_alive(grandchild),
+        "grandchild {grandchild} survived"
+    );
 }

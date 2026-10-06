@@ -457,6 +457,13 @@ export interface NodeRunView { nodeKey: string; status: NodeRunStatus; attempt: 
 - `detach: true` のコマンドは、MDium 同梱の小さなラッパー（Rust のサブコマンドまたは別バイナリ）を介して起動する。ラッパーは子を起動・待機し、終了時に `exit.json`（`code`、`finishedAt`）を原子的に書く。MDium 本体が終了してもラッパーと子は残る（Windows では MDium のジョブオブジェクトから外して起動する）。
 - 標準出力・標準エラーはラッパーがファイルに書く。
 - 再接続（4.6）は pid とプロセス作成時刻の一致で判定し、pid の再利用による取り違えを防ぐ。
+- 実装（PR 3b）:
+  - ラッパーは MDium 実行ファイルの監視モード（`--flow-supervise <supervise.json>`）とし、別バイナリは同梱しない。試行ディレクトリに `supervise.json`（起動内容）と `exit.json`（`code`、`finishedAt`、起動失敗時は `error`）を置く。ラッパーとコマンドは同じプロセスツリー／プロセスグループにあり、中止・タイムアウトはラッパーごとツリーを終了する。
+  - Windows: `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB` で起動する。ジョブが離脱を許さない場合は離脱なしで起動する（その場合は MDium と一緒に終わりうる）。作成時刻は `GetProcessTimes`（`windows-sys`）で取得する。
+  - Linux は `/proc/<pid>/stat` の開始時刻、その他の Unix は `ps -o lstart=` を作成時刻として使う。`process` イベントの `startedAt` にこの値（`win:` / `linux:` / `ps:` で始まる）を記録する。
+  - 外部プロトコルの読み取り位置と受信済みの `outcome` を試行ディレクトリの `protocol.json` に保存し、再接続後に同じイベントを二重に適用しない（保存は該当イベントの追記の後に行うため、異常終了の直前のごく一部は二重になりうる）。
+  - アプリ終了時、切り離したコマンドは止めず、ノードと実行は `running` のまま残す。次回起動時に再接続できたものはドライバが監視を続け（タイムアウトはノードの開始時刻から数える）、できなかったものは `interrupted`（理由 `FLOW_PROCESS_LOST` / `FLOW_APP_EXITED`）にする。再接続して後続のノードを続けるには、その実行の内容ハッシュが確認済みであること（7.2）を要し、確認がなければ `interrupted` にする。
+  - `detach: false` のコマンドは従来どおり MDium の子として動き、アプリ終了時に終了して `interrupted` になる。
 
 ### 5.5 外部の停止ファイルとの関係
 
