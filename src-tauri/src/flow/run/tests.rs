@@ -1701,6 +1701,14 @@ fn review_rework_redesign_then_merge() {
             .get("review@2")
             .is_some_and(|n| n.status == NodeStatus::AwaitingApproval)
     });
+    // The superseded first pass can no longer be answered.
+    assert_eq!(
+        f.engine
+            .approve(&f.root, &run_id, Some("review"), "approve", None)
+            .unwrap_err()
+            .code,
+        FLOW_APPROVAL_INVALID
+    );
     f.engine
         .approve(&f.root, &run_id, Some("review@2"), "approve", None)
         .unwrap();
@@ -2196,7 +2204,10 @@ fn manual_check_sample_runs_end_to_end() {
     let rel = ".mdium/flows/manual-check.flow.yaml";
     let run_id = f.confirm_and_start(rel, json!({}));
     f.wait_for(&run_id, "work running", |s| {
-        s.state.nodes.get("work").is_some_and(|n| n.progress.is_some())
+        s.state
+            .nodes
+            .get("work")
+            .is_some_and(|n| n.progress.is_some())
     });
     f.engine.stop(&f.root, &run_id).unwrap();
     let snap = f.wait_settled(&run_id, RunStatus::Paused);

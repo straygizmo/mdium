@@ -788,6 +788,21 @@ impl FlowEngine {
             .iter()
             .find(|a| a.node_key.as_deref() == node_key)
             .ok_or_else(|| EngineError::new(FLOW_APPROVAL_INVALID, "no such pending approval"))?;
+        // Only the current pass of a node in a live scope can be answered.
+        if let Some(key) = node_key {
+            let (prefix, id, _) = crate::flow::run::scope::split_key(key);
+            let live_scope = prefix.is_empty()
+                || state
+                    .scopes
+                    .get(prefix)
+                    .is_some_and(|s| s.status == crate::flow::run::model::ScopeStatus::Running);
+            if state.current_key(prefix, id) != key || !live_scope {
+                return Err(EngineError::new(
+                    FLOW_APPROVAL_INVALID,
+                    "not a live instance",
+                ));
+            }
+        }
         if !request.options.iter().any(|o| o == choice) {
             return Err(EngineError::new(
                 FLOW_APPROVAL_INVALID,

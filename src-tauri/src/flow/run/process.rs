@@ -425,8 +425,8 @@ pub fn tail_file(path: &Path, max_bytes: u64) -> io::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use serde_json::json;
+    use std::fs;
     use std::io::Write;
 
     #[test]
