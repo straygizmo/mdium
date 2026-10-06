@@ -38,6 +38,9 @@ import enAgentChat from "./locales/en/agent-chat.json";
 import jaWorkflow from "./locales/ja/workflow.json";
 import enWorkflow from "./locales/en/workflow.json";
 
+import jaFlow from "./locales/ja/flow.json";
+import enFlow from "./locales/en/flow.json";
+
 const savedLanguage = localStorage.getItem("mdium-lang") ?? "ja";
 
 i18n.use(initReactI18next).init({
@@ -57,6 +60,7 @@ i18n.use(initReactI18next).init({
       "claude-config": jaClaudeConfig,
       "agent-chat": jaAgentChat,
       workflow: jaWorkflow,
+      flow: jaFlow,
     },
     en: {
       common: enCommon,
@@ -73,6 +77,7 @@ i18n.use(initReactI18next).init({
       "claude-config": enClaudeConfig,
       "agent-chat": enAgentChat,
       workflow: enWorkflow,
+      flow: enFlow,
     },
   },
   lng: savedLanguage,

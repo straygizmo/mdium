@@ -12,6 +12,7 @@ import { AgentChatPanel } from "@/features/agent-chat/components/AgentChatPanel"
 import { GitPanel } from "@/features/git/components/GitPanel";
 import { ReplacementPanel } from "@/features/replacement/components/ReplacementPanel";
 import { WorkflowPanel } from "@/features/workflow/components/WorkflowPanel";
+import { FlowPanel } from "@/features/flow/components/FlowPanel";
 import { useGitStore } from "@/stores/git-store";
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 import { useChatUIStore } from "@/features/opencode-config/hooks/useOpencodeChat";
@@ -70,6 +71,13 @@ export function LeftPanel({
   const activeTab = useTabStore((s) => s.getActiveTab());
   const { aiSettings } = useSettingsStore();
   const setShowSettings = useSettingsStore((s) => s.setShowSettings);
+  const experimentalFlows = useSettingsStore((s) => s.experimentalFlows);
+
+  // The Flows view exists only while its experimental setting is on (a
+  // folder may have saved "flow" as its last panel from an earlier session).
+  useEffect(() => {
+    if (leftPanel === "flow" && !experimentalFlows) setLeftPanel("folder");
+  }, [leftPanel, experimentalFlows, setLeftPanel]);
   const collapseAllDirs = useFileStore((s) => s.collapseAllDirs);
   const ocConfigAgents = useOpencodeConfigStore((s) => s.config.agents);
   const ocSelectedAgent = useChatUIStore((s) => s.selectedAgent);
@@ -175,6 +183,22 @@ export function LeftPanel({
               <rect x="3" y="17" width="18" height="4" rx="1" />
             </svg>
           </button>
+          {experimentalFlows && (
+            <button
+              className={`left-panel__activity-btn ${leftPanel === "flow" ? "left-panel__activity-btn--active" : ""}`}
+              onClick={() => { setLeftPanel("flow"); setFolderLeftPanel("flow"); }}
+              title={t("title", { ns: "flow" })}
+              aria-label={t("title", { ns: "flow" })}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="2" y="3" width="7" height="6" rx="1" />
+                <rect x="15" y="3" width="7" height="6" rx="1" />
+                <rect x="8.5" y="15" width="7" height="6" rx="1" />
+                <path d="M9 6h6" />
+                <path d="M18.5 9v3H12v3" />
+              </svg>
+            </button>
+          )}
         </div>
         <div className="left-panel__activity-bar-bottom">
           {activeFolderPath && (
@@ -240,6 +264,7 @@ export function LeftPanel({
             {leftPanel === "git" && t("sourceControl", { ns: "git" }).toUpperCase()}
             {leftPanel === "replacement" && t("title", { ns: "replacement" }).toUpperCase()}
             {leftPanel === "workflow" && t("title", { ns: "workflow" })}
+            {leftPanel === "flow" && t("title", { ns: "flow" })}
           </span>
           {leftPanel === "folder" && !!activeFolderPath && (
             <div className="left-panel__section-header-actions">
@@ -399,6 +424,7 @@ export function LeftPanel({
         {leftPanel === "git" && <GitPanel />}
         {leftPanel === "replacement" && <ReplacementPanel />}
         {leftPanel === "workflow" && <WorkflowPanel />}
+        {leftPanel === "flow" && experimentalFlows && <FlowPanel />}
       </div>
       {showBatchConvert && (
         <BatchConvertModal

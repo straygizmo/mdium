@@ -42,7 +42,6 @@ export interface FlowNodeDefaults {
 export interface FlowLimits {
   maxConcurrentNodes?: number;
   budgetUsd?: number;
-  maxTraversals?: number;
   stopGrace?: string;
 }
 
@@ -207,7 +206,11 @@ export const FLOW_ERROR_CODES = [
   "FLOW_FILE_TOO_LARGE",
 ] as const;
 
-export const FLOW_WARNING_CODES = ["FLOW_UNKNOWN_KEY", "FLOW_TRAVERSAL_LIMIT_UNUSED"] as const;
+export const FLOW_WARNING_CODES = [
+  "FLOW_UNKNOWN_KEY",
+  "FLOW_DEPRECATED_FIELD",
+  "FLOW_TRAVERSAL_LIMIT_UNUSED",
+] as const;
 
 export type FlowErrorCode = (typeof FLOW_ERROR_CODES)[number];
 export type FlowWarningCode = (typeof FLOW_WARNING_CODES)[number];

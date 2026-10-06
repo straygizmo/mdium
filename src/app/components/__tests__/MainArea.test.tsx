@@ -7,9 +7,13 @@ import i18n from "@/shared/i18n";
 vi.mock("@/features/workflow/components/Workspace", () => ({
   Workspace: () => <div data-testid="workspace" />,
 }));
+vi.mock("@/features/flow/components/FlowWorkspace", () => ({
+  FlowWorkspace: () => <div data-testid="flow-workspace" />,
+}));
 
 import { useTabStore } from "@/stores/tab-store";
 import { useUiStore } from "@/stores/ui-store";
+import { useSettingsStore } from "@/stores/settings-store";
 import { MainArea } from "../MainArea";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -76,5 +80,43 @@ describe("MainArea", () => {
     expect(container.querySelector('[data-testid="workspace"]')).toBeNull();
     expect(container.querySelector<HTMLElement>(".app__main-content")!.style.display).toBe("contents");
     expect(container.querySelector('[data-testid="welcome"]')).not.toBeNull();
+  });
+});
+
+describe("MainArea flows workspace", () => {
+  let root: ReturnType<typeof createRoot>;
+  let container: HTMLDivElement;
+
+  beforeEach(async () => {
+    await i18n.changeLanguage("en");
+    useTabStore.setState({ activeFolderPath: "C:/w" });
+    container = document.createElement("div");
+    root = createRoot(container);
+  });
+
+  afterEach(async () => {
+    await act(async () => root.unmount());
+    useSettingsStore.setState({ experimentalFlows: false });
+    useUiStore.setState({ leftPanel: "folder" });
+    useTabStore.setState({ activeFolderPath: null });
+  });
+
+  it("shows the flow workspace only while the experimental setting is on", async () => {
+    useUiStore.setState({ leftPanel: "flow" });
+    useSettingsStore.setState({ experimentalFlows: true });
+    await act(async () =>
+      root.render(
+        <MainArea>
+          <div data-testid="editor" />
+        </MainArea>,
+      ),
+    );
+    expect(container.querySelector('[data-testid="flow-workspace"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="workspace"]')).toBeNull();
+    expect(container.querySelector<HTMLElement>(".app__main-content")!.style.display).toBe("none");
+
+    await act(async () => useSettingsStore.setState({ experimentalFlows: false }));
+    expect(container.querySelector('[data-testid="flow-workspace"]')).toBeNull();
+    expect(container.querySelector<HTMLElement>(".app__main-content")!.style.display).toBe("contents");
   });
 });

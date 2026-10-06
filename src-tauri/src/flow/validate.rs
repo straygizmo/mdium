@@ -187,9 +187,6 @@ impl Validator {
             self.issues
                 .error(invalid("limits.maxConcurrentNodes", "zero"));
         }
-        if limits.max_traversals == Some(0) {
-            self.issues.error(invalid("limits.maxTraversals", "zero"));
-        }
         if let Some(budget) = limits.budget_usd {
             if !(budget.is_finite() && budget > 0.0) {
                 self.issues

@@ -76,14 +76,11 @@ const TOP_LEVEL_KEYS: &[&str] = &[
 ];
 const PARAM_KEYS: &[&str] = &["type", "required", "default", "description"];
 const DEFAULTS_KEYS: &[&str] = &["timeout", "retry", "workingDir"];
-const LIMITS_KEYS: &[&str] = &[
-    "maxConcurrentNodes",
-    "budgetUsd",
-    "maxTraversals",
-    "stopGrace",
-];
+const LIMITS_KEYS: &[&str] = &["maxConcurrentNodes", "budgetUsd", "stopGrace"];
 const RETRY_KEYS: &[&str] = &["max", "backoff", "on"];
 const COST_KEYS: &[&str] = &["estimateUsd", "budgetUsd"];
+/// Deprecated key under `limits` (warned, then ignored).
+const DEPRECATED_LIMITS_MAX_TRAVERSALS: &str = "maxTraversals";
 const EDGE_KEYS: &[&str] = &["from", "to", "port", "maxTraversals"];
 const BODY_KEYS: &[&str] = &["nodes", "edges", "outputs"];
 const CASE_KEYS: &[&str] = &["when", "port"];
@@ -184,18 +181,33 @@ pub fn decode(value: &Value) -> Decoded {
         }
     }
     if let Some(limits) = root.get("limits") {
-        check_keys(limits, "limits", LIMITS_KEYS, &mut issues);
+        // `limits.maxTraversals` was dropped: every back-edge states its own
+        // bound. Warn and ignore it rather than failing older files.
+        let mut limits = limits.clone();
+        if let Some(map) = limits.as_object_mut() {
+            if map.remove(DEPRECATED_LIMITS_MAX_TRAVERSALS).is_some() {
+                issues.warn(
+                    FlowIssue::new(FLOW_DEPRECATED_FIELD, "limits.maxTraversals")
+                        .with("field", "limits.maxTraversals")
+                        .with("replacement", "edges[].maxTraversals"),
+                );
+            }
+        }
+        check_keys(&limits, "limits", LIMITS_KEYS, &mut issues);
     }
     check_graph(root, "", &mut issues);
     if issues.has_errors() {
         return Decoded { flow: None, issues };
     }
     // Drop unknown top-level keys (already warned) before decoding.
-    let known: Map<String, Value> = root
+    let mut known: Map<String, Value> = root
         .iter()
         .filter(|(k, _)| TOP_LEVEL_KEYS.contains(&k.as_str()))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
+    if let Some(limits) = known.get_mut("limits").and_then(Value::as_object_mut) {
+        limits.remove(DEPRECATED_LIMITS_MAX_TRAVERSALS);
+    }
     match serde_json::from_value::<FlowDef>(Value::Object(known)) {
         Ok(flow) => Decoded {
             flow: Some(flow),

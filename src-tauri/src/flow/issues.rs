@@ -44,6 +44,8 @@ pub const FLOW_FILE_TOO_LARGE: &str = "FLOW_FILE_TOO_LARGE";
 // Warnings.
 /// Unknown top-level key (ignored).
 pub const FLOW_UNKNOWN_KEY: &str = "FLOW_UNKNOWN_KEY";
+/// A field that is no longer used (ignored; `params.replacement` names the successor).
+pub const FLOW_DEPRECATED_FIELD: &str = "FLOW_DEPRECATED_FIELD";
 /// An edge has `maxTraversals` but does not close a cycle.
 pub const FLOW_TRAVERSAL_LIMIT_UNUSED: &str = "FLOW_TRAVERSAL_LIMIT_UNUSED";
 

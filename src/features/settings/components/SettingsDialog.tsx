@@ -63,6 +63,7 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
     addVerifiedModel,
     speechEnabled, setSpeechEnabled,
     speechModel, setSpeechModel,
+    experimentalFlows, setExperimentalFlows,
     language,
   } = useSettingsStore();
 
@@ -73,6 +74,7 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
   const [localRestoreLastFolders, setLocalRestoreLastFolders] = useState(restoreLastFolders);
   const [localSpeechEnabled, setLocalSpeechEnabled] = useState(speechEnabled);
   const [localSpeechModel, setLocalSpeechModel] = useState<SpeechModel>(speechModel);
+  const [localExperimentalFlows, setLocalExperimentalFlows] = useState(experimentalFlows);
   const [localAi, setLocalAi] = useState<AiSettings>(aiSettings);
   const [localVisibility, setLocalVisibility] = useState(filterVisibility ?? DEFAULT_VISIBILITY);
 
@@ -110,6 +112,7 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
       setLocalRestoreLastFolders(restoreLastFolders);
       setLocalSpeechEnabled(speechEnabled);
       setLocalSpeechModel(speechModel);
+      setLocalExperimentalFlows(experimentalFlows);
       setLocalAi(aiSettings);
       setLocalVisibility(filterVisibility ?? DEFAULT_VISIBILITY);
       setTestMsg(null);
@@ -231,6 +234,7 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
     setRestoreLastFolders(localRestoreLastFolders);
     setSpeechEnabled(localSpeechEnabled);
     setSpeechModel(localSpeechModel);
+    setExperimentalFlows(localExperimentalFlows);
     setAiSettings(localAi);
     useSettingsStore.getState().setMediumSettings(localMedium);
     onSaveFilterVisibility?.(localVisibility);
@@ -737,6 +741,23 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
                       : t("mediumConnectionFailed")}
                   </span>
                 )}
+              </div>
+              <div className="settings-dialog__divider" />
+              <div className="settings-dialog__section-title">{t("experimentalSection")}</div>
+              <div className="settings-dialog__toggle-group">
+                <label className="settings-dialog__toggle">
+                  <span>{t("experimentalFlows")}</span>
+                  <input
+                    type="checkbox"
+                    data-switch
+                    role="switch"
+                    checked={localExperimentalFlows}
+                    onChange={(e) => setLocalExperimentalFlows(e.target.checked)}
+                  />
+                </label>
+                <span className="settings-dialog__description">
+                  {t("experimentalFlowsDescription")}
+                </span>
               </div>
             </>
           )}

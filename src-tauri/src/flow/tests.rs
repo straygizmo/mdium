@@ -175,6 +175,7 @@ fn warning_fixtures_report_exactly_their_warning() {
     for (name, expected) in [
         ("unknown-key", FLOW_UNKNOWN_KEY),
         ("traversal-limit-unused", FLOW_TRAVERSAL_LIMIT_UNUSED),
+        ("deprecated-field", FLOW_DEPRECATED_FIELD),
     ] {
         let report = check_file(&root, &root.join(format!("{name}.flow.yaml")));
         assert!(report.errors.is_empty(), "{name}: {:#?}", report.errors);
@@ -215,7 +216,7 @@ fn flow_level_values_are_checked() {
         params: { n: { type: number, default: 'x' }, 1p: { type: string } }\n\
         envPassthrough: ['bad-name']\n\
         defaults: { timeout: forever, retry: { max: 1, backoff: soon, on: [] } }\n\
-        limits: { maxConcurrentNodes: 0, maxTraversals: 0, budgetUsd: -1, stopGrace: x }\n\
+        limits: { maxConcurrentNodes: 0, budgetUsd: -1, stopGrace: x }\n\
         env: { 'A-B': x }\n\
         outputs: { 'bad key': x }\n\
         nodes: [ { id: a, kind: command, run: [x] } ]\n";
@@ -231,7 +232,6 @@ fn flow_level_values_are_checked() {
         (FLOW_INVALID_VALUE, "defaults.retry.backoff"),
         (FLOW_INVALID_VALUE, "defaults.retry.on"),
         (FLOW_INVALID_VALUE, "limits.maxConcurrentNodes"),
-        (FLOW_INVALID_VALUE, "limits.maxTraversals"),
         (FLOW_INVALID_VALUE, "limits.budgetUsd"),
         (FLOW_INVALID_VALUE, "limits.stopGrace"),
         (FLOW_INVALID_ID, "env.A-B"),
@@ -239,7 +239,7 @@ fn flow_level_values_are_checked() {
     ] {
         assert!(has(code, path), "missing {code} at {path}: {found:#?}");
     }
-    assert_eq!(found.len(), 14, "{found:#?}");
+    assert_eq!(found.len(), 13, "{found:#?}");
 }
 
 #[test]

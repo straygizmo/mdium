@@ -32,6 +32,14 @@ export interface ThemeColors {
   taskStatusOnHoldBackground?: string;
   taskStatusCompletedBackground?: string;
   taskStatusCancelledBackground?: string;
+  // Flow viewer node accents per node kind; derived from accent tokens when omitted.
+  flowNodeAgent?: string;
+  flowNodeCommand?: string;
+  flowNodeApproval?: string;
+  flowNodeLoop?: string;
+  flowNodeBranch?: string;
+  flowNodeSubflow?: string;
+  flowNodeAction?: string;
 }
 
 export type ThemeType = "light" | "dark";
