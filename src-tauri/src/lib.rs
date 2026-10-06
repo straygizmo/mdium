@@ -72,6 +72,12 @@ fn ensure_loopback_no_proxy() {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// Runs the flow command supervisor when the executable was started as one
+/// (`--flow-supervise <spec>`); returns its exit code, or `None` for a normal start.
+pub fn flow_supervise(args: &[String]) -> Option<i32> {
+    flow::run::supervise::supervise_from_args(args)
+}
+
 pub fn run() {
     ensure_loopback_no_proxy();
     tauri::Builder::default()

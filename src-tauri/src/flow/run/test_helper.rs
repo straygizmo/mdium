@@ -122,6 +122,34 @@ fn flow_test_helper_entry() {
     std::process::exit(0);
 }
 
+/// The supervisor, run by the test binary (see `detached_launcher`).
+#[test]
+fn flow_supervisor_entry() {
+    if std::env::var("FLOW_TEST_SUPERVISE").is_err() {
+        return;
+    }
+    let spec = std::env::args().last().expect("spec path");
+    std::process::exit(crate::flow::run::supervise::supervise(
+        std::path::Path::new(&spec),
+    ));
+}
+
+/// A detached launcher whose supervisor is this test binary.
+pub fn detached_launcher() -> crate::flow::run::supervise::DetachedLauncher {
+    let exe = std::env::current_exe().expect("test exe");
+    crate::flow::run::supervise::DetachedLauncher {
+        supervisor: vec![
+            exe.to_string_lossy().into_owned(),
+            "--exact".into(),
+            "flow::run::test_helper::flow_supervisor_entry".into(),
+            "--nocapture".into(),
+            "--test-threads=1".into(),
+            "--quiet".into(),
+        ],
+        supervisor_env: vec![("FLOW_TEST_SUPERVISE".into(), "1".into())],
+    }
+}
+
 /// True while a process with `pid` exists.
 pub fn process_alive(pid: u32) -> bool {
     #[cfg(windows)]

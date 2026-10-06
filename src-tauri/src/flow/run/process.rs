@@ -19,6 +19,10 @@ pub struct LaunchSpec {
     pub env: Vec<(String, String)>,
     pub stdout: PathBuf,
     pub stderr: PathBuf,
+    /// The attempt directory (the detached launcher keeps its files there).
+    pub node_dir: PathBuf,
+    /// Unix: start a new process group (so the whole tree can be killed).
+    pub new_group: bool,
 }
 
 /// A started process.
@@ -28,6 +32,18 @@ pub trait ProcessHandle: Send {
     fn try_wait(&mut self) -> io::Result<Option<i32>>;
     /// Ends the process and everything it started.
     fn kill_tree(&mut self);
+    /// OS creation-time identity (detached processes; used to reconnect).
+    fn identity(&self) -> Option<String> {
+        None
+    }
+    /// Where the supervisor records the exit (detached processes).
+    fn exit_file(&self) -> Option<PathBuf> {
+        None
+    }
+    /// Keeps running when MDium exits (detached processes).
+    fn survives_app_exit(&self) -> bool {
+        false
+    }
 }
 
 /// Starts processes (replaceable in tests and by the detached launcher).
@@ -76,7 +92,9 @@ pub fn build_command(spec: &LaunchSpec) -> io::Result<Command> {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        command.process_group(0);
+        if spec.new_group {
+            command.process_group(0);
+        }
     }
     Ok(command)
 }
@@ -146,7 +164,8 @@ pub const MAX_LINE_BYTES: usize = 64 * 1024;
 pub const MAX_LINES: usize = 100_000;
 
 /// `outcome.status` of the protocol.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "status", content = "detail", rename_all = "snake_case")]
 pub enum ProtocolOutcome {
     Ok,
     Fail(Option<String>),
@@ -253,15 +272,30 @@ pub struct ProtocolReader {
 }
 
 impl ProtocolReader {
+    #[cfg(test)]
     pub fn new(path: &Path) -> Self {
+        Self::resume(path, 0, 0)
+    }
+
+    /// Continues after `offset` bytes / `lines` lines already consumed.
+    pub fn resume(path: &Path, offset: u64, lines: usize) -> Self {
         Self {
             path: path.to_path_buf(),
-            offset: 0,
+            offset,
             partial: Vec::new(),
             skipping_long_line: false,
-            lines: 0,
-            limit_warned: false,
+            lines,
+            limit_warned: lines > MAX_LINES,
         }
+    }
+
+    /// Bytes consumed up to the last complete line (safe point to resume from).
+    pub fn committed_offset(&self) -> u64 {
+        self.offset - self.partial.len() as u64
+    }
+
+    pub fn lines(&self) -> usize {
+        self.lines
     }
 
     /// New complete lines since the last call; with `final_read`, a last

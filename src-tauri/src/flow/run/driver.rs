@@ -16,6 +16,7 @@ use crate::flow::run::process::{
     ProtocolOutcome, ProtocolReader,
 };
 use crate::flow::run::store::{EventLog, RunMeta, RunStore, CHECKPOINT_EVERY};
+use crate::flow::run::supervise::DetachedProcess;
 use crate::flow::template::{self, Reference};
 use crate::workflow::fsutil;
 use serde_json::Value;
@@ -33,6 +34,8 @@ pub const FLOW_STOP_GRACE_EXCEEDED: &str = "FLOW_STOP_GRACE_EXCEEDED";
 pub const FLOW_STOP_REQUESTED: &str = "FLOW_STOP_REQUESTED";
 pub const FLOW_RUN_CANCELLED: &str = "FLOW_RUN_CANCELLED";
 pub const FLOW_APP_EXITED: &str = "FLOW_APP_EXITED";
+/// A running node's process could not be reconnected after a restart.
+pub const FLOW_PROCESS_LOST: &str = "FLOW_PROCESS_LOST";
 pub const FLOW_BUDGET_EXCEEDED: &str = "FLOW_BUDGET_EXCEEDED";
 pub const FLOW_APPROVAL_NODE: &str = "FLOW_APPROVAL_NODE";
 pub const FLOW_COMMAND_NEEDS_APPROVAL: &str = "FLOW_COMMAND_NEEDS_APPROVAL";
@@ -87,6 +90,8 @@ pub trait ApprovalNotifier: Send + Sync {
 #[derive(Clone)]
 pub struct DriverEnv {
     pub launcher: Arc<dyn Launcher>,
+    /// Launcher for `detach: true` commands (the default); `None` runs them attached.
+    pub detached: Option<Arc<dyn Launcher>>,
     pub sink: Arc<dyn EventSink>,
     pub notifiers: Arc<Vec<Arc<dyn ApprovalNotifier>>>,
     /// Process environment visible to `env.*` templates (passthrough filtered per flow).
@@ -119,6 +124,8 @@ enum Ended {
     GraceKilled,
     Cancelled,
     Shutdown,
+    /// App exit while a detached process keeps running.
+    Detached,
 }
 
 impl Driver {
@@ -617,6 +624,7 @@ impl Driver {
         for (key, attempt) in waiting {
             self.set_node(&key, NodeStatus::Ready, attempt, None, None);
         }
+        self.reconnect_running();
         loop {
             self.drain_controls();
             if self.shutdown_requested {
@@ -667,6 +675,68 @@ impl Driver {
         }
         self.checkpoint();
         self.state.status
+    }
+
+    /// After a restart: follow detached commands that are still running (or
+    /// left their exit record); anything else that was running is interrupted.
+    fn reconnect_running(&mut self) {
+        let running: Vec<(String, NodeState)> = self
+            .state
+            .nodes
+            .iter()
+            .filter(|(_, n)| n.status == NodeStatus::Running)
+            .map(|(k, n)| (k.clone(), n.clone()))
+            .collect();
+        for (key, state) in running {
+            if self.shutdown_requested || self.cancel_requested {
+                return;
+            }
+            let node = self.node_def(&key).cloned();
+            let command = match node.as_ref().map(|n| &n.kind) {
+                Some(NodeKind::Command(command)) => command.clone(),
+                _ => {
+                    self.set_node(
+                        &key,
+                        NodeStatus::Interrupted,
+                        state.attempt,
+                        Some(Reason::new(FLOW_PROCESS_LOST)),
+                        None,
+                    );
+                    continue;
+                }
+            };
+            let node = node.expect("checked above");
+            let handle = state.process.as_ref().and_then(|p| {
+                let exit_file = PathBuf::from(p.exit_file.as_ref()?);
+                DetachedProcess::reconnect(p.pid, &p.started_at, &exit_file)
+            });
+            let dir = self
+                .store
+                .node_attempt_dir(&self.run_id, &key, state.attempt);
+            match (handle, dir) {
+                (Some(mut handle), Ok(dir)) => {
+                    let started = Instant::now() - elapsed_since(state.started_at.as_deref());
+                    self.follow_command(
+                        &key,
+                        &node,
+                        &command,
+                        state.attempt,
+                        &dir,
+                        &mut handle,
+                        started,
+                    );
+                }
+                _ => {
+                    self.set_node(
+                        &key,
+                        NodeStatus::Interrupted,
+                        state.attempt,
+                        Some(Reason::new(FLOW_PROCESS_LOST)),
+                        None,
+                    );
+                }
+            }
+        }
     }
 
     /// App exit: running nodes and the run become `interrupted`.
@@ -761,7 +831,12 @@ impl Driver {
             Ok(spec) => spec,
             Err(reason) => return self.fail_node(key, attempt, reason),
         };
-        let mut handle = match self.env.launcher.launch(&spec) {
+        let detached = command.detach.unwrap_or(true);
+        let launcher = match (&self.env.detached, detached) {
+            (Some(launcher), true) => launcher.clone(),
+            _ => self.env.launcher.clone(),
+        };
+        let mut handle = match launcher.launch(&spec) {
             Ok(handle) => handle,
             Err(err) => {
                 return self.fail_node(
@@ -775,13 +850,38 @@ impl Driver {
             Some(key),
             EventBody::Process {
                 pid: handle.pid(),
-                started_at: fsutil::now(),
-                exit_file: None,
+                // The OS creation time when known (detached), else the launch time.
+                started_at: handle.identity().unwrap_or_else(fsutil::now),
+                exit_file: handle.exit_file().map(|p| p.to_string_lossy().into_owned()),
             },
         );
+        self.follow_command(
+            key,
+            node,
+            command,
+            attempt,
+            &dir,
+            handle.as_mut(),
+            Instant::now(),
+        );
+    }
+
+    /// Monitors a started (or reconnected) command and records its result.
+    #[allow(clippy::too_many_arguments)]
+    fn follow_command(
+        &mut self,
+        key: &str,
+        node: &FlowNode,
+        command: &CommandNode,
+        attempt: u32,
+        dir: &Path,
+        handle: &mut dyn ProcessHandle,
+        started: Instant,
+    ) {
+        let saved = ProtocolCursor::load(dir);
         let reader = (command.protocol == CommandProtocol::MdiumV1)
-            .then(|| ProtocolReader::new(&dir.join("events.jsonl")));
-        let (ended, outcome) = self.monitor(key, node, handle.as_mut(), reader);
+            .then(|| ProtocolReader::resume(&dir.join("events.jsonl"), saved.offset, saved.lines));
+        let (ended, outcome) = self.monitor(key, node, dir, handle, reader, started, saved.outcome);
         let _ = std::fs::write(
             dir.join("outputs.json"),
             serde_json::to_vec_pretty(&self.node(key).outputs).unwrap_or_default(),
@@ -819,6 +919,8 @@ impl Driver {
                 self.interrupt(Some((key, attempt)));
                 return;
             }
+            // Still running after the app exits; reconnected on the next start.
+            Ended::Detached => return,
         };
         match result {
             CommandResult::Succeeded => {
@@ -975,18 +1077,23 @@ impl Driver {
             env,
             stdout: dir.join("stdout.log"),
             stderr: dir.join("stderr.log"),
+            node_dir: dir.to_path_buf(),
+            new_group: true,
         })
     }
 
     /// Watches a running command until it exits, times out, or a control ends it.
+    #[allow(clippy::too_many_arguments)]
     fn monitor(
         &mut self,
         key: &str,
         node: &FlowNode,
+        dir: &Path,
         handle: &mut dyn ProcessHandle,
         mut reader: Option<ProtocolReader>,
+        started: Instant,
+        saved_outcome: Option<ProtocolOutcome>,
     ) -> (Ended, Option<ProtocolOutcome>) {
-        let started = Instant::now();
         let timeout = self.node_timeout(node);
         let grace = self
             .flow()
@@ -995,12 +1102,14 @@ impl Driver {
             .as_deref()
             .and_then(parse_duration);
         let mut grace_deadline: Option<Instant> = None;
-        let mut outcome: Option<ProtocolOutcome> = None;
+        let mut outcome: Option<ProtocolOutcome> = saved_outcome;
         let mut last_progress: Option<Instant> = None;
         let mut pending_progress: Option<(String, Option<f64>)> = None;
         let ended = loop {
             if let Some(reader) = reader.as_mut() {
-                for item in reader.poll(false) {
+                let items = reader.poll(false);
+                let consumed = !items.is_empty();
+                for item in items {
                     self.protocol_item(
                         key,
                         item,
@@ -1008,6 +1117,15 @@ impl Driver {
                         &mut last_progress,
                         &mut pending_progress,
                     );
+                }
+                if consumed {
+                    // Where to continue after a reconnect (written after the events).
+                    ProtocolCursor {
+                        offset: reader.committed_offset(),
+                        lines: reader.lines(),
+                        outcome: outcome.clone(),
+                    }
+                    .save(dir);
                 }
             }
             match handle.try_wait() {
@@ -1017,6 +1135,9 @@ impl Driver {
             }
             self.drain_controls_while_running();
             if self.shutdown_requested {
+                if handle.survives_app_exit() {
+                    break Ended::Detached;
+                }
                 handle.kill_tree();
                 break Ended::Shutdown;
             }
@@ -1135,6 +1256,43 @@ impl Driver {
             }
         }
     }
+}
+
+/// Persisted reading position of a command's protocol file, so a
+/// reconnect neither re-applies nor loses events (`protocol.json`).
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProtocolCursor {
+    offset: u64,
+    lines: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    outcome: Option<ProtocolOutcome>,
+}
+
+impl ProtocolCursor {
+    fn load(dir: &Path) -> Self {
+        std::fs::read(dir.join("protocol.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
+
+    fn save(&self, dir: &Path) {
+        if let Ok(json) = serde_json::to_vec(self) {
+            let _ = fsutil::atomic_write(&dir.join("protocol.json"), &json);
+        }
+    }
+}
+
+/// Time since an RFC 3339 timestamp (zero when unknown or in the future).
+fn elapsed_since(ts: Option<&str>) -> Duration {
+    ts.and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+        .and_then(|t| {
+            (chrono::Utc::now() - t.with_timezone(&chrono::Utc))
+                .to_std()
+                .ok()
+        })
+        .unwrap_or_default()
 }
 
 fn far_future() -> Instant {
