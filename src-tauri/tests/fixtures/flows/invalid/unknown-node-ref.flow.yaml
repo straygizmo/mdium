@@ -1,0 +1,7 @@
+schemaVersion: 1
+id: t
+name: T
+nodes:
+  - { id: a, kind: command, run: [x, "${{ nodes.ghost.outputs.v }}"] }
+edges:
+  - { from: a, to: missing }

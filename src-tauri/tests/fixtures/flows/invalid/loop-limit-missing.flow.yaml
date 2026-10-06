@@ -1,0 +1,9 @@
+schemaVersion: 1
+id: t
+name: T
+nodes:
+  - id: l
+    kind: loop
+    mode: foreach
+    items: [1]
+    body: { nodes: [ { id: a, kind: command, run: [x] } ] }
