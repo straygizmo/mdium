@@ -179,7 +179,16 @@
     "FLOW_PARAM_UNKNOWN": "Unknown parameter \"{{param}}\".",
     "FLOW_PARAM_MISSING": "Missing parameter \"{{param}}\".",
     "FLOW_PARAM_INVALID": "Parameter \"{{param}}\" has the wrong type.",
-    "FLOW_NODE_NEEDS_ACTION": "Node \"{{node}}\" must be re-run or marked succeeded first."
+    "FLOW_NODE_NEEDS_ACTION": "Node \"{{node}}\" must be re-run or marked succeeded first.",
+    "FLOW_TRAVERSAL_LIMIT": "The loop back was taken the maximum number of times ({{max}}).",
+    "FLOW_BRANCH_NO_MATCH": "No case matched and there is no default.",
+    "FLOW_LOOP_ITEMS_INVALID": "The loop items are not a list.",
+    "FLOW_LOOP_ITERATION_FAILED": "Iteration {{index}} failed.",
+    "FLOW_SUBFLOW_FAILED": "The sub-flow failed.",
+    "FLOW_SUBFLOW_MISSING": "The referenced flow \"{{ref}}\" is not part of this run.",
+    "FLOW_PASS_RESET": "Replaced by a new pass.",
+    "FLOW_RUN_STUCK": "No node could continue.",
+    "FLOW_OUTPUT_UNRESOLVED": "Output \"{{output}}\" could not be computed."
   },
   "runError": {
     "FLOW_PROJECT_INVALID": "The folder is not available.",

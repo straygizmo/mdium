@@ -181,6 +181,134 @@ fn read_flow(root: &Path, rel: &str) -> Result<(PathBuf, String, Vec<u8>)> {
     Ok((file, display, bytes))
 }
 
+/// A flow file with every flow file it references (sub-flows, file loop
+/// bodies), read once: what is confirmed, snapshotted and run.
+struct Bundle {
+    display: String,
+    root_sha: String,
+    flow: crate::flow::model::FlowDef,
+    /// Referenced files by project-relative path: (sha256, flow).
+    others: BTreeMap<String, (String, crate::flow::model::FlowDef)>,
+    refs: BTreeMap<String, String>,
+}
+
+impl Bundle {
+    /// The confirmed hash: the file's own hash when it references nothing,
+    /// otherwise a hash over every file's path and hash.
+    fn hash(&self) -> String {
+        if self.others.is_empty() {
+            return self.root_sha.clone();
+        }
+        let mut text = String::from("mdium-flow-bundle-v1\n");
+        let mut files: Vec<(&str, &str)> = vec![(self.display.as_str(), self.root_sha.as_str())];
+        files.extend(
+            self.others
+                .iter()
+                .map(|(p, (sha, _))| (p.as_str(), sha.as_str())),
+        );
+        files.sort();
+        for (path, sha) in files {
+            text.push_str(&format!("{path}\t{sha}\n"));
+        }
+        sha256_hex(text.as_bytes())
+    }
+
+    fn files(&self) -> Vec<(&str, &crate::flow::model::FlowDef)> {
+        let mut out = vec![(self.display.as_str(), &self.flow)];
+        out.extend(self.others.iter().map(|(p, (_, f))| (p.as_str(), f)));
+        out
+    }
+}
+
+/// References to other flow files in `nodes` (sub-flows and file bodies, any depth).
+fn flow_refs(nodes: &[crate::flow::model::FlowNode], out: &mut Vec<String>) {
+    use crate::flow::model::LoopBody;
+    for node in nodes {
+        match &node.kind {
+            NodeKind::Subflow(sub) => out.push(sub.flow.clone()),
+            NodeKind::Loop(lp) => match &lp.body {
+                LoopBody::File(file) => out.push(file.clone()),
+                LoopBody::Inline(body) => flow_refs(&body.nodes, out),
+            },
+            _ => {}
+        }
+    }
+}
+
+/// Reads, validates and resolves a flow and everything it references.
+fn load_bundle(root: &Path, rel: &str) -> Result<Bundle> {
+    use crate::flow::load::{check_text, resolve_in_project};
+    use crate::flow::parse::FlowFormat;
+    let (file, display, bytes) = read_flow(root, rel)?;
+    let root_sha = sha256_hex(&bytes);
+    let text = String::from_utf8_lossy(&bytes);
+    let report = check_content(root, &file, &text);
+    if !report.errors.is_empty() {
+        let details = report
+            .errors
+            .iter()
+            .map(|i| {
+                Reason {
+                    code: i.code.clone(),
+                    params: i.params.clone(),
+                }
+                .with("path", i.path.clone())
+            })
+            .collect();
+        return Err(
+            EngineError::new(FLOW_FILE_INVALID, "the flow has validation errors")
+                .with_details(details),
+        );
+    }
+    let flow = report
+        .flow
+        .ok_or_else(|| EngineError::new(FLOW_FILE_INVALID, "flow could not be decoded"))?;
+    let mut others = BTreeMap::new();
+    let mut refs = BTreeMap::new();
+    let mut queue = vec![(file, display.clone(), flow.clone())];
+    while let Some((abs, owner, def)) = queue.pop() {
+        let mut found = Vec::new();
+        flow_refs(&def.nodes, &mut found);
+        let base = abs.parent().unwrap_or(root).to_path_buf();
+        for reference in found {
+            let child = resolve_in_project(root, &base, &reference).map_err(|_| {
+                EngineError::new(FLOW_FILE_INVALID, format!("cannot resolve {reference}"))
+            })?;
+            let child_display = load::relative_display(root, &child);
+            refs.insert(
+                crate::flow::run::scope::ref_key(&owner, &reference),
+                child_display.clone(),
+            );
+            if child_display == display || others.contains_key(&child_display) {
+                continue;
+            }
+            let (_, _, child_bytes) = read_flow(root, &child_display)?;
+            let format = child
+                .file_name()
+                .and_then(|n| n.to_str())
+                .and_then(FlowFormat::from_file_name)
+                .ok_or_else(|| EngineError::new(FLOW_FILE_INVALID, child_display.clone()))?;
+            let (child_flow, issues) = check_text(&String::from_utf8_lossy(&child_bytes), format);
+            let child_flow = match child_flow {
+                Some(f) if issues.errors.is_empty() => f,
+                _ => return Err(EngineError::new(FLOW_FILE_INVALID, child_display)),
+            };
+            others.insert(
+                child_display.clone(),
+                (sha256_hex(&child_bytes), child_flow.clone()),
+            );
+            queue.push((child, child_display, child_flow));
+        }
+    }
+    Ok(Bundle {
+        display,
+        root_sha,
+        flow,
+        others,
+        refs,
+    })
+}
+
 impl FlowEngine {
     /// `confirmations`: per-machine file of confirmed command lists.
     pub fn new(env: DriverEnv, confirmations: PathBuf) -> Self {
@@ -342,11 +470,9 @@ impl FlowEngine {
     /// Every driver that is not started by [`Self::start`] runs a stored
     /// snapshot: it needs this machine's confirmation of that exact content.
     fn require_confirmed(&self, root: &Path, meta: &RunMeta) -> Result<()> {
-        let has_commands = meta
-            .flow
-            .nodes
-            .iter()
-            .any(|n| matches!(n.kind, NodeKind::Command(_)));
+        let mut files = vec![(meta.flow_path.as_str(), &meta.flow)];
+        files.extend(meta.subflows.iter().map(|(p, f)| (p.as_str(), f)));
+        let has_commands = !command_summaries(&files).is_empty();
         if has_commands && !self.is_confirmed(root, &meta.flow_path, &meta.flow_sha256) {
             return Err(EngineError::new(
                 FLOW_COMMANDS_UNCONFIRMED,
@@ -358,17 +484,12 @@ impl FlowEngine {
 
     /// The commands of a flow file as written, for the confirmation dialog.
     pub fn review_commands(&self, root: &Path, rel: &str) -> Result<CommandReview> {
-        let (file, display, bytes) = read_flow(root, rel)?;
-        let sha256 = sha256_hex(&bytes);
-        let text = String::from_utf8_lossy(&bytes);
-        let report = check_content(root, &file, &text);
-        let flow = report
-            .flow
-            .ok_or_else(|| EngineError::new(FLOW_FILE_INVALID, "flow could not be decoded"))?;
-        let commands = command_summaries(&flow);
-        let confirmed = commands.is_empty() || self.is_confirmed(root, &display, &sha256);
+        let bundle = load_bundle(root, rel)?;
+        let sha256 = bundle.hash();
+        let commands = command_summaries(&bundle.files());
+        let confirmed = commands.is_empty() || self.is_confirmed(root, &bundle.display, &sha256);
         Ok(CommandReview {
-            path: display,
+            path: bundle.display,
             sha256,
             confirmed,
             commands,
@@ -377,8 +498,9 @@ impl FlowEngine {
 
     /// Records that the user reviewed the commands of exactly this content.
     pub fn confirm_commands(&self, root: &Path, rel: &str, sha256: &str) -> Result<()> {
-        let (_, display, bytes) = read_flow(root, rel)?;
-        if sha256_hex(&bytes) != sha256 {
+        let bundle = load_bundle(root, rel)?;
+        let display = bundle.display.clone();
+        if bundle.hash() != sha256 {
             return Err(EngineError::new(
                 FLOW_FILE_CHANGED,
                 "the file changed since it was reviewed",
@@ -416,37 +538,15 @@ impl FlowEngine {
         sha256: &str,
     ) -> Result<RunSummary> {
         self.attach(root)?;
-        let (file, display, bytes) = read_flow(root, rel)?;
-        let actual = sha256_hex(&bytes);
+        let bundle = load_bundle(root, rel)?;
+        let actual = bundle.hash();
         if actual != sha256 {
             return Err(EngineError::new(
                 FLOW_FILE_CHANGED,
                 "the file changed since it was reviewed",
             ));
         }
-        let text = String::from_utf8_lossy(&bytes);
-        let report = check_content(root, &file, &text);
-        if !report.errors.is_empty() {
-            let details = report
-                .errors
-                .iter()
-                .map(|i| {
-                    Reason {
-                        code: i.code.clone(),
-                        params: i.params.clone(),
-                    }
-                    .with("path", i.path.clone())
-                })
-                .collect();
-            return Err(
-                EngineError::new(FLOW_FILE_INVALID, "the flow has validation errors")
-                    .with_details(details),
-            );
-        }
-        let flow = report
-            .flow
-            .ok_or_else(|| EngineError::new(FLOW_FILE_INVALID, "flow could not be decoded"))?;
-        let problems = check_runnable(&flow);
+        let problems = check_runnable(&bundle.files());
         if !problems.is_empty() {
             return Err(EngineError::new(
                 FLOW_RUN_NOT_RUNNABLE,
@@ -454,16 +554,17 @@ impl FlowEngine {
             )
             .with_details(problems));
         }
-        let has_commands = flow
-            .nodes
-            .iter()
-            .any(|n| matches!(n.kind, NodeKind::Command(_)));
+        let has_commands = !command_summaries(&bundle.files()).is_empty();
+        let display = bundle.display.clone();
         if has_commands && !self.is_confirmed(root, &display, &actual) {
             return Err(EngineError::new(
                 FLOW_COMMANDS_UNCONFIRMED,
                 "review and confirm the commands first",
             ));
         }
+        let Bundle {
+            flow, others, refs, ..
+        } = bundle;
         let params = prepare_params(&flow, params).map_err(|details| {
             EngineError::new(FLOW_PARAMS_INVALID, "invalid parameters").with_details(details)
         })?;
@@ -477,6 +578,8 @@ impl FlowEngine {
             params,
             created_at: fsutil::now(),
             started_by: "user".into(),
+            subflows: others.into_iter().map(|(p, (_, f))| (p, f)).collect(),
+            refs,
         };
         let store = RunStore::new(root);
         store.create(&meta)?;
@@ -611,6 +714,8 @@ impl FlowEngine {
             .state()
             .nodes
             .iter()
+            // Only current instances in live scopes count (older passes are history).
+            .filter(|(key, _)| editor.is_live_instance(key))
             .filter(|(key, n)| match n.status {
                 NodeStatus::Interrupted | NodeStatus::Cancelled => true,
                 NodeStatus::Failed => !editor.has_failure_edge(key),
@@ -736,6 +841,13 @@ impl FlowEngine {
             .get(key)
             .cloned()
             .ok_or_else(|| EngineError::new(FLOW_NODE_NOT_FOUND, key))?;
+        // Older passes and nodes of finished scopes cannot be changed.
+        if !editor.is_live_instance(key) {
+            return Err(EngineError::new(
+                FLOW_NODE_INVALID_STATE,
+                "not a live instance",
+            ));
+        }
         let allowed = match (node.status, to) {
             (NodeStatus::Interrupted | NodeStatus::Cancelled, NodeStatus::Ready) => true,
             // Only failures that stopped the flow; handled ones already moved on.
@@ -750,9 +862,14 @@ impl FlowEngine {
                 format!("{:?}", node.status),
             ));
         }
-        let port =
-            (to == NodeStatus::Succeeded).then(|| crate::flow::model::PORT_SUCCESS.to_string());
-        editor.set_node(key, to, None, port);
+        if to == NodeStatus::Succeeded {
+            editor.mark_succeeded(key);
+        } else if editor.is_composite(key) {
+            // A loop or sub-flow starts over as a fresh instance.
+            editor.new_pass(key);
+        } else {
+            editor.set_node(key, to, None, None);
+        }
         editor.finish();
         // Continue right away when nothing else needs attention.
         // Other nodes may still need attention; the run then stays as it is.
@@ -799,7 +916,8 @@ impl FlowEngine {
         };
         let store = RunStore::new(root);
         let meta = store.load_meta(run_id)?;
-        if !meta.flow.nodes.iter().any(|n| n.id == key) {
+        let state = store.load_state(run_id, &meta)?;
+        if !state.nodes.contains_key(key) {
             return Err(EngineError::new(FLOW_NODE_NOT_FOUND, key));
         }
         let path = store.node_attempt_dir(run_id, key, attempt)?.join(file);

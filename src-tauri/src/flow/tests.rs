@@ -57,6 +57,7 @@ fn valid_fixtures_have_no_errors_or_warnings() {
         "doc-digest.flow.yaml",
         "doc-digest-json.flow.json",
         "dev-workflow.flow.yaml",
+        "manual-check.flow.yaml",
     ] {
         let report = check_file(&root, &root.join(name));
         assert!(report.errors.is_empty(), "{name}: {:#?}", report.errors);

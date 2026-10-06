@@ -1,0 +1,54 @@
+schemaVersion: 1
+id: manual-check
+name: Manual check (Windows)
+description: >-
+  Command-only flow for trying the run UI by hand on Windows (uses PowerShell).
+  Copy it to <folder>/.mdium/flows/ and run it from the Flows view:
+  Run, Stop while "work" runs, Resume, then answer the approval
+  ("rework" once to see a new pass, then "publish").
+params:
+  label: { type: string, default: demo }
+limits:
+  stopGrace: 30s
+nodes:
+  - id: prepare
+    kind: command
+    run:
+      - powershell
+      - -NoProfile
+      - -Command
+      - >-
+        Add-Content -Path $env:MDIUM_FLOW_EVENTS_FILE -Value '{"v":1,"type":"output","key":"prepared","value":true}'
+  - id: work
+    kind: command
+    description: Twenty one-second steps; stops at the next step when the run is stopped.
+    run:
+      - powershell
+      - -NoProfile
+      - -Command
+      - >-
+        for ($i = 1; $i -le 20; $i++) {
+        if (Test-Path $env:MDIUM_FLOW_STOP_FILE) {
+        Add-Content -Path $env:MDIUM_FLOW_EVENTS_FILE -Value '{"v":1,"type":"outcome","status":"stopped"}'; exit 0 }
+        Add-Content -Path $env:MDIUM_FLOW_EVENTS_FILE -Value ('{"v":1,"type":"progress","text":"step ' + $i + '/20"}');
+        Write-Output "step $i";
+        Start-Sleep -Seconds 1 }
+        Add-Content -Path $env:MDIUM_FLOW_EVENTS_FILE -Value '{"v":1,"type":"cost","usd":0.01,"kind":"estimated"}'
+  - id: review
+    kind: approval
+    message: "Publish ${{ params.label }}?"
+    options: [publish, rework]
+  - id: publish
+    kind: command
+    run:
+      - powershell
+      - -NoProfile
+      - -Command
+      - >-
+        Write-Output "published";
+        Add-Content -Path $env:MDIUM_FLOW_EVENTS_FILE -Value '{"v":1,"type":"artifact","path":"published.txt","label":"result"}'
+edges:
+  - { from: prepare, to: work }
+  - { from: work, to: review }
+  - { from: review, to: publish, port: publish }
+  - { from: review, to: work, port: rework, maxTraversals: 2 }

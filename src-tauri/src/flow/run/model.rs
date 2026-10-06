@@ -107,7 +107,9 @@ impl NodeStatus {
 }
 
 /// Node transition table (spec 4.3, plus `running → ready` for a node that
-/// ended because of a stop request; see the spec's 4.3 note).
+/// ended because of a stop request, and `skipped → pending` for a node
+/// re-armed when a back-edge opens a new pass upstream of it, and
+/// `awaiting_approval → cancelled` for a waiting instance a new pass retires).
 pub fn node_transition_allowed(from: NodeStatus, to: NodeStatus) -> bool {
     use NodeStatus::*;
     matches!(
@@ -129,6 +131,8 @@ pub fn node_transition_allowed(from: NodeStatus, to: NodeStatus) -> bool {
             | (Interrupted, Ready)
             | (Cancelled, Ready)
             | (Failed, Succeeded)
+            | (Skipped, Pending)
+            | (AwaitingApproval, Cancelled)
     )
 }
 
@@ -263,6 +267,41 @@ pub enum EventBody {
     },
     /// Something odd that does not change status (bad protocol line, ...).
     Warning(Reason),
+    /// A scope opened; `nodes` are the ids of its graph (they start `pending`).
+    #[serde(rename_all = "camelCase")]
+    ScopeStarted {
+        prefix: String,
+        #[serde(flatten)]
+        init: ScopeInit,
+        nodes: Vec<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    ScopeFinished {
+        prefix: String,
+        status: ScopeStatus,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        outputs: BTreeMap<String, Value>,
+    },
+    /// A `foreach` loop fixed its items (spec 4.4 `loop_items`).
+    #[serde(rename_all = "camelCase")]
+    LoopItems {
+        items: Vec<Value>,
+        #[serde(default)]
+        limit_reached: bool,
+    },
+    /// A back-edge was traversed (spec 4.4 `traversal`).
+    #[serde(rename_all = "camelCase")]
+    Traversal {
+        scope: String,
+        edge: usize,
+        count: u32,
+    },
+    /// Nodes of a scope start a new pass (new pending instances).
+    #[serde(rename_all = "camelCase")]
+    NewPass {
+        scope: String,
+        ids: Vec<String>,
+    },
 }
 
 impl EventBody {
@@ -312,6 +351,63 @@ pub struct Progress {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fraction: Option<f64>,
+}
+
+/// Status of a scope (the root, a loop iteration, or a sub-flow).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScopeStatus {
+    Running,
+    Completed,
+    Failed,
+}
+
+/// How a scope was opened (recorded once in `scope_started`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScopeInit {
+    /// The loop / sub-flow node instance that opened it (`None` for the root).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    /// Prefix of the enclosing scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    /// Inline loop bodies read the enclosing scope's nodes and variables;
+    /// file bodies and sub-flows only get `params` (spec 2.5).
+    #[serde(default)]
+    pub inherits: bool,
+    pub graph: crate::flow::run::scope::GraphLoc,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: BTreeMap<String, Value>,
+    /// Iteration variable name (inline bodies only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub var: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<usize>,
+}
+
+/// A scope's materialized state.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScopeRecord {
+    #[serde(flatten)]
+    pub init: ScopeInit,
+    pub status: ScopeStatus,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub outputs: BTreeMap<String, Value>,
+    /// Sequence number of the event that opened it (scheduling order).
+    pub order: u64,
+}
+
+/// A `foreach` loop's resolved items (fixed at loop start, reused on resume).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoopRecord {
+    pub items: Vec<Value>,
+    #[serde(default)]
+    pub limit_reached: bool,
 }
 
 /// Materialized state of one node.
@@ -389,6 +485,18 @@ pub struct RunState {
     pub budget_limit_usd: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
+    /// Scopes by prefix (`""` is the root).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub scopes: BTreeMap<String, ScopeRecord>,
+    /// `foreach` items by loop instance key.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub loops: BTreeMap<String, LoopRecord>,
+    /// Current pass per `<prefix><id>` (absent = 1).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub passes: BTreeMap<String, u32>,
+    /// Back-edge traversal counts per `<prefix>#<edge index>`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub traversals: BTreeMap<String, u32>,
 }
 
 impl RunState {
@@ -406,7 +514,24 @@ impl RunState {
             approvals: Vec::new(),
             budget_limit_usd: None,
             updated_at: None,
+            scopes: BTreeMap::new(),
+            loops: BTreeMap::new(),
+            passes: BTreeMap::new(),
+            traversals: BTreeMap::new(),
         }
+    }
+
+    /// Current pass of node `id` in scope `prefix`.
+    pub fn pass(&self, prefix: &str, id: &str) -> u32 {
+        self.passes
+            .get(&format!("{prefix}{id}"))
+            .copied()
+            .unwrap_or(1)
+    }
+
+    /// Key of the current instance of node `id` in scope `prefix`.
+    pub fn current_key(&self, prefix: &str, id: &str) -> String {
+        crate::flow::run::scope::instance_key(prefix, id, self.pass(prefix, id))
     }
 }
 
@@ -526,6 +651,62 @@ pub fn apply(state: &mut RunState, event: &FlowEvent) {
             state.budget_limit_usd = Some(*limit_usd);
         }
         EventBody::Warning(_) => {}
+        EventBody::ScopeStarted {
+            prefix,
+            init,
+            nodes,
+        } => {
+            state.scopes.insert(
+                prefix.clone(),
+                ScopeRecord {
+                    init: init.clone(),
+                    status: ScopeStatus::Running,
+                    outputs: BTreeMap::new(),
+                    order: event.seq,
+                },
+            );
+            for id in nodes {
+                let key = state.current_key(prefix, id);
+                state.nodes.entry(key).or_default();
+            }
+        }
+        EventBody::ScopeFinished {
+            prefix,
+            status,
+            outputs,
+        } => {
+            if let Some(scope) = state.scopes.get_mut(prefix) {
+                scope.status = *status;
+                scope.outputs = outputs.clone();
+            }
+        }
+        EventBody::LoopItems {
+            items,
+            limit_reached,
+        } => {
+            if let Some(key) = event.node_key.clone() {
+                state.loops.insert(
+                    key,
+                    LoopRecord {
+                        items: items.clone(),
+                        limit_reached: *limit_reached,
+                    },
+                );
+            }
+        }
+        EventBody::Traversal { scope, edge, count } => {
+            state.traversals.insert(format!("{scope}#{edge}"), *count);
+        }
+        EventBody::NewPass { scope, ids } => {
+            for id in ids {
+                let pass = state.pass(scope, id) + 1;
+                state.passes.insert(format!("{scope}{id}"), pass);
+                state.nodes.insert(
+                    crate::flow::run::scope::instance_key(scope, id, pass),
+                    NodeState::new(),
+                );
+            }
+        }
     }
 }
 
@@ -592,6 +773,8 @@ mod tests {
             (Failed, Succeeded),
             (Interrupted, Ready),
             (Cancelled, Ready),
+            (Skipped, Pending),
+            (AwaitingApproval, Cancelled),
         ];
         for from in NodeStatus::ALL {
             for to in NodeStatus::ALL {
@@ -698,6 +881,80 @@ mod tests {
                 "{text}"
             );
         }
+    }
+
+    #[test]
+    fn scope_events_round_trip_and_reduce() {
+        use crate::flow::run::scope::GraphLoc;
+        let init = ScopeInit {
+            owner: Some("docs".into()),
+            parent: Some(String::new()),
+            inherits: true,
+            graph: GraphLoc {
+                file: "f.flow.yaml".into(),
+                path: vec!["docs".into()],
+            },
+            params: BTreeMap::new(),
+            var: Some("doc".into()),
+            item: Some(json!("a")),
+            index: Some(0),
+        };
+        let bodies = vec![
+            EventBody::ScopeStarted {
+                prefix: "docs[0]/".into(),
+                init: init.clone(),
+                nodes: vec!["proc".into()],
+            },
+            EventBody::ScopeFinished {
+                prefix: "docs[0]/".into(),
+                status: ScopeStatus::Completed,
+                outputs: BTreeMap::from([("k".to_string(), json!(1))]),
+            },
+            EventBody::LoopItems {
+                items: vec![json!("a")],
+                limit_reached: true,
+            },
+            EventBody::Traversal {
+                scope: String::new(),
+                edge: 2,
+                count: 1,
+            },
+            EventBody::NewPass {
+                scope: String::new(),
+                ids: vec!["gen".into()],
+            },
+        ];
+        let mut state = RunState::new(["docs", "gen"]);
+        for (i, body) in bodies.into_iter().enumerate() {
+            let event = FlowEvent {
+                seq: i as u64 + 1,
+                ts: "t".into(),
+                node_key: Some("docs".into()),
+                body,
+            };
+            let text = serde_json::to_string(&event).unwrap();
+            assert_eq!(
+                serde_json::from_str::<FlowEvent>(&text).unwrap(),
+                event,
+                "{text}"
+            );
+            apply(&mut state, &event);
+        }
+        let scope = &state.scopes["docs[0]/"];
+        assert_eq!(scope.init, init);
+        assert_eq!(scope.status, ScopeStatus::Completed);
+        assert_eq!(scope.order, 1);
+        assert!(state.nodes.contains_key("docs[0]/proc"));
+        assert!(state.loops["docs"].limit_reached);
+        assert_eq!(state.traversals["#2"], 1);
+        assert_eq!(state.pass("", "gen"), 2);
+        assert_eq!(state.current_key("", "gen"), "gen@2");
+        assert_eq!(state.nodes["gen@2"].status, NodeStatus::Pending);
+        assert_eq!(
+            state.nodes["gen"].status,
+            NodeStatus::Pending,
+            "the old instance stays"
+        );
     }
 
     fn ev(seq: u64, node: Option<&str>, body: EventBody) -> FlowEvent {

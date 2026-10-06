@@ -179,7 +179,16 @@
     "FLOW_PARAM_UNKNOWN": "未知の引数「{{param}}」です。",
     "FLOW_PARAM_MISSING": "引数「{{param}}」がありません。",
     "FLOW_PARAM_INVALID": "引数「{{param}}」の型が違います。",
-    "FLOW_NODE_NEEDS_ACTION": "先にノード「{{node}}」を再実行するか成功扱いにしてください。"
+    "FLOW_NODE_NEEDS_ACTION": "先にノード「{{node}}」を再実行するか成功扱いにしてください。",
+    "FLOW_TRAVERSAL_LIMIT": "戻りの回数が上限（{{max}}）に達しました。",
+    "FLOW_BRANCH_NO_MATCH": "一致する条件がなく、既定の出口もありません。",
+    "FLOW_LOOP_ITEMS_INVALID": "ループの反復対象が一覧ではありません。",
+    "FLOW_LOOP_ITERATION_FAILED": "{{index}} 番目の反復が失敗しました。",
+    "FLOW_SUBFLOW_FAILED": "サブフローが失敗しました。",
+    "FLOW_SUBFLOW_MISSING": "参照しているフロー「{{ref}}」がこの実行に含まれていません。",
+    "FLOW_PASS_RESET": "新しい周回に置き換えられました。",
+    "FLOW_RUN_STUCK": "続行できるノードがありません。",
+    "FLOW_OUTPUT_UNRESOLVED": "出力「{{output}}」を求められませんでした。"
   },
   "runError": {
     "FLOW_PROJECT_INVALID": "フォルダを使用できません。",
