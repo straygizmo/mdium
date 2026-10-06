@@ -343,12 +343,15 @@ export interface NodeRunView { nodeKey: string; status: NodeRunStatus; attempt: 
 | running → awaiting_approval | 承認ノードの開始、またはコマンドが `outcome: needs_approval` を報告 |
 | awaiting_approval → succeeded | 承認操作（出口は選んだ選択肢） |
 | running → retry_wait → ready | 失敗し `retry.max` が残っている（`backoff` 待ち） |
-| running → cancelled | 中止、またはノードのタイムアウト（理由 `FLOW_NODE_TIMEOUT`、その後 `failed` 扱いで再試行規則に従う） |
+| running → cancelled | 中止 |
+| running → failed | ノードのタイムアウト（理由 `FLOW_NODE_TIMEOUT`。プロセスツリーを終了したうえで、失敗として再試行規則（`retry.on: timeout`）に従う） |
+| running → ready | 停止要求で区切りに達した（`outcome: stopped`、理由 `FLOW_NODE_STOPPED`）、または停止の猶予切れで打ち切った（理由 `FLOW_STOP_GRACE_EXCEEDED`）。再開すると同じノードを次の試行として実行する |
 | running → interrupted | 起動時の回復で再接続できなかった |
 | failed / interrupted / cancelled → ready | 利用者の「このノードから再実行」 |
 | failed → succeeded | 利用者の「成功扱いにする」（出力は空。下流で参照されると警告） |
 
 - 再試行回数は `nodeRun` の連番として数え、重ね表示に出す（6 章）。
+- 承認ノードは `ready → running → awaiting_approval` と進む。承認待ちの間も、他の独立したノードは実行できる（実行は直列）。
 - ループ: `loop` ノード自身は本体の反復をすべて管理する親として `running` を保ち、各反復の本体ノードは `nodeKey` で区別される。`while` は各反復の終了後に `until` を評価する。`maxIterations` に達したら `succeeded`（出力 `limitReached: true`）とし、失敗にはしない（上限到達を失敗とするかは `branch` で表す）。
 
 ### 4.4 イベントとチェックポイント
@@ -388,6 +391,11 @@ export interface NodeRunView { nodeKey: string; status: NodeRunStatus; attempt: 
 - **エージェントノードは既存の不変条件を保つ**（ターンはアプリのプロセスを越えない）。起動時の回復で `interrupted` とし、自動では再実行しない（既存の `ATTENTION_INTERRUPTED` と同じ考え方。ターンの途中から再開する手段がなく、無言の再実行は費用と副作用を生むため）。
 - 承認待ちはプロセスを持たないので、再起動後もそのまま `awaiting_approval` に戻る。
 - 再開は「最後の確定状態からの続き」とする。同じ周回（2.4）で `succeeded` のノードは再実行しない（後退エッジによる新しい周回での再実行は別扱い）。`interrupted` / `failed` のノードは利用者の操作で `ready` に戻す。外部プロジェクト側の冪等性（既にできた成果物を飛ばす）を前提にし、MDium は成果物の有無を判断しない。
+- 利用者の操作（PR 3a で実装）:
+  - 再開（`resume`）: `paused` / `interrupted` / `failed` の実行（および再起動後にドライバのない `awaiting_approval` の実行）を続ける。`interrupted` / `cancelled` のノード、または `failure` 出口のない `failed` のノードが残っていれば拒否する（`FLOW_NODE_NEEDS_ACTION`）。STOP ファイルは再開時に消す。
+  - このノードから再実行（`rerun_node`）: `interrupted` / `cancelled` / `failure` 出口のない `failed` のノードを `ready` に戻し、ほかに対応の要るノードがなければ続ける。`failure` 出口で処理済みの失敗は下流が進んでいるため対象外。
+  - 成功扱い（`mark_succeeded`）: `failure` 出口のない `failed` のノードを `succeeded`（出口 `success`、出力は空）にして続ける。
+- アプリ終了時に実行中のノードがなければ、実行の状態は変えない（承認待ちはそのまま残る）。実行中のノードがあれば、そのノードと実行を `interrupted` にする（PR 3a。PR 3b 以降は切り離したプロセスを残して再接続する）。
 
 ### 4.7 停止・中止・タイムアウト
 
@@ -520,6 +528,12 @@ pub trait ApprovalNotifier: Send + Sync {
 
 - コマンドは利用者が書いた（またはリポジトリに入っている）フロー定義に従い、利用者の権限でそのまま実行する。サンドボックスはしない。
 - そのため、**フロー定義ファイルを初めて実行する前、および前回の実行から内容が変わったときは、実行するコマンドの一覧（展開前の argv）を表示して確認を求める**。確認済みの記録はフローのパスと内容ハッシュでマシンごとの設定に保存する（リポジトリを開いただけでコマンドが走らないようにする。既存の定期 JOB の有効化と同じ考え方）。
+  - 一覧はバックエンドがファイルから作る（UI からの入力は使わない）。確認と開始はどちらも内容の SHA-256 を受け取り、開始時はファイルを 1 回だけ読み、そのバイト列をハッシュ・解析・実行に使う（確認後のすり替えを防ぐ）。保存先は `%LOCALAPPDATA%/mdium/flow-command-confirmations.json`（OS の local data ディレクトリ）。
+  - 確認した一覧が実行内容を決めるように、**実行するプログラム（argv の先頭）と `shell: true` の文字列にはテンプレートを使えない**（開始時に `FLOW_RUN_UNSAFE_TEMPLATE`）。引数・作業ディレクトリ・環境変数のテンプレートは使えるが、確認画面ではテンプレートを含むことを示す。
+  - シェル（`shell: true`）でパラメータを使う場合は環境変数で渡す。ただし Windows の `cmd` では `%VAR%` の展開が構文解析の前に行われるため、値がそのまま構文として解釈されうる。信頼できない値を渡すときは argv 形式を使う。
+  - コマンドは MDium の環境変数を引き継ぐ（PATH や利用者の API キーを含む）。外部プロジェクトの CLI を動かすための前提であり、確認画面でもその旨を示す。
+  - 再開・ノードの再実行・再起動後の承認による続行も、実行が保存しているフロー定義（`run.json`）の内容ハッシュが確認済みであることを要する。`.mdium/flow-runs/` がリポジトリに含まれていても、`pending` の実行を自動では始めない（開始は利用者の再開操作による）。
+  - `experimentalFlows` はフロントエンドの設定で、バックエンドからは見えない。実行を実際に止めているのは、この確認の記録である。
 
 ### 7.3 組込みアクション
 
@@ -731,14 +745,17 @@ edges:
 |---|---|---|---|
 | 1 | 定義モデル・解析・検証 | `src-tauri/src/flow/{model,parse,validate,template,condition}.rs`、TS 型、`flow_list` / `flow_load` / `flow_validate` コマンド、ゴールデンファイルのテスト | なし（内部） |
 | 2 | 読み取り専用ビューア | `src/features/flow/`、アクティビティバーの入口（試験的フラグ）、elkjs レイアウト（Worker）、ノード種別ごとの描画、テーマトークン、i18n | フロー定義の閲覧と検証エラーの表示 |
-| 3 | エンジンの核 | 実行ストア（`events.jsonl` / `state.json`）、実行・ノードの状態遷移、スケジューラ（直列）、`command`（`detach`、ラッパー、再接続、プロトコル `mdium-v1`）、`approval`、停止・中止・タイムアウト、起動時の回復、コマンドの初回確認（7.2）、承認通知の拡張点（6.5、アプリ内のみ）、最小の実行 UI（開始・停止・承認・ログ） | 直列のコマンドフローの実行 |
+| 3a | エンジンの核（バックエンド） | 実行ストア（`events.jsonl` / `state.json`）、実行・ノードの状態遷移、スケジューラ（直列）、`command`（子プロセス、プロトコル `mdium-v1`、`retry`、タイムアウト）、`approval`、`when`、停止・中止・停止の猶予、フロー全体の予算（`limits.budgetUsd`）による承認待ち、起動時の回復（実行中は `interrupted`）、コマンドの初回確認（7.2）、承認通知の拡張点（6.5）、Tauri コマンドとイベント | なし（UI は 3c） |
+| 3b | 切り離したプロセスと再接続 | `detach`（ラッパー、`exit.json`）、pid とプロセス作成時刻による再接続、アプリ終了時にプロセスを残す | 再起動を越える長時間コマンド |
+| 3c | 最小の実行 UI | 開始（引数フォーム、コマンドの確認）、停止・再開・中止、承認、ノードの再実行・成功扱い、ログ表示、`.gitignore` の案内 | 直列のコマンドフローの実行 |
 | 4 | 制御構造と並列度 | `loop`（`foreach` / `while`、`parallelism`）、`branch`、`subflow`、後退エッジと `maxTraversals`、`retry`、`concurrencyKey`、アプリ全体の上限 | 外部プロジェクトのフロー（9.2 相当） |
 | 5 | エージェントノードと費用 | `agent`（既存ランナー・ガードの再利用）、`cost` の集計、予算による承認待ち、見積もりの合計 | LLM を含むフロー |
 | 6 | 重ね表示と実行履歴 | ノードの状態・反復・再試行・費用の重ね表示、ノードのドロワー（実行一覧、出力、成果物、ログ末尾）、実行一覧のフィルタと削除 | 長時間実行の監視 |
 | 7 | エディタ | ノードの追加・削除・接続、属性パネル、条件のフォーム、自動整列、元に戻す、YAML の分割表示、外部変更の検知 | フローの作成・編集 |
 | 8 | 開発ワークフローのテンプレート | 8.2 の組込みアクション、`dev-workflow` テンプレート、同等性の対応表、新旧の同等性テスト | 新エンジンでの開発ワークフロー（試験的） |
 
-- PR 3 と 4 はエンジンの規模が大きいため、実装計画の段階で必要ならさらに分ける。
+- PR 3 は規模が大きいため 3a / 3b / 3c に分けた（3b・3c は前の PR に積み重ねる）。ノード単位の予算（`cost.budgetUsd`）は PR 5、アプリ全体の同時実行数の上限と `concurrencyKey` は PR 4 で扱う。直列実行の間は `limits.maxConcurrentNodes` は効かない。
+- PR 4 も実装計画の段階で必要ならさらに分ける。
 - 旧エンジンの退役は本仕様の範囲外とし、8.3 を満たした後に別の仕様・PR で行う。
 
 ---

@@ -93,6 +93,8 @@ pub fn run() {
             // The one workflow orchestrator of this process.
             let workflow_state = commands::workflow::create_state(app.handle());
             app.manage::<commands::workflow::WorkflowState>(workflow_state);
+            let flow_engine = commands::flow_run::create_state(app.handle());
+            app.manage::<commands::flow_run::FlowEngineState>(flow_engine);
             // Start local HTTP bridge for MCP server callback
             let handle = app.handle().clone();
             let bridge_state = app.state::<HttpBridgeState>().inner().clone();
@@ -390,6 +392,19 @@ pub fn run() {
             commands::flow::flow_list,
             commands::flow::flow_load,
             commands::flow::flow_validate,
+            commands::flow_run::flow_command_review,
+            commands::flow_run::flow_confirm_commands,
+            commands::flow_run::flow_run_start,
+            commands::flow_run::flow_run_list,
+            commands::flow_run::flow_run_get,
+            commands::flow_run::flow_run_stop,
+            commands::flow_run::flow_run_resume,
+            commands::flow_run::flow_run_cancel,
+            commands::flow_run::flow_run_approve,
+            commands::flow_run::flow_run_rerun_node,
+            commands::flow_run::flow_run_mark_succeeded,
+            commands::flow_run::flow_run_delete,
+            commands::flow_run::flow_run_log,
         ])
         .on_window_event(|window, event| {
             // Intake windows do not outlive the main window: closing it
@@ -409,6 +424,10 @@ pub fn run() {
                 commands::workflow::cancel_intake_turns();
                 if let Some(state) = app.try_state::<commands::workflow::WorkflowState>() {
                     state.shutdown(workflow::orchestrator::SHUTDOWN_WAIT);
+                }
+                // Flow runs: kill running commands and record `interrupted`.
+                if let Some(engine) = app.try_state::<commands::flow_run::FlowEngineState>() {
+                    engine.shutdown(commands::flow_run::SHUTDOWN_WAIT);
                 }
             }
         });

@@ -18,7 +18,8 @@ pub const FLOW_SUBFLOW_RECURSION: &str = "FLOW_SUBFLOW_RECURSION";
 pub const FLOW_PATH_OUTSIDE_PROJECT: &str = "FLOW_PATH_OUTSIDE_PROJECT";
 pub const FLOW_TEMPLATE_INVALID: &str = "FLOW_TEMPLATE_INVALID";
 pub const FLOW_ACTION_UNKNOWN: &str = "FLOW_ACTION_UNKNOWN";
-/// Checked at run start (PR 3/5); defined here so the code list is complete.
+/// Checked at run start once agent nodes run (PR 5); defined so the code list is complete.
+#[allow(dead_code)]
 pub const FLOW_PROVIDER_UNAVAILABLE: &str = "FLOW_PROVIDER_UNAVAILABLE";
 
 // Errors added while implementing 2.8 (more precise than the spec's list).
