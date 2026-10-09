@@ -4,6 +4,8 @@ import { showConfirm } from "@/stores/dialog-store";
 import type { FlowDef } from "@/shared/types/flow";
 import {
   ACTIVE_RUN_STATUSES,
+  isLiveInstance,
+  splitNodeKey,
   type ApprovalRequest,
   type FlowRunError,
   type NodeState,
@@ -218,8 +220,13 @@ function RunDetail({ projectRoot, snapshot, onAct, onLog }: RunDetailProps) {
   const canResume = !active && ["pending", "paused", "interrupted", "failed", "awaiting_approval"].includes(status);
   const canCancel = status !== "completed" && status !== "cancelled";
   const canDelete = !active && !isActive && status !== "pending";
-  const nodeIsCommand = (key: string) => meta.flow.nodes.some((n) => n.id === key && n.kind === "command");
-  const hasFailureEdge = (key: string) => (meta.flow.edges ?? []).some((e) => e.from === key && e.port === "failure");
+  /** Top-level definitions (nested nodes are labelled by their key). */
+  const rootDef = (key: string) => (splitNodeKey(key).prefix === "" ? meta.flow.nodes.find((n) => n.id === splitNodeKey(key).id) : undefined);
+  const isApproval = (key: string) => rootDef(key)?.kind === "approval";
+  // Nested scopes' edges are not known here; the backend rejects what it cannot do.
+  const hasFailureEdge = (key: string) =>
+    splitNodeKey(key).prefix === "" &&
+    (meta.flow.edges ?? []).some((e) => e.from === splitNodeKey(key).id && e.port === "failure" && e.maxTraversals === undefined);
 
   return (
     <div className="flow-run">
@@ -280,35 +287,37 @@ function RunDetail({ projectRoot, snapshot, onAct, onLog }: RunDetailProps) {
       )}
       <h4 className="flow-run__heading">{t("run.nodes")}</h4>
       <ul className="flow-run__nodes">
-        {meta.flow.nodes.map((def) => {
-          const node: NodeState | undefined = state.nodes[def.id];
-          if (!node) return null;
+        {Object.entries(state.nodes).map(([key, node]: [string, NodeState]) => {
+          const def = rootDef(key);
           const needsAction =
             !isActive &&
             !active &&
-            (node.status === "interrupted" || node.status === "cancelled" || (node.status === "failed" && !hasFailureEdge(def.id)));
+            isLiveInstance(state, key) &&
+            (node.status === "interrupted" || node.status === "cancelled" || (node.status === "failed" && !hasFailureEdge(key)));
           return (
-            <li key={def.id} className={`flow-run__node flow-run__node--${node.status}`}>
+            <li key={key} className={`flow-run__node flow-run__node--${node.status}`}>
               <div className="flow-run__node-head">
-                <span className="flow-run__node-name">{def.name ?? def.id}</span>
+                <span className="flow-run__node-name" title={key}>
+                  {def?.name && splitNodeKey(key).pass === 1 ? def.name : key}
+                </span>
                 <span className="flow-run__node-status">{t(`nodeStatus.${node.status}`)}</span>
                 {node.attempt > 1 && <span className="flow-run__muted">{t("run.attempt", { n: node.attempt })}</span>}
               </div>
               {node.progress && <div className="flow-run__muted">{node.progress.text}</div>}
               {node.reason && <div className="flow-run__reason">{describeReason(t, node.reason)}</div>}
               <div className="flow-run__node-actions">
-                {nodeIsCommand(def.id) && node.attempt > 0 && (
-                  <button type="button" onClick={() => onLog(def.id, node.attempt)}>
+                {!isApproval(key) && node.attempt > 0 && (node.process || node.startedAt) && (
+                  <button type="button" onClick={() => onLog(key, node.attempt)}>
                     {t("run.log")}
                   </button>
                 )}
                 {needsAction && (
-                  <button type="button" onClick={() => void onAct(() => flowRunApi.rerunNode(projectRoot, runId, def.id))}>
+                  <button type="button" onClick={() => void onAct(() => flowRunApi.rerunNode(projectRoot, runId, key))}>
                     {t("run.rerun")}
                   </button>
                 )}
                 {needsAction && node.status === "failed" && (
-                  <button type="button" onClick={() => void onAct(() => flowRunApi.markSucceeded(projectRoot, runId, def.id))}>
+                  <button type="button" onClick={() => void onAct(() => flowRunApi.markSucceeded(projectRoot, runId, key))}>
                     {t("run.markSucceeded")}
                   </button>
                 )}

@@ -465,10 +465,17 @@ fn start_rejects_invalid_unsupported_or_unsafe_flows() {
         vec![json!({ "id": "a", "kind": "command", "run": [] })],
         vec![],
     );
-    let sha = f.engine.review_commands(&f.root, &invalid).unwrap().sha256;
+    // Invalid flows can be neither reviewed nor started.
     assert_eq!(
         f.engine
-            .start(&f.root, &invalid, &BTreeMap::new(), &sha)
+            .review_commands(&f.root, &invalid)
+            .unwrap_err()
+            .code,
+        FLOW_FILE_INVALID
+    );
+    assert_eq!(
+        f.engine
+            .start(&f.root, &invalid, &BTreeMap::new(), "x")
             .unwrap_err()
             .code,
         FLOW_FILE_INVALID
@@ -1013,6 +1020,8 @@ fn crash_recovery_marks_running_runs_interrupted() {
         params: BTreeMap::new(),
         created_at: "2026-10-06T00:00:00.000Z".into(),
         started_by: "user".into(),
+        subflows: BTreeMap::new(),
+        refs: BTreeMap::new(),
     };
     store.create(&meta).unwrap();
     let meta = store.load_meta(&run_id).unwrap();
@@ -1191,6 +1200,8 @@ fn run_data_from_elsewhere_never_executes_without_confirmation() {
             params: BTreeMap::new(),
             created_at: "2026-10-06T00:00:00.000Z".into(),
             started_by: "someone".into(),
+            subflows: BTreeMap::new(),
+            refs: BTreeMap::new(),
         })
         .unwrap();
     // Listing (first contact with the project) does not start it.
@@ -1403,6 +1414,8 @@ fn reconnect_rejects_a_reused_pid_and_marks_the_node_interrupted() {
             params: BTreeMap::new(),
             created_at: "2026-10-06T00:00:00.000Z".into(),
             started_by: "user".into(),
+            subflows: BTreeMap::new(),
+            refs: BTreeMap::new(),
         })
         .unwrap();
     // `a` "runs" under this test process's pid, but with another creation time.
@@ -1511,4 +1524,718 @@ fn cancel_after_reconnect_kills_the_detached_tree() {
         !process_alive(grandchild),
         "grandchild {grandchild} survived"
     );
+}
+
+// ------------------------------------- PR 4a: branches, passes, loops, sub-flows
+
+fn keys_with_status(snap: &RunSnapshot, status: NodeStatus) -> Vec<String> {
+    snap.state
+        .nodes
+        .iter()
+        .filter(|(_, n)| n.status == status)
+        .map(|(k, _)| k.clone())
+        .collect()
+}
+
+fn lines(path: &Path) -> Vec<String> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .map(String::from)
+        .collect()
+}
+
+#[test]
+fn branches_route_by_condition() {
+    let f = fixture();
+    let rel = |score: i64| {
+        write_flow(
+            &f.root,
+            &format!("branch{score}"),
+            json!({}),
+            vec![
+                cmd(
+                    "measure",
+                    json!([ev(
+                        json!({ "v": 1, "type": "output", "key": "score", "value": score })
+                    )]),
+                ),
+                json!({ "id": "gate", "kind": "branch", "cases": [ { "when": { "ref": "nodes.measure.outputs.score", "op": "<", "value": 7 }, "port": "low" } ], "default": "ok" }),
+                cmd("fix", json!([])),
+                cmd("publish", json!([])),
+            ],
+            vec![
+                json!({ "from": "measure", "to": "gate" }),
+                json!({ "from": "gate", "to": "fix", "port": "low" }),
+                json!({ "from": "gate", "to": "publish", "port": "ok" }),
+            ],
+        )
+    };
+    let run_id = f.confirm_and_start(&rel(3), json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(node(&snap, "gate").port.as_deref(), Some("low"));
+    assert_eq!(node(&snap, "fix").status, NodeStatus::Succeeded);
+    assert_eq!(node(&snap, "publish").status, NodeStatus::Skipped);
+    let run_id = f.confirm_and_start(&rel(9), json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(node(&snap, "gate").port.as_deref(), Some("ok"));
+    assert_eq!(node(&snap, "fix").status, NodeStatus::Skipped);
+    assert_eq!(node(&snap, "publish").status, NodeStatus::Succeeded);
+}
+
+/// gen → gate (branch) –retry→ gen (back-edge); gate –good→ done.
+fn retry_cycle_flow(f: &Fixture, name: &str, max: u32, good_on: &str, order: &Path) -> String {
+    write_flow(
+        &f.root,
+        name,
+        json!({}),
+        vec![
+            cmd(
+                "gen",
+                json!([
+                    { "append_key_to": order.to_string_lossy() },
+                    { "emit_if_key_contains": { "needle": good_on, "event": { "v": 1, "type": "output", "key": "ok", "value": true } } },
+                ]),
+            ),
+            json!({ "id": "gate", "kind": "branch", "cases": [ { "when": { "ref": "nodes.gen.outputs.ok", "op": "==", "value": true }, "port": "good" } ], "default": "retry" }),
+            {
+                let mut done = cmd(
+                    "done",
+                    json!([{ "append_key_to": order.to_string_lossy() }]),
+                );
+                done["name"] = json!("Done");
+                done
+            },
+        ],
+        vec![
+            json!({ "from": "gen", "to": "gate" }),
+            json!({ "from": "gate", "to": "gen", "port": "retry", "maxTraversals": max }),
+            json!({ "from": "gate", "to": "done", "port": "good" }),
+        ],
+    )
+}
+
+#[test]
+fn back_edges_open_new_passes_and_rearm_skipped_nodes() {
+    let f = fixture();
+    let order = f.root.join("order.txt");
+    let rel = retry_cycle_flow(&f, "cycle", 5, "@3", &order);
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    // gen ran in three passes, then the downstream node (skipped twice) ran once.
+    assert_eq!(lines(&order), vec!["gen", "gen@2", "gen@3", "done"]);
+    assert_eq!(node(&snap, "gen").status, NodeStatus::Succeeded);
+    assert_eq!(node(&snap, "gate").port.as_deref(), Some("retry"));
+    assert_eq!(node(&snap, "gate@3").port.as_deref(), Some("good"));
+    assert_eq!(node(&snap, "done").status, NodeStatus::Succeeded);
+    assert_eq!(snap.state.traversals["#1"], 2);
+    assert_eq!(snap.state.pass("", "gen"), 3);
+    // `done` waited for the latest pass of `gate` instead of being skipped early.
+    let skipped_early = f.events(&run_id).iter().any(|e| {
+        e.node_key.as_deref() == Some("done")
+            && matches!(
+                e.body,
+                EventBody::NodeStatus {
+                    to: NodeStatus::Skipped,
+                    ..
+                }
+            )
+    });
+    assert!(!skipped_early);
+}
+
+#[test]
+fn exhausted_back_edge_fails_the_source() {
+    let f = fixture();
+    let order = f.root.join("order.txt");
+    let rel = retry_cycle_flow(&f, "limit", 1, "@9", &order);
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Failed);
+    assert_eq!(lines(&order), vec!["gen", "gen@2"]);
+    let gate = node(&snap, "gate@2");
+    assert_eq!(gate.status, NodeStatus::Failed);
+    assert_eq!(gate.reason.as_ref().unwrap().code, FLOW_TRAVERSAL_LIMIT);
+    assert_eq!(snap.state.reason.as_ref().unwrap().params["node"], "gate@2");
+    assert_eq!(
+        node(&snap, "done").status,
+        NodeStatus::Pending,
+        "the run failed first"
+    );
+}
+
+#[test]
+fn review_rework_redesign_then_merge() {
+    // The dev-workflow shape: review -rework-> design (back-edge), review -approve-> merge.
+    let f = fixture();
+    let order = f.root.join("order.txt");
+    let step = |id: &str| cmd(id, json!([{ "append_key_to": order.to_string_lossy() }]));
+    let rel = write_flow(
+        &f.root,
+        "dev",
+        json!({}),
+        vec![
+            step("prepare"),
+            step("design"),
+            json!({ "id": "review", "kind": "approval", "options": ["approve", "rework"] }),
+            step("merge"),
+            step("cleanup"),
+        ],
+        vec![
+            json!({ "from": "prepare", "to": "design" }),
+            json!({ "from": "design", "to": "review" }),
+            json!({ "from": "review", "to": "design", "port": "rework", "maxTraversals": 3 }),
+            json!({ "from": "review", "to": "merge", "port": "approve" }),
+            json!({ "from": "merge", "to": "cleanup" }),
+        ],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    f.wait_for(&run_id, "first review", |s| {
+        node(s, "review").status == NodeStatus::AwaitingApproval
+    });
+    f.engine
+        .approve(&f.root, &run_id, Some("review"), "rework", None)
+        .unwrap();
+    f.wait_for(&run_id, "second review", |s| {
+        s.state
+            .nodes
+            .get("review@2")
+            .is_some_and(|n| n.status == NodeStatus::AwaitingApproval)
+    });
+    // The superseded first pass can no longer be answered.
+    assert_eq!(
+        f.engine
+            .approve(&f.root, &run_id, Some("review"), "approve", None)
+            .unwrap_err()
+            .code,
+        FLOW_APPROVAL_INVALID
+    );
+    f.engine
+        .approve(&f.root, &run_id, Some("review@2"), "approve", None)
+        .unwrap();
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(
+        lines(&order),
+        vec!["prepare", "design", "design@2", "merge", "cleanup"]
+    );
+    assert_eq!(node(&snap, "merge").status, NodeStatus::Succeeded);
+    assert_eq!(
+        node(&snap, "prepare").attempt,
+        1,
+        "nodes outside the cycle keep their record"
+    );
+}
+
+fn foreach_flow(
+    f: &Fixture,
+    name: &str,
+    items: Value,
+    max: u32,
+    extra: Value,
+    body_steps: Value,
+) -> String {
+    let mut lp = json!({
+        "id": "docs", "kind": "loop", "mode": "foreach", "as": "doc",
+        "items": "${{ nodes.collect.outputs.docs }}", "maxIterations": max,
+        "body": {
+            "nodes": [ cmd("proc", body_steps) ],
+            "outputs": { "item": "${{ nodes.proc.outputs.item }}", "doc": "${{ doc }}" }
+        }
+    });
+    for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+        lp[k] = v;
+    }
+    write_flow(
+        &f.root,
+        name,
+        json!({}),
+        vec![
+            cmd(
+                "collect",
+                json!([ev(
+                    json!({ "v": 1, "type": "output", "key": "docs", "value": items })
+                )]),
+            ),
+            lp,
+            cmd("after", json!([])),
+        ],
+        vec![
+            json!({ "from": "collect", "to": "docs" }),
+            json!({ "from": "docs", "to": "after" }),
+        ],
+    )
+}
+
+#[test]
+fn foreach_runs_each_item_in_its_own_scope() {
+    let f = fixture();
+    let rel = foreach_flow(
+        &f,
+        "each",
+        json!(["a", "b", "c"]),
+        10,
+        json!({}),
+        json!([{ "emit_input": true }]),
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    for (i, item) in ["a", "b", "c"].iter().enumerate() {
+        let key = format!("docs[{i}]/proc");
+        assert_eq!(node(&snap, &key).outputs["item"], json!(item), "{key}");
+        assert_eq!(
+            snap.state.scopes[&format!("docs[{i}]/")].status,
+            ScopeStatus::Completed
+        );
+    }
+    let docs = node(&snap, "docs");
+    assert_eq!(docs.outputs["iterations"], json!(3));
+    assert_eq!(docs.outputs["limitReached"], json!(false));
+    assert_eq!(
+        docs.outputs["results"][1],
+        json!({ "item": "b", "doc": "b" })
+    );
+    assert_eq!(
+        snap.state.loops["docs"].items,
+        vec![json!("a"), json!("b"), json!("c")]
+    );
+    assert_eq!(node(&snap, "after").status, NodeStatus::Succeeded);
+    // Logs are found by instance key.
+    let dir = RunStore::new(&f.root)
+        .node_attempt_dir(&run_id, "docs[2]/proc", 1)
+        .unwrap();
+    assert!(dir.join("stdout.log").exists(), "{}", dir.display());
+    assert!(f
+        .engine
+        .log(&f.root, &run_id, "docs[2]/proc", 1, "stdout", 100)
+        .is_ok());
+
+    // More items than maxIterations: the first ones run, limitReached is set.
+    let rel = foreach_flow(
+        &f,
+        "capped",
+        json!(["a", "b", "c"]),
+        2,
+        json!({}),
+        json!([]),
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(node(&snap, "docs").outputs["iterations"], json!(2));
+    assert_eq!(node(&snap, "docs").outputs["limitReached"], json!(true));
+    assert!(!snap.state.nodes.contains_key("docs[2]/proc"));
+}
+
+#[test]
+fn failing_iterations_stop_or_continue() {
+    let f = fixture();
+    let body = json!([{ "fail_if_item": "b" }]);
+    let rel = foreach_flow(
+        &f,
+        "stop",
+        json!(["a", "b", "c"]),
+        10,
+        json!({}),
+        body.clone(),
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Failed);
+    assert_eq!(
+        node(&snap, "docs").reason.as_ref().unwrap().code,
+        FLOW_LOOP_ITERATION_FAILED
+    );
+    assert!(
+        !snap.state.nodes.contains_key("docs[2]/proc"),
+        "no iteration after the failure"
+    );
+    assert_eq!(snap.state.scopes["docs[1]/"].status, ScopeStatus::Failed);
+
+    let rel = foreach_flow(
+        &f,
+        "cont",
+        json!(["a", "b", "c"]),
+        10,
+        json!({ "onItemFailure": "continue" }),
+        body,
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(node(&snap, "docs").outputs["failedIterations"], json!(1));
+    assert_eq!(node(&snap, "docs[2]/proc").status, NodeStatus::Succeeded);
+}
+
+#[test]
+fn while_loops_until_a_condition_or_the_limit() {
+    let f = fixture();
+    let flow = |name: &str, max: u32| {
+        write_flow(
+            &f.root,
+            name,
+            json!({}),
+            vec![json!({
+                "id": "rounds", "kind": "loop", "mode": "while", "maxIterations": max,
+                "until": { "ref": "iteration.outputs.n", "op": ">=", "value": 3 },
+                "body": { "nodes": [ cmd("step", json!([{ "emit_input": true }])) ], "outputs": { "n": "${{ nodes.step.outputs.n }}" } }
+            })],
+            vec![],
+        )
+    };
+    let run_id = f.confirm_and_start(&flow("until", 10), json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(node(&snap, "rounds").outputs["iterations"], json!(3));
+    assert_eq!(node(&snap, "rounds").outputs["limitReached"], json!(false));
+    assert_eq!(node(&snap, "rounds[2]/step").outputs["index"], json!(2));
+    let run_id = f.confirm_and_start(&flow("cap", 2), json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(node(&snap, "rounds").outputs["iterations"], json!(2));
+    assert_eq!(node(&snap, "rounds").outputs["limitReached"], json!(true));
+}
+
+/// A child flow file: echoes its `x` parameter as output `res`.
+fn write_child(f: &Fixture, name: &str, extra_step: Option<Value>) -> String {
+    let mut steps = vec![json!({ "emit_arg_as": "arg" })];
+    steps.extend(extra_step);
+    let mut echo = cmd("echo", Value::Array(steps));
+    echo["run"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("${{ params.x }}"));
+    write_flow(
+        &f.root,
+        name,
+        json!({ "params": { "x": { "type": "string", "required": true } }, "outputs": { "res": "${{ nodes.echo.outputs.arg }}" } }),
+        vec![echo],
+        vec![],
+    )
+}
+
+#[test]
+fn subflows_run_in_their_own_scope_with_params_and_outputs() {
+    let f = fixture();
+    write_child(&f, "child", None);
+    let mut use_it = cmd("use", json!([{ "emit_arg_as": "got" }]));
+    use_it["run"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("${{ nodes.sub.outputs.res }}"));
+    let rel = write_flow(
+        &f.root,
+        "parent",
+        json!({ "params": { "v": { "type": "string", "default": "hello" } } }),
+        vec![
+            json!({ "id": "sub", "kind": "subflow", "flow": "./child.flow.json", "params": { "x": "${{ params.v }}" } }),
+            use_it,
+        ],
+        vec![json!({ "from": "sub", "to": "use" })],
+    );
+    // The review covers the child's command, labelled with its file.
+    let review = f.engine.review_commands(&f.root, &rel).unwrap();
+    assert_eq!(review.commands.len(), 2);
+    assert!(review
+        .commands
+        .iter()
+        .any(|c| c.file == ".mdium/flows/child.flow.json" && c.node_id == "echo"));
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(node(&snap, "sub/echo").outputs["arg"], json!("hello"));
+    assert_eq!(node(&snap, "sub").outputs["res"], json!("hello"));
+    assert_eq!(node(&snap, "use").outputs["got"], json!("hello"));
+    assert_eq!(
+        snap.meta.subflows.len(),
+        1,
+        "the child is part of the snapshot"
+    );
+
+    // Changing the child invalidates the confirmation of the parent.
+    let before = f.engine.review_commands(&f.root, &rel).unwrap();
+    assert!(before.confirmed);
+    write_child(&f, "child", Some(json!({ "sleep_ms": 1 })));
+    let after = f.engine.review_commands(&f.root, &rel).unwrap();
+    assert_ne!(after.sha256, before.sha256);
+    assert!(!after.confirmed);
+    assert_eq!(
+        f.engine
+            .start(&f.root, &rel, &BTreeMap::new(), &after.sha256)
+            .unwrap_err()
+            .code,
+        FLOW_COMMANDS_UNCONFIRMED
+    );
+}
+
+#[test]
+fn failing_subflow_follows_the_parent_failure_edge() {
+    let f = fixture();
+    write_child(&f, "bad", Some(json!({ "exit": 2 })));
+    let rel = write_flow(
+        &f.root,
+        "handled",
+        json!({}),
+        vec![
+            json!({ "id": "sub", "kind": "subflow", "flow": "./bad.flow.json", "params": { "x": "1" } }),
+            cmd("recover", json!([])),
+        ],
+        vec![json!({ "from": "sub", "to": "recover", "port": "failure" })],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(
+        node(&snap, "sub").reason.as_ref().unwrap().code,
+        FLOW_SUBFLOW_FAILED
+    );
+    assert_eq!(snap.state.scopes["sub/"].status, ScopeStatus::Failed);
+    assert_eq!(node(&snap, "recover").status, NodeStatus::Succeeded);
+}
+
+#[test]
+fn file_bodies_get_params_from_the_item() {
+    let f = fixture();
+    write_child(&f, "each", None);
+    let rel = write_flow(
+        &f.root,
+        "fileloop",
+        json!({}),
+        vec![
+            json!({ "id": "l", "kind": "loop", "mode": "foreach", "items": ["p", "q"], "maxIterations": 5, "body": "./each.flow.json", "params": { "x": "${{ item }}" } }),
+        ],
+        vec![],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(node(&snap, "l[0]/echo").outputs["arg"], json!("p"));
+    assert_eq!(node(&snap, "l[1]/echo").outputs["arg"], json!("q"));
+    assert_eq!(
+        node(&snap, "l").outputs["results"],
+        json!([{ "res": "p" }, { "res": "q" }])
+    );
+}
+
+#[test]
+fn rerunning_a_failed_loop_starts_a_new_pass() {
+    let f = fixture();
+    let marker = f.root.join("broken");
+    std::fs::write(&marker, "").unwrap();
+    let rel = foreach_flow(
+        &f,
+        "rerun",
+        json!(["a", "b"]),
+        10,
+        json!({}),
+        json!([{ "fail_if_file_exists": marker.to_string_lossy() }]),
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    f.wait_settled(&run_id, RunStatus::Failed);
+    std::fs::remove_file(&marker).unwrap();
+    // The inner node belongs to a finished iteration scope: only the loop can be re-run.
+    assert_eq!(
+        f.engine
+            .rerun_node(&f.root, &run_id, "docs[0]/proc")
+            .unwrap_err()
+            .code,
+        FLOW_NODE_INVALID_STATE
+    );
+    f.engine.rerun_node(&f.root, &run_id, "docs").unwrap();
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(node(&snap, "docs@2").status, NodeStatus::Succeeded);
+    assert_eq!(node(&snap, "docs@2[1]/proc").status, NodeStatus::Succeeded);
+    assert_eq!(
+        node(&snap, "docs").status,
+        NodeStatus::Failed,
+        "the old pass is history"
+    );
+    assert!(keys_with_status(&snap, NodeStatus::Running).is_empty());
+}
+
+#[test]
+fn interrupted_iteration_resumes_after_restart() {
+    let f = fixture();
+    let rel = foreach_flow(
+        &f,
+        "resume",
+        json!(["a"]),
+        10,
+        json!({}),
+        json!([{ "succeed_from_attempt": 2 }, { "sleep_ms": 30000 }]),
+    );
+    // Attached commands so the app exit interrupts them.
+    let path = f.root.join(&rel);
+    let mut def: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    def["nodes"][1]["body"]["nodes"][0]["detach"] = json!(false);
+    std::fs::write(&path, serde_json::to_vec_pretty(&def).unwrap()).unwrap();
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    f.wait_for(&run_id, "inner running", |s| {
+        s.state
+            .nodes
+            .get("docs[0]/proc")
+            .is_some_and(|n| n.process.is_some())
+    });
+    f.engine.shutdown(Duration::from_secs(10));
+    let restarted = make_engine(&f.config, f.sink.clone(), f.notifier.clone());
+    let snap = restarted.get(&f.root, &run_id).unwrap();
+    assert_eq!(snap.state.status, RunStatus::Interrupted);
+    assert_eq!(node(&snap, "docs[0]/proc").status, NodeStatus::Interrupted);
+    assert_eq!(
+        node(&snap, "docs").status,
+        NodeStatus::Running,
+        "the loop itself carries on"
+    );
+    let err = restarted.resume(&f.root, &run_id).unwrap_err();
+    assert_eq!(err.details[0].params["node"], "docs[0]/proc");
+    restarted
+        .rerun_node(&f.root, &run_id, "docs[0]/proc")
+        .unwrap();
+    assert!(restarted.wait_idle(&f.root, &run_id, Duration::from_secs(30)));
+    let snap = restarted.get(&f.root, &run_id).unwrap();
+    assert_eq!(snap.state.status, RunStatus::Completed, "{:#?}", snap.state);
+    assert_eq!(node(&snap, "docs[0]/proc").attempt, 2);
+}
+
+#[test]
+fn scoped_runs_replay_to_the_checkpoint() {
+    let f = fixture();
+    let order = f.root.join("order.txt");
+    let rel = retry_cycle_flow(&f, "replay", 5, "@2", &order);
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    f.wait_settled(&run_id, RunStatus::Completed);
+    let rel = foreach_flow(
+        &f,
+        "replay2",
+        json!(["a", "b"]),
+        10,
+        json!({}),
+        json!([{ "emit_input": true }]),
+    );
+    let loop_run = f.confirm_and_start(&rel, json!({}));
+    f.wait_settled(&loop_run, RunStatus::Completed);
+    let store = RunStore::new(&f.root);
+    for id in [run_id, loop_run] {
+        let meta = store.load_meta(&id).unwrap();
+        let state_file = store.run_dir(&id).unwrap().join("state.json");
+        let checkpoint: RunState =
+            serde_json::from_slice(&std::fs::read(&state_file).unwrap()).unwrap();
+        std::fs::remove_file(&state_file).unwrap();
+        assert_eq!(store.load_state(&id, &meta).unwrap(), checkpoint, "{id}");
+    }
+}
+
+#[test]
+fn nodes_skipped_before_a_back_edge_are_rearmed() {
+    // a -> b; b -x-> c (skipped when b takes y); b -y-> d; d -back-> a.
+    let f = fixture();
+    let order = f.root.join("order.txt");
+    let step = |id: &str, extra: Value| {
+        let mut steps = vec![json!({ "append_key_to": order.to_string_lossy() })];
+        if let Some(extra) = extra.as_array() {
+            steps.extend(extra.iter().cloned());
+        }
+        cmd(id, Value::Array(steps))
+    };
+    let rel = write_flow(
+        &f.root,
+        "rearm",
+        json!({}),
+        vec![
+            step(
+                "a",
+                json!([{ "emit_if_key_contains": { "needle": "@2", "event": { "v": 1, "type": "output", "key": "second", "value": true } } }]),
+            ),
+            json!({ "id": "b", "kind": "branch", "cases": [ { "when": { "ref": "nodes.a.outputs.second", "op": "==", "value": true }, "port": "x" } ], "default": "y" }),
+            step("c", json!([])),
+            step("d", json!([])),
+        ],
+        vec![
+            json!({ "from": "a", "to": "b" }),
+            json!({ "from": "b", "to": "c", "port": "x" }),
+            json!({ "from": "b", "to": "d", "port": "y" }),
+            json!({ "from": "d", "to": "a", "maxTraversals": 2 }),
+        ],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(lines(&order), vec!["a", "d", "a@2", "c"]);
+    let rearmed = f.events(&run_id).iter().any(|e| {
+        e.node_key.as_deref() == Some("c")
+            && matches!(
+                e.body,
+                EventBody::NodeStatus {
+                    from: NodeStatus::Skipped,
+                    to: NodeStatus::Pending,
+                    ..
+                }
+            )
+    });
+    assert!(rearmed, "c was skipped in pass 1 and re-armed");
+    assert_eq!(node(&snap, "c").status, NodeStatus::Succeeded);
+    assert_eq!(
+        node(&snap, "d").status,
+        NodeStatus::Succeeded,
+        "d keeps its pass-1 record"
+    );
+    assert_eq!(node(&snap, "d@2").status, NodeStatus::Skipped);
+}
+
+/// The sample flow for checking the run UI by hand is runnable as shipped.
+#[test]
+fn manual_check_sample_is_runnable() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/flows/valid/manual-check.flow.yaml");
+    let (flow, issues) = crate::flow::load::check_text(
+        &std::fs::read_to_string(&path).unwrap(),
+        crate::flow::parse::FlowFormat::Yaml,
+    );
+    assert!(issues.errors.is_empty(), "{:#?}", issues.errors);
+    let flow = flow.unwrap();
+    assert!(
+        crate::flow::run::prepare::check_runnable(&[("manual-check.flow.yaml", &flow)]).is_empty()
+    );
+}
+
+/// End-to-end run of the sample flow with PowerShell (slow; run with `--ignored`).
+#[cfg(windows)]
+#[test]
+#[ignore]
+fn manual_check_sample_runs_end_to_end() {
+    let f = fixture();
+    let dir = f.root.join(".mdium/flows");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/flows/valid/manual-check.flow.yaml"),
+        dir.join("manual-check.flow.yaml"),
+    )
+    .unwrap();
+    let rel = ".mdium/flows/manual-check.flow.yaml";
+    let run_id = f.confirm_and_start(rel, json!({}));
+    f.wait_for(&run_id, "work running", |s| {
+        s.state
+            .nodes
+            .get("work")
+            .is_some_and(|n| n.progress.is_some())
+    });
+    f.engine.stop(&f.root, &run_id).unwrap();
+    let snap = f.wait_settled(&run_id, RunStatus::Paused);
+    assert_eq!(
+        node(&snap, "work").reason.as_ref().unwrap().code,
+        FLOW_NODE_STOPPED
+    );
+    f.engine.resume(&f.root, &run_id).unwrap();
+    f.wait_for(&run_id, "review", |s| {
+        s.state.status == RunStatus::AwaitingApproval
+    });
+    f.engine
+        .approve(&f.root, &run_id, Some("review"), "rework", None)
+        .unwrap();
+    f.wait_for(&run_id, "second review", |s| {
+        s.state
+            .nodes
+            .get("review@2")
+            .is_some_and(|n| n.status == NodeStatus::AwaitingApproval)
+    });
+    f.engine
+        .approve(&f.root, &run_id, Some("review@2"), "publish", None)
+        .unwrap();
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(node(&snap, "publish").artifacts[0].path, "published.txt");
+    assert!(f
+        .engine
+        .log(&f.root, &run_id, "publish", 1, "stdout", 1000)
+        .unwrap()
+        .contains("published"));
 }

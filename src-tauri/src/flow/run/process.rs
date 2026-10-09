@@ -4,7 +4,7 @@
 //! deciding the node's result from the protocol outcome and exit code.
 
 use serde_json::Value;
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -422,18 +422,11 @@ pub fn tail_file(path: &Path, max_bytes: u64) -> io::Result<String> {
     Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
-/// Creates the parent directory of `path`.
-pub fn ensure_parent(path: &Path) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::fs;
     use std::io::Write;
 
     #[test]

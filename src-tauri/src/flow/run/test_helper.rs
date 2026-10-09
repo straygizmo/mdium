@@ -115,6 +115,61 @@ fn flow_test_helper_entry() {
             if attempt() >= n {
                 std::process::exit(0);
             }
+        } else if step.get("emit_input").is_some() {
+            // Echo the node input (`item`, `index`) as outputs, plus `n = index + 1`.
+            let inputs: Value = std::fs::read(std::env::var("MDIUM_FLOW_INPUTS_FILE").unwrap())
+                .ok()
+                .and_then(|b| serde_json::from_slice(&b).ok())
+                .unwrap_or(Value::Null);
+            for (key, value) in [
+                ("item", inputs["item"].clone()),
+                ("index", inputs["index"].clone()),
+            ] {
+                append(
+                    &events,
+                    &json!({ "v": 1, "type": "output", "key": key, "value": value }).to_string(),
+                );
+            }
+            if let Some(index) = inputs["index"].as_u64() {
+                append(
+                    &events,
+                    &json!({ "v": 1, "type": "output", "key": "n", "value": index + 1 })
+                        .to_string(),
+                );
+            }
+        } else if let Some(item) = step.get("fail_if_item") {
+            let inputs: Value = std::fs::read(std::env::var("MDIUM_FLOW_INPUTS_FILE").unwrap())
+                .ok()
+                .and_then(|b| serde_json::from_slice(&b).ok())
+                .unwrap_or(Value::Null);
+            if &inputs["item"] == item {
+                std::process::exit(5);
+            }
+        } else if let Some(rule) = step.get("emit_if_key_contains") {
+            let key = std::env::var("MDIUM_FLOW_NODE_KEY").unwrap_or_default();
+            if key.contains(rule["needle"].as_str().unwrap_or("\u{0}")) {
+                append(&events, &rule["event"].to_string());
+            }
+        } else if let Some(path) = step.get("fail_if_file_exists").and_then(Value::as_str) {
+            if std::path::Path::new(path).exists() {
+                std::process::exit(6);
+            }
+        } else if let Some(path) = step.get("append_key_to").and_then(Value::as_str) {
+            // Records which node instance ran (order of execution).
+            let key = std::env::var("MDIUM_FLOW_NODE_KEY").unwrap_or_default();
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .unwrap();
+            writeln!(file, "{key}").unwrap();
+        } else if let Some(arg) = step.get("emit_arg_as").and_then(Value::as_str) {
+            // Emits the last command-line argument as output `arg`.
+            let last = std::env::args().last().unwrap_or_default();
+            append(
+                &events,
+                &json!({ "v": 1, "type": "output", "key": arg, "value": last }).to_string(),
+            );
         } else if let Some(code) = step.get("exit").and_then(Value::as_i64) {
             std::process::exit(code as i32);
         }

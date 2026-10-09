@@ -72,6 +72,30 @@ export interface RunState {
   approvals?: ApprovalRequest[];
   budgetLimitUsd?: number;
   updatedAt?: string;
+  /** Scopes by prefix (`""` is the root; `docs[0]/`, `sub/` ...). */
+  scopes?: Record<string, { status: "running" | "completed" | "failed"; owner?: string; index?: number }>;
+  /** Current pass per `<prefix><id>` (absent = 1). */
+  passes?: Record<string, number>;
+}
+
+/** `(prefix, id, pass)` of a node instance key like `docs[2]/check@2`. */
+export function splitNodeKey(key: string): { prefix: string; id: string; pass: number } {
+  const cut = key.lastIndexOf("/") + 1;
+  const prefix = key.slice(0, cut);
+  const last = key.slice(cut);
+  const at = last.indexOf("@");
+  return at < 0
+    ? { prefix, id: last, pass: 1 }
+    : { prefix, id: last.slice(0, at), pass: Number(last.slice(at + 1)) || 1 };
+}
+
+/** The instance is its node's current pass in a live scope (older passes are history). */
+export function isLiveInstance(state: RunState, key: string): boolean {
+  const { prefix, id, pass } = splitNodeKey(key);
+  const current = state.passes?.[`${prefix}${id}`] ?? 1;
+  const scope = state.scopes?.[prefix];
+  const live = prefix === "" ? scope?.status !== "failed" : scope?.status === "running";
+  return current === pass && live;
 }
 
 export interface RunMeta {
@@ -105,6 +129,10 @@ export interface RunSummary {
 }
 
 export interface CommandSummary {
+  /** Project-relative flow file that defines the command. */
+  file: string;
+  /** Enclosing loop ids (inline loop bodies), outermost first. */
+  within?: string[];
   nodeId: string;
   /** argv array or shell string, unexpanded. */
   run: string[] | string;

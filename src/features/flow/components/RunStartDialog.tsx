@@ -122,9 +122,10 @@ export function RunStartDialog({ projectRoot, flowPath, flow, onClose, onStarted
             <div className="flow-dialog__muted">{t("run.commandsHint")}</div>
             <ul className="flow-dialog__commands">
               {review.commands.map((command) => (
-                <li key={command.nodeId} className="flow-dialog__command">
+                <li key={`${command.file}|${(command.within ?? []).join("/")}|${command.nodeId}`} className="flow-dialog__command">
                   <div className="flow-dialog__command-head">
-                    <strong>{command.nodeId}</strong>
+                    <strong>{[...(command.within ?? []), command.nodeId].join(" / ")}</strong>
+                    {command.file !== flowPath && <span className="flow-dialog__badge">{command.file}</span>}
                     {command.shell && <span className="flow-dialog__badge">{t("run.shell")}</span>}
                     {command.templated && <span className="flow-dialog__badge">{t("run.templated")}</span>}
                   </div>

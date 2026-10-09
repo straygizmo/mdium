@@ -19,6 +19,7 @@ const showConfirm = vi.hoisted(() => vi.fn(async () => true));
 vi.mock("@/stores/dialog-store", async (orig) => ({ ...(await orig<object>()), showConfirm }));
 
 import { RunPanel, sameRoot } from "../RunPanel";
+import { isLiveInstance, splitNodeKey, type RunState } from "@/shared/types/flow-run";
 import { RunStartDialog, initialParamValues, paramsFromForm } from "../RunStartDialog";
 import { flowRunApi, subscribeFlowRunEvents, toFlowRunError } from "../../lib/flow-run-api";
 import { describeError, describeReason, formatUsd } from "../../lib/run-format";
@@ -48,7 +49,10 @@ const review: CommandReview = {
   path: PATH,
   sha256: "abc",
   confirmed: false,
-  commands: [{ nodeId: "a", run: ["tool", "${{ params.dir }}"], shell: false, env: { K: "v" }, templated: true }],
+  commands: [
+    { file: PATH, nodeId: "a", run: ["tool", "${{ params.dir }}"], shell: false, env: { K: "v" }, templated: true },
+    { file: ".mdium/flows/child.flow.yaml", within: ["docs"], nodeId: "inner", run: ["x"], shell: false, env: {}, templated: false },
+  ],
 };
 
 function summary(runId: string, extra: Partial<RunSummary> = {}): RunSummary {
@@ -238,6 +242,9 @@ describe("run views", () => {
     );
     await waitFor(() => expect(container.textContent).toContain('tool "${{ params.dir }}"'));
     expect(container.textContent).toContain("templated");
+    // Commands of referenced files are listed with their file and enclosing loops.
+    expect(container.textContent).toContain("docs / inner");
+    expect(container.textContent).toContain(".mdium/flows/child.flow.yaml");
     expect(container.textContent).toContain("K=v");
     const start = button(container, "Start");
     expect(start.disabled).toBe(true);
@@ -352,5 +359,26 @@ describe("run views", () => {
     button(container, "Approve");
     button(container, "Stop");
     await flush();
+  });
+});
+
+describe("node instance keys", () => {
+  it("splits keys and finds live instances", () => {
+    expect(splitNodeKey("a")).toEqual({ prefix: "", id: "a", pass: 1 });
+    expect(splitNodeKey("docs[2]/check@3")).toEqual({ prefix: "docs[2]/", id: "check", pass: 3 });
+    const state = {
+      seq: 1,
+      status: "failed",
+      nodes: {},
+      cost: { actual: 0, estimated: 0 },
+      scopes: { "": { status: "running" }, "docs[0]/": { status: "failed" }, "docs@2[0]/": { status: "running" } },
+      passes: { docs: 2, gen: 3 },
+    } as RunState;
+    expect(isLiveInstance(state, "docs")).toBe(false);
+    expect(isLiveInstance(state, "docs@2")).toBe(true);
+    expect(isLiveInstance(state, "gen@3")).toBe(true);
+    expect(isLiveInstance(state, "docs[0]/proc")).toBe(false);
+    expect(isLiveInstance(state, "docs@2[0]/proc")).toBe(true);
+    expect(isLiveInstance(state, "other")).toBe(true);
   });
 });

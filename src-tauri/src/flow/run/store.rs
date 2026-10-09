@@ -35,6 +35,12 @@ pub struct RunMeta {
     pub params: BTreeMap<String, Value>,
     pub created_at: String,
     pub started_by: String,
+    /// Resolved sub-flow / file-body definitions by project-relative path.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub subflows: BTreeMap<String, FlowDef>,
+    /// Where each reference resolved: `scope::ref_key(file, ref)` → path.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub refs: BTreeMap<String, String>,
 }
 
 /// A run id is 16 lowercase hex characters (never a path).
@@ -54,6 +60,7 @@ pub fn node_dir_name(node_key: &str) -> String {
             '/' => out.push_str("__"),
             '[' => out.push('.'),
             ']' => {}
+            '@' => out.push('@'),
             c if c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' => out.push(c),
             _ => out.push('_'),
         }
@@ -316,6 +323,8 @@ mod tests {
             params: BTreeMap::new(),
             created_at: "now".into(),
             started_by: "test".into(),
+            subflows: BTreeMap::new(),
+            refs: BTreeMap::new(),
         }
     }
 
@@ -362,6 +371,7 @@ mod tests {
             Err(StoreError::InvalidRunId(_))
         ));
         assert_eq!(node_dir_name("docs[3]/summarize"), "docs.3__summarize");
+        assert_eq!(node_dir_name("docs@2[3]/check@4"), "docs@2.3__check@4");
         assert_eq!(node_dir_name("a b:c"), "a_b_c");
         assert_eq!(node_dir_name(".."), "_..");
         assert_eq!(node_dir_name(""), "_");
