@@ -99,6 +99,9 @@ pub fn run() {
             let workflow_state = commands::workflow::create_state(app.handle());
             app.manage::<commands::workflow::WorkflowState>(workflow_state);
             let flow_engine = commands::flow_run::create_state(app.handle());
+            app.manage::<commands::flow::FlowServiceState>(Arc::new(
+                flow_core::service::FlowService::new(flow_engine.clone()),
+            ));
             app.manage::<commands::flow_run::FlowEngineState>(flow_engine);
             // Start local HTTP bridge for MCP server callback
             let handle = app.handle().clone();
