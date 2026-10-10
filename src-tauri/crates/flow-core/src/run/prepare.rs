@@ -238,6 +238,9 @@ impl TemplateContext<'_> {
         match reference {
             Reference::Param(name) => self.params.get(name).cloned(),
             Reference::NodeOutput { node, key } => (self.outputs)(node)?.get(key).cloned(),
+            Reference::NodeOutputs { node } => {
+                (self.outputs)(node).map(|map| Value::Object(map.into_iter().collect()))
+            }
             Reference::RunId => Some(Value::String(self.run_id.to_string())),
             Reference::RunDir => Some(path(self.run_dir)),
             Reference::NodeDir => self.node_dir.map(path),
@@ -476,5 +479,30 @@ mod tests {
                 .unwrap(),
             json!({ "a": ["v", 2] })
         );
+    }
+
+    #[test]
+    fn whole_outputs_reference_resolves_to_the_object() {
+        use std::collections::BTreeMap;
+        let params = BTreeMap::new();
+        let env = BTreeMap::new();
+        let outputs =
+            |node: &str| (node == "a").then(|| BTreeMap::from([("k".to_string(), Value::from(1))]));
+        let ctx = TemplateContext {
+            params: &params,
+            outputs: &outputs,
+            vars: &[],
+            iteration: None,
+            run_id: "r",
+            run_dir: Path::new("/run"),
+            node_dir: None,
+            project_root: Path::new("/proj"),
+            env: &env,
+        };
+        assert_eq!(
+            ctx.render_value("${{ nodes.a.outputs }}").unwrap(),
+            serde_json::json!({ "k": 1 })
+        );
+        assert!(ctx.render_value("${{ nodes.b.outputs }}").is_err());
     }
 }

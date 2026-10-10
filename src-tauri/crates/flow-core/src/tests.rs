@@ -961,3 +961,22 @@ fn resolve_flow_path_checks_name_and_containment() {
         Err(PathProblem::Outside("absolute"))
     );
 }
+
+#[test]
+fn whole_outputs_reference_needs_a_visible_node() {
+    let ok = flow(
+        "nodes:
+  - { id: a, kind: command, run: [x] }
+  - { id: b, kind: command, run: [y, '${{ nodes.a.outputs }}'] }
+edges:
+  - { from: a, to: b }
+",
+    );
+    assert!(errors_of(&ok).is_empty(), "{:?}", errors_of(&ok));
+    let bad = flow(
+        "nodes:
+  - { id: b, kind: command, run: [y, '${{ nodes.zzz.outputs }}'] }
+",
+    );
+    assert_eq!(errors_of(&bad), vec![FLOW_UNKNOWN_NODE_REF]);
+}

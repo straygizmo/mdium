@@ -15,6 +15,8 @@ pub enum Reference {
     Param(String),
     /// `nodes.<id>.outputs.<key>`
     NodeOutput { node: String, key: String },
+    /// `nodes.<id>.outputs` (the whole outputs object of a node)
+    NodeOutputs { node: String },
     /// `iteration.outputs.<key>` (only inside a `while` loop's `until`)
     IterationOutput(String),
     /// A loop's iteration variable (`item`, or the loop's `as` name)
@@ -38,6 +40,7 @@ impl fmt::Display for Reference {
         match self {
             Reference::Param(name) => write!(f, "params.{name}"),
             Reference::NodeOutput { node, key } => write!(f, "nodes.{node}.outputs.{key}"),
+            Reference::NodeOutputs { node } => write!(f, "nodes.{node}.outputs"),
             Reference::IterationOutput(key) => write!(f, "iteration.outputs.{key}"),
             Reference::LoopVar(name) => write!(f, "{name}"),
             Reference::Index => write!(f, "index"),
@@ -144,6 +147,9 @@ pub fn parse_reference(expr: &str) -> Result<Reference, TemplateError> {
             node: node.to_string(),
             key: key.to_string(),
         },
+        ["nodes", node, "outputs"] => Reference::NodeOutputs {
+            node: node.to_string(),
+        },
         ["iteration", "outputs", key] => Reference::IterationOutput(key.to_string()),
         ["run", "id"] => Reference::RunId,
         ["run", "dir"] => Reference::RunDir,
@@ -246,12 +252,28 @@ mod tests {
     }
 
     #[test]
+    fn parses_the_whole_outputs_object_reference() {
+        assert_eq!(
+            parse_reference("nodes.verify.outputs"),
+            Ok(Reference::NodeOutputs {
+                node: "verify".into()
+            })
+        );
+        assert_eq!(
+            Reference::NodeOutputs {
+                node: "verify".into()
+            }
+            .to_string(),
+            "nodes.verify.outputs"
+        );
+    }
+
+    #[test]
     fn rejects_unsupported_references() {
         for text in [
             "params",
             "params.a.b",
             "nodes.x.output.y",
-            "nodes.x.outputs",
             "run.other",
             "1abc",
             "a + b",
