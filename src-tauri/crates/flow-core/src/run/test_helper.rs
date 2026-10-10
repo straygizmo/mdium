@@ -238,7 +238,8 @@ pub fn process_alive(pid: u32) -> bool {
 //     "exit_on_describe": 3,                // exit with this code on `describe`
 //     "ignore_describe": true }             // never answer `describe`
 //
-// Steps: `emit` (item JSON; `callId` is added), `log` {level,text}, `raw`
+// Steps: `emit` (item JSON; `callId` is added), `emit_many` {count,item}
+// (`item` repeated `count` times), `log` {level,text}, `raw`
 // (a verbatim line), `sleep_ms`, `wait_cancel_ms` (outcome `stopped` when a
 // `cancel` arrives), `wait_stop_ms` (outcome `stopped` when the STOP file
 // appears), `exit` (code; no outcome), `outcome` {status,reason?,message?},
@@ -347,6 +348,13 @@ fn worker_wait(
 fn worker_step(step: &Value, call_id: &str, ctx: &Value, rx: &Receiver<String>) -> bool {
     if let Some(item) = step.get("emit") {
         worker_out(&worker_item(call_id, item.clone()));
+    } else if let Some(many) = step.get("emit_many") {
+        let line = worker_item(call_id, many["item"].clone()).to_string();
+        let mut out = std::io::BufWriter::new(std::io::stdout().lock());
+        for _ in 0..many["count"].as_u64().unwrap_or(0) {
+            let _ = writeln!(out, "{line}");
+        }
+        let _ = out.flush();
     } else if let Some(log) = step.get("log") {
         worker_out(&worker_item(
             call_id,

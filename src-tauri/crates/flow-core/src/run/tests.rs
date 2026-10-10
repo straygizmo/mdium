@@ -4,7 +4,7 @@
 use crate::run::driver::*;
 use crate::run::engine::*;
 use crate::run::model::*;
-use crate::run::process::AttachedLauncher;
+use crate::run::process::{AttachedLauncher, MAX_LINES};
 use crate::run::store::{RunMeta, RunStore, RUN_SCHEMA_VERSION};
 use crate::run::test_helper::{
     detached_launcher, fake_worker_launcher, helper_argv, helper_env, process_alive,
@@ -2663,8 +2663,9 @@ fn app_exit_interrupts_a_running_stage_and_restart_marks_it_interrupted() {
 #[test]
 fn stray_worker_output_is_logged_not_fatal() {
     // Review Focus 1.
+    // `k` is declared, so the only warning can come from the stray line.
     let script = json!({
-        "stages": [stage("a.noisy", json!({}))],
+        "stages": [{ "name": "a.noisy", "inputs": {}, "outputs": { "k": {} } }],
         "behaviour": { "a.noisy": [ { "raw": "print() output" }, item(json!({ "type": "output", "key": "k", "value": 1 })), { "outcome": { "status": "ok" } } ] }
     });
     let f = fixture_with_worker(script);
@@ -2679,8 +2680,55 @@ fn stray_worker_output_is_logged_not_fatal() {
     let run_id = f.confirm_and_start(&rel, json!({}));
     f.wait_settled(&run_id, RunStatus::Completed);
     let events = f.events(&run_id);
-    assert!(events
+    let warnings: Vec<&Reason> = events
         .iter()
-        .any(|e| matches!(&e.body, EventBody::Warning(r) if r.code == FLOW_PROTOCOL_WARNING)));
+        .filter_map(|e| match &e.body {
+            EventBody::Warning(r) if r.code == FLOW_PROTOCOL_WARNING => Some(r),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(warnings.len(), 1, "{warnings:#?}");
+    assert_eq!(warnings[0].params["reason"], "invalid-json");
     assert_eq!(node(&f.snapshot(&run_id), "n").outputs["k"], 1);
+}
+
+#[test]
+fn python_outcome_past_the_line_limit_still_ends_the_call() {
+    let script = json!({
+        "stages": [stage("a.chatty", json!({}))],
+        "behaviour": { "a.chatty": [
+            { "emit_many": { "count": MAX_LINES + 5, "item": { "type": "progress", "text": "tick" } } },
+            { "outcome": { "status": "ok" } }
+        ] }
+    });
+    let f = fixture_with_worker(script);
+    write_manifest(&f.root);
+    let rel = write_flow(
+        &f.root,
+        "p",
+        json!({}),
+        vec![py("c", "a.chatty", json!({}))],
+        vec![],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(
+        node(&f.snapshot(&run_id), "c").status,
+        NodeStatus::Succeeded
+    );
+    let too_many = f
+        .events(&run_id)
+        .iter()
+        .filter(|e| {
+            matches!(&e.body, EventBody::Warning(r)
+                if r.code == FLOW_PROTOCOL_WARNING && r.params["reason"] == "too-many-lines")
+        })
+        .count();
+    assert_eq!(too_many, 1);
+    let dir = f.engine_store().node_attempt_dir(&run_id, "c", 1).unwrap();
+    let recorded = std::fs::read_to_string(dir.join("events.jsonl"))
+        .unwrap()
+        .lines()
+        .count();
+    assert_eq!(recorded, MAX_LINES, "lines past the limit are not recorded");
 }

@@ -209,6 +209,8 @@ struct RunningCall {
     timed_out: bool,
     lines: usize,
     limit_warned: bool,
+    /// `events.jsonl`, open for appending.
+    events: Option<std::fs::File>,
     /// The `code` of an `error` answering the call request.
     error_code: Option<String>,
     /// Outputs the stage declares (others are accepted with a warning).
@@ -2213,6 +2215,10 @@ impl Driver {
                     .with("message", err.to_string()),
             );
         }
+        let events = std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.join("events.jsonl"))
+            .ok();
         self.calls.push(RunningCall {
             key: key.to_string(),
             attempt,
@@ -2229,6 +2235,7 @@ impl Driver {
             timed_out: false,
             lines: 0,
             limit_warned: false,
+            events,
             error_code: None,
             declared_outputs: stage.outputs.keys().cloned().collect(),
         });
@@ -2237,8 +2244,17 @@ impl Driver {
     /// Starts the runtime's worker unless it runs, and waits (blocking) for
     /// its manifest.
     fn ensure_worker(&mut self, runtime: &str, def: &RuntimeDef) -> Result<(), Reason> {
-        if self.workers.contains_key(runtime) {
-            return Ok(());
+        match self.workers.get(runtime) {
+            Some(w) if !w.eof && w.exit_code.is_none() => return Ok(()),
+            Some(_) => {
+                // Exiting: start a fresh one (its calls end as orphans).
+                if let Some(mut dying) = self.workers.remove(runtime) {
+                    if dying.exit_code.is_none() {
+                        dying.handle.kill_tree();
+                    }
+                }
+            }
+            None => {}
         }
         let start_failed = |message: String| {
             Reason::new(FLOW_RUNTIME_START_FAILED)
@@ -2307,6 +2323,11 @@ impl Driver {
         let deadline = Instant::now() + WORKER_READY_TIMEOUT;
         let pause = self.env.poll.max(Duration::from_millis(5));
         loop {
+            // Checked on every iteration: a worker that keeps printing must
+            // not defeat the cap.
+            if Instant::now() >= deadline {
+                return Err("timed out waiting for the manifest".to_string());
+            }
             match handle.try_recv() {
                 Some(WorkerEvent::Line(line)) => {
                     if line.trim().is_empty() {
@@ -2333,12 +2354,7 @@ impl Driver {
                         None => "the worker exited before answering describe".to_string(),
                     });
                 }
-                None => {
-                    if Instant::now() >= deadline {
-                        return Err("timed out waiting for the manifest".to_string());
-                    }
-                    std::thread::sleep(pause);
-                }
+                None => std::thread::sleep(pause),
             }
         }
     }
@@ -2409,9 +2425,11 @@ impl Driver {
                     Finish::Exited(0)
                 })
             } else if !self.worker_alive(call) {
-                Some(Finish::WorkerExited(
-                    exited.get(&call.worker).copied().flatten(),
-                ))
+                Some(if call.timed_out {
+                    Finish::Timeout
+                } else {
+                    Finish::WorkerExited(exited.get(&call.worker).copied().flatten())
+                })
             } else if call.grace_deadline.is_some_and(|d| Instant::now() >= d) {
                 self.drop_worker(&call.runtime);
                 Some(if call.timed_out {
@@ -2566,9 +2584,10 @@ impl Driver {
             // Stray output (e.g. `print`): a warning inside a call, logged outside.
             WorkerMessage::Invalid { reason } => match active {
                 Some(idx) => {
-                    let key = self.calls[idx].key.clone();
-                    let lines = self.calls[idx].lines;
-                    self.protocol_warning(Some(&key), reason, vec![("line", lines.into())]);
+                    if let Some(line) = self.count_line(idx) {
+                        let key = self.calls[idx].key.clone();
+                        self.protocol_warning(Some(&key), reason, vec![("line", line.into())]);
+                    }
                 }
                 None => append_line(&stdout_log, line),
             },
@@ -2576,24 +2595,51 @@ impl Driver {
         }
     }
 
-    /// Records and applies one protocol item of a running call.
-    fn call_item(&mut self, idx: usize, item: ProtocolItem, clean: &str, raw_len: usize) {
+    /// Counts one line of a call against `MAX_LINES`: `Some(line number)`
+    /// while within the limit; past it, one `too-many-lines` warning and `None`.
+    fn count_line(&mut self, idx: usize) -> Option<usize> {
         let call = &mut self.calls[idx];
         call.lines += 1;
-        let key = call.key.clone();
         let line = call.lines;
-        if line > MAX_LINES {
-            if !call.limit_warned {
-                call.limit_warned = true;
-                self.protocol_warning(Some(&key), "too-many-lines", vec![("line", line.into())]);
+        if line <= MAX_LINES {
+            return Some(line);
+        }
+        if !call.limit_warned {
+            call.limit_warned = true;
+            let key = call.key.clone();
+            self.protocol_warning(Some(&key), "too-many-lines", vec![("line", line.into())]);
+        }
+        None
+    }
+
+    /// Records and applies one protocol item of a running call. An outcome
+    /// is applied even past the limits (only its record is dropped), so the
+    /// call always ends.
+    fn call_item(&mut self, idx: usize, item: ProtocolItem, clean: &str, raw_len: usize) {
+        let key = self.calls[idx].key.clone();
+        let is_outcome = matches!(item, ProtocolItem::Outcome(_));
+        let line = match self.count_line(idx) {
+            Some(line) if raw_len > MAX_LINE_BYTES => {
+                self.protocol_warning(Some(&key), "line-too-long", vec![("line", line.into())]);
+                None
+            }
+            other => other,
+        };
+        let Some(line) = line else {
+            if is_outcome {
+                let mut items = std::mem::take(&mut self.calls[idx].items);
+                self.apply_item(&key, item, &mut items);
+                self.calls[idx].items = items;
             }
             return;
+        };
+        let call = &mut self.calls[idx];
+        match call.events.as_mut() {
+            Some(file) => {
+                let _ = writeln!(file, "{clean}");
+            }
+            None => append_line(&call.dir.join("events.jsonl"), clean),
         }
-        if raw_len > MAX_LINE_BYTES {
-            self.protocol_warning(Some(&key), "line-too-long", vec![("line", line.into())]);
-            return;
-        }
-        append_line(&call.dir.join("events.jsonl"), clean);
         if let ProtocolItem::Output { key: name, .. } = &item {
             if !call.declared_outputs.contains(name) {
                 let name = name.clone();
