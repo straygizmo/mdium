@@ -1,6 +1,6 @@
 // src-tauri/src/commands/flow_run.rs
-//! Tauri commands and events of flow runs (spec 4–6; PR 3a). The engine
-//! is process-wide state; every command validates `projectRoot`. The UI
+//! Tauri commands and events of flow runs (spec 4–6; PR 3a). The flow
+//! service is process-wide state and validates `projectRoot`. The UI
 //! that calls these is gated behind the `experimentalFlows` setting, but
 //! the setting lives in the frontend: what actually gates execution is the
 //! backend's per-machine command confirmation (spec 7.2).
@@ -354,5 +354,37 @@ mod tests {
         assert_eq!(json["nodeKey"], "a");
         assert_eq!(json["status"], "running");
         assert_eq!(json["costUsd"], 0.0);
+    }
+
+    /// The Tauri handlers registered in `lib.rs` for the flow engine, by
+    /// name. Keep in sync with `generate_handler!`; the test below pins the
+    /// list to the service's dispatch table so HTTP and Tauri never drift.
+    const TAURI_FLOW_COMMANDS: [&str; 17] = [
+        "flow_list",
+        "flow_load",
+        "flow_validate",
+        "flow_command_review",
+        "flow_confirm_commands",
+        "flow_run_start",
+        "flow_run_list",
+        "flow_run_get",
+        "flow_run_stop",
+        "flow_run_resume",
+        "flow_run_cancel",
+        "flow_run_approve",
+        "flow_run_rerun_node",
+        "flow_run_mark_succeeded",
+        "flow_run_delete",
+        "flow_run_log",
+        "flow_gitignore_status",
+    ];
+
+    #[test]
+    fn tauri_commands_match_the_service_dispatch_table() {
+        let mut tauri: Vec<&str> = TAURI_FLOW_COMMANDS.to_vec();
+        let mut service: Vec<&str> = flow_core::service::COMMAND_NAMES.to_vec();
+        tauri.sort();
+        service.sort();
+        assert_eq!(tauri, service);
     }
 }

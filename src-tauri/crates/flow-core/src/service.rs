@@ -6,7 +6,7 @@ use crate::load::{self, FlowReport, FlowSummary, PathProblem};
 use crate::parse::FlowFormat;
 use crate::run::engine::{CommandReview, EngineError, FlowEngine, RunSnapshot, RunSummary};
 use crate::run::model::Reason;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -24,6 +24,12 @@ pub const FLOW_FILE_NOT_FOUND: &str = "FLOW_FILE_NOT_FOUND";
 pub const FLOW_LIST_FAILED: &str = "FLOW_LIST_FAILED";
 /// The blocking task could not be joined (used by the Tauri wrappers).
 pub const FLOW_COMMAND_FAILED: &str = "FLOW_COMMAND_FAILED";
+/// The command is not one of [`COMMAND_NAMES`].
+pub const FLOW_UNKNOWN_COMMAND: &str = "FLOW_UNKNOWN_COMMAND";
+/// The JSON arguments do not match the command's parameters.
+pub const FLOW_BAD_ARGS: &str = "FLOW_BAD_ARGS";
+/// The result could not be serialized to JSON.
+pub const FLOW_SERIALIZE_FAILED: &str = "FLOW_SERIALIZE_FAILED";
 
 /// A command failure as the UI receives it: `{ code, message, details? }`.
 /// `message` is a log detail; the UI localizes by `code`.
@@ -170,11 +176,13 @@ impl FlowService {
         })
     }
 
+    /// The commands a flow file runs, for the one-time confirmation (spec 7.2).
     pub fn command_review(&self, project_root_arg: &str, path: &str) -> Result<CommandReview, FlowCommandError> {
         let root = project_root(project_root_arg)?;
         Ok(self.engine.review_commands(&root, path)?)
     }
 
+    /// Records the user's confirmation of the reviewed content (by hash).
     pub fn confirm_commands(&self, project_root_arg: &str, path: &str, sha256: &str) -> Result<(), FlowCommandError> {
         let root = project_root(project_root_arg)?;
         Ok(self.engine.confirm_commands(&root, path, sha256)?)
@@ -269,11 +277,196 @@ impl FlowService {
     }
 }
 
+/// Every command the service dispatches by name (the Tauri command names;
+/// the HTTP server uses the same names, spec 2026-10-10, 10.2).
+pub const COMMAND_NAMES: [&str; 17] = [
+    "flow_list",
+    "flow_load",
+    "flow_validate",
+    "flow_command_review",
+    "flow_confirm_commands",
+    "flow_run_start",
+    "flow_run_list",
+    "flow_run_get",
+    "flow_run_stop",
+    "flow_run_resume",
+    "flow_run_cancel",
+    "flow_run_approve",
+    "flow_run_rerun_node",
+    "flow_run_mark_succeeded",
+    "flow_run_delete",
+    "flow_run_log",
+    "flow_gitignore_status",
+];
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RootArgs {
+    project_root: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PathArgs {
+    project_root: String,
+    path: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ValidateArgs {
+    project_root: String,
+    path: String,
+    content: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ConfirmArgs {
+    project_root: String,
+    path: String,
+    sha256: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StartArgs {
+    project_root: String,
+    path: String,
+    params: BTreeMap<String, Value>,
+    sha256: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RunArgs {
+    project_root: String,
+    run_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ApproveArgs {
+    project_root: String,
+    run_id: String,
+    #[serde(default)]
+    node_key: Option<String>,
+    choice: String,
+    #[serde(default)]
+    comment: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NodeArgs {
+    project_root: String,
+    run_id: String,
+    node_key: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LogArgs {
+    project_root: String,
+    run_id: String,
+    node_key: String,
+    attempt: u32,
+    stream: String,
+    max_bytes: u64,
+}
+
+fn args<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, FlowCommandError> {
+    serde_json::from_value(value).map_err(|err| FlowCommandError::new(FLOW_BAD_ARGS, err))
+}
+
+fn reply<T: Serialize>(value: T) -> Result<Value, FlowCommandError> {
+    serde_json::to_value(value).map_err(|err| FlowCommandError::new(FLOW_SERIALIZE_FAILED, err))
+}
+
+impl FlowService {
+    /// Dispatches a command by its Tauri name with its JSON argument object
+    /// (camelCase keys, exactly what the frontend sends to `invoke`). Used
+    /// by transports that carry commands as data (the HTTP server).
+    pub fn call(&self, name: &str, value: Value) -> Result<Value, FlowCommandError> {
+        match name {
+            "flow_list" => {
+                let a: RootArgs = args(value)?;
+                reply(self.list_flows(&a.project_root)?)
+            }
+            "flow_load" => {
+                let a: PathArgs = args(value)?;
+                reply(self.load_flow(&a.project_root, &a.path)?)
+            }
+            "flow_validate" => {
+                let a: ValidateArgs = args(value)?;
+                reply(self.validate_flow(&a.project_root, &a.path, &a.content)?)
+            }
+            "flow_command_review" => {
+                let a: PathArgs = args(value)?;
+                reply(self.command_review(&a.project_root, &a.path)?)
+            }
+            "flow_confirm_commands" => {
+                let a: ConfirmArgs = args(value)?;
+                reply(self.confirm_commands(&a.project_root, &a.path, &a.sha256)?)
+            }
+            "flow_run_start" => {
+                let a: StartArgs = args(value)?;
+                reply(self.run_start(&a.project_root, &a.path, &a.params, &a.sha256)?)
+            }
+            "flow_run_list" => {
+                let a: RootArgs = args(value)?;
+                reply(self.run_list(&a.project_root)?)
+            }
+            "flow_run_get" => {
+                let a: RunArgs = args(value)?;
+                reply(self.run_get(&a.project_root, &a.run_id)?)
+            }
+            "flow_run_stop" => {
+                let a: RunArgs = args(value)?;
+                reply(self.run_stop(&a.project_root, &a.run_id)?)
+            }
+            "flow_run_resume" => {
+                let a: RunArgs = args(value)?;
+                reply(self.run_resume(&a.project_root, &a.run_id)?)
+            }
+            "flow_run_cancel" => {
+                let a: RunArgs = args(value)?;
+                reply(self.run_cancel(&a.project_root, &a.run_id)?)
+            }
+            "flow_run_approve" => {
+                let a: ApproveArgs = args(value)?;
+                reply(self.run_approve(&a.project_root, &a.run_id, a.node_key.as_deref(), &a.choice, a.comment)?)
+            }
+            "flow_run_rerun_node" => {
+                let a: NodeArgs = args(value)?;
+                reply(self.run_rerun_node(&a.project_root, &a.run_id, &a.node_key)?)
+            }
+            "flow_run_mark_succeeded" => {
+                let a: NodeArgs = args(value)?;
+                reply(self.run_mark_succeeded(&a.project_root, &a.run_id, &a.node_key)?)
+            }
+            "flow_run_delete" => {
+                let a: RunArgs = args(value)?;
+                reply(self.run_delete(&a.project_root, &a.run_id)?)
+            }
+            "flow_run_log" => {
+                let a: LogArgs = args(value)?;
+                reply(self.run_log(&a.project_root, &a.run_id, &a.node_key, a.attempt, &a.stream, a.max_bytes)?)
+            }
+            "flow_gitignore_status" => {
+                let a: RootArgs = args(value)?;
+                reply(self.gitignore_status(&a.project_root)?)
+            }
+            other => Err(FlowCommandError::new(FLOW_UNKNOWN_COMMAND, other)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::run::driver::{ApprovalNotifier, DriverEnv, EventSink};
-    use crate::run::engine::FlowEngine;
+    use crate::run::engine::{FlowEngine, FLOW_RUN_INVALID_ID};
     use crate::run::model::{ApprovalRequest, NodeState, Progress, RunState};
     use crate::run::process::AttachedLauncher;
     use std::fs;
@@ -360,7 +553,6 @@ mod tests {
 
     #[test]
     fn engine_errors_keep_code_and_details() {
-        use crate::run::engine::FLOW_RUN_INVALID_ID;
         let err = FlowCommandError::from(EngineError {
             code: FLOW_RUN_INVALID_ID.into(),
             message: "x".into(),
@@ -384,7 +576,6 @@ mod tests {
 
     #[test]
     fn run_list_of_a_fresh_project_is_empty_and_unknown_ids_fail() {
-        use crate::run::engine::FLOW_RUN_INVALID_ID;
         let tmp = tempfile::tempdir().unwrap();
         let svc = service(tmp.path());
         let root = tmp.path().to_str().unwrap();
@@ -410,5 +601,62 @@ mod tests {
         assert!(!svc.gitignore_status(root).unwrap().ignored);
         std::fs::write(tmp.path().join(".gitignore"), ".mdium/flow-runs/\n").unwrap();
         assert!(svc.gitignore_status(root).unwrap().ignored);
+    }
+
+    #[test]
+    fn call_dispatches_by_tauri_command_name_with_camel_case_args() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = service(tmp.path());
+        let root = tmp.path().to_str().unwrap();
+        fs::create_dir_all(tmp.path().join(".mdium/flows")).unwrap();
+        fs::write(tmp.path().join(".mdium/flows/a.flow.yaml"), OK).unwrap();
+
+        let listed = svc.call("flow_list", serde_json::json!({ "projectRoot": root })).unwrap();
+        assert_eq!(listed.as_array().unwrap().len(), 1);
+        let loaded = svc
+            .call("flow_load", serde_json::json!({ "projectRoot": root, "path": ".mdium/flows/a.flow.yaml" }))
+            .unwrap();
+        assert_eq!(loaded["flow"]["id"], "t");
+        let runs = svc.call("flow_run_list", serde_json::json!({ "projectRoot": root })).unwrap();
+        assert_eq!(runs, serde_json::json!([]));
+        let ignored = svc.call("flow_gitignore_status", serde_json::json!({ "projectRoot": root })).unwrap();
+        assert_eq!(ignored["ignored"], true);
+    }
+
+    #[test]
+    fn call_rejects_unknown_names_and_bad_args() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = service(tmp.path());
+        let root = tmp.path().to_str().unwrap();
+        assert_eq!(
+            svc.call("flow_nope", serde_json::json!({})).unwrap_err().code,
+            FLOW_UNKNOWN_COMMAND
+        );
+        // Missing projectRoot.
+        assert_eq!(svc.call("flow_list", serde_json::json!({})).unwrap_err().code, FLOW_BAD_ARGS);
+        // attempt must be a number.
+        let err = svc
+            .call(
+                "flow_run_log",
+                serde_json::json!({ "projectRoot": root, "runId": "r", "nodeKey": "a", "attempt": "1", "stream": "stdout", "maxBytes": 10 }),
+            )
+            .unwrap_err();
+        assert_eq!(err.code, FLOW_BAD_ARGS);
+        // Engine errors pass through unchanged.
+        let err = svc
+            .call("flow_run_get", serde_json::json!({ "projectRoot": root, "runId": "nope" }))
+            .unwrap_err();
+        assert_eq!(err.code, FLOW_RUN_INVALID_ID);
+    }
+
+    #[test]
+    fn every_command_name_is_dispatchable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = service(tmp.path());
+        for name in COMMAND_NAMES {
+            // With empty args every command fails on arguments, never on the name.
+            let code = svc.call(name, serde_json::json!({})).unwrap_err().code;
+            assert_ne!(code, FLOW_UNKNOWN_COMMAND, "{name}");
+        }
     }
 }
