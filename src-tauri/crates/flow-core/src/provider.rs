@@ -18,7 +18,13 @@ mod tests {
 
     #[test]
     fn provider_serializes_lowercase() {
-        assert_eq!(serde_json::to_string(&Provider::Opencode).unwrap(), "\"opencode\"");
-        assert_eq!(serde_json::from_str::<Provider>("\"claude\"").unwrap(), Provider::Claude);
+        assert_eq!(
+            serde_json::to_string(&Provider::Opencode).unwrap(),
+            "\"opencode\""
+        );
+        assert_eq!(
+            serde_json::from_str::<Provider>("\"claude\"").unwrap(),
+            Provider::Claude
+        );
     }
 }

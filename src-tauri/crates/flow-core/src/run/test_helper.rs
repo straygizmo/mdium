@@ -184,9 +184,9 @@ fn flow_supervisor_entry() {
         return;
     }
     let spec = std::env::args().last().expect("spec path");
-    std::process::exit(crate::run::supervise::supervise(
-        std::path::Path::new(&spec),
-    ));
+    std::process::exit(crate::run::supervise::supervise(std::path::Path::new(
+        &spec,
+    )));
 }
 
 /// A detached launcher whose supervisor is this test binary.

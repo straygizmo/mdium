@@ -3,9 +3,9 @@
 //! is a thin wrapper over `flow_core::service::FlowService`; the UI that
 //! calls these is gated behind the `experimentalFlows` setting.
 
-pub use flow_core::service::{FlowCommandError, FlowLoadResult, FLOW_COMMAND_FAILED};
 use flow_core::load::FlowSummary;
 use flow_core::service::FlowService;
+pub use flow_core::service::{FlowCommandError, FlowLoadResult, FLOW_COMMAND_FAILED};
 use std::sync::Arc;
 
 /// The process-wide service, managed as Tauri state.
@@ -58,5 +58,8 @@ pub async fn flow_validate(
     path: String,
     content: String,
 ) -> Result<FlowLoadResult, FlowCommandError> {
-    with_service(state, move |s| s.validate_flow(&project_root, &path, &content)).await
+    with_service(state, move |s| {
+        s.validate_flow(&project_root, &path, &content)
+    })
+    .await
 }

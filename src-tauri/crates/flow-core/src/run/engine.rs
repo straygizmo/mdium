@@ -3,18 +3,16 @@
 //! mark succeeded / delete), recovery after an app exit or crash, and one
 //! driver thread per active run.
 
+use crate::fsutil;
+use crate::fsutil::project_key;
 use crate::load::{self, check_content, PathProblem, MAX_FLOW_FILE_BYTES};
 use crate::model::NodeKind;
 use crate::run::driver::{Control, Driver, DriverEnv, Editor, FLOW_APP_EXITED, FLOW_RESUMED};
 use crate::run::model::{NodeStatus, Reason, RunState, RunStatus};
-use crate::run::prepare::{
-    check_runnable, command_summaries, prepare_params, CommandSummary,
-};
+use crate::run::prepare::{check_runnable, command_summaries, prepare_params, CommandSummary};
 use crate::run::process::tail_file;
 use crate::run::store::{RunMeta, RunStore, StoreError, RUN_SCHEMA_VERSION};
 use crate::run::supervise::DetachedProcess;
-use crate::fsutil;
-use crate::fsutil::project_key;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};

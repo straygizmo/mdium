@@ -2182,9 +2182,7 @@ fn manual_check_sample_is_runnable() {
     );
     assert!(issues.errors.is_empty(), "{:#?}", issues.errors);
     let flow = flow.unwrap();
-    assert!(
-        crate::run::prepare::check_runnable(&[("manual-check.flow.yaml", &flow)]).is_empty()
-    );
+    assert!(crate::run::prepare::check_runnable(&[("manual-check.flow.yaml", &flow)]).is_empty());
 }
 
 /// End-to-end run of the sample flow with PowerShell (slow; run with `--ignored`).

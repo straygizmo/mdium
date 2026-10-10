@@ -353,7 +353,6 @@ mod tests {
         assert!(leftover.is_empty(), "leftover files: {leftover:?}");
     }
 
-
     #[test]
     fn place_via_rename_restores_original_when_retry_also_fails() {
         let dir = tempfile::tempdir().unwrap();

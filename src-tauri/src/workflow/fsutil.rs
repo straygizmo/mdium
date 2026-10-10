@@ -206,7 +206,6 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello");
     }
 
-
     #[test]
     fn new_id_is_sixteen_lowercase_hex_chars() {
         let id = new_id();

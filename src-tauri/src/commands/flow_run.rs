@@ -187,7 +187,10 @@ pub fn create_state(app: &AppHandle) -> FlowServiceState {
         process_env: Arc::new(std::env::vars().collect()),
         poll: Duration::from_millis(200),
     };
-    let engine = Arc::new(FlowEngine::new(env, base.join("flow-command-confirmations.json")));
+    let engine = Arc::new(FlowEngine::new(
+        env,
+        base.join("flow-command-confirmations.json"),
+    ));
     Arc::new(FlowService::new(engine))
 }
 
@@ -207,7 +210,10 @@ pub async fn flow_confirm_commands(
     path: String,
     sha256: String,
 ) -> Result<(), FlowCommandError> {
-    with_service(state, move |s| s.confirm_commands(&project_root, &path, &sha256)).await
+    with_service(state, move |s| {
+        s.confirm_commands(&project_root, &path, &sha256)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -218,7 +224,10 @@ pub async fn flow_run_start(
     params: BTreeMap<String, Value>,
     sha256: String,
 ) -> Result<RunSummary, FlowCommandError> {
-    with_service(state, move |s| s.run_start(&project_root, &path, &params, &sha256)).await
+    with_service(state, move |s| {
+        s.run_start(&project_root, &path, &params, &sha256)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -276,7 +285,13 @@ pub async fn flow_run_approve(
     comment: Option<String>,
 ) -> Result<(), FlowCommandError> {
     with_service(state, move |s| {
-        s.run_approve(&project_root, &run_id, node_key.as_deref(), &choice, comment)
+        s.run_approve(
+            &project_root,
+            &run_id,
+            node_key.as_deref(),
+            &choice,
+            comment,
+        )
     })
     .await
 }
@@ -288,7 +303,10 @@ pub async fn flow_run_rerun_node(
     run_id: String,
     node_key: String,
 ) -> Result<(), FlowCommandError> {
-    with_service(state, move |s| s.run_rerun_node(&project_root, &run_id, &node_key)).await
+    with_service(state, move |s| {
+        s.run_rerun_node(&project_root, &run_id, &node_key)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -298,7 +316,10 @@ pub async fn flow_run_mark_succeeded(
     run_id: String,
     node_key: String,
 ) -> Result<(), FlowCommandError> {
-    with_service(state, move |s| s.run_mark_succeeded(&project_root, &run_id, &node_key)).await
+    with_service(state, move |s| {
+        s.run_mark_succeeded(&project_root, &run_id, &node_key)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -322,7 +343,14 @@ pub async fn flow_run_log(
     max_bytes: u64,
 ) -> Result<String, FlowCommandError> {
     with_service(state, move |s| {
-        s.run_log(&project_root, &run_id, &node_key, attempt, &stream, max_bytes)
+        s.run_log(
+            &project_root,
+            &run_id,
+            &node_key,
+            attempt,
+            &stream,
+            max_bytes,
+        )
     })
     .await
 }

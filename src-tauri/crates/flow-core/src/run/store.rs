@@ -3,9 +3,9 @@
 //! the `state.json` checkpoint, the `STOP` file and per-attempt node
 //! directories.
 
+use crate::fsutil;
 use crate::model::FlowDef;
 use crate::run::model::{apply, EventBody, FlowEvent, RunState};
-use crate::fsutil;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;

@@ -150,7 +150,11 @@ impl FlowService {
     }
 
     /// Reads and validates one flow file (`path` is project-relative).
-    pub fn load_flow(&self, project_root_arg: &str, path: &str) -> Result<FlowLoadResult, FlowCommandError> {
+    pub fn load_flow(
+        &self,
+        project_root_arg: &str,
+        path: &str,
+    ) -> Result<FlowLoadResult, FlowCommandError> {
         let root = project_root(project_root_arg)?;
         let file = flow_file(&root, path, true)?;
         Ok(FlowLoadResult {
@@ -177,13 +181,22 @@ impl FlowService {
     }
 
     /// The commands a flow file runs, for the one-time confirmation (spec 7.2).
-    pub fn command_review(&self, project_root_arg: &str, path: &str) -> Result<CommandReview, FlowCommandError> {
+    pub fn command_review(
+        &self,
+        project_root_arg: &str,
+        path: &str,
+    ) -> Result<CommandReview, FlowCommandError> {
         let root = project_root(project_root_arg)?;
         Ok(self.engine.review_commands(&root, path)?)
     }
 
     /// Records the user's confirmation of the reviewed content (by hash).
-    pub fn confirm_commands(&self, project_root_arg: &str, path: &str, sha256: &str) -> Result<(), FlowCommandError> {
+    pub fn confirm_commands(
+        &self,
+        project_root_arg: &str,
+        path: &str,
+        sha256: &str,
+    ) -> Result<(), FlowCommandError> {
         let root = project_root(project_root_arg)?;
         Ok(self.engine.confirm_commands(&root, path, sha256)?)
     }
@@ -204,7 +217,11 @@ impl FlowService {
         Ok(self.engine.list(&root)?)
     }
 
-    pub fn run_get(&self, project_root_arg: &str, run_id: &str) -> Result<RunSnapshot, FlowCommandError> {
+    pub fn run_get(
+        &self,
+        project_root_arg: &str,
+        run_id: &str,
+    ) -> Result<RunSnapshot, FlowCommandError> {
         let root = project_root(project_root_arg)?;
         Ok(self.engine.get(&root, run_id)?)
     }
@@ -234,15 +251,27 @@ impl FlowService {
         comment: Option<String>,
     ) -> Result<(), FlowCommandError> {
         let root = project_root(project_root_arg)?;
-        Ok(self.engine.approve(&root, run_id, node_key, choice, comment)?)
+        Ok(self
+            .engine
+            .approve(&root, run_id, node_key, choice, comment)?)
     }
 
-    pub fn run_rerun_node(&self, project_root_arg: &str, run_id: &str, node_key: &str) -> Result<(), FlowCommandError> {
+    pub fn run_rerun_node(
+        &self,
+        project_root_arg: &str,
+        run_id: &str,
+        node_key: &str,
+    ) -> Result<(), FlowCommandError> {
         let root = project_root(project_root_arg)?;
         Ok(self.engine.rerun_node(&root, run_id, node_key)?)
     }
 
-    pub fn run_mark_succeeded(&self, project_root_arg: &str, run_id: &str, node_key: &str) -> Result<(), FlowCommandError> {
+    pub fn run_mark_succeeded(
+        &self,
+        project_root_arg: &str,
+        run_id: &str,
+        node_key: &str,
+    ) -> Result<(), FlowCommandError> {
         let root = project_root(project_root_arg)?;
         Ok(self.engine.mark_succeeded(&root, run_id, node_key)?)
     }
@@ -263,12 +292,19 @@ impl FlowService {
         max_bytes: u64,
     ) -> Result<String, FlowCommandError> {
         let root = project_root(project_root_arg)?;
-        Ok(self.engine.log(&root, run_id, node_key, attempt, stream, max_bytes)?)
+        Ok(self
+            .engine
+            .log(&root, run_id, node_key, attempt, stream, max_bytes)?)
     }
 
-    pub fn gitignore_status(&self, project_root_arg: &str) -> Result<GitignoreStatus, FlowCommandError> {
+    pub fn gitignore_status(
+        &self,
+        project_root_arg: &str,
+    ) -> Result<GitignoreStatus, FlowCommandError> {
         let root = project_root(project_root_arg)?;
-        Ok(GitignoreStatus { ignored: flow_runs_ignored(&root) })
+        Ok(GitignoreStatus {
+            ignored: flow_runs_ignored(&root),
+        })
     }
 
     /// Waits for active drivers to record `interrupted` (app exit).
@@ -435,7 +471,13 @@ impl FlowService {
             }
             "flow_run_approve" => {
                 let a: ApproveArgs = args(value)?;
-                reply(self.run_approve(&a.project_root, &a.run_id, a.node_key.as_deref(), &a.choice, a.comment)?)
+                reply(self.run_approve(
+                    &a.project_root,
+                    &a.run_id,
+                    a.node_key.as_deref(),
+                    &a.choice,
+                    a.comment,
+                )?)
             }
             "flow_run_rerun_node" => {
                 let a: NodeArgs = args(value)?;
@@ -451,7 +493,14 @@ impl FlowService {
             }
             "flow_run_log" => {
                 let a: LogArgs = args(value)?;
-                reply(self.run_log(&a.project_root, &a.run_id, &a.node_key, a.attempt, &a.stream, a.max_bytes)?)
+                reply(self.run_log(
+                    &a.project_root,
+                    &a.run_id,
+                    &a.node_key,
+                    a.attempt,
+                    &a.stream,
+                    a.max_bytes,
+                )?)
             }
             "flow_gitignore_status" => {
                 let a: RootArgs = args(value)?;
@@ -495,7 +544,10 @@ mod tests {
             process_env: Arc::new(Default::default()),
             poll: Duration::from_millis(10),
         };
-        FlowService::new(Arc::new(FlowEngine::new(env, dir.join("confirmations.json"))))
+        FlowService::new(Arc::new(FlowEngine::new(
+            env,
+            dir.join("confirmations.json"),
+        )))
     }
 
     const OK: &str =
@@ -506,7 +558,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let svc = service(tmp.path());
         assert_eq!(svc.list_flows("").unwrap_err().code, FLOW_PROJECT_INVALID);
-        assert_eq!(svc.list_flows("relative/dir").unwrap_err().code, FLOW_PROJECT_INVALID);
+        assert_eq!(
+            svc.list_flows("relative/dir").unwrap_err().code,
+            FLOW_PROJECT_INVALID
+        );
         let missing = tmp.path().join("missing");
         assert_eq!(
             svc.list_flows(missing.to_str().unwrap()).unwrap_err().code,
@@ -532,7 +587,11 @@ mod tests {
         assert!(json["errors"].as_array().unwrap().is_empty());
 
         let checked = svc
-            .validate_flow(&root, ".mdium/flows/new.flow.yaml", "schemaVersion: 1\nid: t\nname: T\nnodes: []\n")
+            .validate_flow(
+                &root,
+                ".mdium/flows/new.flow.yaml",
+                "schemaVersion: 1\nid: t\nname: T\nnodes: []\n",
+            )
             .unwrap();
         assert_eq!(checked.report.errors.len(), 1);
         assert_eq!(svc.list_flows(&root).unwrap().len(), 1);
@@ -544,11 +603,19 @@ mod tests {
         let svc = service(tmp.path());
         let root = tmp.path().to_str().unwrap().to_string();
         assert_eq!(
-            svc.load_flow(&root, ".mdium/flows/none.flow.yaml").unwrap_err().code,
+            svc.load_flow(&root, ".mdium/flows/none.flow.yaml")
+                .unwrap_err()
+                .code,
             FLOW_FILE_NOT_FOUND
         );
-        assert_eq!(svc.load_flow(&root, "../x.flow.yaml").unwrap_err().code, FLOW_FILE_PATH_INVALID);
-        assert_eq!(svc.validate_flow(&root, "notes.md", OK).unwrap_err().code, FLOW_FILE_PATH_INVALID);
+        assert_eq!(
+            svc.load_flow(&root, "../x.flow.yaml").unwrap_err().code,
+            FLOW_FILE_PATH_INVALID
+        );
+        assert_eq!(
+            svc.validate_flow(&root, "notes.md", OK).unwrap_err().code,
+            FLOW_FILE_PATH_INVALID
+        );
     }
 
     #[test]
@@ -571,7 +638,10 @@ mod tests {
         let svc = service(tmp.path());
         assert_eq!(svc.run_list("").unwrap_err().code, FLOW_PROJECT_INVALID);
         assert_eq!(svc.run_get("", "r").unwrap_err().code, FLOW_PROJECT_INVALID);
-        assert_eq!(svc.command_review("", "x.flow.yaml").unwrap_err().code, FLOW_PROJECT_INVALID);
+        assert_eq!(
+            svc.command_review("", "x.flow.yaml").unwrap_err().code,
+            FLOW_PROJECT_INVALID
+        );
     }
 
     #[test]
@@ -580,7 +650,10 @@ mod tests {
         let svc = service(tmp.path());
         let root = tmp.path().to_str().unwrap();
         assert!(svc.run_list(root).unwrap().is_empty());
-        assert_eq!(svc.run_get(root, "not-an-id").unwrap_err().code, FLOW_RUN_INVALID_ID);
+        assert_eq!(
+            svc.run_get(root, "not-an-id").unwrap_err().code,
+            FLOW_RUN_INVALID_ID
+        );
     }
 
     #[test]
@@ -611,15 +684,27 @@ mod tests {
         fs::create_dir_all(tmp.path().join(".mdium/flows")).unwrap();
         fs::write(tmp.path().join(".mdium/flows/a.flow.yaml"), OK).unwrap();
 
-        let listed = svc.call("flow_list", serde_json::json!({ "projectRoot": root })).unwrap();
+        let listed = svc
+            .call("flow_list", serde_json::json!({ "projectRoot": root }))
+            .unwrap();
         assert_eq!(listed.as_array().unwrap().len(), 1);
         let loaded = svc
-            .call("flow_load", serde_json::json!({ "projectRoot": root, "path": ".mdium/flows/a.flow.yaml" }))
+            .call(
+                "flow_load",
+                serde_json::json!({ "projectRoot": root, "path": ".mdium/flows/a.flow.yaml" }),
+            )
             .unwrap();
         assert_eq!(loaded["flow"]["id"], "t");
-        let runs = svc.call("flow_run_list", serde_json::json!({ "projectRoot": root })).unwrap();
+        let runs = svc
+            .call("flow_run_list", serde_json::json!({ "projectRoot": root }))
+            .unwrap();
         assert_eq!(runs, serde_json::json!([]));
-        let ignored = svc.call("flow_gitignore_status", serde_json::json!({ "projectRoot": root })).unwrap();
+        let ignored = svc
+            .call(
+                "flow_gitignore_status",
+                serde_json::json!({ "projectRoot": root }),
+            )
+            .unwrap();
         assert_eq!(ignored["ignored"], true);
     }
 
@@ -629,11 +714,18 @@ mod tests {
         let svc = service(tmp.path());
         let root = tmp.path().to_str().unwrap();
         assert_eq!(
-            svc.call("flow_nope", serde_json::json!({})).unwrap_err().code,
+            svc.call("flow_nope", serde_json::json!({}))
+                .unwrap_err()
+                .code,
             FLOW_UNKNOWN_COMMAND
         );
         // Missing projectRoot.
-        assert_eq!(svc.call("flow_list", serde_json::json!({})).unwrap_err().code, FLOW_BAD_ARGS);
+        assert_eq!(
+            svc.call("flow_list", serde_json::json!({}))
+                .unwrap_err()
+                .code,
+            FLOW_BAD_ARGS
+        );
         // attempt must be a number.
         let err = svc
             .call(
@@ -644,7 +736,10 @@ mod tests {
         assert_eq!(err.code, FLOW_BAD_ARGS);
         // Engine errors pass through unchanged.
         let err = svc
-            .call("flow_run_get", serde_json::json!({ "projectRoot": root, "runId": "nope" }))
+            .call(
+                "flow_run_get",
+                serde_json::json!({ "projectRoot": root, "runId": "nope" }),
+            )
             .unwrap_err();
         assert_eq!(err.code, FLOW_RUN_INVALID_ID);
     }

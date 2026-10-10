@@ -9,6 +9,7 @@
 //! one at a time; concurrency limits are PR 4b.
 
 use crate::condition::Condition;
+use crate::fsutil;
 use crate::model::{
     parse_duration, CommandNode, CommandProtocol, CommandRun, FlowDef, FlowNode, LoopBody,
     LoopMode, LoopNode, NodeKind, OnItemFailure, RetryOn, RetryPolicy, PORT_FAILURE, PORT_SUCCESS,
@@ -25,7 +26,6 @@ use crate::run::scope::{
 use crate::run::store::{EventLog, RunMeta, RunStore, CHECKPOINT_EVERY};
 use crate::run::supervise::DetachedProcess;
 use crate::template;
-use crate::fsutil;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
