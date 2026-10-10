@@ -1,5 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getFlowTransport, type FlowEventName } from "./transport";
+import "./tauri-transport";
 import {
   FLOW_APPROVAL_REQUESTED_EVENT,
   FLOW_NODE_CHANGED_EVENT,
@@ -37,7 +37,7 @@ export function toFlowRunError(err: unknown): FlowRunError | null {
 
 async function call<T>(command: string, args: Record<string, unknown>): Promise<T> {
   try {
-    return await invoke<T>(command, args);
+    return await getFlowTransport().call<T>(command, args);
   } catch (err) {
     throw toFlowRunError(err) ?? err;
   }
@@ -76,10 +76,11 @@ export interface FlowRunEventHandlers {
 }
 
 /** Subscribes to the flow run events; resolves to an unsubscribe function. */
-export async function subscribeFlowRunEvents(handlers: FlowRunEventHandlers): Promise<UnlistenFn> {
-  const unlisten: UnlistenFn[] = [];
-  const add = async <T,>(name: string, handler?: (payload: T) => void) => {
-    if (handler) unlisten.push(await listen<T>(name, (e) => handler(e.payload)));
+export async function subscribeFlowRunEvents(handlers: FlowRunEventHandlers): Promise<() => void> {
+  const transport = getFlowTransport();
+  const unlisten: Array<() => void> = [];
+  const add = async <T,>(name: FlowEventName, handler?: (payload: T) => void) => {
+    if (handler) unlisten.push(await transport.subscribe<T>(name, handler));
   };
   await add(FLOW_RUN_CHANGED_EVENT, handlers.onRunChanged);
   await add(FLOW_NODE_CHANGED_EVENT, handlers.onNodeChanged);

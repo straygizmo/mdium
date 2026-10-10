@@ -1,4 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
+import { getFlowTransport } from "./transport";
+import "./tauri-transport";
 import type { FlowCommandError, FlowLoadResult, FlowSummary } from "@/shared/types/flow";
 
 /** True for a `{ code, message }` command failure. */
@@ -14,7 +15,7 @@ export function isFlowCommandError(value: unknown): value is FlowCommandError {
 /** Invokes a flow command, normalizing command failures to `FlowCommandError`. */
 async function call<T>(command: string, args: Record<string, unknown>): Promise<T> {
   try {
-    return await invoke<T>(command, args);
+    return await getFlowTransport().call<T>(command, args);
   } catch (err) {
     let candidate: unknown = err;
     if (typeof err === "string") {
