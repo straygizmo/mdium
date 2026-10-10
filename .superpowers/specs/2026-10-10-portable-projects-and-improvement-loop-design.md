@@ -121,7 +121,7 @@ metrics:                           # what the outer loop compares (8.3); refs ar
 | コマンド | 内容 |
 |---|---|
 | `flow_project_load(projectRoot)` | `project.yaml` の解析結果と検証結果 |
-| `flow_project_setup(projectRoot)` | セットアップの実行（進捗は `flow://setup-progress` イベント）。実行中は同じプロジェクトで二重に走らせない |
+| `flow_project_setup(projectRoot, sha256)` | セットアップの実行（進捗は `flow://setup-progress` イベント）。実行中は同じプロジェクトで二重に走らせない。`sha256` は `flow_project_load` が返す `project.yaml` の内容ハッシュで、一致しなければ `FLOW_FILE_CHANGED`（確認した手順と実行する手順を一致させる。V2 実装時の追加） |
 | `flow_runtime_describe(projectRoot, runtime)` | ワーカーを起動して `describe` だけを行い、マニフェストを返して終了する（エディタ用。3.4） |
 
 ---
@@ -565,7 +565,7 @@ export interface FlowTransport {
 | # | 内容 | 主な成果物 | リリース時に使えるもの |
 |---|---|---|---|
 | V1 | `flow-core` クレート分離、`FlowService`、フロントのトランスポート層（Tauri 実装のみ） | cargo ワークスペース、`transport.ts`、import 検査 | なし（挙動変更なし） |
-| V2 | プロジェクトマニフェストと関数化の基盤 | `project.yaml` の解析・検証、`flow_project_load` / `flow_project_setup`、確認画面へのランタイムと `setup` の追加、`secrets` の検査、セットアップ UI、サブフローの戻り値検証（`FLOW_OUTPUT_UNKNOWN`）、`lib/` と一覧の 3 群（16.1, 16.2） | プロジェクトのセットアップ、部品の区別 |
+| V2（実装済み 2026-10-10。差分: `flow_project_setup` に `sha256` を追加、`ProjectLoadResult.sha256`。V3 への申し送り: マニフェストに誤りがあるときの実行開始の扱い、`python` / `cwd` / `workingDir` のシンボリックリンク拒否、プロジェクトヘッダでのエラー一覧表示） | プロジェクトマニフェストと関数化の基盤 | `project.yaml` の解析・検証、`flow_project_load` / `flow_project_setup`、確認画面へのランタイムと `setup` の追加、`secrets` の検査、セットアップ UI、サブフローの戻り値検証（`FLOW_OUTPUT_UNKNOWN`）、`lib/` と一覧の 3 群（16.1, 16.2） | プロジェクトのセットアップ、部品の区別 |
 | V3 | `python` ノードとワーカー | `NodeKind::Python`、ワーカープロトコル、ライフサイクル、`flow_runtime_describe`、`python/mdium-worker/`（pytest 付き）、偽ワーカーでの Rust テスト | Python の段階をノードとして実行 |
 | V4 | 成果物とプレビュー | `artifacts.json`、`mediaType`、アセットプロトコルのスコープと CSP、実行パネルの成果物タブ、承認の `show` と `comment`、実行パネルのサブフロー単位のツリー（16.4） | 画像・動画の確認と、コメント付き承認 |
 | V5 | エディタ（6 章） | パレット、属性パネル、エッジ編集、YAML 分割表示、保存、新規作成、サブフローの折りたたみ表示・ドリルダウン・抽出（16.3） | キャンバスでの編集 |
