@@ -241,6 +241,7 @@ impl RefChecker<'_> {
                         &sub.params,
                         &node_path,
                         &node.id,
+                        true,
                     );
                 }
                 NodeKind::Loop(lp) => match &lp.body {
@@ -251,9 +252,9 @@ impl RefChecker<'_> {
                             &lp.params,
                             &node_path,
                             &node.id,
+                            // The callee's outputs become `results[]` items, not node outputs.
+                            false,
                         );
-                        // The callee's outputs become `results[]` items, not node outputs.
-                        self.declared_outputs.remove(&node.id);
                     }
                     LoopBody::Inline(body) => self.nodes(&body.nodes, &format!("{node_path}.body")),
                 },
@@ -270,6 +271,7 @@ impl RefChecker<'_> {
         args: &BTreeMap<String, Value>,
         node_path: &str,
         node_id: &str,
+        record_outputs: bool,
     ) {
         if reference.trim().is_empty() || crate::template::has_template(reference) {
             return; // already reported by the validator
@@ -344,12 +346,31 @@ impl RefChecker<'_> {
             return;
         }
         let Some(child) = child.flow else { return };
-        for key in args.keys() {
-            if !child.params.contains_key(key) {
+        for (key, value) in args {
+            let Some(def) = child.params.get(key) else {
                 self.issues.error(
                     FlowIssue::new(FLOW_PARAM_MISMATCH, format!("{node_path}.params.{key}"))
                         .with("param", key.clone())
                         .with("reason", "unknown"),
+                );
+                continue;
+            };
+            if let Value::String(text) = value {
+                if crate::template::has_template(text) {
+                    continue; // checked at run time
+                }
+            }
+            let ok = match def.ty {
+                ParamType::String | ParamType::Path => value.is_string(),
+                ParamType::Number => value.is_number(),
+                ParamType::Bool => value.is_boolean(),
+            };
+            if !ok {
+                self.issues.error(
+                    FlowIssue::new(FLOW_PARAM_TYPE, format!("{node_path}.params.{key}"))
+                        .with("param", key.clone())
+                        .with("expected", param_type_name(def.ty))
+                        .with("found", json_type_name(value)),
                 );
             }
         }
@@ -362,8 +383,30 @@ impl RefChecker<'_> {
                 );
             }
         }
-        self.declared_outputs
-            .insert(node_id.to_string(), child.outputs.keys().cloned().collect());
+        if record_outputs {
+            self.declared_outputs
+                .insert(node_id.to_string(), child.outputs.keys().cloned().collect());
+        }
+    }
+}
+
+fn param_type_name(ty: ParamType) -> &'static str {
+    match ty {
+        ParamType::String => "string",
+        ParamType::Number => "number",
+        ParamType::Bool => "bool",
+        ParamType::Path => "path",
+    }
+}
+
+fn json_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
     }
 }
 

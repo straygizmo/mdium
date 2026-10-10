@@ -205,6 +205,7 @@ export const FLOW_ERROR_CODES = [
   "FLOW_PARAM_MISMATCH",
   "FLOW_FILE_TOO_LARGE",
   "FLOW_OUTPUT_UNKNOWN",
+  "FLOW_PARAM_TYPE",
 ] as const;
 
 export const FLOW_WARNING_CODES = [

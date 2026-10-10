@@ -44,6 +44,9 @@ pub const FLOW_FILE_TOO_LARGE: &str = "FLOW_FILE_TOO_LARGE";
 /// A template names `nodes.<id>.outputs.<key>` but the node's outputs
 /// (a sub-flow's declared `outputs`, a loop's fixed keys) have no such key.
 pub const FLOW_OUTPUT_UNKNOWN: &str = "FLOW_OUTPUT_UNKNOWN";
+/// A constant argument to a sub-flow / file body has the wrong JSON type
+/// for the callee's `params.<name>.type`.
+pub const FLOW_PARAM_TYPE: &str = "FLOW_PARAM_TYPE";
 
 // Warnings.
 /// Unknown top-level key (ignored).

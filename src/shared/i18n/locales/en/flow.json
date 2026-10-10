@@ -79,6 +79,7 @@
     "FLOW_PARAM_MISMATCH": "Sub-flow parameter \"{{param}}\" does not match ({{reason}}).",
     "FLOW_FILE_TOO_LARGE": "The file is too large ({{size}} bytes; limit {{limit}}).",
     "FLOW_OUTPUT_UNKNOWN": "Node \"{{node}}\" has no output \"{{key}}\" ({{ref}}).",
+    "FLOW_PARAM_TYPE": "Sub-flow parameter \"{{param}}\" expects {{expected}} but got {{found}}.",
     "FLOW_UNKNOWN_KEY": "Unknown top-level key \"{{key}}\" (ignored).",
     "FLOW_DEPRECATED_FIELD": "\"{{field}}\" is no longer used and is ignored. Use {{replacement}} instead.",
     "FLOW_TRAVERSAL_LIMIT_UNUSED": "The edge {{from}} → {{to}} has maxTraversals but does not close a cycle."

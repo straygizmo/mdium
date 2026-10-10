@@ -1031,3 +1031,29 @@ edges:
     );
     assert_eq!(errors_of(&bad), vec![FLOW_UNKNOWN_NODE_REF]);
 }
+
+#[test]
+fn constant_subflow_arguments_must_match_the_param_type() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let flows = root.join(".mdium/flows");
+    write(&flows.join("child.flow.yaml"), CHILD);
+    let parent = flows.join("parent.flow.yaml");
+    let bad = check_content(
+        root,
+        &parent,
+        &subflow_parent("./child.flow.yaml", ", params: { dir: 42 }"),
+    );
+    assert_eq!(codes(&bad.errors), vec![FLOW_PARAM_TYPE]);
+    let issue = &bad.errors[0];
+    assert_eq!(issue.path, "nodes[0].params.dir");
+    assert_eq!(issue.params["expected"], "path");
+    assert_eq!(issue.params["found"], "number");
+    // Templated values are not checked here (run time does that).
+    let templated = check_content(
+        root,
+        &parent,
+        &flow("params: { n: { type: number } }\nnodes:\n  - { id: s, kind: subflow, flow: './child.flow.yaml', params: { dir: '${{ params.n }}' } }\n"),
+    );
+    assert!(templated.errors.is_empty(), "{:#?}", templated.errors);
+}
