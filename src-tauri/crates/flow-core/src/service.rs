@@ -196,7 +196,6 @@ impl FlowService {
         })
     }
 
-    /// The commands a flow file runs, for the one-time confirmation (spec 7.2).
     /// Reads and validates `.mdium/project.yaml` (spec 2.4).
     pub fn project_load(
         &self,
@@ -221,6 +220,7 @@ impl FlowService {
         })
     }
 
+    /// The commands a flow file runs, for the one-time confirmation (spec 7.2).
     pub fn command_review(
         &self,
         project_root_arg: &str,
@@ -583,12 +583,16 @@ mod tests {
     }
 
     fn service(dir: &Path) -> FlowService {
+        service_with_env(dir, BTreeMap::new())
+    }
+
+    fn service_with_env(dir: &Path, process_env: BTreeMap<String, String>) -> FlowService {
         let env = DriverEnv {
             launcher: Arc::new(AttachedLauncher),
             detached: None,
             sink: Arc::new(NoopSink),
             notifiers: Arc::new(vec![Arc::new(NoopNotifier) as Arc<dyn ApprovalNotifier>]),
-            process_env: Arc::new(Default::default()),
+            process_env: Arc::new(process_env),
             poll: Duration::from_millis(10),
         };
         FlowService::new(Arc::new(FlowEngine::new(
@@ -599,6 +603,103 @@ mod tests {
 
     const OK: &str =
         "schemaVersion: 1\nid: t\nname: T\nnodes:\n  - { id: a, kind: command, run: [x] }\n";
+
+    const MANIFEST: &str = "schemaVersion: 1\nid: p\nname: P\nruntimes:\n  r: { kind: python, python: [.venv/Scripts/python.exe, .venv/bin/python], module: m }\nsetup:\n  - { run: [uv, sync] }\nsecrets: [MDIUM_TEST_SECRET]\n";
+    const NO_COMMANDS: &str =
+        "schemaVersion: 1\nid: t\nname: T\nnodes:\n  - { id: a, kind: approval, message: hi }\n";
+
+    #[test]
+    fn manifest_runtimes_and_setup_require_confirmation_and_change_the_hash() {
+        // Review Focus 1 and 3.
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = service(tmp.path());
+        let root = tmp.path().to_str().unwrap();
+        fs::create_dir_all(tmp.path().join(".mdium/flows")).unwrap();
+        fs::write(tmp.path().join(".mdium/flows/a.flow.yaml"), NO_COMMANDS).unwrap();
+        let before = svc
+            .command_review(root, ".mdium/flows/a.flow.yaml")
+            .unwrap();
+        assert!(before.confirmed && before.runtimes.is_empty() && before.project_path.is_none());
+        fs::write(tmp.path().join(".mdium/project.yaml"), MANIFEST).unwrap();
+        let review = svc
+            .command_review(root, ".mdium/flows/a.flow.yaml")
+            .unwrap();
+        assert_ne!(review.sha256, before.sha256);
+        assert!(!review.confirmed);
+        assert_eq!(review.project_path.as_deref(), Some(".mdium/project.yaml"));
+        assert_eq!(review.runtimes[0].name, "r");
+        assert_eq!(
+            review.runtimes[0].python,
+            vec![".venv/Scripts/python.exe", ".venv/bin/python"]
+        );
+        assert_eq!(review.runtimes[0].module, "m");
+        assert_eq!(review.setup[0].run, vec!["uv", "sync"]);
+        // Starting before confirming is refused; after confirming, the secret check runs.
+        let err = svc
+            .run_start(
+                root,
+                ".mdium/flows/a.flow.yaml",
+                &BTreeMap::new(),
+                &review.sha256,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, crate::run::engine::FLOW_COMMANDS_UNCONFIRMED);
+        svc.confirm_commands(root, ".mdium/flows/a.flow.yaml", &review.sha256)
+            .unwrap();
+        let err = svc
+            .run_start(
+                root,
+                ".mdium/flows/a.flow.yaml",
+                &BTreeMap::new(),
+                &review.sha256,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, crate::run::engine::FLOW_SECRET_MISSING);
+        assert_eq!(err.details[0].params["name"], "MDIUM_TEST_SECRET");
+        // Editing the manifest invalidates the confirmation.
+        fs::write(
+            tmp.path().join(".mdium/project.yaml"),
+            MANIFEST.replace("uv, sync", "uv, sync, --frozen"),
+        )
+        .unwrap();
+        assert!(
+            !svc.command_review(root, ".mdium/flows/a.flow.yaml")
+                .unwrap()
+                .confirmed
+        );
+    }
+
+    #[test]
+    fn present_secrets_do_not_block_start() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = BTreeMap::from([("MDIUM_TEST_SECRET".to_string(), "x".to_string())]);
+        let svc = service_with_env(tmp.path(), env);
+        let root = tmp.path().to_str().unwrap();
+        fs::create_dir_all(tmp.path().join(".mdium/flows")).unwrap();
+        fs::write(tmp.path().join(".mdium/flows/a.flow.yaml"), NO_COMMANDS).unwrap();
+        fs::write(
+            tmp.path().join(".mdium/project.yaml"),
+            "schemaVersion: 1\nid: p\nname: P\nsecrets: [MDIUM_TEST_SECRET]\n",
+        )
+        .unwrap();
+        let review = svc
+            .command_review(root, ".mdium/flows/a.flow.yaml")
+            .unwrap();
+        assert!(
+            review.confirmed,
+            "no commands, runtimes or setup: nothing to confirm"
+        );
+        let started = svc
+            .run_start(
+                root,
+                ".mdium/flows/a.flow.yaml",
+                &BTreeMap::new(),
+                &review.sha256,
+            )
+            .unwrap();
+        assert!(!started.run_id.is_empty());
+        svc.run_cancel(root, &started.run_id).unwrap();
+    }
 
     #[test]
     fn project_root_must_be_an_existing_absolute_directory() {

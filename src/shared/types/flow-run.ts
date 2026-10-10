@@ -142,11 +142,26 @@ export interface CommandSummary {
   templated: boolean;
 }
 
+export interface RuntimeSummary {
+  name: string;
+  python: string[];
+  module: string;
+  cwd: string;
+}
+
+export interface SetupSummary {
+  run: string[];
+  workingDir?: string;
+}
+
 export interface CommandReview {
   path: string;
   sha256: string;
   confirmed: boolean;
   commands: CommandSummary[];
+  runtimes: RuntimeSummary[];
+  setup: SetupSummary[];
+  projectPath?: string;
 }
 
 /** Command failures of run operations (plus `details`). */

@@ -85,6 +85,27 @@ impl From<StoreError> for EngineError {
 
 type Result<T> = std::result::Result<T, EngineError>;
 
+pub const FLOW_SECRET_MISSING: &str = "FLOW_SECRET_MISSING";
+
+/// A runtime of the manifest, as shown for confirmation.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeSummary {
+    pub name: String,
+    pub python: Vec<String>,
+    pub module: String,
+    pub cwd: String,
+}
+
+/// A setup step of the manifest, as shown for confirmation.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupSummary {
+    pub run: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub working_dir: Option<String>,
+}
+
 /// The commands of a flow file for confirmation (spec 7.2).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -93,6 +114,10 @@ pub struct CommandReview {
     pub sha256: String,
     pub confirmed: bool,
     pub commands: Vec<CommandSummary>,
+    pub runtimes: Vec<RuntimeSummary>,
+    pub setup: Vec<SetupSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_path: Option<String>,
 }
 
 /// A run in a list.
@@ -189,13 +214,21 @@ struct Bundle {
     /// Referenced files by project-relative path: (sha256, flow).
     others: BTreeMap<String, (String, crate::model::FlowDef)>,
     refs: BTreeMap<String, String>,
+    project: Option<ProjectInBundle>,
+}
+
+/// The manifest as read when the bundle was loaded.
+struct ProjectInBundle {
+    display: String,
+    sha: String,
+    project: Option<crate::project::ProjectDef>,
 }
 
 impl Bundle {
     /// The confirmed hash: the file's own hash when it references nothing,
     /// otherwise a hash over every file's path and hash.
     fn hash(&self) -> String {
-        if self.others.is_empty() {
+        if self.others.is_empty() && self.project.is_none() {
             return self.root_sha.clone();
         }
         let mut text = String::from("mdium-flow-bundle-v1\n");
@@ -205,11 +238,55 @@ impl Bundle {
                 .iter()
                 .map(|(p, (sha, _))| (p.as_str(), sha.as_str())),
         );
+        if let Some(project) = &self.project {
+            files.push((project.display.as_str(), project.sha.as_str()));
+        }
         files.sort();
         for (path, sha) in files {
             text.push_str(&format!("{path}\t{sha}\n"));
         }
         sha256_hex(text.as_bytes())
+    }
+
+    fn runtime_summaries(&self) -> Vec<RuntimeSummary> {
+        self.project
+            .as_ref()
+            .and_then(|p| p.project.as_ref())
+            .map(|p| {
+                p.runtimes
+                    .iter()
+                    .map(|(name, rt)| RuntimeSummary {
+                        name: name.clone(),
+                        python: rt.python.candidates(),
+                        module: rt.module.clone(),
+                        cwd: rt.cwd.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn setup_summaries(&self) -> Vec<SetupSummary> {
+        self.project
+            .as_ref()
+            .and_then(|p| p.project.as_ref())
+            .map(|p| {
+                p.setup
+                    .iter()
+                    .map(|s| SetupSummary {
+                        run: s.run.clone(),
+                        working_dir: s.working_dir.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Anything the user must confirm before this content runs.
+    fn needs_confirmation(&self) -> bool {
+        !command_summaries(&self.files()).is_empty()
+            || !self.runtime_summaries().is_empty()
+            || !self.setup_summaries().is_empty()
     }
 
     fn files(&self) -> Vec<(&str, &crate::model::FlowDef)> {
@@ -299,12 +376,29 @@ fn load_bundle(root: &Path, rel: &str) -> Result<Bundle> {
             queue.push((child, child_display, child_flow));
         }
     }
+    let project = {
+        let file = root.join(crate::project::PROJECT_FILE);
+        match crate::project::load_project(root) {
+            None => None,
+            Some(report) => {
+                let bytes = std::fs::read(&file).map_err(|e| {
+                    EngineError::new(FLOW_FILE_INVALID, format!("project.yaml: {e}"))
+                })?;
+                Some(ProjectInBundle {
+                    display: crate::project::PROJECT_FILE.to_string(),
+                    sha: sha256_hex(&bytes),
+                    project: report.project,
+                })
+            }
+        }
+    };
     Ok(Bundle {
         display,
         root_sha,
         flow,
         others,
         refs,
+        project,
     })
 }
 
@@ -486,12 +580,16 @@ impl FlowEngine {
         let bundle = load_bundle(root, rel)?;
         let sha256 = bundle.hash();
         let commands = command_summaries(&bundle.files());
-        let confirmed = commands.is_empty() || self.is_confirmed(root, &bundle.display, &sha256);
+        let confirmed =
+            !bundle.needs_confirmation() || self.is_confirmed(root, &bundle.display, &sha256);
         Ok(CommandReview {
-            path: bundle.display,
+            path: bundle.display.clone(),
             sha256,
             confirmed,
             commands,
+            runtimes: bundle.runtime_summaries(),
+            setup: bundle.setup_summaries(),
+            project_path: bundle.project.as_ref().map(|p| p.display.clone()),
         })
     }
 
@@ -559,13 +657,27 @@ impl FlowEngine {
             )
             .with_details(problems));
         }
-        let has_commands = !command_summaries(&bundle.files()).is_empty();
         let display = bundle.display.clone();
-        if has_commands && !self.is_confirmed(root, &display, &actual) {
+        if bundle.needs_confirmation() && !self.is_confirmed(root, &display, &actual) {
             return Err(EngineError::new(
                 FLOW_COMMANDS_UNCONFIRMED,
                 "review and confirm the commands first",
             ));
+        }
+        if let Some(project) = bundle.project.as_ref().and_then(|p| p.project.as_ref()) {
+            let missing: Vec<Reason> = project
+                .secrets
+                .iter()
+                .filter(|name| self.env.process_env.get(*name).is_none_or(|v| v.is_empty()))
+                .map(|name| Reason::new(FLOW_SECRET_MISSING).with("name", name.clone()))
+                .collect();
+            if !missing.is_empty() {
+                return Err(EngineError::new(
+                    FLOW_SECRET_MISSING,
+                    "environment variables named in project.yaml `secrets` are not set",
+                )
+                .with_details(missing));
+            }
         }
         let Bundle {
             flow, others, refs, ..

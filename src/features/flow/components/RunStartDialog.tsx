@@ -60,7 +60,8 @@ export function RunStartDialog({ projectRoot, flowPath, flow, onClose, onStarted
     };
   }, [projectRoot, flowPath]);
 
-  const needsConfirmation = !!review && !review.confirmed && review.commands.length > 0;
+  const reviewItems = review ? review.commands.length + review.runtimes.length + review.setup.length : 0;
+  const needsConfirmation = !!review && !review.confirmed && reviewItems > 0;
   const canStart = !!review && !busy && (!needsConfirmation || accepted);
 
   const start = async () => {
@@ -143,17 +144,53 @@ export function RunStartDialog({ projectRoot, flowPath, flow, onClose, onStarted
                 </li>
               ))}
             </ul>
-            {needsConfirmation ? (
-              <label className="flow-dialog__confirm">
-                <input type="checkbox" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} />
-                <span>{t("run.confirmLabel")}</span>
-              </label>
-            ) : (
-              <div className="flow-dialog__muted">{t("run.alreadyConfirmed")}</div>
-            )}
           </>
         )}
       </section>
+      {review && review.runtimes.length > 0 && (
+        <section className="flow-dialog__section">
+          <h3 className="flow-dialog__heading">{t("run.runtimesTitle")}</h3>
+          <div className="flow-dialog__muted">{t("run.runtimesHint", { path: review.projectPath ?? ".mdium/project.yaml" })}</div>
+          <ul className="flow-dialog__commands">
+            {review.runtimes.map((rt) => (
+              <li key={rt.name} className="flow-dialog__command">
+                <div className="flow-dialog__command-head">
+                  <strong>{rt.name}</strong>
+                  <span className="flow-dialog__badge">{t("run.runtimePython")}</span>
+                </div>
+                {rt.python.map((p) => (
+                  <code key={p} className="flow-dialog__code">{p}</code>
+                ))}
+                <div className="flow-dialog__muted">{t("run.runtimeModule", { module: rt.module })}</div>
+                <div className="flow-dialog__muted">{t("run.workingDir", { dir: rt.cwd })}</div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {review && review.setup.length > 0 && (
+        <section className="flow-dialog__section">
+          <h3 className="flow-dialog__heading">{t("run.setupTitle")}</h3>
+          <ul className="flow-dialog__commands">
+            {review.setup.map((step, i) => (
+              <li key={i} className="flow-dialog__command">
+                <code className="flow-dialog__code">{step.run.map((a) => (/\s/.test(a) ? JSON.stringify(a) : a)).join(" ")}</code>
+                {step.workingDir && <div className="flow-dialog__muted">{t("run.workingDir", { dir: step.workingDir })}</div>}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {review && reviewItems > 0 && (
+        needsConfirmation ? (
+          <label className="flow-dialog__confirm">
+            <input type="checkbox" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} />
+            <span>{t("run.confirmLabel")}</span>
+          </label>
+        ) : (
+          <div className="flow-dialog__muted">{t("run.alreadyConfirmed")}</div>
+        )
+      )}
       {described && (
         <div className="flow-dialog__error" role="alert">
           <div>{described.message}</div>

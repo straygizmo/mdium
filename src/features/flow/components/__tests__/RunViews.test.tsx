@@ -53,6 +53,8 @@ const review: CommandReview = {
     { file: PATH, nodeId: "a", run: ["tool", "${{ params.dir }}"], shell: false, env: { K: "v" }, templated: true },
     { file: ".mdium/flows/child.flow.yaml", within: ["docs"], nodeId: "inner", run: ["x"], shell: false, env: {}, templated: false },
   ],
+  runtimes: [],
+  setup: [],
 };
 
 function summary(runId: string, extra: Partial<RunSummary> = {}): RunSummary {
@@ -260,6 +262,27 @@ describe("run views", () => {
     await act(async () => button(container, "Start").click());
     await waitFor(() => expect(onStarted).toHaveBeenCalledWith("r1"));
     expect(calls).toEqual(["confirm abc", 'start {"dir":"data","n":3,"flag":true} abc']);
+  });
+
+  it("requires confirmation for manifest runtimes even without commands", async () => {
+    route({
+      flow_command_review: () => ({
+        ...review,
+        commands: [],
+        runtimes: [{ name: "r", python: [".venv/bin/python"], module: "m", cwd: "." }],
+        setup: [],
+        confirmed: false,
+      }),
+    });
+    await act(async () =>
+      root.render(<RunStartDialog projectRoot={ROOT} flowPath={PATH} flow={flow} onClose={() => {}} onStarted={() => {}} />),
+    );
+    await waitFor(() => expect(container.textContent).toContain("Runtimes this project declares"));
+    expect(container.textContent).toContain(".venv/bin/python");
+    expect(button(container, "Start").disabled).toBe(true);
+    const confirm = [...container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find((c) => !c.hasAttribute("data-switch"))!;
+    await act(async () => confirm.click());
+    expect(button(container, "Start").disabled).toBe(false);
   });
 
   it("shows start errors with details", async () => {

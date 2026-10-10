@@ -5,8 +5,8 @@
 
 use flow_core::load::FlowSummary;
 use flow_core::service::FlowService;
-pub use flow_core::service::{FlowCommandError, FlowLoadResult, FLOW_COMMAND_FAILED};
 use flow_core::service::ProjectLoadResult;
+pub use flow_core::service::{FlowCommandError, FlowLoadResult, FLOW_COMMAND_FAILED};
 use std::sync::Arc;
 
 /// The process-wide service, managed as Tauri state.
