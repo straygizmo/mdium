@@ -26,6 +26,7 @@ pub const RUN_CHANGED_EVENT: &str = "flow://run-changed";
 pub const NODE_CHANGED_EVENT: &str = "flow://node-changed";
 pub const PROGRESS_EVENT: &str = "flow://progress";
 pub const APPROVAL_REQUESTED_EVENT: &str = "flow://approval-requested";
+pub const SETUP_PROGRESS_EVENT: &str = "flow://setup-progress";
 
 /// How long app exit waits for drivers to record `interrupted`.
 pub const SHUTDOWN_WAIT: Duration = Duration::from_secs(5);

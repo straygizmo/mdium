@@ -200,6 +200,9 @@
   },
   "runError": {
     "FLOW_PROJECT_INVALID": "The folder is not available.",
+    "FLOW_PROJECT_REQUIRED": "This folder has no valid .mdium/project.yaml.",
+    "FLOW_SETUP_BUSY": "Setup is already running for this project.",
+    "FLOW_SETUP_FAILED": "Setup could not be started.",
     "FLOW_FILE_PATH_INVALID": "The flow file path is not valid.",
     "FLOW_FILE_NOT_FOUND": "The flow file was not found.",
     "FLOW_FILE_CHANGED": "The flow file changed after it was reviewed. Review it again.",

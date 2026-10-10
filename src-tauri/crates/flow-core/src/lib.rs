@@ -12,6 +12,7 @@ pub mod project;
 pub mod provider;
 pub mod run;
 pub mod service;
+pub mod setup;
 pub mod template;
 pub mod validate;
 

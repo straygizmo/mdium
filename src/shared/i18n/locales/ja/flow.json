@@ -200,6 +200,9 @@
   },
   "runError": {
     "FLOW_PROJECT_INVALID": "フォルダを使用できません。",
+    "FLOW_PROJECT_REQUIRED": "このフォルダに有効な .mdium/project.yaml がありません。",
+    "FLOW_SETUP_BUSY": "このプロジェクトのセットアップは実行中です。",
+    "FLOW_SETUP_FAILED": "セットアップを開始できませんでした。",
     "FLOW_FILE_PATH_INVALID": "フローファイルのパスが不正です。",
     "FLOW_FILE_NOT_FOUND": "フローファイルが見つかりません。",
     "FLOW_FILE_CHANGED": "確認した後にフローファイルが変更されました。もう一度確認してください。",

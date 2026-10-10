@@ -6,6 +6,8 @@ import type {
   FlowSummary,
   ProjectLoadResult,
 } from "@/shared/types/flow";
+import { FLOW_SETUP_PROGRESS_EVENT } from "@/shared/types/flow-run";
+import type { SetupProgressEvent, SetupResult } from "@/shared/types/flow-run";
 
 /** True for a `{ code, message }` command failure. */
 export function isFlowCommandError(value: unknown): value is FlowCommandError {
@@ -52,4 +54,11 @@ export const flowApi = {
   /** Reads and validates `.mdium/project.yaml`. */
   projectLoad: (projectRoot: string) =>
     call<ProjectLoadResult>("flow_project_load", { projectRoot }),
+  /** Runs the manifest's setup steps; progress arrives via `subscribeSetupProgress`. */
+  projectSetup: (projectRoot: string) => call<SetupResult>("flow_project_setup", { projectRoot }),
 };
+
+/** Subscribes to setup progress; resolves to the unsubscribe function. */
+export function subscribeSetupProgress(handler: (event: SetupProgressEvent) => void): Promise<() => void> {
+  return getFlowTransport().subscribe<SetupProgressEvent>(FLOW_SETUP_PROGRESS_EVENT, handler);
+}

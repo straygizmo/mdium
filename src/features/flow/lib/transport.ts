@@ -3,6 +3,7 @@ import {
   FLOW_NODE_CHANGED_EVENT,
   FLOW_PROGRESS_EVENT,
   FLOW_RUN_CHANGED_EVENT,
+  FLOW_SETUP_PROGRESS_EVENT,
 } from "@/shared/types/flow-run";
 
 /** The backend events a transport can deliver (`flow://...`). */
@@ -10,7 +11,8 @@ export type FlowEventName =
   | typeof FLOW_RUN_CHANGED_EVENT
   | typeof FLOW_NODE_CHANGED_EVENT
   | typeof FLOW_PROGRESS_EVENT
-  | typeof FLOW_APPROVAL_REQUESTED_EVENT;
+  | typeof FLOW_APPROVAL_REQUESTED_EVENT
+  | typeof FLOW_SETUP_PROGRESS_EVENT;
 
 /**
  * How the flow UI reaches the engine. The desktop app talks to Tauri

@@ -175,6 +175,36 @@ export const FLOW_RUN_CHANGED_EVENT = "flow://run-changed";
 export const FLOW_NODE_CHANGED_EVENT = "flow://node-changed";
 export const FLOW_PROGRESS_EVENT = "flow://progress";
 export const FLOW_APPROVAL_REQUESTED_EVENT = "flow://approval-requested";
+export const FLOW_SETUP_PROGRESS_EVENT = "flow://setup-progress";
+
+export type SetupStatus = "started" | "succeeded" | "failed" | "finished";
+
+export interface SetupProgressEvent {
+  projectRoot: string;
+  setupId: string;
+  step: number;
+  total: number;
+  status: SetupStatus;
+  run: string[];
+  exitCode?: number;
+}
+
+export interface SetupStepResult {
+  index: number;
+  run: string[];
+  workingDir: string;
+  exitCode?: number;
+  error?: string;
+  stdoutTail: string;
+  stderrTail: string;
+}
+
+export interface SetupResult {
+  setupId: string;
+  ok: boolean;
+  logDir: string;
+  steps: SetupStepResult[];
+}
 
 export interface RunChangedEvent {
   projectRoot: string;

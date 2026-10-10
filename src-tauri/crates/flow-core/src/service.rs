@@ -7,13 +7,20 @@ use crate::parse::FlowFormat;
 use crate::project::{load_project, ProjectReport, PROJECT_FILE};
 use crate::run::engine::{CommandReview, EngineError, FlowEngine, RunSnapshot, RunSummary};
 use crate::run::model::Reason;
+use crate::setup::{run_setup, SetupProgress, SetupResult};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// The project has no manifest, or its manifest has errors.
+pub const FLOW_PROJECT_REQUIRED: &str = "FLOW_PROJECT_REQUIRED";
+/// A setup is already running for this project.
+pub const FLOW_SETUP_BUSY: &str = "FLOW_SETUP_BUSY";
+/// Setup could not be started (reserved for the frontend's error table).
+pub const FLOW_SETUP_FAILED: &str = "FLOW_SETUP_FAILED";
 /// The project root is empty, not absolute, or not an existing directory.
 pub const FLOW_PROJECT_INVALID: &str = "FLOW_PROJECT_INVALID";
 /// The flow path is not a `*.flow.{yaml,yml,json}` file inside the project
@@ -133,6 +140,8 @@ fn flow_runs_ignored(root: &Path) -> bool {
 /// transports (Tauri commands, HTTP handlers) are thin wrappers over it.
 pub struct FlowService {
     engine: Arc<FlowEngine>,
+    /// Project roots whose setup is running (one at a time per project).
+    pub(crate) setups: Mutex<HashSet<PathBuf>>,
 }
 
 /// `flow_project_load` result: the manifest, or `exists: false`.
@@ -147,7 +156,44 @@ pub struct ProjectLoadResult {
 
 impl FlowService {
     pub fn new(engine: Arc<FlowEngine>) -> Self {
-        Self { engine }
+        Self {
+            engine,
+            setups: Mutex::new(HashSet::new()),
+        }
+    }
+
+    /// Runs the manifest's `setup` steps (spec 2.2); progress goes to `progress`.
+    pub fn project_setup(
+        &self,
+        project_root_arg: &str,
+        progress: &(dyn Fn(&SetupProgress) + Sync),
+    ) -> Result<SetupResult, FlowCommandError> {
+        let root = project_root(project_root_arg)?;
+        let project = match load_project(&root) {
+            Some(report) if report.errors.is_empty() => report.project,
+            _ => None,
+        }
+        .ok_or_else(|| {
+            FlowCommandError::new(FLOW_PROJECT_REQUIRED, "no valid .mdium/project.yaml")
+        })?;
+        {
+            let mut running = self.setups.lock().unwrap_or_else(|p| p.into_inner());
+            if !running.insert(root.clone()) {
+                return Err(FlowCommandError::new(FLOW_SETUP_BUSY, project_root_arg));
+            }
+        }
+        let result = run_setup(
+            &root,
+            &project,
+            &crate::run::process::AttachedLauncher,
+            Duration::from_millis(200),
+            progress,
+        );
+        self.setups
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&root);
+        Ok(result)
     }
 
     pub fn engine(&self) -> &Arc<FlowEngine> {
@@ -355,11 +401,12 @@ impl FlowService {
 
 /// Every command the service dispatches by name (the Tauri command names;
 /// the HTTP server uses the same names, spec 2026-10-10, 10.2).
-pub const COMMAND_NAMES: [&str; 18] = [
+pub const COMMAND_NAMES: [&str; 19] = [
     "flow_list",
     "flow_load",
     "flow_validate",
     "flow_project_load",
+    "flow_project_setup",
     "flow_command_review",
     "flow_confirm_commands",
     "flow_run_start",
@@ -483,6 +530,10 @@ impl FlowService {
             "flow_project_load" => {
                 let a: RootArgs = args(value)?;
                 reply(self.project_load(&a.project_root)?)
+            }
+            "flow_project_setup" => {
+                let a: RootArgs = args(value)?;
+                reply(self.project_setup(&a.project_root, &|_| {})?)
             }
             "flow_command_review" => {
                 let a: PathArgs = args(value)?;
@@ -950,6 +1001,41 @@ mod tests {
         assert_eq!(err.code, FLOW_RUN_NOT_ENTRY);
         let loaded = svc.load_flow(root, ".mdium/flows/lib/p.flow.yaml").unwrap();
         assert_eq!(loaded.kind, crate::load::FlowKind::Part);
+    }
+
+    #[test]
+    fn project_setup_requires_a_valid_manifest_and_rejects_concurrent_runs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = service(tmp.path());
+        let root = tmp.path().to_str().unwrap();
+        assert_eq!(
+            svc.project_setup(root, &|_| {}).unwrap_err().code,
+            FLOW_PROJECT_REQUIRED
+        );
+        fs::create_dir_all(tmp.path().join(".mdium")).unwrap();
+        fs::write(
+            tmp.path().join(".mdium/project.yaml"),
+            "schemaVersion: 1\nid: p\nname: P\n",
+        )
+        .unwrap();
+        let result = svc.project_setup(root, &|_| {}).unwrap();
+        assert!(result.ok && result.steps.is_empty());
+        let via_call = svc
+            .call(
+                "flow_project_setup",
+                serde_json::json!({ "projectRoot": root }),
+            )
+            .unwrap();
+        assert_eq!(via_call["ok"], true);
+        // Busy: mark the root as running, then try again.
+        svc.setups
+            .lock()
+            .unwrap()
+            .insert(project_root(root).unwrap());
+        assert_eq!(
+            svc.project_setup(root, &|_| {}).unwrap_err().code,
+            FLOW_SETUP_BUSY
+        );
     }
 
     #[test]

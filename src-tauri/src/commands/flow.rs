@@ -7,7 +7,10 @@ use flow_core::load::FlowSummary;
 use flow_core::service::FlowService;
 use flow_core::service::ProjectLoadResult;
 pub use flow_core::service::{FlowCommandError, FlowLoadResult, FLOW_COMMAND_FAILED};
+use flow_core::setup::{SetupProgress, SetupResult};
+use serde::Serialize;
 use std::sync::Arc;
+use tauri::Emitter;
 
 /// The process-wide service, managed as Tauri state.
 pub type FlowServiceState = Arc<FlowService>;
@@ -71,4 +74,33 @@ pub async fn flow_project_load(
     project_root: String,
 ) -> Result<ProjectLoadResult, FlowCommandError> {
     with_service(state, move |s| s.project_load(&project_root)).await
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SetupProgressPayload {
+    project_root: String,
+    #[serde(flatten)]
+    progress: SetupProgress,
+}
+
+#[tauri::command]
+pub async fn flow_project_setup(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, FlowServiceState>,
+    project_root: String,
+) -> Result<SetupResult, FlowCommandError> {
+    with_service(state, move |s| {
+        let root = project_root.clone();
+        s.project_setup(&project_root, &move |p| {
+            let payload = SetupProgressPayload {
+                project_root: root.clone(),
+                progress: p.clone(),
+            };
+            if let Err(err) = app.emit(super::flow_run::SETUP_PROGRESS_EVENT, payload) {
+                eprintln!("[flow] emitting setup progress failed: {err}");
+            }
+        })
+    })
+    .await
 }

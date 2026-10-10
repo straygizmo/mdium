@@ -5,7 +5,9 @@ import { resolve } from "node:path";
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
-import { flowApi, isFlowCommandError } from "../flow-api";
+import { flowApi, isFlowCommandError, subscribeSetupProgress } from "../flow-api";
+import { setFlowTransport } from "../transport";
+import type { SetupProgressEvent } from "@/shared/types/flow-run";
 import { FLOW_ERROR_CODES, FLOW_WARNING_CODES } from "@/shared/types/flow";
 
 const ROOT = "C:\proj";
@@ -24,6 +26,7 @@ describe("flowApi", () => {
       { projectRoot: ROOT, path: PATH, content: "schemaVersion: 1" },
     ],
     ["projectLoad", () => flowApi.projectLoad(ROOT), "flow_project_load", { projectRoot: ROOT }],
+    ["projectSetup", () => flowApi.projectSetup(ROOT), "flow_project_setup", { projectRoot: ROOT }],
   ] as const)("%s invokes %s", async (_name, call, command, args) => {
     invoke.mockResolvedValueOnce("ok");
     await expect(call()).resolves.toBe("ok");
@@ -43,6 +46,35 @@ describe("flowApi", () => {
     await expect(flowApi.list(ROOT)).rejects.toBe(err);
     invoke.mockRejectedValueOnce("not json");
     await expect(flowApi.list(ROOT)).rejects.toBe("not json");
+  });
+
+  it("subscribes to setup progress through the transport", async () => {
+    const seen: Array<[string, (payload: unknown) => void]> = [];
+    const unlisten = () => {};
+    setFlowTransport({
+      call: async () => undefined as never,
+      subscribe: async <T,>(event: string, handler: (payload: T) => void) => {
+        seen.push([event, handler as (payload: unknown) => void]);
+        return unlisten;
+      },
+    });
+    try {
+      const received: SetupProgressEvent[] = [];
+      await expect(subscribeSetupProgress((e) => received.push(e))).resolves.toBe(unlisten);
+      expect(seen[0][0]).toBe("flow://setup-progress");
+      const payload: SetupProgressEvent = {
+        projectRoot: ROOT,
+        setupId: "s1",
+        step: 1,
+        total: 2,
+        status: "started",
+        run: ["npm", "ci"],
+      };
+      seen[0][1](payload);
+      expect(received).toEqual([payload]);
+    } finally {
+      setFlowTransport(null);
+    }
   });
 
   it("recognizes command errors", () => {
