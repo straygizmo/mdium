@@ -13,6 +13,7 @@ use flow_core::run::model::{
 };
 use flow_core::run::process::{AttachedLauncher, Launcher};
 use flow_core::run::supervise::DetachedLauncher;
+use flow_core::run::worker::PipedWorkerLauncher;
 use flow_core::service::{FlowService, GitignoreStatus};
 use serde::Serialize;
 use serde_json::Value;
@@ -187,6 +188,7 @@ pub fn create_state(app: &AppHandle) -> FlowServiceState {
         ]),
         process_env: Arc::new(std::env::vars().collect()),
         poll: Duration::from_millis(200),
+        worker_launcher: Arc::new(PipedWorkerLauncher),
     };
     let engine = Arc::new(FlowEngine::new(
         env,

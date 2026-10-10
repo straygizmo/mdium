@@ -693,6 +693,7 @@ mod tests {
             notifiers: Arc::new(vec![Arc::new(NoopNotifier) as Arc<dyn ApprovalNotifier>]),
             process_env: Arc::new(process_env),
             poll: Duration::from_millis(10),
+            worker_launcher: Arc::new(crate::run::worker::PipedWorkerLauncher),
         };
         FlowService::new(Arc::new(FlowEngine::new(
             env,

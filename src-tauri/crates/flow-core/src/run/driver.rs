@@ -25,6 +25,7 @@ use crate::run::scope::{
 };
 use crate::run::store::{EventLog, RunMeta, RunStore, CHECKPOINT_EVERY};
 use crate::run::supervise::DetachedProcess;
+use crate::run::worker::WorkerLauncher;
 use crate::template;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -123,6 +124,8 @@ pub struct DriverEnv {
     pub process_env: Arc<BTreeMap<String, String>>,
     /// How often running processes and the STOP file are polled.
     pub poll: Duration,
+    /// Starts the resident Python workers of `python` nodes.
+    pub worker_launcher: Arc<dyn WorkerLauncher>,
 }
 
 /// Minimum interval between persisted progress events of one node.

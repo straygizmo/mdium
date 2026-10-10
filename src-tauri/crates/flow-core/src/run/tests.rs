@@ -6,7 +6,10 @@ use crate::run::engine::*;
 use crate::run::model::*;
 use crate::run::process::AttachedLauncher;
 use crate::run::store::{RunMeta, RunStore, RUN_SCHEMA_VERSION};
-use crate::run::test_helper::{detached_launcher, helper_argv, helper_env, process_alive};
+use crate::run::test_helper::{
+    detached_launcher, fake_worker_launcher, helper_argv, helper_env, process_alive,
+};
+use crate::run::worker::WorkerLauncher;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -59,6 +62,20 @@ struct Fixture {
 }
 
 fn make_engine(config: &Path, sink: Arc<Sink>, notifier: Arc<Notifier>) -> FlowEngine {
+    make_engine_with_worker(config, sink, notifier, default_worker())
+}
+
+/// A fake worker without stages (existing tests never start a python node).
+fn default_worker() -> Arc<dyn WorkerLauncher> {
+    fake_worker_launcher(json!({ "stages": [], "behaviour": {} }))
+}
+
+fn make_engine_with_worker(
+    config: &Path,
+    sink: Arc<Sink>,
+    notifier: Arc<Notifier>,
+    worker_launcher: Arc<dyn WorkerLauncher>,
+) -> FlowEngine {
     let env = DriverEnv {
         launcher: Arc::new(AttachedLauncher),
         // Commands run detached by default, as in the app.
@@ -67,18 +84,29 @@ fn make_engine(config: &Path, sink: Arc<Sink>, notifier: Arc<Notifier>) -> FlowE
         notifiers: Arc::new(vec![notifier as Arc<dyn ApprovalNotifier>]),
         process_env: Arc::new(std::env::vars().collect()),
         poll: Duration::from_millis(20),
+        worker_launcher,
     };
     FlowEngine::new(env, config.join("confirmations.json"))
 }
 
 fn fixture() -> Fixture {
+    fixture_with_worker(json!({ "stages": [], "behaviour": {} }))
+}
+
+/// A fixture whose python workers are fakes running `script`.
+fn fixture_with_worker(script: Value) -> Fixture {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("project");
     let config = tmp.path().join("config");
     std::fs::create_dir_all(&root).unwrap();
     let sink = Arc::new(Sink::default());
     let notifier = Arc::new(Notifier::default());
-    let engine = make_engine(&config, sink.clone(), notifier.clone());
+    let engine = make_engine_with_worker(
+        &config,
+        sink.clone(),
+        notifier.clone(),
+        fake_worker_launcher(script),
+    );
     Fixture {
         _tmp: tmp,
         root,

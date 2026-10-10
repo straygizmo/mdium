@@ -226,3 +226,251 @@ pub fn process_alive(pid: u32) -> bool {
             .unwrap_or(false)
     }
 }
+
+// ---- Fake Python worker ----------------------------------------------------
+//
+// The same trick as the command helper: the test binary re-invokes itself and
+// `flow_test_worker_entry` speaks the `mdium-worker-v1` protocol on stdio,
+// driven by the JSON script in `FLOW_TEST_WORKER`:
+//
+//   { "stages": [...],                      // manifest answer to `describe`
+//     "behaviour": { "<entry>": [steps] },  // what a `call` of <entry> does
+//     "exit_on_describe": 3,                // exit with this code on `describe`
+//     "ignore_describe": true }             // never answer `describe`
+//
+// Steps: `emit` (item JSON; `callId` is added), `log` {level,text}, `raw`
+// (a verbatim line), `sleep_ms`, `wait_cancel_ms` (outcome `stopped` when a
+// `cancel` arrives), `wait_stop_ms` (outcome `stopped` when the STOP file
+// appears), `exit` (code; no outcome), `outcome` {status,reason?,message?},
+// `fail_before_attempt` (n; outcome `fail` while `context.attempt` < n, which
+// also ends the call).
+//
+// When `FLOW_TEST_WORKER_PID_FILE` is set the worker writes its pid there and
+// appends one line per handled `describe` to the sibling `describes.log`.
+
+use super::worker::{spawn_piped, WorkerHandle, WorkerLauncher, WorkerSpec};
+use std::io::BufRead;
+use std::path::PathBuf;
+use std::sync::mpsc::{channel, Receiver, RecvTimeoutError};
+use std::sync::Arc;
+
+const WORKER_TEST_NAME: &str = "run::test_helper::flow_test_worker_entry";
+
+/// The env entry that carries the fake worker's script.
+pub fn worker_script_env(script: &Value) -> (String, String) {
+    ("FLOW_TEST_WORKER".to_string(), script.to_string())
+}
+
+/// Starts the fake worker (this test binary) through the real piped spawner.
+pub struct FakeWorkerLauncher {
+    pub script: Value,
+}
+
+impl WorkerLauncher for FakeWorkerLauncher {
+    fn launch(&self, spec: &WorkerSpec) -> std::io::Result<Box<dyn WorkerHandle>> {
+        let mut argv = helper_argv();
+        argv[2] = WORKER_TEST_NAME.into();
+        let mut cmd = std::process::Command::new(&argv[0]);
+        let (key, value) = worker_script_env(&self.script);
+        cmd.args(&argv[1..])
+            .current_dir(&spec.working_dir)
+            .envs(spec.env.iter().cloned())
+            .env(key, value)
+            .env(
+                "FLOW_TEST_WORKER_PID_FILE",
+                spec.stdout_log.with_file_name("pid"),
+            )
+            .stderr(std::fs::File::create(&spec.stderr)?);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
+        spawn_piped(cmd)
+    }
+}
+
+pub fn fake_worker_launcher(script: Value) -> Arc<dyn WorkerLauncher> {
+    Arc::new(FakeWorkerLauncher { script })
+}
+
+fn worker_out(value: &Value) {
+    let mut out = std::io::stdout().lock();
+    let _ = writeln!(out, "{value}");
+    let _ = out.flush();
+}
+
+fn worker_item(call_id: &str, mut item: Value) -> Value {
+    item["v"] = json!(1);
+    item["callId"] = json!(call_id);
+    item
+}
+
+fn worker_outcome(call_id: &str, status: &str) {
+    worker_out(&worker_item(
+        call_id,
+        json!({ "type": "outcome", "status": status }),
+    ));
+}
+
+/// Waits up to `ms`; true when `on_line` / `on_tick` ended the wait early.
+/// Exits the process on `shutdown` or a closed stdin.
+fn worker_wait(
+    rx: &Receiver<String>,
+    ms: u64,
+    mut on_line: impl FnMut(&Value) -> bool,
+    mut on_tick: impl FnMut() -> bool,
+) -> bool {
+    let deadline = Instant::now() + Duration::from_millis(ms);
+    while Instant::now() < deadline {
+        if on_tick() {
+            return true;
+        }
+        match rx.recv_timeout(Duration::from_millis(20)) {
+            Ok(line) => {
+                let msg: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
+                if msg["type"] == "shutdown" {
+                    std::process::exit(0);
+                }
+                if on_line(&msg) {
+                    return true;
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => std::process::exit(0),
+        }
+    }
+    false
+}
+
+/// Runs one step of a call; true when the call is over.
+fn worker_step(step: &Value, call_id: &str, ctx: &Value, rx: &Receiver<String>) -> bool {
+    if let Some(item) = step.get("emit") {
+        worker_out(&worker_item(call_id, item.clone()));
+    } else if let Some(log) = step.get("log") {
+        worker_out(&worker_item(
+            call_id,
+            json!({ "type": "log", "level": log["level"], "text": log["text"] }),
+        ));
+    } else if let Some(raw) = step.get("raw").and_then(Value::as_str) {
+        let mut out = std::io::stdout().lock();
+        let _ = writeln!(out, "{raw}");
+        let _ = out.flush();
+    } else if let Some(ms) = step.get("sleep_ms").and_then(Value::as_u64) {
+        std::thread::sleep(Duration::from_millis(ms));
+    } else if let Some(ms) = step.get("wait_cancel_ms").and_then(Value::as_u64) {
+        let cancelled = worker_wait(rx, ms, |msg| msg["type"] == "cancel", || false);
+        if cancelled {
+            worker_outcome(call_id, "stopped");
+            return true;
+        }
+    } else if let Some(ms) = step.get("wait_stop_ms").and_then(Value::as_u64) {
+        let stop = std::env::var("MDIUM_FLOW_STOP_FILE")
+            .ok()
+            .or_else(|| ctx["stopFile"].as_str().map(String::from))
+            .unwrap_or_default();
+        let stopped = worker_wait(
+            rx,
+            ms,
+            |_| false,
+            || !stop.is_empty() && std::path::Path::new(&stop).exists(),
+        );
+        if stopped {
+            worker_outcome(call_id, "stopped");
+            return true;
+        }
+    } else if let Some(exit) = step.get("exit") {
+        let code = exit.as_i64().or_else(|| exit["code"].as_i64()).unwrap_or(0);
+        std::process::exit(code as i32);
+    } else if let Some(outcome) = step.get("outcome") {
+        let mut item = json!({ "type": "outcome", "status": outcome["status"] });
+        for key in ["reason", "message"] {
+            if !outcome[key].is_null() {
+                item[key] = outcome[key].clone();
+            }
+        }
+        worker_out(&worker_item(call_id, item));
+    } else if let Some(n) = step.get("fail_before_attempt") {
+        let n = n.as_u64().or_else(|| n["n"].as_u64()).unwrap_or(0);
+        if ctx["attempt"].as_u64().unwrap_or(0) < n {
+            worker_out(&worker_item(
+                call_id,
+                json!({ "type": "outcome", "status": "fail", "reason": "attempt too low" }),
+            ));
+            return true;
+        }
+    }
+    false
+}
+
+fn worker_call(script: &Value, msg: &Value, rx: &Receiver<String>) {
+    let call_id = msg["callId"].as_str().unwrap_or_default();
+    let entry = msg["entry"].as_str().unwrap_or_default();
+    let Some(steps) = script["behaviour"].get(entry).and_then(Value::as_array) else {
+        worker_out(&json!({
+            "v": 1, "type": "error", "requestId": msg["requestId"], "callId": call_id,
+            "code": "FLOW_PYTHON_ENTRY_UNKNOWN", "message": format!("unknown entry {entry}"),
+        }));
+        return;
+    };
+    for step in steps {
+        if worker_step(step, call_id, &msg["context"], rx) {
+            return;
+        }
+    }
+}
+
+#[test]
+fn flow_test_worker_entry() {
+    let Ok(script) = std::env::var("FLOW_TEST_WORKER") else {
+        return;
+    };
+    let script: Value = serde_json::from_str(&script).expect("worker script");
+    let pid_file = std::env::var("FLOW_TEST_WORKER_PID_FILE")
+        .ok()
+        .map(PathBuf::from);
+    if let Some(path) = &pid_file {
+        std::fs::write(path, std::process::id().to_string()).expect("pid file");
+    }
+    // One reader thread feeds every wait (a `cancel` can arrive mid-call).
+    let (tx, rx) = channel::<String>();
+    std::thread::spawn(move || {
+        for line in std::io::stdin().lock().lines() {
+            let Ok(line) = line else { break };
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    loop {
+        let Ok(line) = rx.recv() else {
+            std::process::exit(0);
+        };
+        let Ok(msg) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        match msg["type"].as_str() {
+            Some("describe") => {
+                if let Some(path) = &pid_file {
+                    append(
+                        &path.with_file_name("describes.log").to_string_lossy(),
+                        "describe",
+                    );
+                }
+                if let Some(code) = script["exit_on_describe"].as_i64() {
+                    std::process::exit(code as i32);
+                }
+                if script["ignore_describe"] == true {
+                    continue;
+                }
+                worker_out(&json!({
+                    "v": 1, "type": "manifest", "requestId": msg["requestId"],
+                    "module": "fake", "stages": script["stages"],
+                }));
+            }
+            Some("call") => worker_call(&script, &msg, &rx),
+            Some("shutdown") => std::process::exit(0),
+            _ => {}
+        }
+    }
+}
