@@ -90,6 +90,19 @@ describe("buildFlowGraph", () => {
     expect(graph.nodes.map((n) => n.id)).toEqual(["nodes[0]", "nodes[1]"]);
     expect(graph.edges).toEqual([]);
   });
+
+  it("describes python nodes by runtime and entry", () => {
+    const def: FlowDef = {
+      schemaVersion: 1,
+      id: "f",
+      name: "F",
+      nodes: [{ id: "r", kind: "python", runtime: "video_gen", entry: "video.render", with: { title: "x" } }],
+    };
+    expect(buildFlowGraph(def, new Set()).nodes[0].details).toEqual([
+      { key: "runtime", value: "video_gen" },
+      { key: "entry", value: "video.render" },
+    ]);
+  });
 });
 
 describe("issue paths", () => {

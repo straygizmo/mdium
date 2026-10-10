@@ -249,6 +249,7 @@
 .flow-node--branch { --flow-accent: var(--flow-node-branch); }
 .flow-node--subflow { --flow-accent: var(--flow-node-subflow); }
 .flow-node--action { --flow-accent: var(--flow-node-action); }
+.flow-node--python { --flow-accent: var(--flow-node-python); }
 
 .flow-node--selected,
 .flow-group--selected {

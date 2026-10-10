@@ -44,7 +44,8 @@
     "loop": "ループ",
     "branch": "分岐",
     "subflow": "サブフロー",
-    "action": "アクション"
+    "action": "アクション",
+    "python": "Python 段階"
   },
   "detail": {
     "provider": "プロバイダー",
@@ -59,7 +60,9 @@
     "body": "本体",
     "cases": "出口",
     "flow": "フロー",
-    "uses": "アクション"
+    "uses": "アクション",
+    "runtime": "ランタイム",
+    "entry": "段階"
   },
   "issue": {
     "FLOW_SCHEMA_UNSUPPORTED": "未対応の schemaVersion {{found}} です（対応: {{supported}}）。",

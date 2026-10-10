@@ -144,6 +144,14 @@ export interface FlowActionNode extends FlowNodeCommon {
   with?: Record<string, unknown>;
 }
 
+/** Runs a stage of a runtime declared in `.mdium/project.yaml`. */
+export interface FlowPythonNode extends FlowNodeCommon {
+  kind: "python";
+  runtime: string;
+  entry: string;
+  with?: Record<string, unknown>;
+}
+
 export type FlowNode =
   | FlowAgentNode
   | FlowCommandNode
@@ -151,7 +159,8 @@ export type FlowNode =
   | FlowLoopNode
   | FlowBranchNode
   | FlowSubflowNode
-  | FlowActionNode;
+  | FlowActionNode
+  | FlowPythonNode;
 
 export type FlowNodeKind = FlowNode["kind"];
 

@@ -98,6 +98,11 @@ function nodeDetails(node: FlowNode): NodeDetail[] {
       return [{ key: "flow", value: node.flow }];
     case "action":
       return [{ key: "uses", value: node.uses }];
+    case "python":
+      return [
+        { key: "runtime", value: node.runtime },
+        { key: "entry", value: node.entry },
+      ];
   }
 }
 

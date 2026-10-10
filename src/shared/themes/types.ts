@@ -40,6 +40,7 @@ export interface ThemeColors {
   flowNodeBranch?: string;
   flowNodeSubflow?: string;
   flowNodeAction?: string;
+  flowNodePython?: string;
 }
 
 export type ThemeType = "light" | "dark";

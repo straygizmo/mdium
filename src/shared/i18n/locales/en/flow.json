@@ -44,7 +44,8 @@
     "loop": "Loop",
     "branch": "Branch",
     "subflow": "Sub-flow",
-    "action": "Action"
+    "action": "Action",
+    "python": "Python stage"
   },
   "detail": {
     "provider": "Provider",
@@ -59,7 +60,9 @@
     "body": "Body",
     "cases": "Cases",
     "flow": "Flow",
-    "uses": "Uses"
+    "uses": "Uses",
+    "runtime": "Runtime",
+    "entry": "Stage"
   },
   "issue": {
     "FLOW_SCHEMA_UNSUPPORTED": "Unsupported schemaVersion {{found}} (supported: {{supported}}).",
