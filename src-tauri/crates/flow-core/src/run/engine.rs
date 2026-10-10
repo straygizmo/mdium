@@ -9,7 +9,10 @@ use crate::load::{self, check_content, PathProblem, MAX_FLOW_FILE_BYTES};
 use crate::model::NodeKind;
 use crate::run::driver::{Control, Driver, DriverEnv, Editor, FLOW_APP_EXITED, FLOW_RESUMED};
 use crate::run::model::{NodeStatus, Reason, RunState, RunStatus};
-use crate::run::prepare::{check_runnable, command_summaries, prepare_params, CommandSummary};
+use crate::run::prepare::{
+    check_runnable, command_summaries, prepare_params, stage_summaries, CommandSummary,
+    StageSummary,
+};
 use crate::run::process::tail_file;
 use crate::run::store::{RunMeta, RunStore, StoreError, RUN_SCHEMA_VERSION};
 use crate::run::supervise::DetachedProcess;
@@ -31,6 +34,8 @@ pub const FLOW_FILE_CHANGED: &str = "FLOW_FILE_CHANGED";
 pub const FLOW_FILE_INVALID: &str = "FLOW_FILE_INVALID";
 pub const FLOW_COMMANDS_UNCONFIRMED: &str = "FLOW_COMMANDS_UNCONFIRMED";
 pub const FLOW_RUN_NOT_ENTRY: &str = "FLOW_RUN_NOT_ENTRY";
+/// `.mdium/project.yaml` exists but has validation errors.
+pub const FLOW_PROJECT_INVALID: &str = "FLOW_PROJECT_INVALID";
 pub const FLOW_RUN_NOT_RUNNABLE: &str = "FLOW_RUN_NOT_RUNNABLE";
 pub const FLOW_PARAMS_INVALID: &str = "FLOW_PARAMS_INVALID";
 pub const FLOW_RUN_NOT_FOUND: &str = "FLOW_RUN_NOT_FOUND";
@@ -116,6 +121,7 @@ pub struct CommandReview {
     pub commands: Vec<CommandSummary>,
     pub runtimes: Vec<RuntimeSummary>,
     pub setup: Vec<SetupSummary>,
+    pub stages: Vec<StageSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project_path: Option<String>,
 }
@@ -222,6 +228,8 @@ struct ProjectInBundle {
     display: String,
     sha: String,
     project: Option<crate::project::ProjectDef>,
+    /// The manifest's validation errors (a run refuses to start while any).
+    issues: Vec<crate::issues::FlowIssue>,
 }
 
 impl Bundle {
@@ -287,6 +295,7 @@ impl Bundle {
         !command_summaries(&self.files()).is_empty()
             || !self.runtime_summaries().is_empty()
             || !self.setup_summaries().is_empty()
+            || !stage_summaries(&self.files()).is_empty()
     }
 
     fn files(&self) -> Vec<(&str, &crate::model::FlowDef)> {
@@ -383,6 +392,7 @@ fn load_bundle(root: &Path, rel: &str) -> Result<Bundle> {
                 display: crate::project::PROJECT_FILE.to_string(),
                 sha: sha256_hex(&bytes),
                 project: report.project,
+                issues: report.errors,
             }),
         }
     };
@@ -559,8 +569,13 @@ impl FlowEngine {
     fn require_confirmed(&self, root: &Path, meta: &RunMeta) -> Result<()> {
         let mut files = vec![(meta.flow_path.as_str(), &meta.flow)];
         files.extend(meta.subflows.iter().map(|(p, f)| (p.as_str(), f)));
-        let has_commands = !command_summaries(&files).is_empty();
-        if has_commands && !self.is_confirmed(root, &meta.flow_path, &meta.flow_sha256) {
+        let needs = !command_summaries(&files).is_empty()
+            || !stage_summaries(&files).is_empty()
+            || meta
+                .project
+                .as_ref()
+                .is_some_and(|p| !p.runtimes.is_empty() || !p.setup.is_empty());
+        if needs && !self.is_confirmed(root, &meta.flow_path, &meta.flow_sha256) {
             return Err(EngineError::new(
                 FLOW_COMMANDS_UNCONFIRMED,
                 "the commands of this run's flow were not confirmed on this machine",
@@ -583,6 +598,7 @@ impl FlowEngine {
             commands,
             runtimes: bundle.runtime_summaries(),
             setup: bundle.setup_summaries(),
+            stages: stage_summaries(&bundle.files()),
             project_path: bundle.project.as_ref().map(|p| p.display.clone()),
         })
     }
@@ -636,6 +652,26 @@ impl FlowEngine {
                 "flows under .mdium/flows/lib/ are parts and cannot be started directly",
             ));
         }
+        if let Some(project) = &bundle.project {
+            if !project.issues.is_empty() {
+                let details = project
+                    .issues
+                    .iter()
+                    .map(|i| {
+                        Reason {
+                            code: i.code.clone(),
+                            params: i.params.clone(),
+                        }
+                        .with("path", i.path.clone())
+                    })
+                    .collect();
+                return Err(EngineError::new(
+                    FLOW_PROJECT_INVALID,
+                    ".mdium/project.yaml has validation errors",
+                )
+                .with_details(details));
+            }
+        }
         let actual = bundle.hash();
         if actual != sha256 {
             return Err(EngineError::new(
@@ -673,6 +709,7 @@ impl FlowEngine {
                 .with_details(missing));
             }
         }
+        let project_def = bundle.project.as_ref().and_then(|p| p.project.clone());
         let Bundle {
             flow, others, refs, ..
         } = bundle;
@@ -691,6 +728,7 @@ impl FlowEngine {
             started_by: "user".into(),
             subflows: others.into_iter().map(|(p, (_, f))| (p, f)).collect(),
             refs,
+            project: project_def,
         };
         let store = RunStore::new(root);
         store.create(&meta)?;

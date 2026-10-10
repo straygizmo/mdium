@@ -154,6 +154,14 @@ export interface SetupSummary {
   workingDir?: string;
 }
 
+export interface StageSummary {
+  file: string;
+  within?: string[];
+  nodeId: string;
+  runtime: string;
+  entry: string;
+}
+
 export interface CommandReview {
   path: string;
   sha256: string;
@@ -161,6 +169,7 @@ export interface CommandReview {
   commands: CommandSummary[];
   runtimes: RuntimeSummary[];
   setup: SetupSummary[];
+  stages: StageSummary[];
   projectPath?: string;
 }
 

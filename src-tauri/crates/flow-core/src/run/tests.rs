@@ -1050,6 +1050,7 @@ fn crash_recovery_marks_running_runs_interrupted() {
         started_by: "user".into(),
         subflows: BTreeMap::new(),
         refs: BTreeMap::new(),
+        project: None,
     };
     store.create(&meta).unwrap();
     let meta = store.load_meta(&run_id).unwrap();
@@ -1230,6 +1231,7 @@ fn run_data_from_elsewhere_never_executes_without_confirmation() {
             started_by: "someone".into(),
             subflows: BTreeMap::new(),
             refs: BTreeMap::new(),
+            project: None,
         })
         .unwrap();
     // Listing (first contact with the project) does not start it.
@@ -1444,6 +1446,7 @@ fn reconnect_rejects_a_reused_pid_and_marks_the_node_interrupted() {
             started_by: "user".into(),
             subflows: BTreeMap::new(),
             refs: BTreeMap::new(),
+            project: None,
         })
         .unwrap();
     // `a` "runs" under this test process's pid, but with another creation time.

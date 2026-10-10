@@ -108,6 +108,8 @@
     "confirmLabel": "これらのコマンドを確認し、このマシンでの実行を許可します。",
     "alreadyConfirmed": "これらのコマンドはこのマシンで確認済みです。",
     "runtimesTitle": "このプロジェクトのランタイム",
+    "stagesTitle": "このフローが呼ぶ Python 段階",
+    "stageEntry": "{{runtime}} → {{entry}}",
     "runtimesHint": "{{path}} で宣言されています。インタプリタとモジュールは利用者の権限で実行されます。",
     "runtimePython": "python",
     "runtimeModule": "モジュール: {{module}}",

@@ -166,6 +166,37 @@ pub struct CommandSummary {
     pub templated: bool,
 }
 
+/// A `python` node as shown for confirmation (spec 2.3 / 3.6).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StageSummary {
+    pub file: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub within: Vec<String>,
+    pub node_id: String,
+    pub runtime: String,
+    pub entry: String,
+}
+
+/// Every python node the flow and its referenced files can run.
+pub fn stage_summaries(bundle: &[(&str, &FlowDef)]) -> Vec<StageSummary> {
+    let mut out = Vec::new();
+    for (file, flow) in bundle {
+        walk(&flow.nodes, "", &mut Vec::new(), &mut |_, within, node| {
+            if let NodeKind::Python(py) = &node.kind {
+                out.push(StageSummary {
+                    file: file.to_string(),
+                    within: within.to_vec(),
+                    node_id: node.id.clone(),
+                    runtime: py.runtime.clone(),
+                    entry: py.entry.clone(),
+                });
+            }
+        });
+    }
+    out
+}
+
 /// Every command the flow and its referenced files can run (spec 7.2).
 pub fn command_summaries(bundle: &[(&str, &FlowDef)]) -> Vec<CommandSummary> {
     let mut out = Vec::new();

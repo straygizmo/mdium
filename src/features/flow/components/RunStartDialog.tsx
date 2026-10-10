@@ -60,7 +60,7 @@ export function RunStartDialog({ projectRoot, flowPath, flow, onClose, onStarted
     };
   }, [projectRoot, flowPath]);
 
-  const reviewItems = review ? review.commands.length + review.runtimes.length + review.setup.length : 0;
+  const reviewItems = review ? review.commands.length + review.runtimes.length + review.setup.length + review.stages.length : 0;
   const needsConfirmation = !!review && !review.confirmed && reviewItems > 0;
   const canStart = !!review && !busy && (!needsConfirmation || accepted);
 
@@ -117,7 +117,7 @@ export function RunStartDialog({ projectRoot, flowPath, flow, onClose, onStarted
       </section>
       <section className="flow-dialog__section">
         <h3 className="flow-dialog__heading">{t("run.commandsTitle")}</h3>
-        {review && review.commands.length === 0 && review.runtimes.length === 0 && review.setup.length === 0 && <div className="flow-dialog__muted">{t("run.noCommands")}</div>}
+        {review && review.commands.length === 0 && review.runtimes.length === 0 && review.setup.length === 0 && review.stages.length === 0 && <div className="flow-dialog__muted">{t("run.noCommands")}</div>}
         {review && review.commands.length > 0 && (
           <>
             <div className="flow-dialog__muted">{t("run.commandsHint")}</div>
@@ -163,6 +163,22 @@ export function RunStartDialog({ projectRoot, flowPath, flow, onClose, onStarted
                 ))}
                 <div className="flow-dialog__muted">{t("run.runtimeModule", { module: rt.module })}</div>
                 <div className="flow-dialog__muted">{t("run.workingDir", { dir: rt.cwd })}</div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {review && review.stages.length > 0 && (
+        <section className="flow-dialog__section">
+          <h3 className="flow-dialog__heading">{t("run.stagesTitle")}</h3>
+          <ul className="flow-dialog__commands">
+            {review.stages.map((s) => (
+              <li key={`${s.file}|${(s.within ?? []).join("/")}|${s.nodeId}`} className="flow-dialog__command">
+                <div className="flow-dialog__command-head">
+                  <strong>{[...(s.within ?? []), s.nodeId].join(" / ")}</strong>
+                  {s.file !== flowPath && <span className="flow-dialog__badge">{s.file}</span>}
+                </div>
+                <code className="flow-dialog__code">{t("run.stageEntry", { runtime: s.runtime, entry: s.entry })}</code>
               </li>
             ))}
           </ul>

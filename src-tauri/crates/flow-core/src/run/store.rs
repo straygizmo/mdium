@@ -41,6 +41,9 @@ pub struct RunMeta {
     /// Where each reference resolved: `scope::ref_key(file, ref)` → path.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub refs: BTreeMap<String, String>,
+    /// The project manifest as decoded at start (`None` without a manifest).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<crate::project::ProjectDef>,
 }
 
 /// A run id is 16 lowercase hex characters (never a path).
@@ -325,6 +328,7 @@ mod tests {
             started_by: "test".into(),
             subflows: BTreeMap::new(),
             refs: BTreeMap::new(),
+            project: None,
         }
     }
 

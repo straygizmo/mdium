@@ -55,6 +55,7 @@ const review: CommandReview = {
   ],
   runtimes: [],
   setup: [],
+  stages: [],
 };
 
 function summary(runId: string, extra: Partial<RunSummary> = {}): RunSummary {
@@ -271,6 +272,7 @@ describe("run views", () => {
         commands: [],
         runtimes: [{ name: "r", python: [".venv/bin/python"], module: "m", cwd: "." }],
         setup: [],
+        stages: [],
         confirmed: false,
       }),
     });
@@ -279,6 +281,28 @@ describe("run views", () => {
     );
     await waitFor(() => expect(container.textContent).toContain(i18n.t("run.runtimesTitle", { ns: "flow" })));
     expect(container.textContent).toContain(".venv/bin/python");
+    expect(button(container, "Start").disabled).toBe(true);
+    const confirm = [...container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find((c) => !c.hasAttribute("data-switch"))!;
+    await act(async () => confirm.click());
+    expect(button(container, "Start").disabled).toBe(false);
+  });
+
+  it("requires confirmation for python stages even without commands", async () => {
+    route({
+      flow_command_review: () => ({
+        ...review,
+        commands: [],
+        runtimes: [],
+        setup: [],
+        stages: [{ file: PATH, nodeId: "r", runtime: "video_gen", entry: "video.render" }],
+        confirmed: false,
+      }),
+    });
+    await act(async () =>
+      root.render(<RunStartDialog projectRoot={ROOT} flowPath={PATH} flow={flow} onClose={() => {}} onStarted={() => {}} />),
+    );
+    await waitFor(() => expect(container.textContent).toContain(i18n.t("run.stagesTitle", { ns: "flow" })));
+    expect(container.textContent).toContain("video_gen");
     expect(button(container, "Start").disabled).toBe(true);
     const confirm = [...container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find((c) => !c.hasAttribute("data-switch"))!;
     await act(async () => confirm.click());

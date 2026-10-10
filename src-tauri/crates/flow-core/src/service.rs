@@ -1184,4 +1184,87 @@ mod tests {
             .unwrap();
         assert_eq!(via_call["exists"], true);
     }
+
+    const PY_FLOW: &str = "schemaVersion: 1\nid: t\nname: T\nnodes:\n  - { id: r, kind: python, runtime: r, entry: a.b, with: { x: 1 } }\n";
+
+    #[test]
+    fn python_stages_appear_in_the_review_and_need_confirmation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = service(tmp.path());
+        let root = tmp.path().to_str().unwrap();
+        fs::create_dir_all(tmp.path().join(".mdium/flows")).unwrap();
+        fs::write(tmp.path().join(".mdium/project.yaml"), "schemaVersion: 1\nid: p\nname: P\nruntimes:\n  r: { kind: python, python: nope, module: m }\n").unwrap();
+        fs::write(tmp.path().join(".mdium/flows/a.flow.yaml"), PY_FLOW).unwrap();
+        let review = svc
+            .command_review(root, ".mdium/flows/a.flow.yaml")
+            .unwrap();
+        assert!(!review.confirmed);
+        assert_eq!(review.stages.len(), 1);
+        assert_eq!(
+            (
+                review.stages[0].runtime.as_str(),
+                review.stages[0].entry.as_str(),
+                review.stages[0].node_id.as_str()
+            ),
+            ("r", "a.b", "r")
+        );
+        let json = serde_json::to_value(&review).unwrap();
+        assert_eq!(json["stages"][0]["nodeId"], "r");
+    }
+
+    #[test]
+    fn start_refuses_an_invalid_manifest() {
+        use crate::run::engine::FLOW_PROJECT_INVALID;
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = service(tmp.path());
+        let root = tmp.path().to_str().unwrap();
+        fs::create_dir_all(tmp.path().join(".mdium/flows")).unwrap();
+        fs::write(tmp.path().join(".mdium/flows/a.flow.yaml"), NO_COMMANDS).unwrap();
+        fs::write(
+            tmp.path().join(".mdium/project.yaml"),
+            "schemaVersion: 1\nid: Bad Id\nname: P\n",
+        )
+        .unwrap();
+        let review = svc
+            .command_review(root, ".mdium/flows/a.flow.yaml")
+            .unwrap();
+        let err = svc
+            .run_start(
+                root,
+                ".mdium/flows/a.flow.yaml",
+                &BTreeMap::new(),
+                &review.sha256,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, FLOW_PROJECT_INVALID);
+        assert_eq!(err.details[0].code, crate::issues::FLOW_INVALID_ID);
+    }
+
+    #[test]
+    fn run_meta_snapshots_the_manifest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = service(tmp.path());
+        let root = tmp.path().to_str().unwrap();
+        fs::create_dir_all(tmp.path().join(".mdium/flows")).unwrap();
+        fs::write(tmp.path().join(".mdium/flows/a.flow.yaml"), NO_COMMANDS).unwrap();
+        fs::write(
+            tmp.path().join(".mdium/project.yaml"),
+            "schemaVersion: 1\nid: p\nname: P\nmetrics: [{ ref: costUsd, better: lower }]\n",
+        )
+        .unwrap();
+        let review = svc
+            .command_review(root, ".mdium/flows/a.flow.yaml")
+            .unwrap();
+        let started = svc
+            .run_start(
+                root,
+                ".mdium/flows/a.flow.yaml",
+                &BTreeMap::new(),
+                &review.sha256,
+            )
+            .unwrap();
+        let snap = svc.run_get(root, &started.run_id).unwrap();
+        assert_eq!(snap.meta.project.as_ref().unwrap().id, "p");
+        svc.run_cancel(root, &started.run_id).unwrap();
+    }
 }

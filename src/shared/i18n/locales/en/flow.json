@@ -108,6 +108,8 @@
     "confirmLabel": "I reviewed these commands and allow them to run on this machine.",
     "alreadyConfirmed": "These commands were confirmed on this machine.",
     "runtimesTitle": "Runtimes this project declares",
+    "stagesTitle": "Python stages this flow calls",
+    "stageEntry": "{{runtime}} → {{entry}}",
     "runtimesHint": "Declared in {{path}}. The interpreter and module run with your user account.",
     "runtimePython": "python",
     "runtimeModule": "Module: {{module}}",
