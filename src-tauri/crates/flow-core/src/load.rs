@@ -434,7 +434,13 @@ pub const LIB_DIR_PREFIX: &str = ".mdium/flows/lib/";
 
 /// Kind of a flow by its project-relative display path.
 pub fn flow_kind_of(display_path: &str) -> FlowKind {
-    if display_path.starts_with(LIB_DIR_PREFIX) {
+    let in_lib = if cfg!(windows) {
+        // Windows file systems are case-insensitive.
+        display_path.to_lowercase().starts_with(LIB_DIR_PREFIX)
+    } else {
+        display_path.starts_with(LIB_DIR_PREFIX)
+    };
+    if in_lib {
         FlowKind::Part
     } else {
         FlowKind::Entry

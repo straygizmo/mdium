@@ -320,7 +320,7 @@ describe("run views", () => {
     });
     await act(async () => root.render(<RunPanel projectRoot={ROOT} flowPath={PATH} flow={flow} />));
     await waitFor(() => expect(container.querySelectorAll(".flow-runs__item").length).toBe(1));
-    expect(container.textContent).toContain("Consider adding it to .gitignore");
+    expect(container.textContent).toContain(i18n.t("run.gitignoreHint", { ns: "flow" }));
     await act(async () => container.querySelector<HTMLButtonElement>(".flow-runs__item")!.click());
     await waitFor(() => expect(container.textContent).toContain("The app exited while this was running."));
     expect(container.textContent).toContain("Cost: $0.50");

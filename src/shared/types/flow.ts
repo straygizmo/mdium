@@ -302,6 +302,8 @@ export interface ProjectDef {
 export interface ProjectLoadResult {
   exists: boolean;
   path: string;
+  /** Hex sha256 of the manifest bytes, when the file exists. */
+  sha256?: string;
   project: ProjectDef | null;
   errors: FlowIssue[];
   warnings: FlowIssue[];

@@ -9,11 +9,13 @@ import { describeError } from "../lib/run-format";
 interface ProjectSetupDialogProps {
   projectRoot: string;
   project: ProjectDef;
+  /** Hash of the reviewed manifest content; setup refuses a changed file. */
+  sha256: string;
   onClose(): void;
 }
 
 /** Confirms and runs the manifest's setup steps, showing progress (spec 2.2). */
-export function ProjectSetupDialog({ projectRoot, project, onClose }: ProjectSetupDialogProps) {
+export function ProjectSetupDialog({ projectRoot, project, sha256, onClose }: ProjectSetupDialogProps) {
   const { t } = useTranslation("flow");
   const steps = project.setup ?? [];
   const [accepted, setAccepted] = useState(false);
@@ -49,7 +51,7 @@ export function ProjectSetupDialog({ projectRoot, project, onClose }: ProjectSet
     setResult(null);
     setProgress({});
     try {
-      setResult(await flowApi.projectSetup(projectRoot));
+      setResult(await flowApi.projectSetup(projectRoot, sha256));
     } catch (err) {
       setError(isFlowCommandError(err) ? { code: err.code, message: err.message } : { code: "FLOW_COMMAND_FAILED", message: String(err) });
     } finally {
@@ -61,7 +63,7 @@ export function ProjectSetupDialog({ projectRoot, project, onClose }: ProjectSet
   const argv = (cmd: string[]) => cmd.map((a) => (/\s/.test(a) ? JSON.stringify(a) : a)).join(" ");
 
   return (
-    <DialogShell overlayClassName="flow-dialog-overlay" className="flow-dialog" labelledBy="flow-project-setup-title" onClose={onClose}>
+    <DialogShell overlayClassName="flow-dialog-overlay" className="flow-dialog" labelledBy="flow-project-setup-title" onClose={busy ? () => {} : onClose}>
       <h2 id="flow-project-setup-title" className="flow-dialog__title">{t("project.setupTitle", { name: project.name })}</h2>
       <div className="flow-dialog__muted">{t("project.setupHint")}</div>
       <ul className="flow-dialog__commands">

@@ -121,7 +121,7 @@ export function FlowPanel() {
         </div>
       )}
       {setupOpen && project?.project && (
-        <ProjectSetupDialog projectRoot={folder} project={project.project} onClose={() => setSetupOpen(false)} />
+        <ProjectSetupDialog projectRoot={folder} project={project.project} sha256={project.sha256 ?? ""} onClose={() => setSetupOpen(false)} />
       )}
       {state.status === "loading" && <div className="flow-panel__message">{t("list.loading")}</div>}
       {state.status === "error" && (

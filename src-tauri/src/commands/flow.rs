@@ -89,10 +89,11 @@ pub async fn flow_project_setup(
     app: tauri::AppHandle,
     state: tauri::State<'_, FlowServiceState>,
     project_root: String,
+    sha256: String,
 ) -> Result<SetupResult, FlowCommandError> {
     with_service(state, move |s| {
         let root = project_root.clone();
-        s.project_setup(&project_root, &move |p| {
+        s.project_setup(&project_root, &sha256, &move |p| {
             let payload = SetupProgressPayload {
                 project_root: root.clone(),
                 progress: p.clone(),

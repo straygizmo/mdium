@@ -4,8 +4,10 @@
 
 use crate::load::{self, flow_kind_of, FlowKind, FlowReport, FlowSummary, PathProblem};
 use crate::parse::FlowFormat;
-use crate::project::{load_project, ProjectReport, PROJECT_FILE};
-use crate::run::engine::{CommandReview, EngineError, FlowEngine, RunSnapshot, RunSummary};
+use crate::project::{load_project_bytes, ProjectReport, PROJECT_FILE};
+use crate::run::engine::{
+    sha256_hex, CommandReview, EngineError, FlowEngine, RunSnapshot, RunSummary, FLOW_FILE_CHANGED,
+};
 use crate::run::model::Reason;
 use crate::setup::{run_setup, SetupProgress, SetupResult};
 use serde::{Deserialize, Serialize};
@@ -114,12 +116,19 @@ pub struct GitignoreStatus {
     pub ignored: bool,
 }
 
-/// Whether git ignores `.mdium/flow-runs/` in `root` (the UI suggests
-/// adding it otherwise; nothing is written automatically).
+/// Whether git ignores both `.mdium/flow-runs/` and `.mdium/setup-runs/` in
+/// `root` (the UI suggests adding them otherwise; nothing is written automatically).
 fn flow_runs_ignored(root: &Path) -> bool {
+    [".mdium/flow-runs/probe", ".mdium/setup-runs/probe"]
+        .iter()
+        .all(|probe| path_ignored(root, probe))
+}
+
+/// `git check-ignore` of one probe path; `true` without git.
+fn path_ignored(root: &Path, probe: &str) -> bool {
     let mut command = std::process::Command::new("git");
     command
-        .args(["check-ignore", "-q", ".mdium/flow-runs/probe"])
+        .args(["check-ignore", "-q", probe])
         .current_dir(root)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -165,6 +174,9 @@ pub struct FlowService {
 pub struct ProjectLoadResult {
     pub exists: bool,
     pub path: String,
+    /// Hex sha256 of the manifest bytes the report was built from, when it exists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
     #[serde(flatten)]
     pub report: ProjectReport,
 }
@@ -178,19 +190,30 @@ impl FlowService {
     }
 
     /// Runs the manifest's `setup` steps (spec 2.2); progress goes to `progress`.
+    /// `sha256` is the hash of the manifest content the user reviewed.
     pub fn project_setup(
         &self,
         project_root_arg: &str,
+        sha256: &str,
         progress: &(dyn Fn(&SetupProgress) + Sync),
     ) -> Result<SetupResult, FlowCommandError> {
         let root = project_root(project_root_arg)?;
-        let project = match load_project(&root) {
-            Some(report) if report.errors.is_empty() => report.project,
+        let (bytes, report) = load_project_bytes(&root).ok_or_else(|| {
+            FlowCommandError::new(FLOW_PROJECT_REQUIRED, "no valid .mdium/project.yaml")
+        })?;
+        let project = match report {
+            report if report.errors.is_empty() => report.project,
             _ => None,
         }
         .ok_or_else(|| {
             FlowCommandError::new(FLOW_PROJECT_REQUIRED, "no valid .mdium/project.yaml")
         })?;
+        if sha256_hex(&bytes) != sha256 {
+            return Err(FlowCommandError::new(
+                FLOW_FILE_CHANGED,
+                "project.yaml changed since it was reviewed",
+            ));
+        }
         {
             let mut running = self.setups.lock().unwrap_or_else(|p| p.into_inner());
             if !running.insert(root.clone()) {
@@ -264,10 +287,11 @@ impl FlowService {
         project_root_arg: &str,
     ) -> Result<ProjectLoadResult, FlowCommandError> {
         let root = project_root(project_root_arg)?;
-        let (exists, report) = match load_project(&root) {
-            Some(report) => (true, report),
+        let (exists, sha256, report) = match load_project_bytes(&root) {
+            Some((bytes, report)) => (true, Some(sha256_hex(&bytes)), report),
             None => (
                 false,
+                None,
                 ProjectReport {
                     project: None,
                     errors: vec![],
@@ -278,6 +302,7 @@ impl FlowService {
         Ok(ProjectLoadResult {
             exists,
             path: PROJECT_FILE.to_string(),
+            sha256,
             report,
         })
     }
@@ -464,6 +489,13 @@ struct ValidateArgs {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProjectSetupArgs {
+    project_root: String,
+    sha256: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ConfirmArgs {
     project_root: String,
     path: String,
@@ -548,8 +580,8 @@ impl FlowService {
                 reply(self.project_load(&a.project_root)?)
             }
             "flow_project_setup" => {
-                let a: RootArgs = args(value)?;
-                reply(self.project_setup(&a.project_root, &|_| {})?)
+                let a: ProjectSetupArgs = args(value)?;
+                reply(self.project_setup(&a.project_root, &a.sha256, &|_| {})?)
             }
             "flow_command_review" => {
                 let a: PathArgs = args(value)?;
@@ -888,6 +920,13 @@ mod tests {
         git(&["init", "-q"]);
         assert!(!svc.gitignore_status(root).unwrap().ignored);
         std::fs::write(tmp.path().join(".gitignore"), ".mdium/flow-runs/\n").unwrap();
+        // Both run directories must be ignored.
+        assert!(!svc.gitignore_status(root).unwrap().ignored);
+        std::fs::write(
+            tmp.path().join(".gitignore"),
+            ".mdium/flow-runs/\n.mdium/setup-runs/\n",
+        )
+        .unwrap();
         assert!(svc.gitignore_status(root).unwrap().ignored);
     }
 
@@ -1025,7 +1064,7 @@ mod tests {
         let svc = service(tmp.path());
         let root = tmp.path().to_str().unwrap();
         assert_eq!(
-            svc.project_setup(root, &|_| {}).unwrap_err().code,
+            svc.project_setup(root, "", &|_| {}).unwrap_err().code,
             FLOW_PROJECT_REQUIRED
         );
         fs::create_dir_all(tmp.path().join(".mdium")).unwrap();
@@ -1034,12 +1073,13 @@ mod tests {
             "schemaVersion: 1\nid: p\nname: P\n",
         )
         .unwrap();
-        let result = svc.project_setup(root, &|_| {}).unwrap();
+        let sha = svc.project_load(root).unwrap().sha256.unwrap();
+        let result = svc.project_setup(root, &sha, &|_| {}).unwrap();
         assert!(result.ok && result.steps.is_empty());
         let via_call = svc
             .call(
                 "flow_project_setup",
-                serde_json::json!({ "projectRoot": root }),
+                serde_json::json!({ "projectRoot": root, "sha256": sha }),
             )
             .unwrap();
         assert_eq!(via_call["ok"], true);
@@ -1049,9 +1089,26 @@ mod tests {
             .unwrap()
             .insert(project_root(root).unwrap());
         assert_eq!(
-            svc.project_setup(root, &|_| {}).unwrap_err().code,
+            svc.project_setup(root, &sha, &|_| {}).unwrap_err().code,
             FLOW_SETUP_BUSY
         );
+    }
+
+    #[test]
+    fn project_setup_refuses_a_manifest_that_changed_after_review() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = service(tmp.path());
+        let root = tmp.path().to_str().unwrap();
+        fs::create_dir_all(tmp.path().join(".mdium")).unwrap();
+        let file = tmp.path().join(".mdium/project.yaml");
+        fs::write(&file, "schemaVersion: 1\nid: p\nname: P\n").unwrap();
+        let sha = svc.project_load(root).unwrap().sha256.unwrap();
+        fs::write(&file, "schemaVersion: 1\nid: p\nname: Changed\n").unwrap();
+        assert_eq!(
+            svc.project_setup(root, &sha, &|_| {}).unwrap_err().code,
+            FLOW_FILE_CHANGED
+        );
+        assert!(svc.setups.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -1070,8 +1127,9 @@ mod tests {
             format!("schemaVersion: 1\nid: p\nname: P\nsetup:\n  - {step}\n"),
         )
         .unwrap();
-        assert!(!svc.project_setup(root, &|_| {}).unwrap().ok);
-        assert!(!svc.project_setup(root, &|_| {}).unwrap().ok);
+        let sha = svc.project_load(root).unwrap().sha256.unwrap();
+        assert!(!svc.project_setup(root, &sha, &|_| {}).unwrap().ok);
+        assert!(!svc.project_setup(root, &sha, &|_| {}).unwrap().ok);
     }
 
     #[test]
@@ -1085,8 +1143,9 @@ mod tests {
             "schemaVersion: 1\nid: p\nname: P\nsetup:\n  - { run: [x] }\n",
         )
         .unwrap();
+        let sha = svc.project_load(root).unwrap().sha256.unwrap();
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = svc.project_setup(root, &|_| panic!("boom"));
+            let _ = svc.project_setup(root, &sha, &|_| panic!("boom"));
         }));
         assert!(panicked.is_err());
         assert!(svc.setups.lock().unwrap().is_empty());

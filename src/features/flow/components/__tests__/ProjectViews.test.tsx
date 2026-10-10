@@ -83,7 +83,7 @@ describe("project views", () => {
           ];
         }
         if (cmd === "flow_project_load") {
-          return { exists: true, path: ".mdium/project.yaml", project: { schemaVersion: 1, id: "p", name: "Proj", setup: [{ run: ["uv", "sync"] }] }, errors: [], warnings: [] };
+          return { exists: true, path: ".mdium/project.yaml", sha256: "abc", project: { schemaVersion: 1, id: "p", name: "Proj", setup: [{ run: ["uv", "sync"] }] }, errors: [], warnings: [] };
         }
         throw new Error(`unexpected ${cmd}`);
       });
@@ -137,7 +137,7 @@ describe("project views", () => {
         throw new Error(`unexpected ${cmd}`);
       });
       const onClose = vi.fn();
-      await act(async () => root.render(<ProjectSetupDialog projectRoot={FOLDER} project={project} onClose={onClose} />));
+      await act(async () => root.render(<ProjectSetupDialog projectRoot={FOLDER} project={project} sha256="abc" onClose={onClose} />));
       expect(container.textContent).toContain("uv sync");
       const run = container.querySelector<HTMLButtonElement>(".flow-dialog__button--primary")!;
       expect(run.disabled).toBe(true);
@@ -146,7 +146,7 @@ describe("project views", () => {
       await act(async () => run.click());
       await waitFor(() => expect(container.textContent).toContain(i18n.t("project.setupFailed", { ns: "flow" })));
       expect(container.textContent).toContain("boom");
-      expect(invoke).toHaveBeenCalledWith("flow_project_setup", { projectRoot: FOLDER });
+      expect(invoke).toHaveBeenCalledWith("flow_project_setup", { projectRoot: FOLDER, sha256: "abc" });
     });
   });
 

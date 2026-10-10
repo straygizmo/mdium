@@ -133,7 +133,7 @@
     "cost": "費用: ${{usd}}",
     "attempt": "試行 {{n}}",
     "created": "開始 {{at}}",
-    "gitignoreHint": "実行データは .mdium/flow-runs/ に保存されます。.gitignore への追加を検討してください。",
+    "gitignoreHint": "実行データは .mdium/flow-runs/ と .mdium/setup-runs/ に保存されます。両方を .gitignore に追加することを検討してください。",
     "approvalNotice": "承認待ちの実行があります。",
     "active": "このアプリで実行中",
     "loadFailed": "実行を読み込めませんでした（{{code}}）。",

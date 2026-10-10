@@ -377,6 +377,12 @@ pub fn flow_roles(project: &ProjectDef) -> BTreeMap<String, String> {
 
 /// Reads `<root>/.mdium/project.yaml`; `None` when it does not exist.
 pub fn load_project(project_root: &Path) -> Option<ProjectReport> {
+    load_project_bytes(project_root).map(|(_, report)| report)
+}
+
+/// Like [`load_project`], but also returns the raw bytes the report was
+/// built from, so callers can hash exactly what was validated.
+pub fn load_project_bytes(project_root: &Path) -> Option<(Vec<u8>, ProjectReport)> {
     let file = project_root.join(PROJECT_FILE);
     for probe in [project_root.join(".mdium"), file.clone()] {
         match std::fs::symlink_metadata(&probe) {
@@ -390,7 +396,7 @@ pub fn load_project(project_root: &Path) -> Option<ProjectReport> {
         Ok(bytes) => bytes,
         Err(err) => {
             issues.error(FlowIssue::new(FLOW_PARSE_FAILED, "").with("message", err.to_string()));
-            return Some(ProjectReport::from_issues(None, issues));
+            return Some((Vec::new(), ProjectReport::from_issues(None, issues)));
         }
     };
     if bytes.len() as u64 > MAX_FLOW_FILE_BYTES {
@@ -399,15 +405,16 @@ pub fn load_project(project_root: &Path) -> Option<ProjectReport> {
                 .with("size", bytes.len())
                 .with("limit", MAX_FLOW_FILE_BYTES),
         );
-        return Some(ProjectReport::from_issues(None, issues));
+        return Some((bytes, ProjectReport::from_issues(None, issues)));
     }
-    let Ok(text) = String::from_utf8(bytes) else {
+    let Ok(text) = std::str::from_utf8(&bytes) else {
         issues.error(
             FlowIssue::new(FLOW_PARSE_FAILED, "").with("message", "file is not valid UTF-8"),
         );
-        return Some(ProjectReport::from_issues(None, issues));
+        return Some((bytes, ProjectReport::from_issues(None, issues)));
     };
-    Some(check_project_text(&text))
+    let report = check_project_text(text);
+    Some((bytes, report))
 }
 
 #[cfg(test)]

@@ -1195,3 +1195,11 @@ fn list_flows_with_a_broken_manifest_still_lists_flows_without_roles() {
     assert_eq!(list.len(), 1);
     assert!(list.iter().all(|s| s.role.is_none()));
 }
+
+#[cfg(windows)]
+#[test]
+fn lib_prefix_is_matched_case_insensitively_on_windows() {
+    use crate::load::flow_kind_of;
+    assert_eq!(flow_kind_of(".mdium/flows/LIB/x.flow.yaml"), FlowKind::Part);
+    assert_eq!(flow_kind_of(".mdium/flows/x.flow.yaml"), FlowKind::Entry);
+}

@@ -181,7 +181,7 @@ pub struct FlowEngine {
     inner: Mutex<Inner>,
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -377,19 +377,13 @@ fn load_bundle(root: &Path, rel: &str) -> Result<Bundle> {
         }
     }
     let project = {
-        let file = root.join(crate::project::PROJECT_FILE);
-        match crate::project::load_project(root) {
+        match crate::project::load_project_bytes(root) {
             None => None,
-            Some(report) => {
-                let bytes = std::fs::read(&file).map_err(|e| {
-                    EngineError::new(FLOW_FILE_INVALID, format!("project.yaml: {e}"))
-                })?;
-                Some(ProjectInBundle {
-                    display: crate::project::PROJECT_FILE.to_string(),
-                    sha: sha256_hex(&bytes),
-                    project: report.project,
-                })
-            }
+            Some((bytes, report)) => Some(ProjectInBundle {
+                display: crate::project::PROJECT_FILE.to_string(),
+                sha: sha256_hex(&bytes),
+                project: report.project,
+            }),
         }
     };
     Ok(Bundle {

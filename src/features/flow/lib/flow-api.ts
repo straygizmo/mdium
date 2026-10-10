@@ -55,7 +55,7 @@ export const flowApi = {
   projectLoad: (projectRoot: string) =>
     call<ProjectLoadResult>("flow_project_load", { projectRoot }),
   /** Runs the manifest's setup steps; progress arrives via `subscribeSetupProgress`. */
-  projectSetup: (projectRoot: string) => call<SetupResult>("flow_project_setup", { projectRoot }),
+  projectSetup: (projectRoot: string, sha256: string) => call<SetupResult>("flow_project_setup", { projectRoot, sha256 }),
 };
 
 /** Subscribes to setup progress; resolves to the unsubscribe function. */

@@ -133,7 +133,7 @@
     "cost": "Cost: ${{usd}}",
     "attempt": "attempt {{n}}",
     "created": "Started {{at}}",
-    "gitignoreHint": "Run data is stored in .mdium/flow-runs/. Consider adding it to .gitignore.",
+    "gitignoreHint": "Run data is stored in .mdium/flow-runs/ and .mdium/setup-runs/. Consider adding both to .gitignore.",
     "approvalNotice": "A run is waiting for approval.",
     "active": "running in this app",
     "loadFailed": "Could not load the run ({{code}}).",
