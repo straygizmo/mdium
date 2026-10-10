@@ -114,6 +114,60 @@ fn decoded_flow_round_trips_through_serialization() {
     }
 }
 
+const MANIFEST_WITH_RUNTIME: &str = "schemaVersion: 1\nid: p\nname: P\nruntimes:\n  video_gen: { kind: python, python: .venv/bin/python, module: video_gen_flow }\n";
+
+#[test]
+fn python_node_needs_a_declared_runtime() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write(&root.join(".mdium/project.yaml"), MANIFEST_WITH_RUNTIME);
+    let file = root.join(".mdium/flows/a.flow.yaml");
+    let ok = check_content(root, &file, &flow("nodes:\n  - { id: r, kind: python, runtime: video_gen, entry: video.render, with: { title: '${{ params.t }}' } }\nparams: { t: { type: string } }\n"));
+    assert!(ok.errors.is_empty(), "{:#?}", ok.errors);
+    let bad = check_content(
+        root,
+        &file,
+        &flow("nodes:\n  - { id: r, kind: python, runtime: nope, entry: video.render }\n"),
+    );
+    assert_eq!(codes(&bad.errors), vec![FLOW_RUNTIME_UNKNOWN]);
+    assert_eq!(bad.errors[0].path, "nodes[0].runtime");
+    assert_eq!(bad.errors[0].params["runtime"], "nope");
+}
+
+#[test]
+fn python_node_attributes_are_validated() {
+    assert_eq!(
+        reasons_of(&flow(
+            "nodes:\n  - { id: r, kind: python, runtime: '', entry: video.render }\n"
+        ))[0],
+        (
+            FLOW_INVALID_VALUE.to_string(),
+            "nodes[0].runtime".to_string(),
+            "empty".to_string()
+        )
+    );
+    assert_eq!(
+        reasons_of(&flow(
+            "nodes:\n  - { id: r, kind: python, runtime: x, entry: 'Video.Render' }\n"
+        ))[0],
+        (
+            FLOW_INVALID_VALUE.to_string(),
+            "nodes[0].entry".to_string(),
+            "bad-entry-name".to_string()
+        )
+    );
+    assert_eq!(
+        errors_of(&flow("nodes:\n  - { id: r, kind: python, runtime: x, entry: a.b, with: { k: '${{ nodes.zzz.outputs.q }}' } }\n")),
+        vec![FLOW_UNKNOWN_NODE_REF]
+    );
+    assert_eq!(
+        errors_of(&flow(
+            "nodes:\n  - { id: r, kind: python, runtime: x, entry: a.b, module: m }\n"
+        )),
+        vec![FLOW_UNKNOWN_FIELD]
+    );
+}
+
 #[test]
 fn invalid_fixtures_report_exactly_their_error() {
     let cases = [
@@ -130,6 +184,7 @@ fn invalid_fixtures_report_exactly_their_error() {
         ("invalid-value", FLOW_INVALID_VALUE),
         ("invalid-id", FLOW_INVALID_ID),
         ("condition-invalid", FLOW_CONDITION_INVALID),
+        ("python-without-project", FLOW_PROJECT_REQUIRED),
     ];
     let root = fixtures().join("invalid");
     let mut seen = 0;

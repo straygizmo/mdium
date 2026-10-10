@@ -118,6 +118,7 @@ fn kind_keys(kind: &str) -> Option<&'static [&'static str]> {
             "protocol",
             "detach",
         ],
+        "python" => &["runtime", "entry", "with"],
         "approval" => &["message", "show", "options"],
         "loop" => &[
             "mode",

@@ -47,6 +47,10 @@ pub const FLOW_OUTPUT_UNKNOWN: &str = "FLOW_OUTPUT_UNKNOWN";
 /// A constant argument to a sub-flow / file body has the wrong JSON type
 /// for the callee's `params.<name>.type`.
 pub const FLOW_PARAM_TYPE: &str = "FLOW_PARAM_TYPE";
+/// A `python` node exists but the project has no `.mdium/project.yaml`.
+pub const FLOW_PROJECT_REQUIRED: &str = "FLOW_PROJECT_REQUIRED";
+/// A `python` node names a runtime the manifest does not declare (`params.runtime`).
+pub const FLOW_RUNTIME_UNKNOWN: &str = "FLOW_RUNTIME_UNKNOWN";
 
 // Warnings.
 /// Unknown top-level key (ignored).

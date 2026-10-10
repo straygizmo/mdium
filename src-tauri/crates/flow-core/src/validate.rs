@@ -162,6 +162,17 @@ fn walk_nodes<'a>(nodes: &'a [FlowNode], path: &str, out: &mut Vec<(String, &'a 
     }
 }
 
+/// A stage name: lowercase identifiers joined by single dots (`video.render`).
+pub fn is_entry_name(text: &str) -> bool {
+    !text.is_empty()
+        && text.split('.').all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+        })
+}
+
 fn join(path: &str, key: &str) -> String {
     if path.is_empty() {
         key.to_string()
@@ -311,6 +322,27 @@ impl Validator {
         match &node.kind {
             NodeKind::Agent(agent) => self.agent(agent, path, ctx),
             NodeKind::Command(command) => self.command(command, path, ctx),
+            NodeKind::Python(py) => {
+                let runtime_path = join(path, "runtime");
+                if py.runtime.trim().is_empty() {
+                    self.issues.error(invalid(&runtime_path, "empty"));
+                } else if template::has_template(&py.runtime) {
+                    self.issues
+                        .error(invalid(&runtime_path, "template-not-allowed"));
+                }
+                if !is_entry_name(&py.entry) {
+                    self.issues
+                        .error(invalid(join(path, "entry"), "bad-entry-name"));
+                }
+                for (key, value) in &py.with_args {
+                    let p = format!("{path}.with.{key}");
+                    if !is_ident(key) {
+                        self.issues
+                            .error(FlowIssue::new(FLOW_INVALID_ID, &p).with("name", key.clone()));
+                    }
+                    self.value_templates(value, &p, ctx);
+                }
+            }
             NodeKind::Approval(approval) => self.approval(approval, path, ctx),
             NodeKind::Loop(lp) => self.loop_node(lp, path, ctx),
             NodeKind::Branch(branch) => self.branch(branch, path, ctx),

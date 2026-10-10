@@ -190,7 +190,16 @@ fn check_content_at(
     let (flow, mut issues) = decode_text(text, format);
     if let Some(flow) = &flow {
         let base = file.parent().unwrap_or(project_root).to_path_buf();
+        // `None`: no manifest; a manifest with errors counts as no known runtimes.
+        let runtimes: Option<BTreeSet<String>> =
+            crate::project::load_project(project_root).map(|report| {
+                report
+                    .project
+                    .map(|p| p.runtimes.keys().cloned().collect())
+                    .unwrap_or_default()
+            });
         let mut refs = RefChecker {
+            runtimes,
             project_root,
             base: &base,
             stack,
@@ -211,6 +220,8 @@ struct RefChecker<'a> {
     issues: Issues,
     /// Sub-flow node id -> output keys declared by the resolved callee.
     declared_outputs: BTreeMap<String, BTreeSet<String>>,
+    /// Runtime names of the project manifest; `None` when there is no manifest.
+    runtimes: Option<BTreeSet<String>>,
 }
 
 impl RefChecker<'_> {
@@ -232,6 +243,17 @@ impl RefChecker<'_> {
                                 self.issues.error(path_issue(problem, &p, prompt_ref));
                             }
                         }
+                    }
+                }
+                NodeKind::Python(py) => {
+                    let p = format!("{node_path}.runtime");
+                    match &self.runtimes {
+                        None => self.issues.error(FlowIssue::new(FLOW_PROJECT_REQUIRED, &p)),
+                        Some(names) if !names.contains(&py.runtime) => self.issues.error(
+                            FlowIssue::new(FLOW_RUNTIME_UNKNOWN, &p)
+                                .with("runtime", py.runtime.clone()),
+                        ),
+                        Some(_) => {}
                     }
                 }
                 NodeKind::Subflow(sub) => {

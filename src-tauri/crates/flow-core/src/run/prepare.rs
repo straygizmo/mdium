@@ -77,7 +77,8 @@ pub fn check_runnable(bundle: &[(&str, &FlowDef)]) -> Vec<Reason> {
                         }
                     }
                 },
-                NodeKind::Approval(_)
+                NodeKind::Python(_)
+                | NodeKind::Approval(_)
                 | NodeKind::Loop(_)
                 | NodeKind::Branch(_)
                 | NodeKind::Subflow(_) => {}
@@ -359,6 +360,8 @@ mod tests {
             "nodes:\n  - { id: a, kind: command, run: [x, '${{ run.id }}'] }\n  - { id: b, kind: approval }\n  - { id: c, kind: branch, cases: [ { when: { ref: run.id, op: exists }, port: y } ] }\n  - { id: s, kind: subflow, flow: ./x.flow.yaml }\nedges:\n  - { from: a, to: b, port: success }\n  - { from: b, to: a, port: reject, maxTraversals: 2 }\n",
         );
         assert!(check_runnable(&[("r", &ok)]).is_empty());
+        let py = flow("nodes:\n  - { id: p, kind: python, runtime: r, entry: a.b }\n");
+        assert!(check_runnable(&[("r", &py)]).is_empty());
     }
 
     #[test]

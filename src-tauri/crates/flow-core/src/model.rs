@@ -189,6 +189,7 @@ pub struct FlowNode {
 pub enum NodeKind {
     Agent(AgentNode),
     Command(CommandNode),
+    Python(PythonNode),
     Approval(ApprovalNode),
     Loop(LoopNode),
     Branch(BranchNode),
@@ -202,6 +203,7 @@ impl NodeKind {
         match self {
             NodeKind::Agent(_) => "agent",
             NodeKind::Command(_) => "command",
+            NodeKind::Python(_) => "python",
             NodeKind::Approval(_) => "approval",
             NodeKind::Loop(_) => "loop",
             NodeKind::Branch(_) => "branch",
@@ -267,6 +269,19 @@ pub enum CommandProtocol {
     MdiumV1,
     #[serde(rename = "none")]
     None,
+}
+
+/// Calls a stage of a Python runtime declared in the project manifest (spec 3.1).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PythonNode {
+    /// Name of a runtime declared in `.mdium/project.yaml`.
+    pub runtime: String,
+    /// Stage name, e.g. `video.render`.
+    pub entry: String,
+    /// Arguments handed to the stage (values may contain templates).
+    #[serde(default, rename = "with", skip_serializing_if = "BTreeMap::is_empty")]
+    pub with_args: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
