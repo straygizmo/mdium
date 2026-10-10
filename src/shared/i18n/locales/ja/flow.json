@@ -233,7 +233,7 @@
   "project": {
     "title": "プロジェクト",
     "noManifest": "このフォルダに .mdium/project.yaml はありません。",
-    "invalid": "project.yaml に {{count}} 件のエラーがあります。",
+    "invalid": "project.yaml のエラー: {{count}}",
     "setup": "セットアップ",
     "setupTitle": "プロジェクトのセットアップ: {{name}}",
     "setupHint": "次のコマンドを、このフォルダで利用者の権限で今すぐ実行します。.mdium/project.yaml に書かれた手順です。",

@@ -91,7 +91,7 @@ describe("project views", () => {
       await waitFor(() => expect(container.textContent).toContain("Proj"));
       expect(container.textContent).toContain(i18n.t("list.groupEntries", { ns: "flow" }));
       expect(container.textContent).toContain(i18n.t("list.groupParts", { ns: "flow" }));
-      expect(container.textContent).toContain("main"); // role badge
+      expect(container.querySelector(".flow-panel__role")?.textContent).toBe("main");
       expect(container.textContent).toContain("storyDir → videoPath"); // signature line
       expect(container.querySelector(".flow-panel__setup")).not.toBeNull();
     });

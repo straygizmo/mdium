@@ -233,7 +233,7 @@
   "project": {
     "title": "Project",
     "noManifest": "No .mdium/project.yaml in this folder.",
-    "invalid": "project.yaml has {{count}} errors.",
+    "invalid": "Errors in project.yaml: {{count}}",
     "setup": "Set up",
     "setupTitle": "Set up project: {{name}}",
     "setupHint": "These commands run now, with your user account, in this folder. They are listed in .mdium/project.yaml.",

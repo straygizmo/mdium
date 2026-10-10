@@ -117,7 +117,7 @@ export function RunStartDialog({ projectRoot, flowPath, flow, onClose, onStarted
       </section>
       <section className="flow-dialog__section">
         <h3 className="flow-dialog__heading">{t("run.commandsTitle")}</h3>
-        {review && review.commands.length === 0 && <div className="flow-dialog__muted">{t("run.noCommands")}</div>}
+        {review && review.commands.length === 0 && review.runtimes.length === 0 && review.setup.length === 0 && <div className="flow-dialog__muted">{t("run.noCommands")}</div>}
         {review && review.commands.length > 0 && (
           <>
             <div className="flow-dialog__muted">{t("run.commandsHint")}</div>

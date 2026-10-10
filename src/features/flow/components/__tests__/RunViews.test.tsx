@@ -277,7 +277,7 @@ describe("run views", () => {
     await act(async () =>
       root.render(<RunStartDialog projectRoot={ROOT} flowPath={PATH} flow={flow} onClose={() => {}} onStarted={() => {}} />),
     );
-    await waitFor(() => expect(container.textContent).toContain("Runtimes this project declares"));
+    await waitFor(() => expect(container.textContent).toContain(i18n.t("run.runtimesTitle", { ns: "flow" })));
     expect(container.textContent).toContain(".venv/bin/python");
     expect(button(container, "Start").disabled).toBe(true);
     const confirm = [...container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find((c) => !c.hasAttribute("data-switch"))!;
