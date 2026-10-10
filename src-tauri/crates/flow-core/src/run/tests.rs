@@ -10,7 +10,7 @@ use crate::run::test_helper::{
     detached_launcher, fake_worker_launcher, helper_argv, helper_env, process_alive,
 };
 use crate::run::worker::{
-    WorkerLauncher, FLOW_PYTHON_ENTRY_UNKNOWN, FLOW_PYTHON_INPUT_INVALID, FLOW_PYTHON_WORKER_EXITED,
+    PipedWorkerLauncher, WorkerLauncher, FLOW_PYTHON_ENTRY_UNKNOWN, FLOW_PYTHON_INPUT_INVALID, FLOW_PYTHON_WORKER_EXITED,
 };
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -117,6 +117,38 @@ fn fixture_with_worker(script: Value) -> Fixture {
         engine,
         sink,
         notifier,
+    }
+}
+
+/// A fixture over an existing project `root` (it still gets its own temp
+/// dir for the engine config) whose python workers come from `launcher`.
+fn fixture_at(root: &Path, launcher: Arc<dyn WorkerLauncher>) -> Fixture {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = tmp.path().join("config");
+    let sink = Arc::new(Sink::default());
+    let notifier = Arc::new(Notifier::default());
+    let engine = make_engine_with_worker(&config, sink.clone(), notifier.clone(), launcher);
+    Fixture {
+        _tmp: Arc::new(tmp),
+        root: root.to_path_buf(),
+        config,
+        engine,
+        sink,
+        notifier,
+    }
+}
+
+/// Recursively copies the directory `src` to `dst`.
+fn copy_dir(src: &Path, dst: &Path) {
+    fs::create_dir_all(dst).unwrap();
+    for entry in fs::read_dir(src).unwrap() {
+        let entry = entry.unwrap();
+        let target = dst.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), &target).unwrap();
+        }
     }
 }
 
@@ -2731,4 +2763,50 @@ fn python_outcome_past_the_line_limit_still_ends_the_call() {
         .lines()
         .count();
     assert_eq!(recorded, MAX_LINES, "lines past the limit are not recorded");
+}
+
+#[test]
+#[ignore = "needs uv and a Python interpreter; run with --ignored"]
+fn python_demo_end_to_end() {
+    if std::process::Command::new("uv")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("uv not found; skipping");
+        return;
+    }
+    let src = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/projects/python-demo");
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("python-demo");
+    copy_dir(&src, &root);
+    // Install the worker package into a fresh venv (what the project's `setup` does).
+    let worker_pkg = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../python/mdium-worker");
+    assert!(std::process::Command::new("uv")
+        .args(["venv", ".venv"])
+        .current_dir(&root)
+        .status()
+        .unwrap()
+        .success());
+    assert!(std::process::Command::new("uv")
+        .args(["pip", "install", "--python", ".venv", "-e"])
+        .arg(&worker_pkg)
+        .current_dir(&root)
+        .status()
+        .unwrap()
+        .success());
+    let f = fixture_at(&root, Arc::new(PipedWorkerLauncher));
+    let run_id = f.confirm_and_start(".mdium/flows/demo.flow.yaml", json!({ "a": 2 }));
+    // The worker keeps the run active while it waits, so poll the status
+    // instead of `wait_status`.
+    f.wait_for(&run_id, "approval", |s| {
+        s.state.status == RunStatus::AwaitingApproval
+    });
+    f.engine
+        .approve(&f.root, &run_id, Some("ask"), "approve", None)
+        .unwrap();
+    f.wait_settled(&run_id, RunStatus::Completed);
+    let snap = f.snapshot(&run_id);
+    assert_eq!(node(&snap, "add").outputs["sum"], json!(3));
 }
