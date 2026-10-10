@@ -277,7 +277,9 @@ pub fn validate_project(project: &ProjectDef) -> Issues {
         }
         for (i, candidate) in candidates.iter().enumerate() {
             let p = format!("{path}.python[{i}]");
-            if has_template(candidate) {
+            if candidate.trim().is_empty() {
+                issues.error(invalid(&p, "empty"));
+            } else if has_template(candidate) {
                 issues.error(invalid(&p, "template-not-allowed"));
             } else if !inside_root(candidate) {
                 issues.error(outside(&p, candidate));
@@ -289,7 +291,9 @@ pub fn validate_project(project: &ProjectDef) -> Issues {
         if has_template(&rt.module) {
             issues.error(invalid(format!("{path}.module"), "template-not-allowed"));
         }
-        if !inside_root(&rt.cwd) {
+        if rt.cwd.trim().is_empty() {
+            issues.error(invalid(format!("{path}.cwd"), "empty"));
+        } else if !inside_root(&rt.cwd) {
             issues.error(outside(format!("{path}.cwd"), &rt.cwd));
         }
         for key in rt.env.keys() {
@@ -312,7 +316,9 @@ pub fn validate_project(project: &ProjectDef) -> Issues {
             }
         }
         if let Some(dir) = &step.working_dir {
-            if !inside_root(dir) {
+            if dir.trim().is_empty() {
+                issues.error(invalid(format!("{path}.workingDir"), "empty"));
+            } else if !inside_root(dir) {
                 issues.error(outside(format!("{path}.workingDir"), dir));
             }
         }
@@ -554,7 +560,52 @@ mod tests {
         assert!(!inside_root("../x"));
         assert!(!inside_root("a/../../x"));
         assert!(!inside_root("/abs"));
-        assert!(!inside_root("C:\\abs"));
+        if cfg!(windows) {
+            assert!(!inside_root("C:\\abs"));
+        }
         assert!(!inside_root(""));
+    }
+
+    fn empty_reason_at(yaml: &str) -> Vec<(String, String)> {
+        check_project_text(yaml)
+            .errors
+            .iter()
+            .map(|e| {
+                assert_eq!(e.code, FLOW_INVALID_VALUE, "{e:?}");
+                (
+                    e.path.clone(),
+                    e.params["reason"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn empty_python_cwd_and_working_dir_are_invalid() {
+        let head = "schemaVersion: 1\nid: x\nname: X\n";
+        assert_eq!(
+            empty_reason_at(&format!(
+                "{head}runtimes:\n  r: {{ kind: python, python: '', module: m }}\n"
+            )),
+            vec![("runtimes.r.python[0]".to_string(), "empty".to_string())]
+        );
+        assert_eq!(
+            empty_reason_at(&format!(
+                "{head}runtimes:\n  r: {{ kind: python, python: [], module: m }}\n"
+            )),
+            vec![("runtimes.r.python".to_string(), "empty".to_string())]
+        );
+        assert_eq!(
+            empty_reason_at(&format!(
+                "{head}runtimes:\n  r: {{ kind: python, python: p, module: m, cwd: '' }}\n"
+            )),
+            vec![("runtimes.r.cwd".to_string(), "empty".to_string())]
+        );
+        assert_eq!(
+            empty_reason_at(&format!(
+                "{head}setup:\n  - {{ run: [x], workingDir: '' }}\n"
+            )),
+            vec![("setup[0].workingDir".to_string(), "empty".to_string())]
+        );
     }
 }

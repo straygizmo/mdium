@@ -355,6 +355,9 @@ impl RefChecker<'_> {
                 );
                 continue;
             };
+            if value.is_null() {
+                continue; // run time treats `null` as "use the default"
+            }
             if let Value::String(text) = value {
                 if crate::template::has_template(text) {
                     continue; // checked at run time
@@ -375,7 +378,10 @@ impl RefChecker<'_> {
             }
         }
         for (name, def) in &child.params {
-            if def.required && def.default.is_none() && !args.contains_key(name) {
+            if def.required
+                && def.default.is_none()
+                && !args.get(name).is_some_and(|v| !v.is_null())
+            {
                 self.issues.error(
                     FlowIssue::new(FLOW_PARAM_MISMATCH, format!("{node_path}.params"))
                         .with("param", name.clone())

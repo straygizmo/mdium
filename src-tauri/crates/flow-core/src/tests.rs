@@ -1082,3 +1082,116 @@ fn constant_subflow_arguments_must_match_the_param_type() {
     );
     assert!(templated.errors.is_empty(), "{:#?}", templated.errors);
 }
+
+const TYPED_CHILD: &str = "schemaVersion: 1\nid: child\nname: Child\nparams: { dir: { type: path, default: d }, opt: { type: string, default: x }, b: { type: bool, default: false }, n: { type: number, default: 0 } }\nnodes:\n  - { id: a, kind: command, run: [x] }\n";
+
+fn check_with_child(child: &str, parent_yaml: &str) -> crate::load::FlowReport {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let flows = root.join(".mdium/flows");
+    write(&flows.join("child.flow.yaml"), child);
+    check_content(root, &flows.join("parent.flow.yaml"), parent_yaml)
+}
+
+#[test]
+fn null_constants_use_the_default_and_do_not_satisfy_required_params() {
+    // `null` for a required param without default is "missing".
+    let missing = check_with_child(
+        CHILD,
+        &subflow_parent("./child.flow.yaml", ", params: { dir: null }"),
+    );
+    assert_eq!(codes(&missing.errors), vec![FLOW_PARAM_MISMATCH]);
+    assert_eq!(missing.errors[0].params["reason"], "missing");
+    // `null` for an optional param is fine.
+    let opt_null = check_with_child(
+        CHILD,
+        &subflow_parent("./child.flow.yaml", ", params: { dir: '/tmp', opt: null }"),
+    );
+    assert!(opt_null.errors.is_empty(), "{:#?}", opt_null.errors);
+    // A wrong-typed value for a string param.
+    let opt_num = check_with_child(
+        CHILD,
+        &subflow_parent("./child.flow.yaml", ", params: { dir: '/tmp', opt: 1 }"),
+    );
+    assert_eq!(codes(&opt_num.errors), vec![FLOW_PARAM_TYPE]);
+    assert_eq!(opt_num.errors[0].params["expected"], "string");
+}
+
+#[test]
+fn constant_arguments_are_checked_for_every_param_type() {
+    let bool_num = check_with_child(
+        TYPED_CHILD,
+        &subflow_parent("./child.flow.yaml", ", params: { b: 1 }"),
+    );
+    assert_eq!(codes(&bool_num.errors), vec![FLOW_PARAM_TYPE]);
+    assert_eq!(bool_num.errors[0].params["expected"], "bool");
+    assert_eq!(bool_num.errors[0].params["found"], "number");
+    let num_str = check_with_child(
+        TYPED_CHILD,
+        &subflow_parent("./child.flow.yaml", ", params: { n: 'x' }"),
+    );
+    assert_eq!(codes(&num_str.errors), vec![FLOW_PARAM_TYPE]);
+    assert_eq!(num_str.errors[0].params["expected"], "number");
+    assert_eq!(num_str.errors[0].params["found"], "string");
+    let ok = check_with_child(
+        TYPED_CHILD,
+        &subflow_parent(
+            "./child.flow.yaml",
+            ", params: { dir: '/tmp', opt: s, b: true, n: 3 }",
+        ),
+    );
+    assert!(ok.errors.is_empty(), "{:#?}", ok.errors);
+    // An unknown param is only a mismatch, never also a type error.
+    let unknown = check_with_child(
+        TYPED_CHILD,
+        &subflow_parent("./child.flow.yaml", ", params: { extra: { a: 1 } }"),
+    );
+    assert_eq!(codes(&unknown.errors), vec![FLOW_PARAM_MISMATCH]);
+}
+
+#[test]
+fn loop_file_body_arguments_are_type_checked() {
+    let parent = flow("params: { xs: { type: string } }\nnodes:\n  - { id: l, kind: loop, mode: foreach, items: '${{ params.xs }}', maxIterations: 2, body: './child.flow.yaml', params: { dir: 42 } }\n");
+    let report = check_with_child(CHILD, &parent);
+    assert_eq!(codes(&report.errors), vec![FLOW_PARAM_TYPE]);
+    assert_eq!(report.errors[0].path, "nodes[0].params.dir");
+}
+
+#[test]
+fn template_referencing_a_missing_node_reports_only_the_node() {
+    let yaml =
+        flow("nodes:\n  - { id: a, kind: command, run: [echo, '${{ nodes.zzz.outputs.k }}'] }\n");
+    assert_eq!(errors_of(&yaml), vec![FLOW_UNKNOWN_NODE_REF]);
+}
+
+#[test]
+fn subflow_outputs_are_checked_inside_an_inline_loop_body() {
+    let parent = |key: &str| {
+        flow(&format!(
+            "params: {{ xs: {{ type: string }} }}\nnodes:\n  - {{ id: l, kind: loop, mode: foreach, items: '${{{{ params.xs }}}}', maxIterations: 2, body: {{ nodes: [ {{ id: s, kind: subflow, flow: './child.flow.yaml', params: {{ dir: '/tmp' }} }}, {{ id: use, kind: command, run: [echo, '${{{{ nodes.s.outputs.{key} }}}}'] }} ], edges: [ {{ from: s, to: use }} ] }} }}\n"
+        ))
+    };
+    let bad = check_with_child(CHILD_WITH_OUTPUTS, &parent("nope"));
+    assert_eq!(
+        codes(&bad.errors),
+        vec![FLOW_OUTPUT_UNKNOWN],
+        "{:#?}",
+        bad.errors
+    );
+    let ok = check_with_child(CHILD_WITH_OUTPUTS, &parent("summary"));
+    assert!(ok.errors.is_empty(), "{:#?}", ok.errors);
+}
+
+#[test]
+fn list_flows_with_a_broken_manifest_still_lists_flows_without_roles() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write(
+        &root.join(".mdium/flows/a.flow.yaml"),
+        &flow("nodes:\n  - { id: a, kind: command, run: [x] }\n"),
+    );
+    write(&root.join(".mdium/project.yaml"), "{ not yaml");
+    let list = list_flows(root).unwrap();
+    assert_eq!(list.len(), 1);
+    assert!(list.iter().all(|s| s.role.is_none()));
+}
