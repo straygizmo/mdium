@@ -54,6 +54,13 @@ def exits(ctx: Context) -> None:
     sys.exit(3)
 
 
+@stage("demo.surrogate")
+def surrogate(ctx: Context) -> None:
+    # A lone surrogate, as os.fsdecode gives for an undecodable filename.
+    ctx.log("file \udcff")
+    raise StageFailed("cannot open \udcff")
+
+
 @stage("demo.nan")
 def nan(ctx: Context) -> None:
     ctx.output("x", float("nan"))

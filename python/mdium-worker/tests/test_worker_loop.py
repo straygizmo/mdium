@@ -16,7 +16,7 @@ def start(tmp_path: Path, *extra: str) -> subprocess.Popen:
     return subprocess.Popen(
         [sys.executable, "-m", "mdium_worker", "--module", "sample_module", *extra],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
-        env=env, bufsize=1,
+        errors="surrogateescape", env=env, bufsize=1,
     )
 
 
@@ -159,6 +159,21 @@ def test_system_exit_and_nan_fail_the_call_not_the_worker(tmp_path):
         assert lines[-1]["status"] == "fail" and "ValueError" in lines[-1]["reason"]
         call(proc, "3", "c3", "demo.add", {"a": 1}, tmp_path)
         assert read_until(proc, lambda m: m["type"] == "outcome")[-1]["status"] == "ok"
+    finally:
+        proc.kill()
+
+
+def test_a_lone_surrogate_in_texts_does_not_kill_the_worker(tmp_path):
+    proc = start(tmp_path)
+    try:
+        call(proc, "1", "c1", "demo.surrogate", {}, tmp_path)
+        lines = read_until(proc, lambda m: m["type"] == "outcome")
+        # Written as the raw byte 0xff (surrogateescape), read back the same way.
+        assert [m["text"] for m in lines if m["type"] == "log"] == ["file \udcff"]
+        assert lines[-1]["status"] == "fail" and lines[-1]["reason"] == "cannot open \udcff"
+        call(proc, "2", "c2", "demo.add", {"a": 1}, tmp_path)
+        assert read_until(proc, lambda m: m["type"] == "outcome")[-1]["status"] == "ok"
+        assert proc.poll() is None
     finally:
         proc.kill()
 

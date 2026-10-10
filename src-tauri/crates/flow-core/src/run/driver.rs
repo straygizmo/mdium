@@ -2128,6 +2128,9 @@ impl Driver {
         if let Err(err) = self.ensure_worker(&runtime, &def) {
             return self.worker_start_error(key, attempt, err);
         }
+        if !self.still_starting(key, attempt) {
+            return;
+        }
         let Some(stage) = self
             .workers
             .get(&runtime)
@@ -2238,6 +2241,9 @@ impl Driver {
             if let Err(err) = self.ensure_worker(&runtime, &def) {
                 return self.worker_start_error(key, attempt, err);
             }
+            if !self.still_starting(key, attempt) {
+                return;
+            }
         };
         let events = std::fs::OpenOptions::new()
             .append(true)
@@ -2266,10 +2272,21 @@ impl Driver {
         });
     }
 
+    /// The node is still `running` at `attempt` after a worker start. While
+    /// a worker starts, `await_manifest` applies controls (an approval may
+    /// open a new pass and retire this instance); then the call is dropped.
+    fn still_starting(&self, key: &str, attempt: u32) -> bool {
+        let node = self.node(key);
+        node.status == NodeStatus::Running && node.attempt == attempt
+    }
+
     /// Ends a node whose worker did not start: failed, or (when a cancel or
     /// app exit interrupted the start) cancelled / interrupted like a
     /// running node.
     fn worker_start_error(&mut self, key: &str, attempt: u32, err: WorkerStartError) {
+        if !self.still_starting(key, attempt) {
+            return;
+        }
         match err {
             WorkerStartError::Failed(reason) => self.fail_node(key, attempt, reason),
             WorkerStartError::Aborted if self.shutdown_requested => {
@@ -2716,8 +2733,9 @@ impl Driver {
         })
     }
 
-    /// A line over `MAX_LINE_BYTES` (the reader dropped it): a counted
-    /// warning inside a call, ignored outside.
+    /// A dropped line: over `MAX_LINE_BYTES_HARD` (the reader discarded it),
+    /// or over `MAX_LINE_BYTES` without ending a call. A counted warning
+    /// inside a call, ignored outside.
     fn worker_line_too_long(&mut self, runtime: &str) {
         if let Some(idx) = self.active_call(runtime) {
             if let Some(line) = self.count_line(idx) {
@@ -2746,8 +2764,8 @@ impl Driver {
 
     /// Records and applies one protocol item of a running call. An outcome
     /// is applied even past `MAX_LINES` (only its record is dropped), so the
-    /// call always ends. (Over-long lines never get here: the reader drops
-    /// them.)
+    /// call always ends. Of the over-long lines only a call-ending `outcome`
+    /// gets here, in its bounded form (`bound_over_long_line`).
     fn call_item(&mut self, idx: usize, item: ProtocolItem, clean: &str) {
         let key = self.calls[idx].key.clone();
         let is_outcome = matches!(item, ProtocolItem::Outcome(_));
