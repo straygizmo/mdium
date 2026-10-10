@@ -2,6 +2,9 @@
 //! This crate has no Tauri dependency; the desktop app and the flow server
 //! both build on it.
 
+pub mod fsutil;
+pub mod provider;
+
 #[cfg(test)]
 mod tests {
     #[test]

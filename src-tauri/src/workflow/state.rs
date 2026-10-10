@@ -162,60 +162,7 @@ impl ProjectLocks {
     }
 }
 
-/// A project root as MDium works with it: canonicalized when the path
-/// exists (falling back to the path as given), without a trailing
-/// separator, and without the Windows verbatim (`\\?\`) prefix that
-/// `canonicalize` adds. Letter case is preserved.
-///
-/// The result is meant as a lock/identity key and a display root. Without
-/// the verbatim prefix, Win32 APIs apply the `MAX_PATH` limit and path
-/// normalization again, so do not use it to reach deep paths below the
-/// root on Windows.
-pub(crate) fn normalize_root(project_root: &Path) -> PathBuf {
-    // `canonicalize` fails for paths that do not exist (yet). Fall back to
-    // `absolute`, which needs no file system access, so a relative and an
-    // absolute spelling of the same missing root still share one key; only
-    // if that fails too is the path used exactly as given.
-    let resolved = std::fs::canonicalize(project_root)
-        .or_else(|_| std::path::absolute(project_root))
-        .unwrap_or_else(|_| project_root.to_path_buf());
-    // Rebuilding from the components drops a trailing separator.
-    strip_verbatim(resolved.components().collect())
-}
-
-/// Removes the verbatim prefix from a verbatim disk (`\\?\C:\...`) or UNC
-/// (`\\?\UNC\server\share`) path; any other path is returned unchanged.
-#[cfg(windows)]
-fn strip_verbatim(path: PathBuf) -> PathBuf {
-    let Some(text) = path.to_str() else {
-        return path;
-    };
-    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
-        return PathBuf::from(format!(r"\\{rest}"));
-    }
-    match text.strip_prefix(r"\\?\") {
-        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
-        _ => path,
-    }
-}
-
-#[cfg(not(windows))]
-fn strip_verbatim(path: PathBuf) -> PathBuf {
-    path
-}
-
-/// Normalized key for a project root ([`normalize_root`]), lowercased on
-/// Windows, whose file system is case-insensitive. Different spellings of
-/// the same directory share one key; the per-project lock and the
-/// orchestrator's project table are both keyed by it.
-pub(crate) fn project_key(project_root: &Path) -> PathBuf {
-    let root = normalize_root(project_root);
-    if cfg!(windows) {
-        PathBuf::from(root.to_string_lossy().to_lowercase())
-    } else {
-        root
-    }
-}
+pub(crate) use flow_core::fsutil::{normalize_root, project_key};
 
 /// Moves task `task_id` from `expected_from` to `to` and returns the task
 /// as written. Takes the project lock for the duration of the call; see
@@ -739,30 +686,4 @@ mod tests {
         assert_eq!(project_key(&path), project_key(&upper));
     }
 
-    #[test]
-    fn normalize_root_drops_trailing_separator_and_keeps_case() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = normalize_root(dir.path());
-        assert_eq!(normalize_root(&dir.path().join("")), root);
-        assert!(!root.to_string_lossy().ends_with(std::path::MAIN_SEPARATOR));
-        let missing = dir.path().join("Missing-Dir");
-        let normalized = normalize_root(&missing.join(""));
-        assert!(normalized.to_string_lossy().ends_with("Missing-Dir"));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn normalize_root_strips_the_verbatim_prefix() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = normalize_root(dir.path());
-        assert!(!root.to_string_lossy().starts_with(r"\\?\"), "{root:?}");
-        let verbatim = PathBuf::from(format!(r"\\?\{}", root.display()));
-        assert_eq!(normalize_root(&verbatim), root);
-        assert_eq!(
-            strip_verbatim(PathBuf::from(r"\\?\UNC\server\share\x")),
-            PathBuf::from(r"\\server\share\x")
-        );
-        let volume = PathBuf::from(r"\\?\Volume{0}\x");
-        assert_eq!(strip_verbatim(volume.clone()), volume);
-    }
 }

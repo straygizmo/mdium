@@ -23,15 +23,7 @@ pub enum Role {
     Review,
 }
 
-/// Which coding agent runs a stage. Serializes as lowercase.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Provider {
-    Codex,
-    Copilot,
-    Opencode,
-    Claude,
-}
+pub use flow_core::provider::Provider;
 
 /// Whether the workflow auto-creates/updates an issue tracker entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
