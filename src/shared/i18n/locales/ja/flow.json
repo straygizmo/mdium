@@ -78,6 +78,7 @@
     "FLOW_SUBFLOW_INVALID": "サブフロー「{{ref}}」に {{errorCount}} 件のエラーがあります。",
     "FLOW_PARAM_MISMATCH": "サブフローの引数「{{param}}」が一致しません（{{reason}}）。",
     "FLOW_FILE_TOO_LARGE": "ファイルが大きすぎます（{{size}} バイト、上限 {{limit}}）。",
+    "FLOW_OUTPUT_UNKNOWN": "ノード「{{node}}」に出力「{{key}}」はありません（{{ref}}）。",
     "FLOW_UNKNOWN_KEY": "未知のトップレベルキー「{{key}}」は無視します。",
     "FLOW_DEPRECATED_FIELD": "「{{field}}」は使われなくなったため無視します。代わりに {{replacement}} を使ってください。",
     "FLOW_TRAVERSAL_LIMIT_UNUSED": "エッジ {{from}} → {{to}} に maxTraversals がありますが、閉路を作っていません。"

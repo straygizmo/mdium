@@ -6,10 +6,10 @@
 use crate::issues::*;
 use crate::model::*;
 use crate::parse::{decode, parse_text, FlowFormat};
-use crate::validate::validate;
+use crate::validate::{validate, validate_with_outputs};
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
 /// Largest flow file we read (1 MiB).
@@ -47,8 +47,8 @@ impl FlowReport {
     }
 }
 
-/// Parse, decode and validate `text` without touching the file system.
-pub fn check_text(text: &str, format: FlowFormat) -> (Option<FlowDef>, Issues) {
+/// Parses and decodes `text` without the semantic validation.
+fn decode_text(text: &str, format: FlowFormat) -> (Option<FlowDef>, Issues) {
     let value = match parse_text(text, format) {
         Ok(value) => value,
         Err(issue) => {
@@ -58,11 +58,16 @@ pub fn check_text(text: &str, format: FlowFormat) -> (Option<FlowDef>, Issues) {
         }
     };
     let decoded = decode(&value);
-    let mut issues = decoded.issues;
-    if let Some(flow) = &decoded.flow {
+    (decoded.flow, decoded.issues)
+}
+
+/// Parse, decode and validate `text` without touching the file system.
+pub fn check_text(text: &str, format: FlowFormat) -> (Option<FlowDef>, Issues) {
+    let (flow, mut issues) = decode_text(text, format);
+    if let Some(flow) = &flow {
         issues.extend(validate(flow));
     }
-    (decoded.flow, issues)
+    (flow, issues)
 }
 
 /// Lexically normalizes a path (`.` and `..`), without touching the disk.
@@ -182,7 +187,7 @@ fn check_content_at(
     format: FlowFormat,
     stack: &mut Vec<PathBuf>,
 ) -> FlowReport {
-    let (flow, mut issues) = check_text(text, format);
+    let (flow, mut issues) = decode_text(text, format);
     if let Some(flow) = &flow {
         let base = file.parent().unwrap_or(project_root).to_path_buf();
         let mut refs = RefChecker {
@@ -190,8 +195,10 @@ fn check_content_at(
             base: &base,
             stack,
             issues: Issues::default(),
+            declared_outputs: BTreeMap::new(),
         };
         refs.nodes(&flow.nodes, "");
+        issues.extend(validate_with_outputs(flow, &refs.declared_outputs));
         issues.extend(refs.issues);
     }
     FlowReport::from_issues(flow, issues)
@@ -202,6 +209,8 @@ struct RefChecker<'a> {
     base: &'a Path,
     stack: &'a mut Vec<PathBuf>,
     issues: Issues,
+    /// Sub-flow node id -> output keys declared by the resolved callee.
+    declared_outputs: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl RefChecker<'_> {
@@ -231,11 +240,20 @@ impl RefChecker<'_> {
                         &format!("{node_path}.flow"),
                         &sub.params,
                         &node_path,
+                        &node.id,
                     );
                 }
                 NodeKind::Loop(lp) => match &lp.body {
                     LoopBody::File(file) => {
-                        self.flow_ref(file, &format!("{node_path}.body"), &lp.params, &node_path);
+                        self.flow_ref(
+                            file,
+                            &format!("{node_path}.body"),
+                            &lp.params,
+                            &node_path,
+                            &node.id,
+                        );
+                        // The callee's outputs become `results[]` items, not node outputs.
+                        self.declared_outputs.remove(&node.id);
                     }
                     LoopBody::Inline(body) => self.nodes(&body.nodes, &format!("{node_path}.body")),
                 },
@@ -251,6 +269,7 @@ impl RefChecker<'_> {
         path: &str,
         args: &BTreeMap<String, Value>,
         node_path: &str,
+        node_id: &str,
     ) {
         if reference.trim().is_empty() || crate::template::has_template(reference) {
             return; // already reported by the validator
@@ -343,6 +362,8 @@ impl RefChecker<'_> {
                 );
             }
         }
+        self.declared_outputs
+            .insert(node_id.to_string(), child.outputs.keys().cloned().collect());
     }
 }
 

@@ -41,6 +41,9 @@ pub const FLOW_SUBFLOW_INVALID: &str = "FLOW_SUBFLOW_INVALID";
 pub const FLOW_PARAM_MISMATCH: &str = "FLOW_PARAM_MISMATCH";
 /// A flow file is larger than [`crate::load::MAX_FLOW_FILE_BYTES`].
 pub const FLOW_FILE_TOO_LARGE: &str = "FLOW_FILE_TOO_LARGE";
+/// A template names `nodes.<id>.outputs.<key>` but the node's outputs
+/// (a sub-flow's declared `outputs`, a loop's fixed keys) have no such key.
+pub const FLOW_OUTPUT_UNKNOWN: &str = "FLOW_OUTPUT_UNKNOWN";
 
 // Warnings.
 /// Unknown top-level key (ignored).

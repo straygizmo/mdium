@@ -11,12 +11,29 @@ use crate::template::{self, is_ident, Reference, RESERVED_ROOTS};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
+/// Output keys every loop node has (spec 2.3, run/driver.rs).
+pub const LOOP_OUTPUT_KEYS: [&str; 4] =
+    ["iterations", "failedIterations", "limitReached", "results"];
+
 /// Validates `flow` and returns the findings.
 pub fn validate(flow: &FlowDef) -> Issues {
+    validate_with_outputs(flow, &BTreeMap::new())
+}
+
+/// Like [`validate`], additionally checking `nodes.<id>.outputs.<key>`
+/// references against `declared` (node id -> known output keys). Loop nodes
+/// are added automatically with [`LOOP_OUTPUT_KEYS`].
+pub fn validate_with_outputs(
+    flow: &FlowDef,
+    declared: &BTreeMap<String, BTreeSet<String>>,
+) -> Issues {
+    let mut known = declared.clone();
+    collect_loop_outputs(&flow.nodes, &mut known);
     let mut v = Validator {
         issues: Issues::default(),
         params: flow.params.keys().cloned().collect(),
         env_passthrough: flow.env_passthrough.iter().cloned().collect(),
+        known_outputs: known,
     };
     v.flow_level(flow);
     v.check_ids(flow);
@@ -49,10 +66,26 @@ pub fn validate(flow: &FlowDef) -> Issues {
     v.issues
 }
 
+fn collect_loop_outputs(nodes: &[FlowNode], known: &mut BTreeMap<String, BTreeSet<String>>) {
+    for node in nodes {
+        if let NodeKind::Loop(lp) = &node.kind {
+            known.insert(
+                node.id.clone(),
+                LOOP_OUTPUT_KEYS.iter().map(|k| k.to_string()).collect(),
+            );
+            if let LoopBody::Inline(body) = &lp.body {
+                collect_loop_outputs(&body.nodes, known);
+            }
+        }
+    }
+}
+
 struct Validator {
     issues: Issues,
     params: BTreeSet<String>,
     env_passthrough: BTreeSet<String>,
+    /// Node id -> output keys, for nodes whose outputs are known.
+    known_outputs: BTreeMap<String, BTreeSet<String>>,
 }
 
 /// What references may see at a given place.
@@ -631,6 +664,19 @@ impl Validator {
                 self.issues.error(
                     FlowIssue::new(FLOW_UNKNOWN_NODE_REF, path)
                         .with("node", node.clone())
+                        .with("ref", reference.to_string()),
+                );
+            }
+            Reference::NodeOutput { node, key }
+                if self
+                    .known_outputs
+                    .get(node)
+                    .is_some_and(|keys| !keys.contains(key)) =>
+            {
+                self.issues.error(
+                    FlowIssue::new(FLOW_OUTPUT_UNKNOWN, path)
+                        .with("node", node.clone())
+                        .with("key", key.clone())
                         .with("ref", reference.to_string()),
                 );
             }

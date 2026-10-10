@@ -734,6 +734,57 @@ fn subflow_reference_is_resolved_and_arguments_checked() {
     );
 }
 
+const CHILD_WITH_OUTPUTS: &str = "schemaVersion: 1\nid: child\nname: Child\nparams: { dir: { type: path, required: true } }\nnodes:\n  - { id: a, kind: command, run: [x, '${{ params.dir }}'] }\noutputs:\n  summary: \"${{ nodes.a.outputs.text }}\"\n";
+
+fn parent_using_output(key: &str) -> String {
+    flow(&format!(
+        "nodes:\n  - {{ id: s, kind: subflow, flow: './child.flow.yaml', params: {{ dir: '/tmp' }} }}\n  - {{ id: use, kind: command, run: [echo, '${{{{ nodes.s.outputs.{key} }}}}'] }}\nedges:\n  - {{ from: s, to: use }}\n"
+    ))
+}
+
+#[test]
+fn subflow_output_references_must_be_declared_by_the_callee() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let flows = root.join(".mdium/flows");
+    write(&flows.join("child.flow.yaml"), CHILD_WITH_OUTPUTS);
+    let parent = flows.join("parent.flow.yaml");
+    let ok = check_content(root, &parent, &parent_using_output("summary"));
+    assert!(ok.errors.is_empty(), "{:#?}", ok.errors);
+    let bad = check_content(root, &parent, &parent_using_output("nope"));
+    assert_eq!(codes(&bad.errors), vec![FLOW_OUTPUT_UNKNOWN]);
+    let issue = &bad.errors[0];
+    assert_eq!(issue.path, "nodes[1].run[1]");
+    assert_eq!(issue.params["node"], "s");
+    assert_eq!(issue.params["key"], "nope");
+    // The whole object is always allowed.
+    let whole = flow("nodes:\n  - { id: s, kind: subflow, flow: './child.flow.yaml', params: { dir: '/tmp' } }\n  - { id: use, kind: command, run: [echo, '${{ nodes.s.outputs }}'] }\nedges:\n  - { from: s, to: use }\n");
+    assert!(check_content(root, &parent, &whole).errors.is_empty());
+}
+
+#[test]
+fn loop_output_references_use_the_fixed_keys() {
+    let ok = flow("nodes:\n  - { id: l, kind: loop, mode: foreach, items: '${{ params.xs }}', maxIterations: 3, body: { nodes: [ { id: a, kind: command, run: [x] } ] } }\n  - { id: use, kind: command, run: [echo, '${{ nodes.l.outputs.results }}'] }\nparams: { xs: { type: string } }\nedges:\n  - { from: l, to: use }\n");
+    assert!(errors_of(&ok).is_empty(), "{:?}", errors_of(&ok));
+    let bad = flow("nodes:\n  - { id: l, kind: loop, mode: foreach, items: '${{ params.xs }}', maxIterations: 3, body: { nodes: [ { id: a, kind: command, run: [x] } ] } }\n  - { id: use, kind: command, run: [echo, '${{ nodes.l.outputs.total }}'] }\nparams: { xs: { type: string } }\nedges:\n  - { from: l, to: use }\n");
+    assert_eq!(errors_of(&bad), vec![FLOW_OUTPUT_UNKNOWN]);
+}
+
+#[test]
+fn output_check_is_skipped_when_the_callee_is_invalid() {
+    // Only FLOW_SUBFLOW_INVALID, no second error, no panic.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let flows = root.join(".mdium/flows");
+    write(
+        &flows.join("child.flow.yaml"),
+        "schemaVersion: 1\nid: child\nname: Child\nnodes: []\n",
+    );
+    let parent = flows.join("parent.flow.yaml");
+    let report = check_content(root, &parent, &parent_using_output("summary"));
+    assert_eq!(codes(&report.errors), vec![FLOW_SUBFLOW_INVALID]);
+}
+
 #[test]
 fn missing_and_escaping_references_are_rejected() {
     let tmp = tempfile::tempdir().unwrap();
