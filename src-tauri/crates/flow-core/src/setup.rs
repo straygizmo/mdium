@@ -111,8 +111,14 @@ pub fn run_setup(
             };
             let mut handle = launcher.launch(&spec)?;
             loop {
-                if let Some(code) = handle.try_wait()? {
-                    return Ok(code);
+                match handle.try_wait() {
+                    Ok(Some(code)) => return Ok(code),
+                    Ok(None) => {}
+                    Err(err) => {
+                        // Do not orphan the child when we can no longer watch it.
+                        handle.kill_tree();
+                        return Err(err);
+                    }
                 }
                 std::thread::sleep(poll);
             }

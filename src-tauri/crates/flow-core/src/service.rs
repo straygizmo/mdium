@@ -136,6 +136,21 @@ fn flow_runs_ignored(root: &Path) -> bool {
     }
 }
 
+/// Removes a project root from the running-setup set when dropped.
+struct SetupGuard<'a> {
+    setups: &'a Mutex<HashSet<PathBuf>>,
+    root: PathBuf,
+}
+
+impl Drop for SetupGuard<'_> {
+    fn drop(&mut self) {
+        self.setups
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&self.root);
+    }
+}
+
 /// Every operation of the flow engine as plain methods. One per process;
 /// transports (Tauri commands, HTTP handlers) are thin wrappers over it.
 pub struct FlowService {
@@ -182,6 +197,11 @@ impl FlowService {
                 return Err(FlowCommandError::new(FLOW_SETUP_BUSY, project_root_arg));
             }
         }
+        // Released on every exit path, including a panic in `run_setup` or `progress`.
+        let _guard = SetupGuard {
+            setups: &self.setups,
+            root: root.clone(),
+        };
         let result = run_setup(
             &root,
             &project,
@@ -189,10 +209,6 @@ impl FlowService {
             Duration::from_millis(200),
             progress,
         );
-        self.setups
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(&root);
         Ok(result)
     }
 
@@ -1036,6 +1052,44 @@ mod tests {
             svc.project_setup(root, &|_| {}).unwrap_err().code,
             FLOW_SETUP_BUSY
         );
+    }
+
+    #[test]
+    fn project_setup_releases_the_busy_flag_after_a_failed_step() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = service(tmp.path());
+        let root = tmp.path().to_str().unwrap();
+        let step = if cfg!(windows) {
+            "{ run: [cmd, /C, 'exit 3'] }"
+        } else {
+            "{ run: [sh, -c, 'exit 3'] }"
+        };
+        fs::create_dir_all(tmp.path().join(".mdium")).unwrap();
+        fs::write(
+            tmp.path().join(".mdium/project.yaml"),
+            format!("schemaVersion: 1\nid: p\nname: P\nsetup:\n  - {step}\n"),
+        )
+        .unwrap();
+        assert!(!svc.project_setup(root, &|_| {}).unwrap().ok);
+        assert!(!svc.project_setup(root, &|_| {}).unwrap().ok);
+    }
+
+    #[test]
+    fn project_setup_releases_the_busy_flag_when_progress_panics() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = service(tmp.path());
+        let root = tmp.path().to_str().unwrap();
+        fs::create_dir_all(tmp.path().join(".mdium")).unwrap();
+        fs::write(
+            tmp.path().join(".mdium/project.yaml"),
+            "schemaVersion: 1\nid: p\nname: P\nsetup:\n  - { run: [x] }\n",
+        )
+        .unwrap();
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = svc.project_setup(root, &|_| panic!("boom"));
+        }));
+        assert!(panicked.is_err());
+        assert!(svc.setups.lock().unwrap().is_empty());
     }
 
     #[test]
