@@ -175,6 +175,11 @@
     "interrupted": "Interrupted"
   },
   "reason": {
+    "FLOW_RUNTIME_START_FAILED": "The Python runtime could not be started: {{message}}",
+    "FLOW_PYTHON_ENTRY_UNKNOWN": "Stage \"{{entry}}\" is not provided by the runtime.",
+    "FLOW_PYTHON_INPUT_INVALID": "Input \"{{input}}\" is invalid ({{reason}}).",
+    "FLOW_PYTHON_PROTOCOL": "The Python worker sent an invalid message.",
+    "FLOW_PYTHON_WORKER_EXITED": "The Python worker exited during the stage.",
     "FLOW_NODE_FAILED": "Node \"{{node}}\" failed ({{cause}}).",
     "FLOW_NODE_TIMEOUT": "The node timed out.",
     "FLOW_NODE_STOPPED": "Stopped at a boundary; runs again on resume.",
@@ -212,7 +217,9 @@
     "FLOW_OUTPUT_UNRESOLVED": "Output \"{{output}}\" could not be computed."
   },
   "runError": {
-    "FLOW_PROJECT_INVALID": "The folder is not available.",
+    "FLOW_PROJECT_INVALID": ".mdium/project.yaml has errors; fix them before running.",
+    "FLOW_RUNTIME_UNKNOWN": "The runtime is not declared in project.yaml.",
+    "FLOW_RUNTIME_START_FAILED": "The Python runtime could not be started.",
     "FLOW_PROJECT_REQUIRED": "This folder has no valid .mdium/project.yaml.",
     "FLOW_SETUP_BUSY": "Setup is already running for this project.",
     "FLOW_SETUP_FAILED": "Setup could not be started.",

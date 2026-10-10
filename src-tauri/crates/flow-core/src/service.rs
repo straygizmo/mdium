@@ -4,7 +4,10 @@
 
 use crate::load::{self, flow_kind_of, FlowKind, FlowReport, FlowSummary, PathProblem};
 use crate::parse::FlowFormat;
-use crate::project::{load_project_bytes, ProjectReport, PROJECT_FILE};
+use crate::project::{load_project, load_project_bytes, ProjectReport, PROJECT_FILE};
+use crate::run::worker::{
+    describe_runtime, worker_spec, Manifest, PipedWorkerLauncher, FLOW_RUNTIME_START_FAILED,
+};
 use crate::run::engine::{
     sha256_hex, CommandReview, EngineError, FlowEngine, RunSnapshot, RunSummary, FLOW_FILE_CHANGED,
 };
@@ -168,6 +171,9 @@ pub struct FlowService {
     pub(crate) setups: Mutex<HashSet<PathBuf>>,
 }
 
+/// How long `flow_runtime_describe` waits for a worker to report its manifest.
+pub const DESCRIBE_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// `flow_project_load` result: the manifest, or `exists: false`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -187,6 +193,46 @@ impl FlowService {
             engine,
             setups: Mutex::new(HashSet::new()),
         }
+    }
+
+    /// Starts the runtime's worker only to read its manifest (spec 3.4).
+    pub fn runtime_describe(
+        &self,
+        project_root_arg: &str,
+        runtime: &str,
+    ) -> Result<Manifest, FlowCommandError> {
+        let root = project_root(project_root_arg)?;
+        let project = match load_project(&root) {
+            Some(report) if report.errors.is_empty() => report.project,
+            _ => None,
+        }
+        .ok_or_else(|| {
+            FlowCommandError::new(FLOW_PROJECT_REQUIRED, "no valid .mdium/project.yaml")
+        })?;
+        let def = project
+            .runtimes
+            .get(runtime)
+            .ok_or_else(|| FlowCommandError::new(crate::issues::FLOW_RUNTIME_UNKNOWN, runtime))?;
+        let scratch = root
+            .join(".mdium/flow-runs/.describe")
+            .join(crate::fsutil::new_id());
+        let start_failed = |r: Reason| {
+            FlowCommandError::new(
+                FLOW_RUNTIME_START_FAILED,
+                r.params
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(""),
+            )
+        };
+        let result = worker_spec(&root, runtime, def, &scratch, &[])
+            .map_err(start_failed)
+            .and_then(|spec| {
+                describe_runtime(&PipedWorkerLauncher, &spec, DESCRIBE_TIMEOUT)
+                    .map_err(start_failed)
+            });
+        let _ = std::fs::remove_dir_all(&scratch);
+        result
     }
 
     /// Runs the manifest's `setup` steps (spec 2.2); progress goes to `progress`.
@@ -442,12 +488,13 @@ impl FlowService {
 
 /// Every command the service dispatches by name (the Tauri command names;
 /// the HTTP server uses the same names, spec 2026-10-10, 10.2).
-pub const COMMAND_NAMES: [&str; 19] = [
+pub const COMMAND_NAMES: [&str; 20] = [
     "flow_list",
     "flow_load",
     "flow_validate",
     "flow_project_load",
     "flow_project_setup",
+    "flow_runtime_describe",
     "flow_command_review",
     "flow_confirm_commands",
     "flow_run_start",
@@ -470,6 +517,13 @@ pub const COMMAND_NAMES: [&str; 19] = [
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RootArgs {
     project_root: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DescribeArgs {
+    project_root: String,
+    runtime: String,
 }
 
 #[derive(Deserialize)]
@@ -582,6 +636,10 @@ impl FlowService {
             "flow_project_setup" => {
                 let a: ProjectSetupArgs = args(value)?;
                 reply(self.project_setup(&a.project_root, &a.sha256, &|_| {})?)
+            }
+            "flow_runtime_describe" => {
+                let a: DescribeArgs = args(value)?;
+                reply(self.runtime_describe(&a.project_root, &a.runtime)?)
             }
             "flow_command_review" => {
                 let a: PathArgs = args(value)?;
@@ -1020,6 +1078,42 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(err.code, FLOW_RUN_INVALID_ID);
+    }
+
+    #[test]
+    fn runtime_describe_rejects_unknown_runtimes_and_missing_manifests() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = service(tmp.path());
+        let root = tmp.path().to_str().unwrap();
+        assert_eq!(
+            svc.runtime_describe(root, "r").unwrap_err().code,
+            FLOW_PROJECT_REQUIRED
+        );
+        fs::create_dir_all(tmp.path().join(".mdium")).unwrap();
+        fs::write(
+            tmp.path().join(".mdium/project.yaml"),
+            "schemaVersion: 1\nid: p\nname: P\nruntimes:\n  r: { kind: python, python: nope, module: m }\n",
+        )
+        .unwrap();
+        assert_eq!(
+            svc.runtime_describe(root, "zzz").unwrap_err().code,
+            crate::issues::FLOW_RUNTIME_UNKNOWN
+        );
+        // No interpreter at `nope`: the launcher fails before any process starts.
+        let err = svc.runtime_describe(root, "r").unwrap_err();
+        assert_eq!(err.code, crate::run::worker::FLOW_RUNTIME_START_FAILED);
+        let describe_dir = tmp.path().join(".mdium/flow-runs/.describe");
+        assert!(
+            !describe_dir.exists() || fs::read_dir(&describe_dir).unwrap().next().is_none(),
+            "temp dir cleaned"
+        );
+        let via_call = svc
+            .call(
+                "flow_runtime_describe",
+                serde_json::json!({ "projectRoot": root, "runtime": "zzz" }),
+            )
+            .unwrap_err();
+        assert_eq!(via_call.code, crate::issues::FLOW_RUNTIME_UNKNOWN);
     }
 
     #[test]

@@ -319,3 +319,37 @@ export interface ProjectLoadResult {
   errors: FlowIssue[];
   warnings: FlowIssue[];
 }
+
+/** Value type of a python stage input or output. */
+export type StageInputType = "string" | "number" | "bool" | "path" | "object" | "array";
+
+export interface StageInput {
+  type: StageInputType;
+  required: boolean;
+  default?: unknown;
+  description?: string;
+}
+
+export interface StageOutput {
+  type?: StageInputType;
+  description?: string;
+}
+
+export interface StageArtifact {
+  label: string;
+  mediaType?: string;
+}
+
+export interface StageDef {
+  name: string;
+  description?: string;
+  inputs: Record<string, StageInput>;
+  outputs: Record<string, StageOutput>;
+  artifacts: StageArtifact[];
+}
+
+/** A runtime's stage manifest, as reported by its worker (`flow_runtime_describe`). */
+export interface Manifest {
+  module: string;
+  stages: StageDef[];
+}

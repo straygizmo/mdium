@@ -175,6 +175,11 @@
     "interrupted": "中断"
   },
   "reason": {
+    "FLOW_RUNTIME_START_FAILED": "Python ランタイムを起動できませんでした: {{message}}",
+    "FLOW_PYTHON_ENTRY_UNKNOWN": "ステージ「{{entry}}」はランタイムに用意されていません。",
+    "FLOW_PYTHON_INPUT_INVALID": "入力「{{input}}」が不正です（{{reason}}）。",
+    "FLOW_PYTHON_PROTOCOL": "Python ワーカーが不正なメッセージを送信しました。",
+    "FLOW_PYTHON_WORKER_EXITED": "ステージの実行中に Python ワーカーが終了しました。",
     "FLOW_NODE_FAILED": "ノード「{{node}}」が失敗しました（{{cause}}）。",
     "FLOW_NODE_TIMEOUT": "ノードがタイムアウトしました。",
     "FLOW_NODE_STOPPED": "区切りで停止しました。再開すると再実行します。",
@@ -212,7 +217,9 @@
     "FLOW_OUTPUT_UNRESOLVED": "出力「{{output}}」を求められませんでした。"
   },
   "runError": {
-    "FLOW_PROJECT_INVALID": "フォルダを使用できません。",
+    "FLOW_PROJECT_INVALID": ".mdium/project.yaml にエラーがあります。修正してから実行してください。",
+    "FLOW_RUNTIME_UNKNOWN": "このランタイムは project.yaml に宣言されていません。",
+    "FLOW_RUNTIME_START_FAILED": "Python ランタイムを起動できませんでした。",
     "FLOW_PROJECT_REQUIRED": "このフォルダに有効な .mdium/project.yaml がありません。",
     "FLOW_SETUP_BUSY": "このプロジェクトのセットアップは実行中です。",
     "FLOW_SETUP_FAILED": "セットアップを開始できませんでした。",

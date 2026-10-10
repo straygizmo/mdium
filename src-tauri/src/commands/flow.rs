@@ -7,6 +7,7 @@ use flow_core::load::FlowSummary;
 use flow_core::service::FlowService;
 use flow_core::service::ProjectLoadResult;
 pub use flow_core::service::{FlowCommandError, FlowLoadResult, FLOW_COMMAND_FAILED};
+use flow_core::run::worker::Manifest;
 use flow_core::setup::{SetupProgress, SetupResult};
 use serde::Serialize;
 use std::sync::Arc;
@@ -74,6 +75,15 @@ pub async fn flow_project_load(
     project_root: String,
 ) -> Result<ProjectLoadResult, FlowCommandError> {
     with_service(state, move |s| s.project_load(&project_root)).await
+}
+
+#[tauri::command]
+pub async fn flow_runtime_describe(
+    state: tauri::State<'_, FlowServiceState>,
+    project_root: String,
+    runtime: String,
+) -> Result<Manifest, FlowCommandError> {
+    with_service(state, move |s| s.runtime_describe(&project_root, &runtime)).await
 }
 
 #[derive(Debug, Clone, Serialize)]
