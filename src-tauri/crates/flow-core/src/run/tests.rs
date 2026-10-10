@@ -2701,6 +2701,34 @@ fn worker_errors_map_to_translatable_reasons() {
 }
 
 #[test]
+fn an_over_long_outcome_still_ends_the_call_with_a_truncated_reason() {
+    // A 100 KiB `fail` reason (e.g. an embedded subprocess stderr) is over
+    // MAX_LINE_BYTES but must not leave the call waiting for a timeout.
+    let script = json!({
+        "stages": [stage("a.loud", json!({}))],
+        "behaviour": { "a.loud": [ { "long_fail": 100 * 1024 } ] }
+    });
+    let f = fixture_with_worker(script);
+    write_manifest(&f.root);
+    let mut loud = py("l", "a.loud", json!({}));
+    loud["timeout"] = json!("60s");
+    let rel = write_flow(&f.root, "p", json!({}), vec![loud], vec![]);
+    let started = Instant::now();
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    f.wait_settled(&run_id, RunStatus::Failed);
+    assert!(started.elapsed() < Duration::from_secs(20), "not the 60 s timeout");
+    let reason = node(&f.snapshot(&run_id), "l").reason.unwrap();
+    assert_eq!(reason.code, FLOW_NODE_FAILED);
+    let detail = reason.params["detail"].as_str().unwrap();
+    assert!(detail.len() < 5 * 1024, "{}", detail.len());
+    assert!(detail.starts_with("rrrr") && detail.ends_with("… [truncated]"));
+    // The recorded event is bounded too.
+    let dir = f.engine_store().node_attempt_dir(&run_id, "l", 1).unwrap();
+    let events = fs::read_to_string(dir.join("events.jsonl")).unwrap();
+    assert!(events.len() < 5 * 1024 && events.contains("\"status\":\"fail\""), "{}", events.len());
+}
+
+#[test]
 fn stray_bytes_and_over_long_lines_do_not_end_the_call() {
     // I1: invalid UTF-8 and over-long lines are stray output, not an EOF.
     let script = json!({

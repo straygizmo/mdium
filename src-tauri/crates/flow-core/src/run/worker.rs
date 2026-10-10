@@ -18,6 +18,11 @@ use std::time::{Duration, Instant};
 
 pub const WORKER_PROTOCOL_VERSION: u64 = 1;
 
+/// Longest worker line the reader buffers; past it the line is discarded.
+/// Lines between `MAX_LINE_BYTES` and this are delivered as
+/// [`WorkerEvent::OverLong`], so an over-long `outcome` still ends its call.
+pub const MAX_LINE_BYTES_HARD: usize = 1024 * 1024;
+
 pub const FLOW_RUNTIME_START_FAILED: &str = "FLOW_RUNTIME_START_FAILED";
 pub const FLOW_PYTHON_ENTRY_UNKNOWN: &str = "FLOW_PYTHON_ENTRY_UNKNOWN";
 pub const FLOW_PYTHON_INPUT_INVALID: &str = "FLOW_PYTHON_INPUT_INVALID";
@@ -318,7 +323,10 @@ pub struct WorkerSpec {
 pub enum WorkerEvent {
     /// One line, decoded lossily (invalid UTF-8 never ends the reader).
     Line(String),
-    /// A line longer than `MAX_LINE_BYTES`; it was dropped.
+    /// A line longer than `MAX_LINE_BYTES` but within `MAX_LINE_BYTES_HARD`:
+    /// dropped by the receiver unless it ends a call (an `outcome`).
+    OverLong(String),
+    /// A line longer than `MAX_LINE_BYTES_HARD`; it was dropped.
     TooLong,
     Exited(Option<i32>),
 }
@@ -378,14 +386,15 @@ impl Drop for PipedWorker {
 }
 
 /// Reads one line into `buf` without its `\n` / `\r\n`, keeping at most
-/// `MAX_LINE_BYTES + 1` bytes and discarding the rest of a longer line.
-/// `Ok(None)` at EOF; `Ok(Some(false))` when the line was too long.
+/// `hard + 1` bytes and discarding the rest of a longer line. `Ok(None)` at
+/// EOF; `Ok(Some(false))` when the line was longer than `hard` bytes.
 fn read_capped_line(
     reader: &mut impl BufRead,
     buf: &mut Vec<u8>,
+    hard: usize,
 ) -> std::io::Result<Option<bool>> {
     buf.clear();
-    let cap = MAX_LINE_BYTES + 1;
+    let cap = hard + 1;
     let mut read_any = false;
     let mut overflow = false;
     loop {
@@ -416,7 +425,56 @@ fn read_capped_line(
     if !overflow && buf.last() == Some(&b'\r') {
         buf.pop();
     }
-    Ok(Some(!overflow && buf.len() <= MAX_LINE_BYTES))
+    Ok(Some(!overflow && buf.len() <= hard))
+}
+
+/// The worker event for one line the reader kept (`fits`: within the hard cap).
+fn line_event(buf: &[u8], fits: bool) -> WorkerEvent {
+    if !fits {
+        return WorkerEvent::TooLong;
+    }
+    let text = String::from_utf8_lossy(buf).into_owned();
+    if buf.len() > MAX_LINE_BYTES {
+        WorkerEvent::OverLong(text)
+    } else {
+        WorkerEvent::Line(text)
+    }
+}
+
+/// Bound of the `reason` / `message` kept from an over-long outcome.
+pub const MAX_OVER_LONG_TEXT: usize = 4 * 1024;
+
+/// An over-long line that ends a call (`outcome`, or an `error` answering
+/// the request) with its `reason` / `message` cut to `MAX_OVER_LONG_TEXT`,
+/// re-serialised; `None` for any other line (it is dropped).
+pub fn bound_over_long_line(line: &str) -> Option<String> {
+    let Ok(Value::Object(mut obj)) = serde_json::from_str::<Value>(line) else {
+        return None;
+    };
+    if !matches!(
+        obj.get("type").and_then(Value::as_str),
+        Some("outcome" | "error")
+    ) {
+        return None;
+    }
+    for key in ["reason", "message"] {
+        if let Some(Value::String(text)) = obj.get_mut(key) {
+            *text = truncate_text(text, MAX_OVER_LONG_TEXT);
+        }
+    }
+    Some(Value::Object(obj).to_string())
+}
+
+/// Cuts `text` to at most `max` bytes (on a char boundary), marking the cut.
+pub fn truncate_text(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_string();
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}… [truncated]", &text[..end])
 }
 
 /// Spawns `cmd` with piped stdin/stdout and a reader thread; `stderr` must
@@ -438,13 +496,8 @@ pub fn spawn_piped(mut cmd: Command) -> std::io::Result<Box<dyn WorkerHandle>> {
         let mut reader = BufReader::new(stdout);
         let mut buf = Vec::new();
         // Only EOF or a real I/O error ends the reader.
-        while let Ok(Some(fits)) = read_capped_line(&mut reader, &mut buf) {
-            let event = if fits {
-                WorkerEvent::Line(String::from_utf8_lossy(&buf).into_owned())
-            } else {
-                WorkerEvent::TooLong
-            };
-            if tx.send(event).is_err() {
+        while let Ok(Some(fits)) = read_capped_line(&mut reader, &mut buf, MAX_LINE_BYTES_HARD) {
+            if tx.send(line_event(&buf, fits)).is_err() {
                 return;
             }
         }
@@ -647,7 +700,9 @@ pub fn describe_runtime(
     let deadline = Instant::now() + timeout;
     let result = loop {
         match handle.try_recv() {
-            Some(WorkerEvent::Line(line)) => match parse_worker_line(&line) {
+            // An over-long line may still be the answer (a large manifest);
+            // anything else in it is ignored, as every other line is here.
+            Some(WorkerEvent::Line(line) | WorkerEvent::OverLong(line)) => match parse_worker_line(&line) {
                 WorkerMessage::Manifest {
                     request_id,
                     manifest,
@@ -657,7 +712,9 @@ pub fn describe_runtime(
                 {
                     break Err(fail(bad_manifest_message(&error)))
                 }
-                WorkerMessage::Error { message, .. } => break Err(fail(message)),
+                WorkerMessage::Error { message, .. } => {
+                    break Err(fail(truncate_text(&message, MAX_OVER_LONG_TEXT)))
+                }
                 _ => {}
             },
             Some(WorkerEvent::TooLong) => {}
@@ -821,25 +878,63 @@ mod tests {
         let mut data = b"{\"a\":1}\r\n\xff\xfe\n".to_vec();
         data.extend(std::iter::repeat_n(b'x', MAX_LINE_BYTES + 10));
         data.extend_from_slice(b"\nnext\n");
+        data.extend(std::iter::repeat_n(b'z', MAX_LINE_BYTES_HARD + 10));
+        data.extend_from_slice(b"\n");
         data.extend(std::iter::repeat_n(b'y', MAX_LINE_BYTES));
         data.extend_from_slice(b"\r\ntail");
         let mut reader = std::io::BufReader::with_capacity(1024, &data[..]);
         let mut buf = Vec::new();
-        let mut lines = Vec::new();
-        while let Some(fits) = read_capped_line(&mut reader, &mut buf).unwrap() {
-            assert!(buf.len() <= MAX_LINE_BYTES + 1);
-            lines.push(fits.then(|| String::from_utf8_lossy(&buf).into_owned()));
+        let mut events = Vec::new();
+        while let Some(fits) = read_capped_line(&mut reader, &mut buf, MAX_LINE_BYTES_HARD).unwrap() {
+            assert!(buf.len() <= MAX_LINE_BYTES_HARD + 1);
+            events.push(line_event(&buf, fits));
         }
-        let lens: Vec<Option<usize>> = lines.iter().map(|l| l.as_ref().map(String::len)).collect();
-        assert_eq!(lines.len(), 6, "{lens:?}");
-        assert_eq!(lines[0].as_deref(), Some("{\"a\":1}"));
-        assert_eq!(lines[1].as_deref(), Some("\u{FFFD}\u{FFFD}"));
-        assert_eq!(lines[2], None, "the over-long line is dropped");
-        assert_eq!(lines[3].as_deref(), Some("next"));
-        // Exactly the limit (its `\r` stripped) still fits.
-        assert_eq!(lens[4], Some(MAX_LINE_BYTES));
+        let line = |i: usize| match &events[i] {
+            WorkerEvent::Line(text) => Some(text.as_str()),
+            _ => None,
+        };
+        assert_eq!(events.len(), 7, "{}", events.len());
+        assert_eq!(line(0), Some("{\"a\":1}"));
+        assert_eq!(line(1), Some("\u{FFFD}\u{FFFD}"));
+        // Over `MAX_LINE_BYTES`: delivered whole, tagged over-long.
+        assert!(matches!(&events[2], WorkerEvent::OverLong(t) if t.len() == MAX_LINE_BYTES + 10));
+        assert_eq!(line(3), Some("next"));
+        // Over the hard cap: dropped, the rest of the line discarded.
+        assert!(matches!(events[4], WorkerEvent::TooLong));
+        // Exactly the limit (its `\r` stripped) still is an ordinary line.
+        assert_eq!(line(5).map(str::len), Some(MAX_LINE_BYTES));
         // The unterminated last line still arrives.
-        assert_eq!(lines[5].as_deref(), Some("tail"));
+        assert_eq!(line(6), Some("tail"));
+    }
+
+    #[test]
+    fn over_long_outcomes_and_errors_are_kept_bounded() {
+        let big = "e".repeat(100 * 1024);
+        let outcome = json!({ "v": 1, "type": "outcome", "callId": "c", "status": "fail", "reason": big })
+            .to_string();
+        let bounded = bound_over_long_line(&outcome).unwrap();
+        assert!(bounded.len() < MAX_OVER_LONG_TEXT + 200, "{}", bounded.len());
+        match parse_worker_line(&bounded) {
+            WorkerMessage::Item {
+                item: ProtocolItem::Outcome(ProtocolOutcome::Fail(Some(reason))),
+                ..
+            } => assert!(reason.ends_with("… [truncated]")),
+            other => panic!("{other:?}"),
+        }
+        let error = json!({ "v": 1, "type": "error", "requestId": "2", "code": "X", "message": big })
+            .to_string();
+        assert!(bound_over_long_line(&error).unwrap().len() < MAX_OVER_LONG_TEXT + 200);
+        let output = json!({ "v": 1, "type": "output", "key": "k", "value": big }).to_string();
+        assert!(bound_over_long_line(&output).is_none());
+        assert!(bound_over_long_line("not json").is_none());
+    }
+
+    #[test]
+    fn truncates_text_on_a_char_boundary() {
+        assert_eq!(truncate_text("short", 10), "short");
+        assert_eq!(truncate_text("abcdef", 3), "abc… [truncated]");
+        // "é" is two bytes: never cut inside it.
+        assert_eq!(truncate_text("aé", 2), "a… [truncated]");
     }
 
     #[test]
@@ -1136,7 +1231,9 @@ mod tests {
                         return seen;
                     }
                 }
-                Some(WorkerEvent::TooLong) => seen.push(Value::String("<too long>".into())),
+                Some(WorkerEvent::TooLong | WorkerEvent::OverLong(_)) => {
+                    seen.push(Value::String("<too long>".into()))
+                }
                 Some(WorkerEvent::Exited(_)) => return seen,
                 None => std::thread::sleep(Duration::from_millis(10)),
             }

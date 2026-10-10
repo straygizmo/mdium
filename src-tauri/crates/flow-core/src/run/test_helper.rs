@@ -241,7 +241,8 @@ pub fn process_alive(pid: u32) -> bool {
 // Steps: `emit` (item JSON; `callId` is added), `emit_many` {count,item}
 // (`item` repeated `count` times), `log` {level,text}, `raw`
 // (a verbatim line), `raw_bytes` (an array of byte values written as is),
-// `long_line` (n; a line of n `x` bytes), `sleep_ms`, `wait_cancel_ms`
+// `long_line` (n; a line of n `x` bytes), `long_fail` (n; outcome `fail`
+// with an n-byte reason, which ends the call), `sleep_ms`, `wait_cancel_ms`
 // (outcome `stopped` when a `cancel` arrives), `exit_on_cancel_ms` (exit 0
 // without an outcome when a `cancel` arrives), `wait_stop_ms` (outcome
 // `stopped` when the STOP file
@@ -378,6 +379,13 @@ fn worker_step(step: &Value, call_id: &str, ctx: &Value, rx: &Receiver<String>) 
         let _ = out.write_all(&vec![b'x'; n as usize]);
         let _ = out.write_all(b"\n");
         let _ = out.flush();
+    } else if let Some(n) = step.get("long_fail").and_then(Value::as_u64) {
+        // An outcome `fail` whose reason is n bytes (too big for the env script).
+        worker_out(&worker_item(
+            call_id,
+            json!({ "type": "outcome", "status": "fail", "reason": "r".repeat(n as usize) }),
+        ));
+        return true;
     } else if let Some(ms) = step.get("exit_on_cancel_ms").and_then(Value::as_u64) {
         if worker_wait(rx, ms, |msg| msg["type"] == "cancel", || false) {
             std::process::exit(0);

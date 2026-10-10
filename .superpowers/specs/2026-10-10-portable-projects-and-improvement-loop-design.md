@@ -248,7 +248,7 @@ def render(ctx: Context, videoDir: str, title: str = "video") -> None:
 
 - `Context`: `progress(text, fraction=None)`、`cost(usd, kind="actual", provider=None, model=None, units=None)`、`output(key, value)`、`artifact(path, label=None, media_type=None)`、`log(text, level="info")`、`should_stop() -> bool`（停止ファイルと `cancel` の両方を見る）、`needs_approval(message)`（例外として投げると `outcome: needs_approval`）、`node_dir`、`run_id`、`project_root`。
 - 段階関数の戻り値: `None` で `ok`。`mdium_worker.StageFailed(reason)` を投げると `fail`、`mdium_worker.Stopped()` で `stopped`。その他の例外は `fail`（トレースバックを `log` の `error` と `reason` に入れる）。
-  - V3 実装メモ: 想定外の例外の `reason` は `型名: メッセージ` の短い形にし、トレースバックは `error` レベルの `log` 行にだけ入れる（表示が長くならないため）。段階内の `sys.exit()` も `fail`（`reason` は `SystemExit: <code>`）でワーカーは終了しない。
+  - V3 実装メモ: 想定外の例外の `reason` は `型名: メッセージ` の短い形にし、トレースバックは `error` レベルの `log` 行にだけ入れる（表示が長くならないため）。段階内の `sys.exit()` も `fail`（`reason` は `SystemExit: <code>`）でワーカーは終了しない。ワーカーは `outcome` の `reason` / `message`、`error` の `message`、`log` の `text` を 8 KiB（文字数）で切り詰め、末尾に `… [truncated]` を付ける（1 行 64 KiB の上限に掛からないため）。MDium 側も、64 KiB を超えた行は 1 MiB まで読み、呼び出しを終える `outcome`（または要求への `error`）であれば `reason` / `message` を 4 KiB に切り詰めて適用する（それ以外の超過行と 1 MiB 超の行は捨てる。`describe` の応答は 1 MiB まで受け付ける）。
 - `python -m mdium_worker --module <module>`: モジュールを import して登録された段階を集め、3.3 のループに入る。`describe` だけなら `--describe` で起動して 1 行出して終了する（`flow_runtime_describe` 用）。
 - 入力検証: `inputs` スキーマに対して必須と型を検証。`path` は文字列として受け、存在は検証しない（段階の責務）。
 - 同時実行はしない（3.2）。`cancel` は別スレッドで読み取り、`ctx.should_stop()` が真になる。段階が止まらなければ MDium 側のタイムアウトとプロセス終了に任せる。

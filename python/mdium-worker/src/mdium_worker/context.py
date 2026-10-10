@@ -5,6 +5,16 @@ import os
 import threading
 from typing import Any, Callable
 
+# Longest `log.text` / `outcome.reason` / `outcome.message` sent (characters),
+# well inside MDium's 64 KiB line limit.
+MAX_TEXT = 8 * 1024
+TRUNCATED = "… [truncated]"
+
+
+def truncate_text(text: str, limit: int = MAX_TEXT) -> str:
+    """`text` cut to `limit` characters, marked when cut."""
+    return text if len(text) <= limit else text[:limit] + TRUNCATED
+
 
 class StageFailed(Exception):
     """The stage failed; the message is reported as the outcome's reason."""
@@ -73,7 +83,7 @@ class Context:
         self._send(message)
 
     def log(self, text: str, level: str = "info") -> None:
-        self._send({"type": "log", "level": level, "text": text})
+        self._send({"type": "log", "level": level, "text": truncate_text(str(text))})
 
     def should_stop(self) -> bool:
         stop_file = self._ctx.get("stopFile") or os.environ.get("MDIUM_FLOW_STOP_FILE")

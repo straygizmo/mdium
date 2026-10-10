@@ -29,7 +29,7 @@ use crate::run::scope::{
 use crate::run::store::{EventLog, RunMeta, RunStore, CHECKPOINT_EVERY};
 use crate::run::supervise::DetachedProcess;
 use crate::run::worker::{
-    bad_manifest_message, call_request, cancel_request, describe_request,
+    bad_manifest_message, bound_over_long_line, truncate_text, MAX_OVER_LONG_TEXT, call_request, cancel_request, describe_request,
     exited_before_describe, parse_worker_line, shutdown_request, validate_inputs,
     with_stderr_tail, worker_spec, CallContext, Manifest, WorkerEvent, WorkerHandle,
     WorkerLauncher, WorkerMessage, FLOW_PYTHON_ENTRY_UNKNOWN, FLOW_PYTHON_INPUT_INVALID,
@@ -2425,6 +2425,23 @@ impl Driver {
                         _ => append_line(stdout_log, &line),
                     }
                 }
+                // An over-long line still counts when it answers `describe`
+                // (a large manifest, or an error, bounded); otherwise dropped.
+                Some(WorkerEvent::OverLong(line)) => match parse_worker_line(&line) {
+                    WorkerMessage::Manifest {
+                        request_id,
+                        manifest,
+                    } if request_id == "1" => return Ok(manifest),
+                    WorkerMessage::BadManifest { request_id, error }
+                        if request_id.as_deref().is_none_or(|id| id == "1") =>
+                    {
+                        return Err(Some(bad_manifest_message(&error)))
+                    }
+                    WorkerMessage::Error { message, .. } => {
+                        return Err(Some(truncate_text(&message, MAX_OVER_LONG_TEXT)))
+                    }
+                    _ => {}
+                },
                 Some(WorkerEvent::TooLong) => {}
                 Some(WorkerEvent::Exited(_)) => return Err(Some(exited_before_describe(handle))),
                 None => std::thread::sleep(pause),
@@ -2559,6 +2576,12 @@ impl Driver {
             match event {
                 WorkerEvent::Line(line) => self.worker_line(runtime, &line),
                 WorkerEvent::TooLong => self.worker_line_too_long(runtime),
+                // Dropped like any over-long line, unless it ends a call:
+                // then it is applied with its text bounded.
+                WorkerEvent::OverLong(line) => match bound_over_long_line(&line) {
+                    Some(bounded) => self.worker_line(runtime, &bounded),
+                    None => self.worker_line_too_long(runtime),
+                },
                 WorkerEvent::Exited(code) => {
                     if let Some(worker) = self.workers.get_mut(runtime) {
                         worker.eof = true;

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .context import truncate_text
 from .registry import TYPE_CHECKS, StageDef
 
 __all__ = ["TYPE_CHECKS", "InputError", "validate_inputs", "manifest_message", "error_message", "outcome_message"]
@@ -45,11 +46,16 @@ def manifest_message(request_id: str, module: str, stages: list[StageDef]) -> di
 
 
 def error_message(request_id: str | None, code: str, message: str) -> dict:
-    out = {"v": 1, "type": "error", "code": code, "message": message}
+    out = {"v": 1, "type": "error", "code": code, "message": truncate_text(message)}
     if request_id is not None:
         out["requestId"] = request_id
     return out
 
 
 def outcome_message(call_id: str, status: str, **extra: Any) -> dict:
-    return {"v": 1, "type": "outcome", "callId": call_id, "status": status, **{k: v for k, v in extra.items() if v is not None}}
+    out = {"v": 1, "type": "outcome", "callId": call_id, "status": status, **{k: v for k, v in extra.items() if v is not None}}
+    # A reason may embed a subprocess's stderr: keep the line bounded.
+    for key in ("reason", "message"):
+        if isinstance(out.get(key), str):
+            out[key] = truncate_text(out[key])
+    return out
