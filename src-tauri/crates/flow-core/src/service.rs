@@ -107,7 +107,7 @@ pub struct GitignoreStatus {
 
 /// Whether git ignores `.mdium/flow-runs/` in `root` (the UI suggests
 /// adding it otherwise; nothing is written automatically).
-pub fn flow_runs_ignored(root: &Path) -> bool {
+fn flow_runs_ignored(root: &Path) -> bool {
     let mut command = std::process::Command::new("git");
     command
         .args(["check-ignore", "-q", ".mdium/flow-runs/probe"])
@@ -335,6 +335,8 @@ pub const COMMAND_NAMES: [&str; 17] = [
     "flow_gitignore_status",
 ];
 
+// `call` is deliberately stricter than Tauri's `invoke`: unknown keys are rejected with
+// `FLOW_BAD_ARGS` because this is the data-carrying HTTP surface.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RootArgs {
@@ -739,6 +741,29 @@ mod tests {
             .call(
                 "flow_run_get",
                 serde_json::json!({ "projectRoot": root, "runId": "nope" }),
+            )
+            .unwrap_err();
+        assert_eq!(err.code, FLOW_RUN_INVALID_ID);
+    }
+
+    #[test]
+    fn call_accepts_null_node_key_and_comment_for_approve() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = service(tmp.path());
+        let root = tmp.path().to_str().unwrap();
+        // Null optionals deserialize and the engine is reached.
+        let err = svc
+            .call(
+                "flow_run_approve",
+                serde_json::json!({ "projectRoot": root, "runId": "nope", "nodeKey": null, "choice": "approve", "comment": null }),
+            )
+            .unwrap_err();
+        assert_eq!(err.code, FLOW_RUN_INVALID_ID);
+        // Omitting them entirely behaves the same.
+        let err = svc
+            .call(
+                "flow_run_approve",
+                serde_json::json!({ "projectRoot": root, "runId": "nope", "choice": "approve" }),
             )
             .unwrap_err();
         assert_eq!(err.code, FLOW_RUN_INVALID_ID);

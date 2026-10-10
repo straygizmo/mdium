@@ -17,7 +17,7 @@ function sourceFiles(dir: string): string[] {
 describe("flow feature isolation", () => {
   it("imports @tauri-apps only from the Tauri transport", () => {
     const offenders = sourceFiles(FLOW_ROOT)
-      .filter((file) => /from\s+["']@tauri-apps\//.test(readFileSync(file, "utf8")))
+      .filter((file) => /(?:from\s+|import\s*\(?\s*)["']@tauri-apps\//.test(readFileSync(file, "utf8")))
       .map((file) => relative(FLOW_ROOT, file).replace(/\\/g, "/"))
       .filter((file) => !ALLOWED.has(file));
     expect(offenders).toEqual([]);

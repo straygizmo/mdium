@@ -432,8 +432,8 @@ pub fn run() {
                     state.shutdown(workflow::orchestrator::SHUTDOWN_WAIT);
                 }
                 // Flow runs: kill running commands and record `interrupted`.
-                if let Some(engine) = app.try_state::<commands::flow::FlowServiceState>() {
-                    engine.shutdown(commands::flow_run::SHUTDOWN_WAIT);
+                if let Some(flow_service) = app.try_state::<commands::flow::FlowServiceState>() {
+                    flow_service.shutdown(commands::flow_run::SHUTDOWN_WAIT);
                 }
             }
         });

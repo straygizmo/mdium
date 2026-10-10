@@ -384,34 +384,21 @@ mod tests {
         assert_eq!(json["costUsd"], 0.0);
     }
 
-    /// The Tauri handlers registered in `lib.rs` for the flow engine, by
-    /// name. Keep in sync with `generate_handler!`; the test below pins the
-    /// list to the service's dispatch table so HTTP and Tauri never drift.
-    const TAURI_FLOW_COMMANDS: [&str; 17] = [
-        "flow_list",
-        "flow_load",
-        "flow_validate",
-        "flow_command_review",
-        "flow_confirm_commands",
-        "flow_run_start",
-        "flow_run_list",
-        "flow_run_get",
-        "flow_run_stop",
-        "flow_run_resume",
-        "flow_run_cancel",
-        "flow_run_approve",
-        "flow_run_rerun_node",
-        "flow_run_mark_succeeded",
-        "flow_run_delete",
-        "flow_run_log",
-        "flow_gitignore_status",
-    ];
+    const LIB_RS: &str = include_str!("../lib.rs");
 
+    /// The flow handlers are read from `generate_handler!` in `lib.rs`, so the
+    /// test pins the registered Tauri commands to the service's dispatch table
+    /// and HTTP and Tauri never drift.
     #[test]
     fn tauri_commands_match_the_service_dispatch_table() {
-        let mut tauri: Vec<&str> = TAURI_FLOW_COMMANDS.to_vec();
-        let mut service: Vec<&str> = flow_core::service::COMMAND_NAMES.to_vec();
+        let re = regex::Regex::new(r"commands::flow(?:_run)?::(flow_\w+)").unwrap();
+        let mut tauri: Vec<&str> = re
+            .captures_iter(LIB_RS)
+            .map(|c| c.get(1).unwrap().as_str())
+            .collect();
         tauri.sort();
+        tauri.dedup();
+        let mut service: Vec<&str> = flow_core::service::COMMAND_NAMES.to_vec();
         service.sort();
         assert_eq!(tauri, service);
     }
