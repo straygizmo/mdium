@@ -217,7 +217,7 @@
     "FLOW_OUTPUT_UNRESOLVED": "Output \"{{output}}\" could not be computed."
   },
   "runError": {
-    "FLOW_PROJECT_INVALID": ".mdium/project.yaml has errors; fix them before running.",
+    "FLOW_PROJECT_INVALID": "The project folder or its .mdium/project.yaml cannot be used.",
     "FLOW_RUNTIME_UNKNOWN": "The runtime is not declared in project.yaml.",
     "FLOW_RUNTIME_START_FAILED": "The Python runtime could not be started.",
     "FLOW_PROJECT_REQUIRED": "This folder has no valid .mdium/project.yaml.",

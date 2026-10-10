@@ -217,7 +217,7 @@
     "FLOW_OUTPUT_UNRESOLVED": "出力「{{output}}」を求められませんでした。"
   },
   "runError": {
-    "FLOW_PROJECT_INVALID": ".mdium/project.yaml にエラーがあります。修正してから実行してください。",
+    "FLOW_PROJECT_INVALID": "プロジェクトフォルダまたは .mdium/project.yaml を使用できません。",
     "FLOW_RUNTIME_UNKNOWN": "このランタイムは project.yaml に宣言されていません。",
     "FLOW_RUNTIME_START_FAILED": "Python ランタイムを起動できませんでした。",
     "FLOW_PROJECT_REQUIRED": "このフォルダに有効な .mdium/project.yaml がありません。",
