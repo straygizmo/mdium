@@ -20,6 +20,7 @@
 | 11 | フローサーバと Web フロント |
 | 12 | PR 分割 |
 | 13 | テスト方針、14 リスク、15 決定事項 |
+| 16 | フローの関数化（署名、ライブラリ、折りたたみとドリルダウン、抽出、粒度） |
 
 ---
 
@@ -57,6 +58,7 @@ video_gen の `orchestrate.py` が内容（ストーリー）のレベルで回�
 | ノード種別 | `python` を追加。`command` と `mdium-v1` プロトコルは残し、`python` はその上に作る | 3 章 |
 | フロー定義のトップレベル | `runtimes` は**フローには置かず**、プロジェクトの `project.yaml` に置く | 2 章 |
 | `subflow` | `flow` に `mdium:<template>` を認める。`projectRoot`（実行ルートの上書き）を追加 | 7.3, 8 章 |
+| サブフローの扱い | **関数として扱う**。`outputs` の宣言を署名とし、呼び出し側の参照を検証する（`FLOW_OUTPUT_UNKNOWN`）。`.mdium/flows/lib/` を部品の置き場にし、一覧を入口・部品・テンプレートに分ける。エディタに折りたたみ表示・ドリルダウン・抽出を足し、実行パネルをサブフロー単位のツリーにする | 16 章 |
 | `approval` | 出力 `choice` と `comment` を持つ。`show` に成果物参照を認める | 5.3 |
 | 外部プロトコル `artifact` | `mediaType` を任意で追加 | 5.1 |
 | 値の参照（2.5） | `nodes.<id>.artifacts` / `nodes.<id>.artifacts.<label>`、`nodes.<id>.costUsd`（サブフローの実費合計）を追加。`with` の値が**ちょうど 1 つの** `${{ }}` だけから成る場合は参照先の型（オブジェクト・配列・数値・真偽）を保ち、それ以外は文字列に展開する | 3.1, 5.1, 8.2 |
@@ -218,7 +220,7 @@ MDium → ワーカー:
 
 ### 3.7 エラーコード（追加）
 
-`FLOW_PROJECT_INVALID`、`FLOW_PROJECT_REQUIRED`、`FLOW_RUNTIME_UNKNOWN`、`FLOW_RUNTIME_START_FAILED`、`FLOW_PYTHON_ENTRY_UNKNOWN`、`FLOW_PYTHON_INPUT_INVALID`、`FLOW_PYTHON_PROTOCOL`、`FLOW_PYTHON_WORKER_EXITED`、`FLOW_SECRET_MISSING`、`FLOW_SETUP_FAILED`、`FLOW_SUBFLOW_ROOT_INVALID`、`FLOW_TEMPLATE_UNKNOWN`、`FLOW_ARTIFACT_OUTSIDE_PROJECT`。
+`FLOW_PROJECT_INVALID`、`FLOW_PROJECT_REQUIRED`、`FLOW_RUNTIME_UNKNOWN`、`FLOW_RUNTIME_START_FAILED`、`FLOW_PYTHON_ENTRY_UNKNOWN`、`FLOW_PYTHON_INPUT_INVALID`、`FLOW_PYTHON_PROTOCOL`、`FLOW_PYTHON_WORKER_EXITED`、`FLOW_SECRET_MISSING`、`FLOW_SETUP_FAILED`、`FLOW_SUBFLOW_ROOT_INVALID`、`FLOW_TEMPLATE_UNKNOWN`、`FLOW_ARTIFACT_OUTSIDE_PROJECT`、`FLOW_OUTPUT_UNKNOWN`、`FLOW_PARAM_TYPE`（16.1）。
 
 ---
 
@@ -268,6 +270,7 @@ def render(ctx: Context, videoDir: str, title: str = "video") -> None:
 ### 5.3 実行パネルと承認
 
 - 実行パネルのノード詳細に「成果物」タブを足し、`mediaType` に応じて画像・動画（`<video controls>`）・音声・JSON/テキスト（整形表示、先頭 256 KiB）を表示する。
+- 実行パネルのノード一覧はサブフロー単位のツリーにする（16.4）。
 - `approval` ノード:
   - `show` に `nodes.<id>.outputs.<key>`（値を表示）、`nodes.<id>.artifacts`、`nodes.<id>.artifacts.<label>`（プレビューを表示）を書ける。
   - 出力 `choice`（選んだ選択肢）と `comment`（入力した文字列。空なら `""`）を持ち、後続ノードから `${{ nodes.review.outputs.comment }}` で参照できる。
@@ -283,7 +286,8 @@ def render(ctx: Context, videoDir: str, title: str = "video") -> None:
 - 属性パネル: 種別ごとのフォーム（共通属性＋種別属性）。`python` の `with` はマニフェストの入力スキーマから行を生成し、値はテンプレート文字列として編集する。`when` と `cases` の条件は 2.6 の最小構文のフォーム。
 - フローの属性: `params` / `defaults` / `limits` / `outputs` の編集。
 - 保存: 正規化した YAML を書き出す（既存の警告: コメントは失われる）。保存前に `flow_validate` を通し、エラーがあれば保存を拒まず警告として表示する（実行は検証エラーがあれば既存どおり拒む）。
-- YAML 分割表示: キャンバスの横に YAML のテキストエディタ（既存の CodeMirror）を出し、どちらを編集しても他方へ反映する。インラインの `body` を持つループの中身の編集は、初版ではこのテキスト側で行う（キャンバスでは展開表示のみ）。
+- YAML 分割表示: キャンバスの横に YAML のテキストエディタ（既存の CodeMirror）を出し、どちらを編集しても他方へ反映する。インラインの `body` を持つループの中身の編集は、初版ではこのテキスト側で行う（キャンバスでは展開表示のみ。パレットから追加するループの本体はファイル参照にする。16.6）。
+- サブフロー: 折りたたみ表示（署名）、ダブルクリックでのドリルダウン、「選択したノード群をサブフローに抽出」（16.3）。
 - 外部変更の検知: 開いている間にファイルが変わったら通知し、再読み込みか上書きかを選ぶ。
 - 対象外（後続）: 元に戻す／やり直す、自動整列の再実行、複数選択、コピー／貼り付け、ループ本体のキャンバス編集。
 - 新規作成: 「空のフロー」と「テンプレートから」（`mdium:` のテンプレートをプロジェクトにコピーする。7.3）。
@@ -414,10 +418,12 @@ edges:
 ```
 video_gen/
   .mdium/project.yaml
-  .mdium/flows/production-cycle.flow.yaml   # main
-  .mdium/flows/story-run.flow.yaml
-  .mdium/flows/video.flow.yaml
-  .mdium/flows/improve.flow.yaml            # 8 章のテンプレートを調整したもの
+  .mdium/flows/production-cycle.flow.yaml   # main (entry)
+  .mdium/flows/improve.flow.yaml            # 8 章のテンプレートを調整したもの (entry)
+  .mdium/flows/lib/story-run.flow.yaml      # parts (16.2)
+  .mdium/flows/lib/video.flow.yaml
+  .mdium/flows/lib/video-assets.flow.yaml
+  .mdium/flows/lib/video-review.flow.yaml
   video_gen_flow/__init__.py                # registers the stages below
   video_gen_flow/portfolio.py, story.py, video.py
 ```
@@ -450,13 +456,13 @@ video_gen/
 
 ```
 observe → evaluate → plan → approve_order(承認: order.json を提示, approve/reject)
-  → stories(subflow story-run.flow.yaml, order の level/genres/count/relationship)
-  → videos(loop foreach stories.outputs.storyDirs, body: subflow video.flow.yaml, onItemFailure: continue)
+  → stories(subflow lib/story-run.flow.yaml, order の level/genres/count/relationship)
+  → videos(loop foreach stories.outputs.storyDirs, body: lib/video.flow.yaml, onItemFailure: continue)
   → record
 outputs: coverage, avgVideoCoherence, storyCount
 ```
 
-`story-run.flow.yaml`:
+`lib/story-run.flow.yaml`:
 
 ```
 params: level, genres, count, relationship, targetCoverage(95), resumeDir("")
@@ -465,25 +471,41 @@ init_run → stories(loop while, until: iteration.outputs.done == true, maxItera
 outputs: runDir, storyDirs, coverage
 ```
 
-`video.flow.yaml`:
+`lib/video.flow.yaml`（1 ストーリーの動画化。2 つの部品を呼ぶ）:
 
 ```
 params: storyDir(path), title("video"), imageStyle("Anime"), ttsEngine("Gemini"),
         qualityIters(3), audioPacing(true), minContinuityScore(7)
 audit → gate(branch: eligible == false → blocked, default ok)
-  blocked → force_gate(承認: audit を提示, force/stop) → label (force)
-  ok → label → script → voice → assets → ir → render
-  → quality(when qualityIters > 0) → pacing(when audioPacing == true) → review_build(when audioPacing == false)
-  → review(承認: reviewVideoPath を提示, accept / revise{commentRequired})
-  → revise(port revise; feedback = review.outputs.comment) → review(後退エッジ, maxTraversals: 5)
+  blocked → force_gate(承認: audit を提示, force/stop) → produce (force)
+  ok → produce(subflow lib/video-assets.flow.yaml)
+  → review(subflow lib/video-review.flow.yaml, videoDir/reviewVideoPath を渡す)
 outputs: videoPath, coherence, continuityScore
+```
+
+`lib/video-assets.flow.yaml`（台本から動画まで）:
+
+```
+params: storyDir, videoDir, title, imageStyle, ttsEngine, qualityIters, audioPacing
+label → script → voice → assets → ir → render
+  → quality(when qualityIters > 0) → pacing(when audioPacing == true) → review_build(when audioPacing == false)
+outputs: videoPath, reviewVideoPath, coherence
+```
+
+`lib/video-review.flow.yaml`（人のレビューと部分再生成のループ）:
+
+```
+params: videoDir, title, reviewVideoPath
+review(承認: reviewVideoPath を提示, accept / revise{commentRequired})
+  → revise(port revise; feedback = review.outputs.comment) → review(後退エッジ, maxTraversals: 5)
+outputs: videoPath, reviewVideoPath, revisionCount
 ```
 
 - 承認コメントの JSON（`{"revisions":[{"scene":11,"target":"tts","speaker":"Narrator"}]}`）は既存の `video_revise` の形式をそのまま使う。承認ダイアログには、`show` のレビュー動画の下に入力例を説明文として出す（フロー定義の `message` に書く）。
 
 ### 9.4 改善フロー（`improve.flow.yaml`）
 
-8.2 のテンプレートをコピーし、`verify` の `params` を小さくする（例: `count: 1`、`qualityIters: 1`）。`metrics` は 2.1 の例のとおり。`analyze` のプロンプトには `goal` の例として「レビュー動画で指摘された台詞の間延びを減らす」「継続性ゲートの誤検出を減らす」のような内容を想定する。
+8.2 のテンプレートをコピーし（部品 `lib/improve-propose.flow.yaml` / `lib/improve-verify.flow.yaml` も一緒にコピーされる。16.5）、`verify` の `params` を小さくする（例: `count: 1`、`qualityIters: 1`）。`metrics` は 2.1 の例のとおり。`analyze` のプロンプトには `goal` の例として「レビュー動画で指摘された台詞の間延びを減らす」「継続性ゲートの誤検出を減らす」のような内容を想定する。
 
 ### 9.5 移行しないもの
 
@@ -543,11 +565,11 @@ export interface FlowTransport {
 | # | 内容 | 主な成果物 | リリース時に使えるもの |
 |---|---|---|---|
 | V1 | `flow-core` クレート分離、`FlowService`、フロントのトランスポート層（Tauri 実装のみ） | cargo ワークスペース、`transport.ts`、import 検査 | なし（挙動変更なし） |
-| V2 | プロジェクトマニフェスト | `project.yaml` の解析・検証、`flow_project_load` / `flow_project_setup`、確認画面へのランタイムと `setup` の追加、`secrets` の検査、セットアップ UI | プロジェクトのセットアップ |
+| V2 | プロジェクトマニフェストと関数化の基盤 | `project.yaml` の解析・検証、`flow_project_load` / `flow_project_setup`、確認画面へのランタイムと `setup` の追加、`secrets` の検査、セットアップ UI、サブフローの戻り値検証（`FLOW_OUTPUT_UNKNOWN`）、`lib/` と一覧の 3 群（16.1, 16.2） | プロジェクトのセットアップ、部品の区別 |
 | V3 | `python` ノードとワーカー | `NodeKind::Python`、ワーカープロトコル、ライフサイクル、`flow_runtime_describe`、`python/mdium-worker/`（pytest 付き）、偽ワーカーでの Rust テスト | Python の段階をノードとして実行 |
-| V4 | 成果物とプレビュー | `artifacts.json`、`mediaType`、アセットプロトコルのスコープと CSP、実行パネルの成果物タブ、承認の `show` と `comment` | 画像・動画の確認と、コメント付き承認 |
-| V5 | エディタ（6 章） | パレット、属性パネル、エッジ編集、YAML 分割表示、保存、新規作成 | キャンバスでの編集 |
-| V6 | video_gen プロジェクト化（video_gen リポジトリ側） | `video_gen_flow/`、`run_video_pipeline` の段階分解、3 フロー、`project.yaml`、デスクトップでの通し確認 | **デスクトップで video_gen をフローとして運用** |
+| V4 | 成果物とプレビュー | `artifacts.json`、`mediaType`、アセットプロトコルのスコープと CSP、実行パネルの成果物タブ、承認の `show` と `comment`、実行パネルのサブフロー単位のツリー（16.4） | 画像・動画の確認と、コメント付き承認 |
+| V5 | エディタ（6 章） | パレット、属性パネル、エッジ編集、YAML 分割表示、保存、新規作成、サブフローの折りたたみ表示・ドリルダウン・抽出（16.3） | キャンバスでの編集 |
+| V6 | video_gen プロジェクト化（video_gen リポジトリ側） | `video_gen_flow/`、`run_video_pipeline` の段階分解、入口 2 本と部品 4 本のフロー、`project.yaml`、デスクトップでの通し確認 | **デスクトップで video_gen をフローとして運用** |
 | V7 | `agent` ノード、組込みアクション、テンプレート | 7.1、8.2 の 7 アクション＋7.2 の 3 アクション、`mdium:` 参照、`dev-workflow` テンプレート（`mergeGate`）、`subflow.projectRoot` | 開発ワークフローをフローとして実行（試験的） |
 | V8 | 改善ループ | `improve-app` テンプレート、`builtin:improve-analyze`、video_gen の `improve.flow.yaml`、実機で 1 反復 | **MDium が video_gen を改善するループ** |
 | V9 | サーバと Web フロント | `flow-server`、HTTP トランスポート、`src/web/`、ロックファイル、ブラウザでの通し確認 | **ブラウザからの利用** |
@@ -566,10 +588,11 @@ export interface FlowTransport {
   - 成果物: ルート外の拒否、`mediaType` の推定、`artifacts.json` の再開後の読み直し。
   - 組込みアクション: `flow-run-latest`（完了した最新だけを選ぶ）、`metrics-compare`（`higher` / `lower` / 同等 / 欠損）、`project-setup`（失敗で `FLOW_SETUP_FAILED`）。
   - `subflow.projectRoot`: worktree 以外の拒否、子の確認内容の不一致で承認待ちになること。
+  - 関数化: 宣言していない戻り値の参照が `FLOW_OUTPUT_UNKNOWN`、`lib/` のフローが入口の一覧に出ないこと、抽出の署名推定（引数・戻り値の自動検出、名前の衝突）。
   - `FlowService` の呼び出しを Tauri を介さずテストする（サーバのハンドラと共通）。
 - Python（pytest、`python/mdium-worker/`）: デコレータと登録、マニフェスト、入力検証、プロトコルの往復、`cancel` と `should_stop`、例外の `fail` への写像。
 - video_gen（pytest）: 段階分解後も既存の `run_video_pipeline` テストが通ること。各段階の単体テストは既存の fake provider で行う。
-- フロントエンド（vitest）: トランスポートの切り替えと import 検査、エディタの保存結果（YAML の往復で意味が変わらないこと、`ui.positions` の保存）、属性パネルのマニフェスト反映、成果物の種類判定と表示、承認ダイアログの `commentRequired`、ja/en の i18n キー一致。
+- フロントエンド（vitest）: トランスポートの切り替えと import 検査、エディタの保存結果（YAML の往復で意味が変わらないこと、`ui.positions` の保存）、属性パネルのマニフェスト反映、成果物の種類判定と表示、承認ダイアログの `commentRequired`、サブフローの折りたたみ表示とドリルダウンのパンくず、抽出の結果（呼び出しノードの `params` と新ファイルの署名が一致すること）、実行パネルのツリーの集約（失敗数・費用）、ja/en の i18n キー一致。
 - 実機:
   - V6: video_gen の 3 フローをデスクトップで通す（承認、`revise` の後退エッジ、停止と再開を含む）。
   - V8: `improve.flow.yaml` で 1 反復（提案 → 承認 → 開発ワークフロー → 検証 → 比較 → 採用／破棄）。
@@ -603,6 +626,57 @@ export interface FlowTransport {
 | 5 | サーバ | Rust の `flow-core` クレートを共有する axum サーバ。まずデスクトップで目標を達成してから着手する |
 | 6 | 捉え直し | 「プロジェクトの可搬化」と「外側の改善ループ」を基盤の目的とし、video_gen と開発ワークフローをその実証にする |
 | 7 | 順序 | V1〜V9（12 章）。改善ループ（V7・V8）を Web 化（V9）より先にする |
+| 8 | フローの関数化 | サブフローを関数として扱い、署名の検証・部品ライブラリ・折りたたみとドリルダウン・抽出を入れる。1 フローは十数ノードまでを目安にし、超えたら部品に分ける（16 章） |
+
+---
+
+## 16. フローの関数化
+
+全体のフローが大きくなると把握できなくなるため、サブフローを**関数**として扱い、分割して読む・書く・実行結果を見るための仕組みを揃える。
+
+### 16.1 署名
+
+- サブフロー（およびループのファイル本体）の `params` が引数、`outputs` が戻り値、`description` が説明。これらを**署名**と呼び、呼び出しノードの表示と検証に使う。
+- `outputs` は宣言が必要になる。呼び出し側の `nodes.<sub>.outputs.<key>` は、呼び先の `outputs` に `<key>` が無ければ検証エラー `FLOW_OUTPUT_UNKNOWN`（既存の引数の検証 `FLOW_PARAM_MISMATCH` と対）。`nodes.<sub>.outputs`（オブジェクト全体）の参照は従来どおり可。
+- `params` の型の不一致（例: `number` に真偽を渡す）は、テンプレートを含まない定数の場合のみ検証で見る（`FLOW_PARAM_TYPE`）。テンプレートを含む場合は実行時に見る（既存の `FLOW_CONDITION_TYPE` と同じ扱いでノードを `failed`）。
+- 署名の変更（引数の追加・削除、戻り値の削除）は、呼び出し側の検証エラーとして現れる。エディタは部品を保存するとき、同じプロジェクト内の呼び出し元を再検証して一覧に出す。
+
+### 16.2 ライブラリと一覧
+
+- `.mdium/flows/lib/**/*.flow.yaml` を**部品**とする。部品は他のフローから参照されるためのもので、実行の入口には出さない（実行開始ダイアログの対象外。直接実行したい場合は入口のフローから呼ぶ）。
+- フロー一覧は 3 群に分ける: **入口**（`lib/` 外のフロー。`project.yaml` の `flows` の役割名を付けて表示）、**部品**（`lib/`）、**テンプレート**（`mdium:`。コピーして使う）。
+- 参照の規則は変えない: パス参照はプロジェクトルート内に限る。プロジェクト横断の部品は初版では `mdium:` テンプレートだけ。
+- 部品の一覧には署名（引数と戻り値）を表示し、ドラッグでキャンバスに `subflow` ノードとして置ける。
+
+### 16.3 エディタ
+
+- **折りたたみ表示**: `subflow` ノードと、ファイル本体を持つ `loop` ノードは、名前・引数の対応・戻り値のキーを 1 枚のカードに表示する。中身は描かない。
+- **ドリルダウン**: ダブルクリックで参照先のフローを開く。パンくず（`production-cycle › videos[3] › video › produce`）で戻る。閲覧中に実行結果があれば、その周回・反復の状態を重ねる（16.4 の実行パネルと同じデータ）。
+- **抽出**: 選択したノード群を「サブフローに抽出」する。
+  - 選択の外から参照している値（`params.*`、`nodes.<外>.outputs.*`、`item` など）を引数に、選択の外から参照されている出力を戻り値にして署名を自動で作る。名前は参照元のキーから付け、衝突すれば連番を付ける。
+  - 選択に入るエッジが複数のノードに向かう、または選択から出るエッジが複数の出口を持つ場合は抽出できない（理由を表示する）。選択内で閉じる後退エッジは一緒に移す。
+  - 新しいファイルを `lib/<name>.flow.yaml` に保存し、選択を 1 つの `subflow` ノードに置き換える。元のファイルと新しいファイルの両方を検証し、エラーがあれば操作を取り消す。
+- **逆操作（インライン展開）** は対象外。
+- 部品のファイルを開いたときは、署名を編集するフォーム（`params` / `outputs`）を先頭に出す。
+
+### 16.4 実行パネル
+
+- ノード一覧を、サブフローとループの反復を親とする**ツリー**にする（`nodeKey` のスコープがそのまま階層になる）。
+- 親の行に子の状態を集約して表示する: 実行中の数、失敗の数、承認待ちの数、費用の合計、最新の進捗テキスト。
+- 既定では親を折りたたみ、実行中・失敗・承認待ちを含む親だけを自動で展開する。
+- 承認待ちの行をクリックすると、その承認ダイアログを開く（階層の深さに関係なく）。
+
+### 16.5 粒度の目安とテンプレートの分割
+
+- 1 つのフローファイルは**十数ノード**までを目安にする。超えたら 16.3 の抽出で部品に分ける。
+- video_gen は入口 2 本（`production-cycle`、`improve`）と部品 4 本（`story-run`、`video`、`video-assets`、`video-review`）にする（9.1、9.3）。
+- `improve-app` テンプレートも部品を持つ: `lib/improve-propose.flow.yaml`（`baseline` → `analyze` → `approve_proposal`、戻り値 `proposalPath` / `baseline`）と `lib/improve-verify.flow.yaml`（`setup` → `verify` → `compare`、戻り値 `improved` / `report` / `candidate`）。入口の `improve.flow.yaml` は提案 → 開発 → 検証 → 採用の 4〜6 ノードになる。8.2 の一覧は意味を示すための展開形で、テンプレートの実体はこの分割形とする。
+- `dev-workflow` テンプレートは既存の 1 ファイルのまま（8.1 の構造はそのままで、約 20 ノード。分割は旧エンジンの同等性の確認後に検討する）。
+
+### 16.6 ループ本体
+
+- パレットから追加する `loop` の本体は**ファイル参照**にする（部品を選ぶか、新しい部品を作る）。インラインの `body` は YAML 側でのみ書け、キャンバスでは展開表示のみ（6 章）。
+- 実行時の意味は変えない（インラインは外側のスコープを参照でき、ファイル参照は `params` だけを受け取る。2026-10-06 仕様 2.5）。
 
 ---
 
