@@ -1,5 +1,5 @@
 /**
- * TypeScript mirrors of flow runs (`src-tauri/src/flow/run/`,
+ * TypeScript mirrors of flow runs (`src-tauri/crates/flow-core/src/run/`,
  * `src-tauri/src/commands/flow_run.rs`). Field names are camelCase as
  * serialized by serde; optional fields are omitted when unset.
  */

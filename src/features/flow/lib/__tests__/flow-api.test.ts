@@ -53,7 +53,7 @@ describe("flowApi", () => {
 
 describe("issue codes", () => {
   it("mirror the Rust constants exactly", () => {
-    const rust = readFileSync(resolve(__dirname, "../../../../../src-tauri/src/flow/issues.rs"), "utf8");
+    const rust = readFileSync(resolve(__dirname, "../../../../../src-tauri/crates/flow-core/src/issues.rs"), "utf8");
     const codes = [...rust.matchAll(/pub const (FLOW_[A-Z_]+): &str = "\1";/g)].map((m) => m[1]);
     expect([...codes].sort()).toEqual([...FLOW_ERROR_CODES, ...FLOW_WARNING_CODES].sort());
   });

@@ -1,6 +1,6 @@
 /**
  * TypeScript mirrors of the generic flow engine's definition model and
- * Tauri command payloads (`src-tauri/src/flow/`, `src-tauri/src/commands/flow.rs`).
+ * Tauri command payloads (`src-tauri/crates/flow-core/src/`, `src-tauri/src/commands/flow.rs`).
  * Field names are the camelCase names used on disk and by serde.
  *
  * Flow files: `<project>/.mdium/flows/*.flow.yaml` (primary), `*.flow.yml`,
@@ -181,7 +181,7 @@ export interface FlowDef {
   ui?: unknown;
 }
 
-/** Stable validation issue codes (`src-tauri/src/flow/issues.rs`). */
+/** Stable validation issue codes (`src-tauri/crates/flow-core/src/issues.rs`). */
 export const FLOW_ERROR_CODES = [
   "FLOW_SCHEMA_UNSUPPORTED",
   "FLOW_PARSE_FAILED",
