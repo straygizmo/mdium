@@ -1,0 +1,21 @@
+schemaVersion: 1
+id: video-gen
+name: CEFR video generator
+description: Spec 2.1 example
+runtimes:
+  video_gen:
+    kind: python
+    python: [.venv/Scripts/python.exe, .venv/bin/python]
+    module: video_gen_flow
+    cwd: .
+    env: { PYTHONUTF8: "1" }
+setup:
+  - { run: [uv, sync], workingDir: . }
+secrets: [GOOGLE_API_KEY, ANTHROPIC_API_KEY]
+flows:
+  main: flows/production-cycle.flow.yaml
+  improve: flows/improve.flow.yaml
+metrics:
+  - { ref: outputs.avgVideoCoherence, better: higher }
+  - { ref: outputs.coverage, better: higher }
+  - { ref: costUsd, better: lower }

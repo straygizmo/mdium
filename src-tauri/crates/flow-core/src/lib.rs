@@ -8,6 +8,7 @@ pub mod issues;
 pub mod load;
 pub mod model;
 pub mod parse;
+pub mod project;
 pub mod provider;
 pub mod run;
 pub mod service;

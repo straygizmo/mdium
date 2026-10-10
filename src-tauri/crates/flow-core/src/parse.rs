@@ -227,7 +227,7 @@ fn invalid_value(path: &str, err: &serde_json::Error) -> FlowIssue {
 }
 
 /// Reports keys of `value` (if it is an object) that are not in `allowed`.
-fn check_keys(value: &Value, path: &str, allowed: &[&str], issues: &mut Issues) {
+pub(crate) fn check_keys(value: &Value, path: &str, allowed: &[&str], issues: &mut Issues) {
     if let Some(map) = value.as_object() {
         for key in map.keys() {
             if !allowed.contains(&key.as_str()) {
