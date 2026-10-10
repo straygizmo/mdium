@@ -98,6 +98,7 @@ metrics:                           # what the outer loop compares (8.3); refs ar
 
 - `schemaVersion` は初版 `1`。未知のトップレベルキーは警告、`runtimes` / `setup` の未知の属性は検証エラー。
 - `runtimes.<name>.kind` は初版 `python` のみ。`python` と `cwd` はプロジェクト相対パスで、ルート外とシンボリックリンクは拒否する（フローファイルと同じ規則）。`python` は文字列または文字列の配列（OS ごとの候補。例 `[.venv/Scripts/python.exe, .venv/bin/python]`）で、配列なら最初に存在するものを使う。
+  - V3 実装メモ: `python` と `cwd` はルートから成分ごとに辿り、途中の成分（`.venv` など）がシンボリックリンク・ジャンクションなら拒否する。ただしインタプリタの末端（unix の venv の `bin/python`）だけはリンクでよく、辿った先が通常ファイルであること。`cwd` は末端も含めてリンクを拒否し、ディレクトリであること。
 - `setup[].run` は argv 配列（シェル文字列は使わない）。`workingDir` の既定はプロジェクトルート。
 - `secrets` は名前だけ。MDium は値を保存せず、フロー実行の開始時に MDium プロセスの環境変数に全名が存在することを確認し、無ければ `FLOW_SECRET_MISSING`（不足した名前の一覧）で開始を拒む。ワーカーとコマンドは MDium の環境変数を引き継ぐ（2026-10-06 仕様 7.2 のとおり）。
 - `flows.main` は必須ではない。`.mdium/flows/*.flow.yaml` の自動一覧は変えず、`flows` は役割の印（UI で「主フロー」「改善」と表示）と改善ループの既定値に使う。
@@ -122,7 +123,7 @@ metrics:                           # what the outer loop compares (8.3); refs ar
 |---|---|
 | `flow_project_load(projectRoot)` | `project.yaml` の解析結果と検証結果 |
 | `flow_project_setup(projectRoot, sha256)` | セットアップの実行（進捗は `flow://setup-progress` イベント）。実行中は同じプロジェクトで二重に走らせない。`sha256` は `flow_project_load` が返す `project.yaml` の内容ハッシュで、一致しなければ `FLOW_FILE_CHANGED`（確認した手順と実行する手順を一致させる。V2 実装時の追加） |
-| `flow_runtime_describe(projectRoot, runtime)` | ワーカーを起動して `describe` だけを行い、マニフェストを返して終了する（エディタ用。3.4） |
+| `flow_runtime_describe(projectRoot, runtime, sha256)` | ワーカーを起動して `describe` だけを行い、マニフェストを返して終了する（エディタ用。3.4）。`sha256` は 3.6 の V3 実装メモ |
 
 ---
 
@@ -162,6 +163,7 @@ nodes:
 - 1 ワーカーは同時に 1 呼び出しだけを処理する。並列度（旧 PR 4b）を入れる際は、ランタイムごとに複数ワーカーを起動する方式にする（ワーカー側の変更は不要）。
 - 呼び出し中にワーカーが終了したら、そのノードは `failed`（`FLOW_PYTHON_WORKER_EXITED`）。次の `python` ノードで新しいワーカーを起動する。
 - タイムアウト・中止: `cancel` を送り、`stopGrace` の後にプロセスツリーを終了する。停止（`STOP` ファイル）: `cancel` は送らず、段階が `MDIUM_FLOW_STOP_FILE` を見て区切りで `stopped` を返すのを待つ（`command` と同じ）。
+- V3 実装メモ: 利用者の中止では、実行中の各呼び出しに `cancel` を送り、`outcome` かワーカーの終了を `limits.stopGrace`（未指定なら 5 秒）まで待ってからプロセスツリーを終了する（同期・上限あり。タイムアウトと同じ扱い）。実行終了時は `shutdown` の後 `limits.stopGrace`（未指定なら 2 秒）待って終了させる。ワーカーの起動（`describe` の応答待ち、上限 30 秒）中も中止とアプリ終了を受け付け、起動中のワーカーを終了させる。`FLOW_RUNTIME_START_FAILED` の `message` にはワーカーの `stderr.log` の末尾（約 2 KB、`stderr` 属性にも）を付ける。`stderr.log` は追記で開き、ワーカーの再起動をまたいで残す。
 
 ### 3.3 プロトコル（`mdium-worker-v1`）
 
@@ -217,6 +219,7 @@ MDium → ワーカー:
 
 - ワーカーは利用者の権限で、`project.yaml` に書かれたインタプリタとモジュールをそのまま実行する。サンドボックスはしない。2.3 の確認がこれを制御する。
 - `runtimes.<name>.python` と `module` にはテンプレートを使えない（確認した内容が実行内容を決めるため）。`with` にはテンプレートを使える。
+- V3 実装メモ: `flow_runtime_describe(projectRoot, runtime, sha256)` はプロジェクトのコード（モジュールの import）を実行するため、セットアップと同じく、呼び出し側が表示した `project.yaml` の内容ハッシュ（`flow_project_load` の `sha256`）を要求し、一致しなければ `FLOW_FILE_CHANGED` で拒む。呼び出し側はランタイムの概要を表示してから呼ぶ。マニフェストに誤りがあれば `FLOW_PROJECT_INVALID`（問題ごとの詳細付き）、無ければ `FLOW_PROJECT_REQUIRED`。
 
 ### 3.7 エラーコード（追加）
 
@@ -245,6 +248,7 @@ def render(ctx: Context, videoDir: str, title: str = "video") -> None:
 
 - `Context`: `progress(text, fraction=None)`、`cost(usd, kind="actual", provider=None, model=None, units=None)`、`output(key, value)`、`artifact(path, label=None, media_type=None)`、`log(text, level="info")`、`should_stop() -> bool`（停止ファイルと `cancel` の両方を見る）、`needs_approval(message)`（例外として投げると `outcome: needs_approval`）、`node_dir`、`run_id`、`project_root`。
 - 段階関数の戻り値: `None` で `ok`。`mdium_worker.StageFailed(reason)` を投げると `fail`、`mdium_worker.Stopped()` で `stopped`。その他の例外は `fail`（トレースバックを `log` の `error` と `reason` に入れる）。
+  - V3 実装メモ: 想定外の例外の `reason` は `型名: メッセージ` の短い形にし、トレースバックは `error` レベルの `log` 行にだけ入れる（表示が長くならないため）。段階内の `sys.exit()` も `fail`（`reason` は `SystemExit: <code>`）でワーカーは終了しない。
 - `python -m mdium_worker --module <module>`: モジュールを import して登録された段階を集め、3.3 のループに入る。`describe` だけなら `--describe` で起動して 1 行出して終了する（`flow_runtime_describe` 用）。
 - 入力検証: `inputs` スキーマに対して必須と型を検証。`path` は文字列として受け、存在は検証しない（段階の責務）。
 - 同時実行はしない（3.2）。`cancel` は別スレッドで読み取り、`ctx.should_stop()` が真になる。段階が止まらなければ MDium 側のタイムアウトとプロセス終了に任せる。
@@ -566,7 +570,7 @@ export interface FlowTransport {
 |---|---|---|---|
 | V1 | `flow-core` クレート分離、`FlowService`、フロントのトランスポート層（Tauri 実装のみ） | cargo ワークスペース、`transport.ts`、import 検査 | なし（挙動変更なし） |
 | V2（実装済み 2026-10-10。差分: `flow_project_setup` に `sha256` を追加、`ProjectLoadResult.sha256`。V3 への申し送り: マニフェストに誤りがあるときの実行開始の扱い、`python` / `cwd` / `workingDir` のシンボリックリンク拒否、プロジェクトヘッダでのエラー一覧表示） | プロジェクトマニフェストと関数化の基盤 | `project.yaml` の解析・検証、`flow_project_load` / `flow_project_setup`、確認画面へのランタイムと `setup` の追加、`secrets` の検査、セットアップ UI、サブフローの戻り値検証（`FLOW_OUTPUT_UNKNOWN`）、`lib/` と一覧の 3 群（16.1, 16.2） | プロジェクトのセットアップ、部品の区別 |
-| V3 | `python` ノードとワーカー | `NodeKind::Python`、ワーカープロトコル、ライフサイクル、`flow_runtime_describe`、`python/mdium-worker/`（pytest 付き）、偽ワーカーでの Rust テスト | Python の段階をノードとして実行 |
+| V3（実装 2026-10-11。計画のインタフェースからの差分: `flow_runtime_describe` に `sha256` を追加（3.6）、インタプリタ末端のシンボリックリンクを許可し途中の成分と `cwd` は拒否（2.1）、利用者の中止で `cancel` を送り `stopGrace` 後に終了（計画は即時終了。3.2）、実行終了時の猶予は `limits.stopGrace`（3.2）、想定外例外の `reason` は短い形（4）） | `python` ノードとワーカー | `NodeKind::Python`、ワーカープロトコル、ライフサイクル、`flow_runtime_describe`、`python/mdium-worker/`（pytest 付き）、偽ワーカーでの Rust テスト | Python の段階をノードとして実行 |
 | V4 | 成果物とプレビュー | `artifacts.json`、`mediaType`、アセットプロトコルのスコープと CSP、実行パネルの成果物タブ、承認の `show` と `comment`、実行パネルのサブフロー単位のツリー（16.4） | 画像・動画の確認と、コメント付き承認 |
 | V5 | エディタ（6 章） | パレット、属性パネル、エッジ編集、YAML 分割表示、保存、新規作成、サブフローの折りたたみ表示・ドリルダウン・抽出（16.3） | キャンバスでの編集 |
 | V6 | video_gen プロジェクト化（video_gen リポジトリ側） | `video_gen_flow/`、`run_video_pipeline` の段階分解、入口 2 本と部品 4 本のフロー、`project.yaml`、デスクトップでの通し確認 | **デスクトップで video_gen をフローとして運用** |
