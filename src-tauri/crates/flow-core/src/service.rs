@@ -4,11 +4,14 @@
 
 use crate::load::{self, FlowReport, FlowSummary, PathProblem};
 use crate::parse::FlowFormat;
-use crate::run::engine::{EngineError, FlowEngine};
+use crate::run::engine::{CommandReview, EngineError, FlowEngine, RunSnapshot, RunSummary};
 use crate::run::model::Reason;
 use serde::Serialize;
+use serde_json::Value;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 /// The project root is empty, not absolute, or not an existing directory.
 pub const FLOW_PROJECT_INVALID: &str = "FLOW_PROJECT_INVALID";
@@ -89,6 +92,35 @@ fn format_of(file: &Path) -> FlowFormat {
         .unwrap_or(FlowFormat::Yaml)
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitignoreStatus {
+    /// `.mdium/flow-runs/` is ignored by git (or the folder is not a git repository).
+    pub ignored: bool,
+}
+
+/// Whether git ignores `.mdium/flow-runs/` in `root` (the UI suggests
+/// adding it otherwise; nothing is written automatically).
+pub fn flow_runs_ignored(root: &Path) -> bool {
+    let mut command = std::process::Command::new("git");
+    command
+        .args(["check-ignore", "-q", ".mdium/flow-runs/probe"])
+        .current_dir(root)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    match command.status() {
+        Ok(status) => status.code() != Some(1),
+        // No git: nothing to suggest.
+        Err(_) => true,
+    }
+}
+
 /// Every operation of the flow engine as plain methods. One per process;
 /// transports (Tauri commands, HTTP handlers) are thin wrappers over it.
 pub struct FlowService {
@@ -137,6 +169,104 @@ impl FlowService {
             report: load::check_content(&root, &file, content),
         })
     }
+
+    pub fn command_review(&self, project_root_arg: &str, path: &str) -> Result<CommandReview, FlowCommandError> {
+        let root = project_root(project_root_arg)?;
+        Ok(self.engine.review_commands(&root, path)?)
+    }
+
+    pub fn confirm_commands(&self, project_root_arg: &str, path: &str, sha256: &str) -> Result<(), FlowCommandError> {
+        let root = project_root(project_root_arg)?;
+        Ok(self.engine.confirm_commands(&root, path, sha256)?)
+    }
+
+    pub fn run_start(
+        &self,
+        project_root_arg: &str,
+        path: &str,
+        params: &BTreeMap<String, Value>,
+        sha256: &str,
+    ) -> Result<RunSummary, FlowCommandError> {
+        let root = project_root(project_root_arg)?;
+        Ok(self.engine.start(&root, path, params, sha256)?)
+    }
+
+    pub fn run_list(&self, project_root_arg: &str) -> Result<Vec<RunSummary>, FlowCommandError> {
+        let root = project_root(project_root_arg)?;
+        Ok(self.engine.list(&root)?)
+    }
+
+    pub fn run_get(&self, project_root_arg: &str, run_id: &str) -> Result<RunSnapshot, FlowCommandError> {
+        let root = project_root(project_root_arg)?;
+        Ok(self.engine.get(&root, run_id)?)
+    }
+
+    pub fn run_stop(&self, project_root_arg: &str, run_id: &str) -> Result<(), FlowCommandError> {
+        let root = project_root(project_root_arg)?;
+        Ok(self.engine.stop(&root, run_id)?)
+    }
+
+    pub fn run_resume(&self, project_root_arg: &str, run_id: &str) -> Result<(), FlowCommandError> {
+        let root = project_root(project_root_arg)?;
+        Ok(self.engine.resume(&root, run_id)?)
+    }
+
+    pub fn run_cancel(&self, project_root_arg: &str, run_id: &str) -> Result<(), FlowCommandError> {
+        let root = project_root(project_root_arg)?;
+        Ok(self.engine.cancel(&root, run_id)?)
+    }
+
+    /// Answers an approval; `node_key` `None` answers the budget approval.
+    pub fn run_approve(
+        &self,
+        project_root_arg: &str,
+        run_id: &str,
+        node_key: Option<&str>,
+        choice: &str,
+        comment: Option<String>,
+    ) -> Result<(), FlowCommandError> {
+        let root = project_root(project_root_arg)?;
+        Ok(self.engine.approve(&root, run_id, node_key, choice, comment)?)
+    }
+
+    pub fn run_rerun_node(&self, project_root_arg: &str, run_id: &str, node_key: &str) -> Result<(), FlowCommandError> {
+        let root = project_root(project_root_arg)?;
+        Ok(self.engine.rerun_node(&root, run_id, node_key)?)
+    }
+
+    pub fn run_mark_succeeded(&self, project_root_arg: &str, run_id: &str, node_key: &str) -> Result<(), FlowCommandError> {
+        let root = project_root(project_root_arg)?;
+        Ok(self.engine.mark_succeeded(&root, run_id, node_key)?)
+    }
+
+    pub fn run_delete(&self, project_root_arg: &str, run_id: &str) -> Result<(), FlowCommandError> {
+        let root = project_root(project_root_arg)?;
+        Ok(self.engine.delete(&root, run_id)?)
+    }
+
+    /// Tail of a node attempt's `stdout` / `stderr` log (at most 256 KiB).
+    pub fn run_log(
+        &self,
+        project_root_arg: &str,
+        run_id: &str,
+        node_key: &str,
+        attempt: u32,
+        stream: &str,
+        max_bytes: u64,
+    ) -> Result<String, FlowCommandError> {
+        let root = project_root(project_root_arg)?;
+        Ok(self.engine.log(&root, run_id, node_key, attempt, stream, max_bytes)?)
+    }
+
+    pub fn gitignore_status(&self, project_root_arg: &str) -> Result<GitignoreStatus, FlowCommandError> {
+        let root = project_root(project_root_arg)?;
+        Ok(GitignoreStatus { ignored: flow_runs_ignored(&root) })
+    }
+
+    /// Waits for active drivers to record `interrupted` (app exit).
+    pub fn shutdown(&self, wait: Duration) {
+        self.engine.shutdown(wait);
+    }
 }
 
 #[cfg(test)]
@@ -163,7 +293,7 @@ mod tests {
         fn approval_requested(&self, _: &Path, _: &str, _: &ApprovalRequest) {}
     }
 
-    pub(super) fn service(dir: &Path) -> FlowService {
+    fn service(dir: &Path) -> FlowService {
         let env = DriverEnv {
             launcher: Arc::new(AttachedLauncher),
             detached: None,
@@ -206,6 +336,7 @@ mod tests {
         assert!(loaded.report.errors.is_empty());
         let json = serde_json::to_value(&loaded).unwrap();
         assert_eq!(json["flow"]["id"], "t");
+        assert!(json["errors"].as_array().unwrap().is_empty());
 
         let checked = svc
             .validate_flow(&root, ".mdium/flows/new.flow.yaml", "schemaVersion: 1\nid: t\nname: T\nnodes: []\n")
@@ -229,8 +360,7 @@ mod tests {
 
     #[test]
     fn engine_errors_keep_code_and_details() {
-        use crate::run::engine::{EngineError, FLOW_RUN_INVALID_ID};
-        use crate::run::model::Reason;
+        use crate::run::engine::FLOW_RUN_INVALID_ID;
         let err = FlowCommandError::from(EngineError {
             code: FLOW_RUN_INVALID_ID.into(),
             message: "x".into(),
@@ -241,5 +371,44 @@ mod tests {
         assert_eq!(json["details"][0]["code"], "D");
         let plain = serde_json::to_value(FlowCommandError::new("C", "m")).unwrap();
         assert!(plain.get("details").is_none());
+    }
+
+    #[test]
+    fn run_operations_validate_the_project_root_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = service(tmp.path());
+        assert_eq!(svc.run_list("").unwrap_err().code, FLOW_PROJECT_INVALID);
+        assert_eq!(svc.run_get("", "r").unwrap_err().code, FLOW_PROJECT_INVALID);
+        assert_eq!(svc.command_review("", "x.flow.yaml").unwrap_err().code, FLOW_PROJECT_INVALID);
+    }
+
+    #[test]
+    fn run_list_of_a_fresh_project_is_empty_and_unknown_ids_fail() {
+        use crate::run::engine::FLOW_RUN_INVALID_ID;
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = service(tmp.path());
+        let root = tmp.path().to_str().unwrap();
+        assert!(svc.run_list(root).unwrap().is_empty());
+        assert_eq!(svc.run_get(root, "not-an-id").unwrap_err().code, FLOW_RUN_INVALID_ID);
+    }
+
+    #[test]
+    fn detects_whether_flow_runs_are_ignored() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = service(tmp.path());
+        let root = tmp.path().to_str().unwrap();
+        // Not a repository: nothing to suggest.
+        assert!(svc.gitignore_status(root).unwrap().ignored);
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(tmp.path())
+                .output()
+                .unwrap()
+        };
+        git(&["init", "-q"]);
+        assert!(!svc.gitignore_status(root).unwrap().ignored);
+        std::fs::write(tmp.path().join(".gitignore"), ".mdium/flow-runs/\n").unwrap();
+        assert!(svc.gitignore_status(root).unwrap().ignored);
     }
 }

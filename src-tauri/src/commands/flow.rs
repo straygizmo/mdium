@@ -8,9 +8,6 @@ use flow_core::load::FlowSummary;
 use flow_core::service::FlowService;
 use std::sync::Arc;
 
-// Temporary: `flow_run.rs` still imports this from here until it is rewritten.
-pub use flow_core::service::project_root;
-
 /// The process-wide service, managed as Tauri state.
 pub type FlowServiceState = Arc<FlowService>;
 
