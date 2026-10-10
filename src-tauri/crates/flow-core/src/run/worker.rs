@@ -5,13 +5,13 @@
 
 use crate::project::RuntimeDef;
 use crate::run::model::Reason;
-use crate::run::process::{parse_line, ProtocolItem};
+use crate::run::process::{parse_line, ProtocolItem, MAX_LINE_BYTES};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
-use std::fs::File;
-use std::io::{BufRead, BufReader, Write};
-use std::path::{Path, PathBuf};
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{channel, Receiver};
 use std::time::{Duration, Instant};
@@ -139,6 +139,11 @@ pub enum WorkerMessage {
         item: ProtocolItem,
         line: String,
     },
+    /// A `manifest` line that does not deserialise (`error` is serde's message).
+    BadManifest {
+        request_id: Option<String>,
+        error: String,
+    },
     Invalid {
         reason: &'static str,
     },
@@ -158,18 +163,18 @@ pub fn parse_worker_line(line: &str) -> WorkerMessage {
     let s = |o: &Map<String, Value>, k: &str| o.get(k).and_then(Value::as_str).map(String::from);
     match obj.get("type").and_then(Value::as_str) {
         Some("manifest") => {
-            let Some(request_id) = s(&obj, "requestId") else {
-                return WorkerMessage::Invalid {
+            let request_id = s(&obj, "requestId");
+            match (serde_json::from_value::<Manifest>(Value::Object(obj)), request_id) {
+                (Err(err), request_id) => WorkerMessage::BadManifest {
+                    request_id,
+                    error: err.to_string(),
+                },
+                (Ok(_), None) => WorkerMessage::Invalid {
                     reason: "missing-request-id",
-                };
-            };
-            match serde_json::from_value::<Manifest>(Value::Object(obj)) {
-                Ok(manifest) => WorkerMessage::Manifest {
+                },
+                (Ok(manifest), Some(request_id)) => WorkerMessage::Manifest {
                     request_id,
                     manifest,
-                },
-                Err(_) => WorkerMessage::Invalid {
-                    reason: "bad-manifest",
                 },
             }
         }
@@ -300,8 +305,8 @@ pub fn shutdown_request() -> String {
 
 #[derive(Debug, Clone)]
 pub struct WorkerSpec {
-    /// Absolute interpreter candidates, in preference order.
-    pub python_candidates: Vec<PathBuf>,
+    /// The resolved interpreter (see [`resolve_python`]).
+    pub python: PathBuf,
     pub module: String,
     pub working_dir: PathBuf,
     pub env: Vec<(String, String)>,
@@ -311,7 +316,10 @@ pub struct WorkerSpec {
 
 #[derive(Debug)]
 pub enum WorkerEvent {
+    /// One line, decoded lossily (invalid UTF-8 never ends the reader).
     Line(String),
+    /// A line longer than `MAX_LINE_BYTES`; it was dropped.
+    TooLong,
     Exited(Option<i32>),
 }
 
@@ -360,6 +368,57 @@ impl WorkerHandle for PipedWorker {
     }
 }
 
+impl Drop for PipedWorker {
+    /// A worker must never outlive its owner (e.g. a panicking driver).
+    fn drop(&mut self) {
+        if let Ok(None) = self.child.try_wait() {
+            self.kill_tree();
+        }
+    }
+}
+
+/// Reads one line into `buf` without its `\n` / `\r\n`, keeping at most
+/// `MAX_LINE_BYTES + 1` bytes and discarding the rest of a longer line.
+/// `Ok(None)` at EOF; `Ok(Some(false))` when the line was too long.
+fn read_capped_line(
+    reader: &mut impl BufRead,
+    buf: &mut Vec<u8>,
+) -> std::io::Result<Option<bool>> {
+    buf.clear();
+    let cap = MAX_LINE_BYTES + 1;
+    let mut read_any = false;
+    let mut overflow = false;
+    loop {
+        let available = match reader.fill_buf() {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        if available.is_empty() {
+            break;
+        }
+        read_any = true;
+        let newline = available.iter().position(|&b| b == b'\n');
+        let content = newline.unwrap_or(available.len());
+        let room = cap.saturating_sub(buf.len());
+        if content > room {
+            overflow = true;
+        }
+        buf.extend_from_slice(&available[..content.min(room)]);
+        reader.consume(newline.map_or(content, |i| i + 1));
+        if newline.is_some() {
+            break;
+        }
+    }
+    if !read_any {
+        return Ok(None);
+    }
+    if !overflow && buf.last() == Some(&b'\r') {
+        buf.pop();
+    }
+    Ok(Some(!overflow && buf.len() <= MAX_LINE_BYTES))
+}
+
 /// Spawns `cmd` with piped stdin/stdout and a reader thread; `stderr` must
 /// already be set on `cmd` (a file). Lines arrive through `try_recv`.
 pub fn spawn_piped(mut cmd: Command) -> std::io::Result<Box<dyn WorkerHandle>> {
@@ -376,15 +435,17 @@ pub fn spawn_piped(mut cmd: Command) -> std::io::Result<Box<dyn WorkerHandle>> {
     let pid = child.id();
     let (tx, rx) = channel();
     std::thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-            match line {
-                Ok(line) => {
-                    if tx.send(WorkerEvent::Line(line)).is_err() {
-                        return;
-                    }
-                }
-                Err(_) => break,
+        let mut reader = BufReader::new(stdout);
+        let mut buf = Vec::new();
+        // Only EOF or a real I/O error ends the reader.
+        while let Ok(Some(fits)) = read_capped_line(&mut reader, &mut buf) {
+            let event = if fits {
+                WorkerEvent::Line(String::from_utf8_lossy(&buf).into_owned())
+            } else {
+                WorkerEvent::TooLong
+            };
+            if tx.send(event).is_err() {
+                return;
             }
         }
         // EOF: the exit code is read by the owner through `try_wait`.
@@ -398,18 +459,50 @@ pub fn spawn_piped(mut cmd: Command) -> std::io::Result<Box<dyn WorkerHandle>> {
     }))
 }
 
-fn no_link_metadata(path: &Path) -> Option<std::fs::Metadata> {
-    let meta = std::fs::symlink_metadata(path).ok()?;
-    (!meta.file_type().is_symlink()).then_some(meta)
+/// Walks `relative` below `project_root` one component at a time (like
+/// `load::resolve_in_project`): it must stay inside the root, every
+/// component must exist, and none may be a symlink or junction, except the
+/// leaf when `leaf_may_link` (a unix venv's `bin/python`). Returns the path
+/// and the leaf's metadata with links followed.
+fn walk_in_project(
+    project_root: &Path,
+    relative: &str,
+    leaf_may_link: bool,
+) -> Option<(PathBuf, std::fs::Metadata)> {
+    let mut parts: Vec<&std::ffi::OsStr> = Vec::new();
+    for component in Path::new(relative).components() {
+        match component {
+            Component::Normal(part) => parts.push(part),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                parts.pop()?;
+            }
+            Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    let mut current = project_root.to_path_buf();
+    for (i, part) in parts.iter().enumerate() {
+        current.push(part);
+        let meta = std::fs::symlink_metadata(&current).ok()?;
+        let leaf = i + 1 == parts.len();
+        if meta.file_type().is_symlink() && !(leaf && leaf_may_link) {
+            return None;
+        }
+    }
+    let meta = std::fs::metadata(&current).ok()?;
+    Some((current, meta))
 }
 
-/// The first interpreter candidate that is an existing regular file (no link).
+/// The first interpreter candidate that is an existing regular file in the
+/// project: no link on the way, though the leaf itself may be one (it must
+/// then resolve to a regular file).
 pub fn resolve_python(project_root: &Path, def: &RuntimeDef) -> Result<PathBuf, String> {
     let candidates = def.python.candidates();
     for candidate in &candidates {
-        let path = project_root.join(candidate);
-        if no_link_metadata(&path).is_some_and(|m| m.is_file()) {
-            return Ok(path);
+        if let Some((path, meta)) = walk_in_project(project_root, candidate, true) {
+            if meta.is_file() {
+                return Ok(path);
+            }
         }
     }
     Err(format!(
@@ -418,17 +511,69 @@ pub fn resolve_python(project_root: &Path, def: &RuntimeDef) -> Result<PathBuf, 
     ))
 }
 
-/// The runtime's working directory (an existing directory, no link).
+/// The runtime's working directory (an existing directory, no link anywhere).
 pub fn resolve_cwd(project_root: &Path, def: &RuntimeDef) -> Result<PathBuf, String> {
-    let path = project_root.join(&def.cwd);
-    if no_link_metadata(&path).is_some_and(|m| m.is_dir()) {
-        Ok(path)
-    } else {
-        Err(format!(
+    match walk_in_project(project_root, &def.cwd, false) {
+        Some((path, meta)) if meta.is_dir() => Ok(path),
+        _ => Err(format!(
             "working directory {} is not a directory in the project",
             def.cwd
-        ))
+        )),
     }
+}
+
+/// The last ~2 KB of a worker's `stderr.log`, trimmed; `None` when empty.
+pub fn stderr_tail(path: &Path) -> Option<String> {
+    const TAIL: u64 = 2048;
+    let mut file = File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    file.seek(SeekFrom::Start(len.saturating_sub(TAIL))).ok()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    let text = String::from_utf8_lossy(&bytes).trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
+/// Adds the worker's stderr tail to a start failure: a `stderr` param, also
+/// appended to `message`.
+pub fn with_stderr_tail(reason: Reason, stderr: &Path) -> Reason {
+    let Some(tail) = stderr_tail(stderr) else {
+        return reason;
+    };
+    let message = match reason.params.get("message").and_then(Value::as_str) {
+        Some(message) => format!("{message}; stderr: {tail}"),
+        None => format!("stderr: {tail}"),
+    };
+    reason.with("message", message).with("stderr", tail)
+}
+
+/// Opens a worker's `stderr.log` for appending, so it spans restarts.
+pub fn open_stderr_log(path: &Path) -> std::io::Result<File> {
+    OpenOptions::new().create(true).append(true).open(path)
+}
+
+/// Why a worker is gone before answering `describe` (waits briefly for its
+/// exit code).
+pub fn exited_before_describe(handle: &mut dyn WorkerHandle) -> String {
+    let deadline = Instant::now() + Duration::from_millis(500);
+    let code = loop {
+        match handle.try_wait() {
+            Ok(Some(code)) => break Some(code),
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10))
+            }
+            _ => break None,
+        }
+    };
+    match code {
+        Some(code) => format!("the worker exited with code {code} before answering describe"),
+        None => "the worker exited before answering describe".to_string(),
+    }
+}
+
+/// The message of a manifest the worker sent but that does not deserialise.
+pub fn bad_manifest_message(error: &str) -> String {
+    format!("the worker sent an invalid manifest: {error}")
 }
 
 /// Everything needed to launch the worker of runtime `name` for a run.
@@ -445,6 +590,7 @@ pub fn worker_spec(
             .with("message", message)
     };
     let working_dir = resolve_cwd(project_root, def).map_err(start_failed)?;
+    let python = resolve_python(project_root, def).map_err(start_failed)?;
     let log_dir = run_dir.join("runtimes").join(name);
     std::fs::create_dir_all(&log_dir).map_err(|e| start_failed(e.to_string()))?;
     let mut env: Vec<(String, String)> = def
@@ -459,12 +605,7 @@ pub fn worker_spec(
     ));
     env.extend(extra_env.iter().cloned());
     Ok(WorkerSpec {
-        python_candidates: def
-            .python
-            .candidates()
-            .iter()
-            .map(|c| project_root.join(c))
-            .collect(),
+        python,
         module: def.module.clone(),
         working_dir,
         env,
@@ -477,28 +618,11 @@ pub struct PipedWorkerLauncher;
 
 impl WorkerLauncher for PipedWorkerLauncher {
     fn launch(&self, spec: &WorkerSpec) -> std::io::Result<Box<dyn WorkerHandle>> {
-        let python = spec
-            .python_candidates
-            .iter()
-            .find(|p| no_link_metadata(p).is_some_and(|m| m.is_file()))
-            .ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    format!(
-                        "no interpreter found among {}",
-                        spec.python_candidates
-                            .iter()
-                            .map(|p| p.to_string_lossy().into_owned())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
-                )
-            })?;
-        let mut cmd = Command::new(python);
+        let mut cmd = Command::new(&spec.python);
         cmd.args(["-m", "mdium_worker", "--module", &spec.module])
             .current_dir(&spec.working_dir)
             .envs(spec.env.iter().cloned())
-            .stderr(File::create(&spec.stderr)?);
+            .stderr(open_stderr_log(&spec.stderr)?);
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -528,12 +652,16 @@ pub fn describe_runtime(
                     request_id,
                     manifest,
                 } if request_id == "1" => break Ok(manifest),
+                WorkerMessage::BadManifest { request_id, error }
+                    if request_id.as_deref().is_none_or(|id| id == "1") =>
+                {
+                    break Err(fail(bad_manifest_message(&error)))
+                }
                 WorkerMessage::Error { message, .. } => break Err(fail(message)),
                 _ => {}
             },
-            Some(WorkerEvent::Exited(_)) => {
-                break Err(fail("the worker exited before answering describe".into()))
-            }
+            Some(WorkerEvent::TooLong) => {}
+            Some(WorkerEvent::Exited(_)) => break Err(fail(exited_before_describe(handle.as_mut()))),
             None => {
                 if Instant::now() >= deadline {
                     break Err(fail("timed out waiting for the manifest".into()));
@@ -544,14 +672,19 @@ pub fn describe_runtime(
     };
     let _ = handle.send(&shutdown_request());
     let grace = Instant::now() + Duration::from_secs(1);
+    let mut exited = false;
     while Instant::now() < grace {
         if matches!(handle.try_wait(), Ok(Some(_))) {
-            return result;
+            exited = true;
+            break;
         }
         std::thread::sleep(Duration::from_millis(20));
     }
-    handle.kill_tree();
-    result
+    if !exited {
+        handle.kill_tree();
+    }
+    // Read once the worker is gone, so its last words are in the file.
+    result.map_err(|reason| with_stderr_tail(reason, &spec.stderr))
 }
 
 #[cfg(test)]
@@ -658,6 +791,55 @@ mod tests {
             parse_worker_line(r#"{"v":1,"type":"output","key":"bad key","value":1}"#),
             WorkerMessage::Invalid { .. }
         ));
+    }
+
+    #[test]
+    fn a_manifest_that_does_not_deserialise_is_a_bad_manifest() {
+        match parse_worker_line(
+            r#"{"v":1,"type":"manifest","requestId":"1","module":"m","stages":[{"name":"a","outputs":{"k":{"type":"file"}}}]}"#,
+        ) {
+            WorkerMessage::BadManifest { request_id, error } => {
+                assert_eq!(request_id.as_deref(), Some("1"));
+                assert!(error.contains("file"), "{error}");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            parse_worker_line(r#"{"v":1,"type":"manifest","module":"m","stages":"x"}"#),
+            WorkerMessage::BadManifest { request_id: None, .. }
+        ));
+        assert!(matches!(
+            parse_worker_line(r#"{"v":1,"type":"manifest","module":"m","stages":[]}"#),
+            WorkerMessage::Invalid {
+                reason: "missing-request-id"
+            }
+        ));
+    }
+
+    #[test]
+    fn reads_lines_lossily_and_drops_over_long_ones() {
+        let mut data = b"{\"a\":1}\r\n\xff\xfe\n".to_vec();
+        data.extend(std::iter::repeat_n(b'x', MAX_LINE_BYTES + 10));
+        data.extend_from_slice(b"\nnext\n");
+        data.extend(std::iter::repeat_n(b'y', MAX_LINE_BYTES));
+        data.extend_from_slice(b"\r\ntail");
+        let mut reader = std::io::BufReader::with_capacity(1024, &data[..]);
+        let mut buf = Vec::new();
+        let mut lines = Vec::new();
+        while let Some(fits) = read_capped_line(&mut reader, &mut buf).unwrap() {
+            assert!(buf.len() <= MAX_LINE_BYTES + 1);
+            lines.push(fits.then(|| String::from_utf8_lossy(&buf).into_owned()));
+        }
+        let lens: Vec<Option<usize>> = lines.iter().map(|l| l.as_ref().map(String::len)).collect();
+        assert_eq!(lines.len(), 6, "{lens:?}");
+        assert_eq!(lines[0].as_deref(), Some("{\"a\":1}"));
+        assert_eq!(lines[1].as_deref(), Some("\u{FFFD}\u{FFFD}"));
+        assert_eq!(lines[2], None, "the over-long line is dropped");
+        assert_eq!(lines[3].as_deref(), Some("next"));
+        // Exactly the limit (its `\r` stripped) still fits.
+        assert_eq!(lens[4], Some(MAX_LINE_BYTES));
+        // The unterminated last line still arrives.
+        assert_eq!(lines[5].as_deref(), Some("tail"));
     }
 
     #[test]
@@ -820,22 +1002,85 @@ mod tests {
         let bad_cwd =
             runtime("{ kind: python, python: .venv/bin/python, module: m, cwd: missing }");
         assert!(resolve_cwd(root, &bad_cwd).is_err());
+        // A directory is no interpreter, a file no working directory, and
+        // `..` may not leave the root.
+        let dir = runtime("{ kind: python, python: sub, module: m }");
+        assert!(resolve_python(root, &dir).is_err());
+        let file_cwd = runtime("{ kind: python, python: p, module: m, cwd: .venv/bin/python }");
+        assert!(resolve_cwd(root, &file_cwd).is_err());
+        assert!(walk_in_project(root, "../x", false).is_none());
+        assert_eq!(
+            walk_in_project(root, "sub/../.venv/bin/python", false).map(|(p, _)| p),
+            Some(root.join(".venv").join("bin").join("python"))
+        );
+        // The spec carries the resolved interpreter.
+        let spec = worker_spec(root, "r", &def, &root.join("run"), &[]).unwrap();
+        assert_eq!(spec.python, root.join(".venv/bin/python"));
+        let missing = runtime("{ kind: python, python: nope, module: m }");
+        let err = worker_spec(root, "r", &missing, &root.join("run"), &[]).unwrap_err();
+        assert_eq!(err.code, FLOW_RUNTIME_START_FAILED);
     }
 
     #[cfg(unix)]
     #[test]
-    fn symlinked_interpreter_and_cwd_are_rejected() {
+    fn links_are_rejected_except_on_the_interpreter_leaf() {
+        use std::os::unix::fs::symlink;
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
+        // A unix venv: `bin/python` links to the base interpreter (accepted).
         std::fs::write(root.join("real-python"), "").unwrap();
-        std::os::unix::fs::symlink(root.join("real-python"), root.join("link-python")).unwrap();
-        let def = runtime("{ kind: python, python: link-python, module: m }");
-        assert!(resolve_python(root, &def).is_err());
+        symlink(root.join("real-python"), root.join("link-python")).unwrap();
+        let leaf = runtime("{ kind: python, python: link-python, module: m }");
+        assert_eq!(resolve_python(root, &leaf).unwrap(), root.join("link-python"));
+        // A dangling leaf link is no interpreter.
+        symlink(root.join("gone"), root.join("dangling")).unwrap();
+        let dangling = runtime("{ kind: python, python: dangling, module: m }");
+        assert!(resolve_python(root, &dangling).is_err());
+        // A linked `.venv` directory is rejected.
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(outside.path().join("bin")).unwrap();
+        std::fs::write(outside.path().join("bin/python"), "").unwrap();
+        symlink(outside.path(), root.join(".venv")).unwrap();
+        let venv = runtime("{ kind: python, python: .venv/bin/python, module: m }");
+        assert!(resolve_python(root, &venv).is_err());
+        // A linked `cwd` is rejected, leaf or parent.
+        std::fs::create_dir_all(root.join("real-dir/inner")).unwrap();
+        symlink(root.join("real-dir"), root.join("link-dir")).unwrap();
+        let cwd = runtime("{ kind: python, python: real-python, module: m, cwd: link-dir }");
+        assert!(resolve_cwd(root, &cwd).is_err());
+        let parent = runtime("{ kind: python, python: real-python, module: m, cwd: link-dir/inner }");
+        assert!(resolve_cwd(root, &parent).is_err());
+    }
+
+    #[test]
+    fn stderr_log_is_appended_and_its_tail_joins_the_reason() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("stderr.log");
+        assert!(stderr_tail(&path).is_none());
+        writeln!(open_stderr_log(&path).unwrap(), "first").unwrap();
+        writeln!(open_stderr_log(&path).unwrap(), "second").unwrap();
+        assert_eq!(stderr_tail(&path).as_deref(), Some("first\nsecond"));
+        let reason = with_stderr_tail(
+            Reason::new(FLOW_RUNTIME_START_FAILED).with("message", "boom"),
+            &path,
+        );
+        assert_eq!(reason.params["message"], "boom; stderr: first\nsecond");
+        assert_eq!(reason.params["stderr"], "first\nsecond");
+        std::fs::write(&path, "z".repeat(5000)).unwrap();
+        assert_eq!(stderr_tail(&path).unwrap().len(), 2048);
+    }
+
+    /// A project root holding the interpreter file `nope` (the fake launcher
+    /// ignores it, but `worker_spec` resolves it).
+    fn fake_root() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("nope"), "").unwrap();
+        tmp
     }
 
     #[test]
     fn describe_runtime_returns_the_manifest_from_a_live_worker() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = fake_root();
         let root = tmp.path();
         let script = serde_json::json!({ "stages": [{ "name": "a.b", "inputs": {}, "outputs": {} }], "behaviour": {} });
         let launcher = fake_worker_launcher(script);
@@ -850,16 +1095,28 @@ mod tests {
 
     #[test]
     fn describe_runtime_fails_when_the_worker_exits_or_times_out() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = fake_root();
         let root = tmp.path();
         let def = runtime("{ kind: python, python: nope, module: m }");
         let spec = worker_spec(root, "r", &def, &root.join("run"), &[]).unwrap();
         let exits = fake_worker_launcher(serde_json::json!({ "exit_on_describe": 3 }));
         let err = describe_runtime(exits.as_ref(), &spec, Duration::from_secs(10)).unwrap_err();
         assert_eq!(err.code, FLOW_RUNTIME_START_FAILED);
+        let message = err.params["message"].as_str().unwrap();
+        assert!(message.contains("code 3"), "{message}");
+        // I5: the cause is in the worker's stderr, now part of the reason.
+        assert!(message.contains("stderr: fake worker: exiting on describe"), "{message}");
+        assert!(err.params["stderr"].as_str().unwrap().contains("exiting on describe"));
         let silent = fake_worker_launcher(serde_json::json!({ "ignore_describe": true }));
         let err = describe_runtime(silent.as_ref(), &spec, Duration::from_millis(300)).unwrap_err();
         assert_eq!(err.code, FLOW_RUNTIME_START_FAILED);
+        // I4: an invalid manifest fails at once with serde's message.
+        let bad = fake_worker_launcher(serde_json::json!({ "stages": [{ "name": "a", "outputs": { "k": "path" } }] }));
+        let started = Instant::now();
+        let err = describe_runtime(bad.as_ref(), &spec, Duration::from_secs(20)).unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(10));
+        let message = err.params["message"].as_str().unwrap();
+        assert!(message.contains("invalid manifest"), "{message}");
     }
 
     /// Reads lines from `handle` until `done` accepts one (10 s limit).
@@ -879,6 +1136,7 @@ mod tests {
                         return seen;
                     }
                 }
+                Some(WorkerEvent::TooLong) => seen.push(Value::String("<too long>".into())),
                 Some(WorkerEvent::Exited(_)) => return seen,
                 None => std::thread::sleep(Duration::from_millis(10)),
             }
@@ -888,7 +1146,7 @@ mod tests {
 
     #[test]
     fn the_fake_worker_runs_call_steps_and_keeps_bookkeeping() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = fake_root();
         let root = tmp.path();
         let script = json!({
             "stages": [],

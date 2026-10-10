@@ -21,7 +21,7 @@ use crate::run::model::*;
 use crate::run::prepare::{prepare_params, LoopVar, TemplateContext};
 use crate::run::process::{
     decide, CommandResult, LaunchSpec, Launcher, ProcessHandle, ProtocolItem, ProtocolOutcome,
-    ProtocolReader, MAX_LINES, MAX_LINE_BYTES,
+    ProtocolReader, MAX_LINES,
 };
 use crate::run::scope::{
     self, iteration_prefix, ref_key, split_key, subflow_prefix, Graph, GraphLoc,
@@ -29,10 +29,11 @@ use crate::run::scope::{
 use crate::run::store::{EventLog, RunMeta, RunStore, CHECKPOINT_EVERY};
 use crate::run::supervise::DetachedProcess;
 use crate::run::worker::{
-    call_request, cancel_request, describe_request, parse_worker_line, shutdown_request,
-    validate_inputs, worker_spec, CallContext, Manifest, WorkerEvent, WorkerHandle, WorkerLauncher,
-    WorkerMessage, FLOW_PYTHON_ENTRY_UNKNOWN, FLOW_PYTHON_INPUT_INVALID, FLOW_PYTHON_WORKER_EXITED,
-    FLOW_RUNTIME_START_FAILED,
+    bad_manifest_message, call_request, cancel_request, describe_request,
+    exited_before_describe, parse_worker_line, shutdown_request, validate_inputs,
+    with_stderr_tail, worker_spec, CallContext, Manifest, WorkerEvent, WorkerHandle,
+    WorkerLauncher, WorkerMessage, FLOW_PYTHON_ENTRY_UNKNOWN, FLOW_PYTHON_INPUT_INVALID,
+    FLOW_PYTHON_PROTOCOL, FLOW_PYTHON_WORKER_EXITED, FLOW_RUNTIME_START_FAILED,
 };
 use crate::template;
 use serde_json::Value;
@@ -144,9 +145,11 @@ const MAX_RUNNING_COMMANDS: usize = 1;
 
 /// How long a new worker may take to answer `describe` (the driver blocks).
 const WORKER_READY_TIMEOUT: Duration = Duration::from_secs(30);
-/// Grace after a call's `cancel` (timeout) when `limits.stopGrace` is unset.
+/// Grace after a call's `cancel` (timeout or user cancel) when
+/// `limits.stopGrace` is unset.
 const DEFAULT_CANCEL_GRACE: Duration = Duration::from_secs(5);
-/// How long workers may take to exit after `shutdown` at run end.
+/// How long workers may take to exit after `shutdown` at run end when
+/// `limits.stopGrace` is unset.
 const WORKER_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 /// Ticks to wait for a worker's exit code once it was seen exiting.
 const WORKER_EXIT_TICKS: u32 = 10;
@@ -198,6 +201,8 @@ struct RunningCall {
     runtime: String,
     /// `LiveWorker::id` of the worker the call was sent to.
     worker: u64,
+    /// The stage called (`entry` of the node).
+    entry: String,
     call_id: String,
     request_id: String,
     items: ItemState,
@@ -224,6 +229,14 @@ enum Finish {
     GraceKilled,
     /// The python worker running the call is gone (exit code when known).
     WorkerExited(Option<i32>),
+}
+
+/// Why a runtime's worker did not become ready.
+enum WorkerStartError {
+    /// `FLOW_RUNTIME_START_FAILED` (or a resolution failure).
+    Failed(Reason),
+    /// A cancel or app exit arrived while it started; it was killed.
+    Aborted,
 }
 
 pub struct Driver {
@@ -845,9 +858,7 @@ impl Driver {
                 }
                 if let Some(pos) = self.calls.iter().position(|c| c.key == key) {
                     let call = self.calls.remove(pos);
-                    if self.worker_alive(&call) {
-                        self.drop_worker(&call.runtime);
-                    }
+                    self.drop_worker(&call.runtime, call.worker);
                 }
                 self.close_children(key);
                 self.set_node(key, NodeStatus::Cancelled, node.attempt, reason, None);
@@ -2114,8 +2125,8 @@ impl Driver {
                 Reason::new(FLOW_RUNTIME_UNKNOWN).with("runtime", runtime),
             );
         };
-        if let Err(reason) = self.ensure_worker(&runtime, &def) {
-            return self.fail_node(key, attempt, reason);
+        if let Err(err) = self.ensure_worker(&runtime, &def) {
+            return self.worker_start_error(key, attempt, err);
         }
         let Some(stage) = self
             .workers
@@ -2194,27 +2205,40 @@ impl Driver {
             attempt,
         };
         let timeout = self.node_timeout(prefix, node);
-        let Some(worker) = self.workers.get_mut(&runtime) else {
-            return self.fail_node(
-                key,
-                attempt,
-                Reason::new(FLOW_PYTHON_WORKER_EXITED).with("runtime", runtime),
-            );
+        // A worker that died between ticks fails the send: retry once on a
+        // fresh worker (spec 3.2) before failing the node.
+        let mut retried = false;
+        let (worker_id, request_id) = loop {
+            let Some(worker) = self.workers.get_mut(&runtime) else {
+                return self.fail_node(
+                    key,
+                    attempt,
+                    Reason::new(FLOW_PYTHON_WORKER_EXITED).with("runtime", runtime),
+                );
+            };
+            let worker_id = worker.id;
+            let request_id = worker.next_request.to_string();
+            worker.next_request += 1;
+            let request = call_request(&request_id, &call_id, &py.entry, &inputs, &context);
+            let err = match worker.handle.send(&request) {
+                Ok(()) => break (worker_id, request_id),
+                Err(err) => err,
+            };
+            self.drop_worker(&runtime, worker_id);
+            if retried {
+                return self.fail_node(
+                    key,
+                    attempt,
+                    Reason::new(FLOW_PYTHON_WORKER_EXITED)
+                        .with("runtime", runtime)
+                        .with("message", err.to_string()),
+                );
+            }
+            retried = true;
+            if let Err(err) = self.ensure_worker(&runtime, &def) {
+                return self.worker_start_error(key, attempt, err);
+            }
         };
-        let worker_id = worker.id;
-        let request_id = worker.next_request.to_string();
-        worker.next_request += 1;
-        let request = call_request(&request_id, &call_id, &py.entry, &inputs, &context);
-        if let Err(err) = worker.handle.send(&request) {
-            self.drop_worker(&runtime);
-            return self.fail_node(
-                key,
-                attempt,
-                Reason::new(FLOW_PYTHON_WORKER_EXITED)
-                    .with("runtime", runtime)
-                    .with("message", err.to_string()),
-            );
-        }
         let events = std::fs::OpenOptions::new()
             .append(true)
             .open(dir.join("events.jsonl"))
@@ -2225,6 +2249,7 @@ impl Driver {
             dir,
             runtime,
             worker: worker_id,
+            entry: py.entry.clone(),
             call_id,
             request_id,
             items: ItemState::default(),
@@ -2241,9 +2266,38 @@ impl Driver {
         });
     }
 
-    /// Starts the runtime's worker unless it runs, and waits (blocking) for
-    /// its manifest.
-    fn ensure_worker(&mut self, runtime: &str, def: &RuntimeDef) -> Result<(), Reason> {
+    /// Ends a node whose worker did not start: failed, or (when a cancel or
+    /// app exit interrupted the start) cancelled / interrupted like a
+    /// running node.
+    fn worker_start_error(&mut self, key: &str, attempt: u32, err: WorkerStartError) {
+        match err {
+            WorkerStartError::Failed(reason) => self.fail_node(key, attempt, reason),
+            WorkerStartError::Aborted if self.shutdown_requested => {
+                self.set_node(
+                    key,
+                    NodeStatus::Interrupted,
+                    attempt,
+                    Some(Reason::new(FLOW_APP_EXITED)),
+                    None,
+                );
+                self.set_run(RunStatus::Interrupted, Some(Reason::new(FLOW_APP_EXITED)));
+            }
+            // `cancel_all` (next loop turn) ends the run.
+            WorkerStartError::Aborted => {
+                self.set_node(
+                    key,
+                    NodeStatus::Cancelled,
+                    attempt,
+                    Some(Reason::new(FLOW_RUN_CANCELLED)),
+                    None,
+                );
+            }
+        }
+    }
+
+    /// Starts the runtime's worker unless it runs, and waits (blocking, but
+    /// watching for cancel and app exit) for its manifest.
+    fn ensure_worker(&mut self, runtime: &str, def: &RuntimeDef) -> Result<(), WorkerStartError> {
         match self.workers.get(runtime) {
             Some(w) if !w.eof && w.exit_code.is_none() => return Ok(()),
             Some(_) => {
@@ -2261,10 +2315,11 @@ impl Driver {
                 .with("runtime", runtime)
                 .with("message", message)
         };
+        let failed = |message: String| WorkerStartError::Failed(start_failed(message));
         let stop_file = self
             .store
             .stop_file(&self.run_id)
-            .map_err(|e| start_failed(e.to_string()))?;
+            .map_err(|e| failed(e.to_string()))?;
         let extra_env = [
             ("MDIUM_FLOW_RUN_ID".to_string(), self.run_id.clone()),
             (
@@ -2278,12 +2333,13 @@ impl Driver {
             def,
             &self.run_dir(),
             &extra_env,
-        )?;
+        )
+        .map_err(WorkerStartError::Failed)?;
         let mut handle = self
             .env
             .worker_launcher
             .launch(&spec)
-            .map_err(|e| start_failed(e.to_string()))?;
+            .map_err(|e| failed(e.to_string()))?;
         match self.await_manifest(handle.as_mut(), &spec.stdout_log) {
             Ok(manifest) => {
                 self.worker_seq += 1;
@@ -2303,30 +2359,49 @@ impl Driver {
                 );
                 Ok(())
             }
-            Err(message) => {
+            Err(None) => {
                 handle.kill_tree();
-                Err(start_failed(message))
+                Err(WorkerStartError::Aborted)
+            }
+            Err(Some(message)) => {
+                handle.kill_tree();
+                // Read once the worker is gone: the cause usually is in its stderr.
+                Err(WorkerStartError::Failed(with_stderr_tail(
+                    start_failed(message),
+                    &spec.stderr,
+                )))
             }
         }
     }
 
     /// Sends `describe` (request id `1`) and waits for the manifest; other
-    /// output meanwhile goes to the worker's stdout log.
+    /// output meanwhile goes to the worker's stdout log. `Err(None)` when a
+    /// cancel or app exit arrived meanwhile (M5), `Err(Some(message))` when
+    /// the worker failed to start.
     fn await_manifest(
-        &self,
+        &mut self,
         handle: &mut dyn WorkerHandle,
         stdout_log: &Path,
-    ) -> Result<Manifest, String> {
+    ) -> Result<Manifest, Option<String>> {
         handle
             .send(&describe_request("1"))
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| Some(e.to_string()))?;
         let deadline = Instant::now() + WORKER_READY_TIMEOUT;
         let pause = self.env.poll.max(Duration::from_millis(5));
+        let mut next_controls = Instant::now();
         loop {
             // Checked on every iteration: a worker that keeps printing must
-            // not defeat the cap.
-            if Instant::now() >= deadline {
-                return Err("timed out waiting for the manifest".to_string());
+            // not defeat the cap or hold up a cancel.
+            let now = Instant::now();
+            if now >= deadline {
+                return Err(Some("timed out waiting for the manifest".to_string()));
+            }
+            if now >= next_controls {
+                next_controls = now + pause;
+                self.drain_controls();
+                if self.shutdown_requested || self.cancel_requested {
+                    return Err(None);
+                }
             }
             match handle.try_recv() {
                 Some(WorkerEvent::Line(line)) => {
@@ -2338,31 +2413,32 @@ impl Driver {
                             request_id,
                             manifest,
                         } if request_id == "1" => return Ok(manifest),
-                        WorkerMessage::Error { message, .. } => return Err(message),
+                        WorkerMessage::BadManifest { request_id, error }
+                            if request_id.as_deref().is_none_or(|id| id == "1") =>
+                        {
+                            return Err(Some(bad_manifest_message(&error)))
+                        }
+                        WorkerMessage::Error { message, .. } => return Err(Some(message)),
                         WorkerMessage::Log { level, text, .. } => {
                             append_line(stdout_log, &format!("[{level}] {text}"))
                         }
                         _ => append_line(stdout_log, &line),
                     }
                 }
-                Some(WorkerEvent::Exited(code)) => {
-                    let code = code.or_else(|| handle.try_wait().ok().flatten());
-                    return Err(match code {
-                        Some(code) => {
-                            format!("the worker exited with code {code} before answering describe")
-                        }
-                        None => "the worker exited before answering describe".to_string(),
-                    });
-                }
+                Some(WorkerEvent::TooLong) => {}
+                Some(WorkerEvent::Exited(_)) => return Err(Some(exited_before_describe(handle))),
                 None => std::thread::sleep(pause),
             }
         }
     }
 
-    /// Kills a runtime's worker and forgets it (its calls end next tick).
-    fn drop_worker(&mut self, runtime: &str) {
-        if let Some(mut worker) = self.workers.remove(runtime) {
-            worker.handle.kill_tree();
+    /// Kills a runtime's worker and forgets it (its calls end next tick) —
+    /// only while it still is worker `id`, never a restarted one.
+    fn drop_worker(&mut self, runtime: &str, id: u64) {
+        if self.workers.get(runtime).is_some_and(|w| w.id == id) {
+            if let Some(mut worker) = self.workers.remove(runtime) {
+                worker.handle.kill_tree();
+            }
         }
     }
 
@@ -2379,7 +2455,7 @@ impl Driver {
         for worker in &mut pending {
             let _ = worker.handle.send(&shutdown_request());
         }
-        let deadline = Instant::now() + WORKER_SHUTDOWN_GRACE;
+        let deadline = Instant::now() + self.stop_grace().unwrap_or(WORKER_SHUTDOWN_GRACE);
         let pause = self.env.poll.max(Duration::from_millis(5));
         loop {
             pending.retain_mut(|w| !matches!(w.handle.try_wait(), Ok(Some(_))));
@@ -2431,7 +2507,7 @@ impl Driver {
                     Finish::WorkerExited(exited.get(&call.worker).copied().flatten())
                 })
             } else if call.grace_deadline.is_some_and(|d| Instant::now() >= d) {
-                self.drop_worker(&call.runtime);
+                self.drop_worker(&call.runtime, call.worker);
                 Some(if call.timed_out {
                     Finish::Timeout
                 } else {
@@ -2482,6 +2558,7 @@ impl Driver {
         for event in events {
             match event {
                 WorkerEvent::Line(line) => self.worker_line(runtime, &line),
+                WorkerEvent::TooLong => self.worker_line_too_long(runtime),
                 WorkerEvent::Exited(code) => {
                     if let Some(worker) = self.workers.get_mut(runtime) {
                         worker.eof = true;
@@ -2529,13 +2606,17 @@ impl Driver {
         };
         let mine = |c: &RunningCall| c.runtime == runtime && c.worker == worker;
         // The call in flight on this worker (one that has no outcome yet).
-        let active = self
-            .calls
-            .iter()
-            .position(|c| mine(c) && c.items.outcome.is_none());
+        let active = self.active_call(runtime);
         let find =
             |calls: &[RunningCall], id: &str| calls.iter().position(|c| mine(c) && c.call_id == id);
-        match parse_worker_line(line) {
+        let message = match parse_worker_line(line) {
+            // Only `describe` expects a manifest; here it is stray output.
+            WorkerMessage::BadManifest { .. } => WorkerMessage::Invalid {
+                reason: "bad-manifest",
+            },
+            message => message,
+        };
+        match message {
             WorkerMessage::Item {
                 call_id,
                 item,
@@ -2543,7 +2624,7 @@ impl Driver {
             } => {
                 let known = call_id.as_deref().and_then(|id| find(&self.calls, id));
                 match known.filter(|&i| self.calls[i].items.outcome.is_none()) {
-                    Some(idx) => self.call_item(idx, item, &clean, line.len()),
+                    Some(idx) => self.call_item(idx, item, &clean),
                     None => {
                         let key = known.or(active).map(|i| self.calls[i].key.clone());
                         self.protocol_warning(key.as_deref(), "unexpected-call-id", Vec::new());
@@ -2555,12 +2636,16 @@ impl Driver {
                 level,
                 text,
             } => {
-                let target = call_id
-                    .as_deref()
-                    .and_then(|id| find(&self.calls, id))
-                    .map(|i| self.calls[i].dir.join("stdout.log"))
-                    .unwrap_or(stdout_log);
-                append_line(&target, &format!("[{level}] {text}"));
+                let text = format!("[{level}] {text}");
+                match call_id.as_deref().and_then(|id| find(&self.calls, id)) {
+                    // Inside a call: counted, dropped past the limit.
+                    Some(idx) => {
+                        if self.count_line(idx).is_some() {
+                            append_line(&self.calls[idx].dir.join("stdout.log"), &text);
+                        }
+                    }
+                    None => append_line(&stdout_log, &text),
+                }
             }
             WorkerMessage::Error {
                 request_id,
@@ -2574,6 +2659,9 @@ impl Driver {
                 });
                 match target {
                     Some(idx) => {
+                        // Counted like an outcome: it ends the call even
+                        // past the limit.
+                        let _ = self.count_line(idx);
                         let call = &mut self.calls[idx];
                         call.items.outcome = Some(ProtocolOutcome::Fail(Some(message)));
                         call.error_code = Some(code);
@@ -2581,17 +2669,38 @@ impl Driver {
                     None => append_line(&stdout_log, line),
                 }
             }
-            // Stray output (e.g. `print`): a warning inside a call, logged outside.
+            // Stray output (e.g. `print`): a warning inside a call (the text
+            // goes to the attempt's stdout.log), logged outside.
             WorkerMessage::Invalid { reason } => match active {
                 Some(idx) => {
-                    if let Some(line) = self.count_line(idx) {
+                    if let Some(number) = self.count_line(idx) {
                         let key = self.calls[idx].key.clone();
-                        self.protocol_warning(Some(&key), reason, vec![("line", line.into())]);
+                        append_line(&self.calls[idx].dir.join("stdout.log"), line);
+                        self.protocol_warning(Some(&key), reason, vec![("line", number.into())]);
                     }
                 }
                 None => append_line(&stdout_log, line),
             },
-            WorkerMessage::Manifest { .. } => {}
+            WorkerMessage::Manifest { .. } | WorkerMessage::BadManifest { .. } => {}
+        }
+    }
+
+    /// The call in flight on the runtime's current worker (no outcome yet).
+    fn active_call(&self, runtime: &str) -> Option<usize> {
+        let worker = self.workers.get(runtime)?.id;
+        self.calls.iter().position(|c| {
+            c.runtime == runtime && c.worker == worker && c.items.outcome.is_none()
+        })
+    }
+
+    /// A line over `MAX_LINE_BYTES` (the reader dropped it): a counted
+    /// warning inside a call, ignored outside.
+    fn worker_line_too_long(&mut self, runtime: &str) {
+        if let Some(idx) = self.active_call(runtime) {
+            if let Some(line) = self.count_line(idx) {
+                let key = self.calls[idx].key.clone();
+                self.protocol_warning(Some(&key), "line-too-long", vec![("line", line.into())]);
+            }
         }
     }
 
@@ -2613,19 +2722,13 @@ impl Driver {
     }
 
     /// Records and applies one protocol item of a running call. An outcome
-    /// is applied even past the limits (only its record is dropped), so the
-    /// call always ends.
-    fn call_item(&mut self, idx: usize, item: ProtocolItem, clean: &str, raw_len: usize) {
+    /// is applied even past `MAX_LINES` (only its record is dropped), so the
+    /// call always ends. (Over-long lines never get here: the reader drops
+    /// them.)
+    fn call_item(&mut self, idx: usize, item: ProtocolItem, clean: &str) {
         let key = self.calls[idx].key.clone();
         let is_outcome = matches!(item, ProtocolItem::Outcome(_));
-        let line = match self.count_line(idx) {
-            Some(line) if raw_len > MAX_LINE_BYTES => {
-                self.protocol_warning(Some(&key), "line-too-long", vec![("line", line.into())]);
-                None
-            }
-            other => other,
-        };
-        let Some(line) = line else {
+        let Some(line) = self.count_line(idx) else {
             if is_outcome {
                 let mut items = std::mem::take(&mut self.calls[idx].items);
                 self.apply_item(&key, item, &mut items);
@@ -2694,11 +2797,7 @@ impl Driver {
                 self.settle(&key, attempt, NodeStatus::Succeeded, PORT_SUCCESS, None)
             }
             Some(ProtocolOutcome::Fail(detail)) => {
-                let mut reason =
-                    Reason::new(call.error_code.as_deref().unwrap_or(FLOW_NODE_FAILED));
-                if let Some(detail) = detail {
-                    reason = reason.with("detail", detail);
-                }
+                let reason = call_failure_reason(call.error_code.as_deref(), detail, &call.entry);
                 self.after_failure(&key, attempt, reason, false);
             }
             Some(ProtocolOutcome::NeedsApproval(message)) => {
@@ -2761,6 +2860,39 @@ impl Driver {
         }
     }
 
+    /// User cancel (spec 3.2): sends `cancel` for every call in flight, then
+    /// waits (bounded by `limits.stopGrace`) until each call has its outcome
+    /// or its worker is gone. The caller kills what is left.
+    fn cancel_calls(&mut self) {
+        if self.calls.is_empty() {
+            return;
+        }
+        for call in &self.calls {
+            if let Some(worker) = self.workers.get_mut(&call.runtime) {
+                if worker.id == call.worker && call.items.outcome.is_none() {
+                    // A failed send shows up as the worker's exit.
+                    let _ = worker.handle.send(&cancel_request(&call.call_id));
+                }
+            }
+        }
+        let deadline = Instant::now() + self.stop_grace().unwrap_or(DEFAULT_CANCEL_GRACE);
+        let pause = self.env.poll.max(Duration::from_millis(5));
+        loop {
+            let runtimes: Vec<String> = self.workers.keys().cloned().collect();
+            for runtime in runtimes {
+                self.poll_worker(&runtime);
+            }
+            let settled = self
+                .calls
+                .iter()
+                .all(|c| c.items.outcome.is_some() || !self.worker_alive(c));
+            if settled || Instant::now() >= deadline {
+                return;
+            }
+            std::thread::sleep(pause);
+        }
+    }
+
     fn cancel_all(&mut self) {
         let running = std::mem::take(&mut self.running);
         for mut command in running {
@@ -2773,6 +2905,7 @@ impl Driver {
                 None,
             );
         }
+        self.cancel_calls();
         self.kill_workers();
         for call in std::mem::take(&mut self.calls) {
             self.set_node(
@@ -2929,6 +3062,25 @@ impl ProtocolCursor {
             let _ = fsutil::atomic_write(&dir.join("protocol.json"), &json);
         }
     }
+}
+
+/// The reason of a call that failed: its `outcome` (`FLOW_NODE_FAILED`) or
+/// an `error` the worker answered with. Worker codes other than the known
+/// `FLOW_PYTHON_*` ones become `FLOW_PYTHON_PROTOCOL` (original in `code`),
+/// so every reason has a translation.
+fn call_failure_reason(error_code: Option<&str>, detail: Option<String>, entry: &str) -> Reason {
+    let mut reason = match error_code {
+        None => Reason::new(FLOW_NODE_FAILED),
+        Some(code @ (FLOW_PYTHON_INPUT_INVALID | FLOW_PYTHON_ENTRY_UNKNOWN)) => {
+            Reason::new(code).with("entry", entry)
+        }
+        Some(FLOW_PYTHON_PROTOCOL) => Reason::new(FLOW_PYTHON_PROTOCOL),
+        Some(code) => Reason::new(FLOW_PYTHON_PROTOCOL).with("code", code),
+    };
+    if let Some(detail) = detail {
+        reason = reason.with("detail", detail);
+    }
+    reason
 }
 
 /// Appends one line to a log file (best effort).

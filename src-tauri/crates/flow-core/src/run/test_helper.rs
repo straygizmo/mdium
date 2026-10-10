@@ -240,11 +240,15 @@ pub fn process_alive(pid: u32) -> bool {
 //
 // Steps: `emit` (item JSON; `callId` is added), `emit_many` {count,item}
 // (`item` repeated `count` times), `log` {level,text}, `raw`
-// (a verbatim line), `sleep_ms`, `wait_cancel_ms` (outcome `stopped` when a
-// `cancel` arrives), `wait_stop_ms` (outcome `stopped` when the STOP file
+// (a verbatim line), `raw_bytes` (an array of byte values written as is),
+// `long_line` (n; a line of n `x` bytes), `sleep_ms`, `wait_cancel_ms`
+// (outcome `stopped` when a `cancel` arrives), `exit_on_cancel_ms` (exit 0
+// without an outcome when a `cancel` arrives), `wait_stop_ms` (outcome
+// `stopped` when the STOP file
 // appears), `exit` (code; no outcome), `outcome` {status,reason?,message?},
 // `fail_before_attempt` (n; outcome `fail` while `context.attempt` < n, which
-// also ends the call).
+// also ends the call), `error` {code,message} (an `error` answering the call
+// request, which ends it).
 //
 // When `FLOW_TEST_WORKER_PID_FILE` is set the worker writes its pid there and
 // appends one line per handled `describe` to the sibling `describes.log`.
@@ -281,7 +285,7 @@ impl WorkerLauncher for FakeWorkerLauncher {
                 "FLOW_TEST_WORKER_PID_FILE",
                 spec.stdout_log.with_file_name("pid"),
             )
-            .stderr(std::fs::File::create(&spec.stderr)?);
+            .stderr(super::worker::open_stderr_log(&spec.stderr)?);
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -364,6 +368,20 @@ fn worker_step(step: &Value, call_id: &str, ctx: &Value, rx: &Receiver<String>) 
         let mut out = std::io::stdout().lock();
         let _ = writeln!(out, "{raw}");
         let _ = out.flush();
+    } else if let Some(bytes) = step.get("raw_bytes").and_then(Value::as_array) {
+        let bytes: Vec<u8> = bytes.iter().filter_map(Value::as_u64).map(|b| b as u8).collect();
+        let mut out = std::io::stdout().lock();
+        let _ = out.write_all(&bytes);
+        let _ = out.flush();
+    } else if let Some(n) = step.get("long_line").and_then(Value::as_u64) {
+        let mut out = std::io::stdout().lock();
+        let _ = out.write_all(&vec![b'x'; n as usize]);
+        let _ = out.write_all(b"\n");
+        let _ = out.flush();
+    } else if let Some(ms) = step.get("exit_on_cancel_ms").and_then(Value::as_u64) {
+        if worker_wait(rx, ms, |msg| msg["type"] == "cancel", || false) {
+            std::process::exit(0);
+        }
     } else if let Some(ms) = step.get("sleep_ms").and_then(Value::as_u64) {
         std::thread::sleep(Duration::from_millis(ms));
     } else if let Some(ms) = step.get("wait_cancel_ms").and_then(Value::as_u64) {
@@ -422,6 +440,14 @@ fn worker_call(script: &Value, msg: &Value, rx: &Receiver<String>) {
         return;
     };
     for step in steps {
+        if let Some(error) = step.get("error") {
+            // An `error` answering the call request (ends the call).
+            worker_out(&json!({
+                "v": 1, "type": "error", "requestId": msg["requestId"],
+                "code": error["code"], "message": error["message"],
+            }));
+            return;
+        }
         if worker_step(step, call_id, &msg["context"], rx) {
             return;
         }
@@ -466,6 +492,7 @@ fn flow_test_worker_entry() {
                     );
                 }
                 if let Some(code) = script["exit_on_describe"].as_i64() {
+                    eprintln!("fake worker: exiting on describe");
                     std::process::exit(code as i32);
                 }
                 if script["ignore_describe"] == true {
