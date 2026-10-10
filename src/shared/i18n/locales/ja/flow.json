@@ -8,7 +8,12 @@
     "emptyHint": "このフォルダの .mdium/flows/ に *.flow.yaml を置いてください。",
     "errorCount": "エラー: {{count}}",
     "warningCount": "警告: {{count}}",
-    "loadFailed": "フローを一覧できませんでした（{{code}}）。"
+    "loadFailed": "フローを一覧できませんでした（{{code}}）。",
+    "groupEntries": "フロー",
+    "groupParts": "部品（lib/）",
+    "signature": "{{params}} → {{outputs}}",
+    "noParams": "()",
+    "noOutputs": "()"
   },
   "workspace": {
     "noSelection": "左のパネルでフローを選んでください。",
@@ -136,7 +141,8 @@
       "approve": "承認",
       "reject": "却下",
       "stop": "停止"
-    }
+    },
+    "partHint": "このフローは部品（lib/ 配下）です。他のフローから呼び出してください。直接は実行できません。"
   },
   "runStatus": {
     "pending": "準備中",
@@ -223,5 +229,25 @@
     "FLOW_STORE_FAILED": "実行データを読み書きできませんでした。",
     "FLOW_LOG_INVALID": "不明なログです。",
     "FLOW_COMMAND_FAILED": "操作に失敗しました。"
+  },
+  "project": {
+    "title": "プロジェクト",
+    "noManifest": "このフォルダに .mdium/project.yaml はありません。",
+    "invalid": "project.yaml に {{count}} 件のエラーがあります。",
+    "setup": "セットアップ",
+    "setupTitle": "プロジェクトのセットアップ: {{name}}",
+    "setupHint": "次のコマンドを、このフォルダで利用者の権限で今すぐ実行します。.mdium/project.yaml に書かれた手順です。",
+    "setupConfirm": "この手順を確認し、実行を許可します。",
+    "setupRun": "セットアップを実行",
+    "setupRunning": "実行中…",
+    "setupStep": "手順 {{step}} / {{total}}",
+    "setupDone": "セットアップが完了しました。",
+    "setupFailed": "セットアップに失敗しました。",
+    "stepStatus": {
+      "started": "実行中",
+      "succeeded": "完了",
+      "failed": "失敗"
+    },
+    "logDir": "ログ: {{dir}}"
   }
 }

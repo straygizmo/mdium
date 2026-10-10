@@ -147,10 +147,11 @@ export function FlowWorkspace() {
             {folder && (
               <section className="flow-workspace__section">
                 <h3 className="flow-workspace__section-title">{t("run.title")}</h3>
+                {result.kind === "part" && <div className="flow-workspace__message">{t("run.partHint")}</div>}
                 <RunPanel
                   projectRoot={folder}
                   flowPath={result.path}
-                  flow={result.flow && result.errors.length === 0 ? result.flow : null}
+                  flow={result.kind === "entry" && result.flow && result.errors.length === 0 ? result.flow : null}
                 />
               </section>
             )}

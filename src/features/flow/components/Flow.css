@@ -813,3 +813,55 @@ button.flow-issue__button:hover {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+.flow-panel__project {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 2px;
+  border-bottom: 1px solid var(--border);
+}
+
+.flow-panel__project-name {
+  font-weight: 600;
+  font-size: 13px;
+  flex: 1;
+}
+
+.flow-panel__setup {
+  font-size: 12px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.flow-panel__setup:hover {
+  border-color: var(--border-hover);
+}
+
+.flow-panel__group-title {
+  margin-top: 10px;
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.flow-panel__role {
+  margin-left: 6px;
+  font-size: 10px;
+  padding: 0 5px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
+.flow-panel__item-signature {
+  display: block;
+  font-family: monospace;
+  font-size: 11px;
+  color: var(--text-muted);
+}

@@ -48,6 +48,17 @@ async function waitFor(check: () => void, timeoutMs = 5000) {
   }
 }
 
+/** Answers the panel's two commands: `flow_list` via `list`, and an absent manifest. */
+function answerPanel(list: () => Promise<unknown>) {
+  invoke.mockImplementation(async (cmd: string) => {
+    if (cmd === "flow_list") return list();
+    if (cmd === "flow_project_load") {
+      return { exists: false, path: ".mdium/project.yaml", project: null, errors: [], warnings: [] };
+    }
+    throw new Error(`unexpected ${cmd}`);
+  });
+}
+
 describe("flow views", () => {
   let root: ReturnType<typeof createRoot>;
   let container: HTMLDivElement;
@@ -69,7 +80,7 @@ describe("flow views", () => {
   });
 
   it("lists flow files and selects one", async () => {
-    invoke.mockResolvedValueOnce([
+    answerPanel(async () => [
       { path: PATH, kind: "entry", params: {}, outputs: [], id: "doc-digest", name: "Document digest", errorCount: 0, warningCount: 1 },
       { path: ".mdium/flows/broken.flow.yaml", kind: "entry", params: {}, outputs: [], id: null, name: null, errorCount: 2, warningCount: 0 },
     ]);
@@ -85,10 +96,12 @@ describe("flow views", () => {
   });
 
   it("shows the empty state and list errors", async () => {
-    invoke.mockResolvedValueOnce([]);
+    answerPanel(async () => []);
     await act(async () => root.render(<FlowPanel />));
     await waitFor(() => expect(container.textContent).toContain(i18n.t("list.empty", { ns: "flow" })));
-    invoke.mockRejectedValueOnce({ code: "FLOW_LIST_FAILED", message: "x" });
+    answerPanel(async () => {
+      throw { code: "FLOW_LIST_FAILED", message: "x" };
+    });
     await act(async () => container.querySelector<HTMLButtonElement>(".flow-panel__refresh")!.click());
     await waitFor(() => expect(container.textContent).toContain("FLOW_LIST_FAILED"));
   });

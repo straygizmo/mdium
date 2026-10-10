@@ -8,7 +8,12 @@
     "emptyHint": "Add *.flow.yaml files to .mdium/flows/ in this folder.",
     "errorCount": "Errors: {{count}}",
     "warningCount": "Warnings: {{count}}",
-    "loadFailed": "Could not list flows ({{code}})."
+    "loadFailed": "Could not list flows ({{code}}).",
+    "groupEntries": "Flows",
+    "groupParts": "Parts (lib/)",
+    "signature": "{{params}} → {{outputs}}",
+    "noParams": "()",
+    "noOutputs": "()"
   },
   "workspace": {
     "noSelection": "Select a flow in the left panel.",
@@ -136,7 +141,8 @@
       "approve": "Approve",
       "reject": "Reject",
       "stop": "Stop"
-    }
+    },
+    "partHint": "This flow is a part (under lib/). Call it from another flow; it cannot be started directly."
   },
   "runStatus": {
     "pending": "Pending",
@@ -223,5 +229,25 @@
     "FLOW_STORE_FAILED": "Run data could not be read or written.",
     "FLOW_LOG_INVALID": "Unknown log.",
     "FLOW_COMMAND_FAILED": "The operation failed."
+  },
+  "project": {
+    "title": "Project",
+    "noManifest": "No .mdium/project.yaml in this folder.",
+    "invalid": "project.yaml has {{count}} errors.",
+    "setup": "Set up",
+    "setupTitle": "Set up project: {{name}}",
+    "setupHint": "These commands run now, with your user account, in this folder. They are listed in .mdium/project.yaml.",
+    "setupConfirm": "I reviewed these steps and allow them to run.",
+    "setupRun": "Run setup",
+    "setupRunning": "Running…",
+    "setupStep": "Step {{step}} of {{total}}",
+    "setupDone": "Setup finished.",
+    "setupFailed": "Setup failed.",
+    "stepStatus": {
+      "started": "running",
+      "succeeded": "done",
+      "failed": "failed"
+    },
+    "logDir": "Logs: {{dir}}"
   }
 }
