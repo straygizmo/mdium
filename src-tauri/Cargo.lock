@@ -1068,6 +1068,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "flow-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "sha2",
+ "tempfile",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2378,6 +2392,7 @@ dependencies = [
  "chrono",
  "dirs 5.0.1",
  "encoding_rs",
+ "flow-core",
  "futures-util",
  "http",
  "junction",
