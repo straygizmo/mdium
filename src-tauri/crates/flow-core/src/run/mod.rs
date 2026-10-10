@@ -10,6 +10,7 @@ pub mod process;
 pub mod scope;
 pub mod store;
 pub mod supervise;
+pub mod worker;
 
 #[cfg(test)]
 mod test_helper;
