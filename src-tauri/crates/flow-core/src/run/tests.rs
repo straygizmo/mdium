@@ -2863,7 +2863,10 @@ fn user_cancel_sends_cancel_before_killing_the_worker() {
     // I6 (spec 3.2): the stage gets `cancel` and can finish cleanly.
     let script = json!({
         "stages": [stage("a.polite", json!({}))],
-        "behaviour": { "a.polite": [ { "wait_cancel_ms": 30000 } ] }
+        "behaviour": { "a.polite": [
+            item(json!({ "type": "progress", "text": "working" })),
+            { "wait_cancel_ms": 30000 }
+        ] }
     });
     let f = fixture_with_worker(script);
     write_manifest(&f.root);
@@ -2875,8 +2878,9 @@ fn user_cancel_sends_cancel_before_killing_the_worker() {
         vec![],
     );
     let run_id = f.confirm_and_start(&rel, json!({}));
-    f.wait_for(&run_id, "running", |s| {
-        node(s, "p").status == NodeStatus::Running
+    // The call is in flight once its progress arrived (not still starting).
+    f.wait_for(&run_id, "call in flight", |s| {
+        node(s, "p").progress.is_some()
     });
     let pid = f.worker_pid(&run_id, "r");
     let started = Instant::now();
