@@ -28,10 +28,15 @@ export function ProjectSetupDialog({ projectRoot, project, onClose }: ProjectSet
     void subscribeSetupProgress((event) => {
       if (event.projectRoot !== projectRoot || event.status === "finished") return;
       setProgress((p) => ({ ...p, [event.step]: event }));
-    }).then((off) => {
-      if (cancelled) off();
-      else unsubscribe.current = off;
-    });
+    }).then(
+      (off) => {
+        if (cancelled) off();
+        else unsubscribe.current = off;
+      },
+      () => {
+        // Progress is optional; the final result still arrives from the command.
+      },
+    );
     return () => {
       cancelled = true;
       unsubscribe.current?.();

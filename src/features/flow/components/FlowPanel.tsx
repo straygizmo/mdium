@@ -38,9 +38,14 @@ export function FlowPanel() {
     if (!folder) return;
     const id = ++requestId.current;
     setState({ status: "loading" });
+    setProject(null);
+    setSetupOpen(false);
     try {
-      const flows = await flowApi.list(folder);
-      const loaded = await flowApi.projectLoad(folder);
+      // The project header is additive: a manifest failure must not hide the flow list.
+      const [flows, loaded] = await Promise.all([
+        flowApi.list(folder),
+        flowApi.projectLoad(folder).catch(() => null),
+      ]);
       if (id === requestId.current) {
         setProject(loaded);
         setState({ status: "ready", flows });

@@ -110,6 +110,21 @@ describe("project views", () => {
     });
   });
 
+  describe("FlowPanel when the manifest fails", () => {
+    it("still lists the flows without a project header", async () => {
+      invoke.mockImplementation(async (cmd: string) => {
+        if (cmd === "flow_list") {
+          return [{ path: ".mdium/flows/main.flow.yaml", kind: "entry", id: "m", name: "Main", params: {}, outputs: [], errorCount: 0, warningCount: 0 }];
+        }
+        if (cmd === "flow_project_load") throw { code: "FLOW_PROJECT_INVALID", message: "x" };
+        throw new Error(`unexpected ${cmd}`);
+      });
+      await act(async () => root.render(<FlowPanel />));
+      await waitFor(() => expect(container.textContent).toContain("Main"));
+      expect(container.querySelector(".flow-panel__project")).toBeNull();
+    });
+  });
+
   describe("ProjectSetupDialog", () => {
     it("lists the steps, requires confirmation, runs and shows progress", async () => {
       const project = { schemaVersion: 1 as const, id: "p", name: "Proj", setup: [{ run: ["uv", "sync"], workingDir: "." }] };
@@ -148,7 +163,9 @@ describe("project views", () => {
       await act(async () => root.render(<FlowWorkspace />));
       await waitFor(() => expect(container.textContent).toContain(i18n.t("run.partHint", { ns: "flow" })));
       // RunPanel always renders its start button; for a part (flow=null) it is disabled.
-      expect(container.querySelector<HTMLButtonElement>(".flow-runs__start")?.disabled ?? true).toBe(true);
+      const start = container.querySelector<HTMLButtonElement>(".flow-runs__start");
+      expect(start).not.toBeNull();
+      expect(start!.disabled).toBe(true);
     });
   });
 });
