@@ -51,3 +51,10 @@ slides/
 
 # Superpowers SDD scratch (ledger, briefs, review packages)
 .superpowers/sdd/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+python/mdium-worker/.venv/
+python/mdium-worker/dist/
