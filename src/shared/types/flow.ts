@@ -237,9 +237,9 @@ export interface FlowLoadResult {
   warnings: FlowIssue[];
 }
 
-/** One entry of `flow_list`. */
 export type FlowKind = "entry" | "part";
 
+/** One entry of `flow_list`. */
 export interface FlowSummary {
   path: string;
   kind: FlowKind;
@@ -265,4 +265,44 @@ export type FlowCommandErrorCode =
 export interface FlowCommandError {
   code: FlowCommandErrorCode;
   message: string;
+}
+
+/** `.mdium/project.yaml` (spec 2026-10-10, 2.1). */
+export interface RuntimeDef {
+  kind: "python";
+  python: string | string[];
+  module: string;
+  cwd: string;
+  env?: Record<string, string>;
+}
+
+export interface SetupStep {
+  run: string[];
+  workingDir?: string;
+}
+
+export interface MetricDef {
+  ref: string;
+  better: "higher" | "lower";
+}
+
+export interface ProjectDef {
+  schemaVersion: 1;
+  id: string;
+  name: string;
+  description?: string;
+  runtimes?: Record<string, RuntimeDef>;
+  setup?: SetupStep[];
+  secrets?: string[];
+  flows?: Record<string, string>;
+  metrics?: MetricDef[];
+}
+
+/** `flow_project_load` result. */
+export interface ProjectLoadResult {
+  exists: boolean;
+  path: string;
+  project: ProjectDef | null;
+  errors: FlowIssue[];
+  warnings: FlowIssue[];
 }

@@ -4,6 +4,7 @@
 
 use crate::load::{self, flow_kind_of, FlowKind, FlowReport, FlowSummary, PathProblem};
 use crate::parse::FlowFormat;
+use crate::project::{load_project, ProjectReport, PROJECT_FILE};
 use crate::run::engine::{CommandReview, EngineError, FlowEngine, RunSnapshot, RunSummary};
 use crate::run::model::Reason;
 use serde::{Deserialize, Serialize};
@@ -134,6 +135,16 @@ pub struct FlowService {
     engine: Arc<FlowEngine>,
 }
 
+/// `flow_project_load` result: the manifest, or `exists: false`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectLoadResult {
+    pub exists: bool,
+    pub path: String,
+    #[serde(flatten)]
+    pub report: ProjectReport,
+}
+
 impl FlowService {
     pub fn new(engine: Arc<FlowEngine>) -> Self {
         Self { engine }
@@ -186,6 +197,30 @@ impl FlowService {
     }
 
     /// The commands a flow file runs, for the one-time confirmation (spec 7.2).
+    /// Reads and validates `.mdium/project.yaml` (spec 2.4).
+    pub fn project_load(
+        &self,
+        project_root_arg: &str,
+    ) -> Result<ProjectLoadResult, FlowCommandError> {
+        let root = project_root(project_root_arg)?;
+        let (exists, report) = match load_project(&root) {
+            Some(report) => (true, report),
+            None => (
+                false,
+                ProjectReport {
+                    project: None,
+                    errors: vec![],
+                    warnings: vec![],
+                },
+            ),
+        };
+        Ok(ProjectLoadResult {
+            exists,
+            path: PROJECT_FILE.to_string(),
+            report,
+        })
+    }
+
     pub fn command_review(
         &self,
         project_root_arg: &str,
@@ -320,10 +355,11 @@ impl FlowService {
 
 /// Every command the service dispatches by name (the Tauri command names;
 /// the HTTP server uses the same names, spec 2026-10-10, 10.2).
-pub const COMMAND_NAMES: [&str; 17] = [
+pub const COMMAND_NAMES: [&str; 18] = [
     "flow_list",
     "flow_load",
     "flow_validate",
+    "flow_project_load",
     "flow_command_review",
     "flow_confirm_commands",
     "flow_run_start",
@@ -443,6 +479,10 @@ impl FlowService {
             "flow_validate" => {
                 let a: ValidateArgs = args(value)?;
                 reply(self.validate_flow(&a.project_root, &a.path, &a.content)?)
+            }
+            "flow_project_load" => {
+                let a: RootArgs = args(value)?;
+                reply(self.project_load(&a.project_root)?)
             }
             "flow_command_review" => {
                 let a: PathArgs = args(value)?;
@@ -809,5 +849,38 @@ mod tests {
         assert_eq!(err.code, FLOW_RUN_NOT_ENTRY);
         let loaded = svc.load_flow(root, ".mdium/flows/lib/p.flow.yaml").unwrap();
         assert_eq!(loaded.kind, crate::load::FlowKind::Part);
+    }
+
+    #[test]
+    fn project_load_reports_missing_and_present_manifests() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = service(tmp.path());
+        let root = tmp.path().to_str().unwrap();
+        let missing = svc.project_load(root).unwrap();
+        assert!(
+            !missing.exists && missing.report.project.is_none() && missing.report.errors.is_empty()
+        );
+        fs::create_dir_all(tmp.path().join(".mdium")).unwrap();
+        fs::write(
+            tmp.path().join(".mdium/project.yaml"),
+            "schemaVersion: 1\nid: p\nname: P\nsecrets: [A_KEY]\n",
+        )
+        .unwrap();
+        let present = svc.project_load(root).unwrap();
+        assert!(present.exists);
+        assert_eq!(
+            present.report.project.as_ref().unwrap().secrets,
+            vec!["A_KEY"]
+        );
+        let json = serde_json::to_value(&present).unwrap();
+        assert_eq!(json["path"], ".mdium/project.yaml");
+        assert_eq!(json["project"]["id"], "p");
+        let via_call = svc
+            .call(
+                "flow_project_load",
+                serde_json::json!({ "projectRoot": root }),
+            )
+            .unwrap();
+        assert_eq!(via_call["exists"], true);
     }
 }

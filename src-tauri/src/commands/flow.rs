@@ -6,6 +6,7 @@
 use flow_core::load::FlowSummary;
 use flow_core::service::FlowService;
 pub use flow_core::service::{FlowCommandError, FlowLoadResult, FLOW_COMMAND_FAILED};
+use flow_core::service::ProjectLoadResult;
 use std::sync::Arc;
 
 /// The process-wide service, managed as Tauri state.
@@ -62,4 +63,12 @@ pub async fn flow_validate(
         s.validate_flow(&project_root, &path, &content)
     })
     .await
+}
+
+#[tauri::command]
+pub async fn flow_project_load(
+    state: tauri::State<'_, FlowServiceState>,
+    project_root: String,
+) -> Result<ProjectLoadResult, FlowCommandError> {
+    with_service(state, move |s| s.project_load(&project_root)).await
 }

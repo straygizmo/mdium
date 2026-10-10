@@ -1,6 +1,11 @@
 import { getFlowTransport } from "./transport";
 import "./tauri-transport";
-import type { FlowCommandError, FlowLoadResult, FlowSummary } from "@/shared/types/flow";
+import type {
+  FlowCommandError,
+  FlowLoadResult,
+  FlowSummary,
+  ProjectLoadResult,
+} from "@/shared/types/flow";
 
 /** True for a `{ code, message }` command failure. */
 export function isFlowCommandError(value: unknown): value is FlowCommandError {
@@ -44,4 +49,7 @@ export const flowApi = {
   /** Validates unsaved content as if it were the file at `path`. */
   validate: (projectRoot: string, path: string, content: string) =>
     call<FlowLoadResult>("flow_validate", { projectRoot, path, content }),
+  /** Reads and validates `.mdium/project.yaml`. */
+  projectLoad: (projectRoot: string) =>
+    call<ProjectLoadResult>("flow_project_load", { projectRoot }),
 };

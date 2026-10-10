@@ -23,6 +23,7 @@ describe("flowApi", () => {
       "flow_validate",
       { projectRoot: ROOT, path: PATH, content: "schemaVersion: 1" },
     ],
+    ["projectLoad", () => flowApi.projectLoad(ROOT), "flow_project_load", { projectRoot: ROOT }],
   ] as const)("%s invokes %s", async (_name, call, command, args) => {
     invoke.mockResolvedValueOnce("ok");
     await expect(call()).resolves.toBe("ok");
