@@ -3,16 +3,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from .registry import StageDef
+from .registry import TYPE_CHECKS, StageDef
 
-TYPE_CHECKS = {
-    "string": lambda v: isinstance(v, str),
-    "path": lambda v: isinstance(v, str),
-    "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
-    "bool": lambda v: isinstance(v, bool),
-    "object": lambda v: isinstance(v, dict),
-    "array": lambda v: isinstance(v, list),
-}
+__all__ = ["TYPE_CHECKS", "InputError", "validate_inputs", "manifest_message", "error_message", "outcome_message"]
 
 
 class InputError(Exception):
@@ -30,7 +23,8 @@ def validate_inputs(stage: StageDef, given: dict[str, Any]) -> dict[str, Any]:
     for name, spec in stage.inputs.items():
         value = given.get(name)
         if value is None:
-            if spec.has_default:
+            # A `None` default means "optional", like no default (as in Rust).
+            if spec.has_default and spec.default is not None:
                 value = spec.default
             elif spec.required:
                 errors.append(f"{name}: missing")

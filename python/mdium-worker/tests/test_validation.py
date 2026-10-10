@@ -23,3 +23,14 @@ def test_reports_unknown_missing_and_type_errors() -> None:
 
 def test_null_uses_the_default() -> None:
     assert validate_inputs(stage_def(), {"a": 2, "t": None})["t"] == "x"
+
+
+def test_a_none_default_counts_as_no_default() -> None:
+    optional = StageDef.from_decorator("s", None, {"x": {"type": "string", "default": None}}, {}, [])
+    assert validate_inputs(optional, {}) == {}
+    assert validate_inputs(optional, {"x": None}) == {}
+    assert validate_inputs(optional, {"x": "v"}) == {"x": "v"}
+    required = StageDef.from_decorator("s", None, {"x": {"type": "string", "required": True, "default": None}}, {}, [])
+    with pytest.raises(InputError) as info:
+        validate_inputs(required, {})
+    assert info.value.errors == ["x: missing"]

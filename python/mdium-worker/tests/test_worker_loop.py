@@ -2,7 +2,6 @@ import json
 import os
 import subprocess
 import sys
-import threading
 import time
 from pathlib import Path
 
@@ -11,9 +10,13 @@ ROOT = Path(__file__).resolve().parent
 
 def start(tmp_path: Path, *extra: str) -> subprocess.Popen:
     env = dict(os.environ, PYTHONPATH=str(ROOT), MDIUM_FLOW_STOP_FILE=str(tmp_path / "STOP"))
+    # The worker must speak UTF-8 on its own, not because of the environment.
+    for key in ("PYTHONUTF8", "PYTHONIOENCODING"):
+        env.pop(key, None)
     return subprocess.Popen(
         [sys.executable, "-m", "mdium_worker", "--module", "sample_module", *extra],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, bufsize=1,
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
+        env=env, bufsize=1,
     )
 
 
@@ -114,3 +117,63 @@ def test_describe_flag_prints_the_manifest_and_exits(tmp_path):
     assert proc.returncode == 0
     manifest = json.loads(out.strip().splitlines()[-1])
     assert manifest["type"] == "manifest" and manifest["module"] == "sample_module"
+
+
+def test_shutdown_during_a_call_stops_it_and_exits(tmp_path):
+    proc = start(tmp_path)
+    try:
+        call(proc, "1", "c1", "demo.wait", {}, tmp_path)
+        time.sleep(0.2)
+        send(proc, {"type": "shutdown"})
+        [out] = read_until(proc, lambda m: m["type"] == "outcome")
+        assert out["status"] == "stopped"
+        assert proc.wait(timeout=10) == 0
+    finally:
+        proc.kill()
+
+
+def test_non_object_and_invalid_lines_are_reported_and_survived(tmp_path):
+    proc = start(tmp_path)
+    try:
+        proc.stdin.write("[1]\nnot json\n")
+        proc.stdin.flush()
+        first, second = read_until(proc, lambda m: m["type"] == "error" and "invalid JSON" in m["message"])
+        assert first["code"] == "FLOW_PYTHON_PROTOCOL" and "not a JSON object" in first["message"]
+        assert second["code"] == "FLOW_PYTHON_PROTOCOL" and "requestId" not in second
+        # Still serving.
+        call(proc, "2", "c2", "demo.add", {"a": 1}, tmp_path)
+        assert read_until(proc, lambda m: m["type"] == "outcome")[-1]["status"] == "ok"
+    finally:
+        proc.kill()
+
+
+def test_system_exit_and_nan_fail_the_call_not_the_worker(tmp_path):
+    proc = start(tmp_path)
+    try:
+        call(proc, "1", "c1", "demo.exit", {}, tmp_path)
+        out = read_until(proc, lambda m: m["type"] == "outcome")[-1]
+        assert out["status"] == "fail" and out["reason"] == "SystemExit: 3"
+        call(proc, "2", "c2", "demo.nan", {}, tmp_path)
+        lines = read_until(proc, lambda m: m["type"] == "outcome")
+        assert not any(m["type"] == "output" for m in lines)
+        assert lines[-1]["status"] == "fail" and "ValueError" in lines[-1]["reason"]
+        call(proc, "3", "c3", "demo.add", {"a": 1}, tmp_path)
+        assert read_until(proc, lambda m: m["type"] == "outcome")[-1]["status"] == "ok"
+    finally:
+        proc.kill()
+
+
+def test_none_default_is_optional_and_text_round_trips_as_utf8(tmp_path):
+    proc = start(tmp_path)
+    try:
+        call(proc, "1", "c1", "demo.optional", {}, tmp_path)
+        lines = read_until(proc, lambda m: m["type"] == "outcome")
+        assert lines[-1]["status"] == "ok"
+        assert [m["value"] for m in lines if m["type"] == "output"] == [False]
+        text = "日本語 – ünïcödé ✓"
+        call(proc, "2", "c2", "demo.echo", {"text": text}, tmp_path)
+        lines = read_until(proc, lambda m: m["type"] == "outcome")
+        assert [m["text"] for m in lines if m["type"] == "log"] == [text]
+        assert [m["value"] for m in lines if m["type"] == "output"] == [text]
+    finally:
+        proc.kill()

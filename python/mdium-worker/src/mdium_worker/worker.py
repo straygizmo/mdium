@@ -1,6 +1,7 @@
 """The worker loop: reads requests on stdin, runs stages, writes events on stdout."""
 from __future__ import annotations
 
+import collections
 import importlib
 import json
 import queue
@@ -23,7 +24,9 @@ class Emitter:
         self._lock = threading.Lock()
 
     def __call__(self, message: dict) -> None:
-        line = json.dumps(message, ensure_ascii=False, separators=(",", ":"))
+        # `allow_nan=False`: NaN/Infinity are not JSON; the caller gets a
+        # ValueError (inside a stage it becomes a failed outcome).
+        line = json.dumps(message, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
         with self._lock:
             self._stdout.write(line + "\n")
             self._stdout.flush()
@@ -37,7 +40,10 @@ def _reader(stdin: TextIO, inbox: "queue.Queue[dict | None]") -> None:
         try:
             message = json.loads(raw)
         except json.JSONDecodeError:
-            inbox.put({"type": "__invalid__", "raw": raw})
+            inbox.put({"type": "__invalid__", "raw": raw, "why": "invalid JSON"})
+            continue
+        if not isinstance(message, dict):
+            inbox.put({"type": "__invalid__", "raw": raw, "why": "line is not a JSON object"})
             continue
         inbox.put(message)
     inbox.put(None)
@@ -65,6 +71,9 @@ def _run_call(message: dict, emit: Emitter, cancel: threading.Event) -> None:
         emit(outcome_message(call_id, "stopped"))
     except NeedsApproval as err:
         emit(outcome_message(call_id, "needs_approval", message=err.message))
+    except SystemExit as err:
+        # Reused CLI code calling sys.exit() must not end the worker.
+        emit(outcome_message(call_id, "fail", reason=f"SystemExit: {err.code}"))
     except Exception as err:  # noqa: BLE001 - any stage error becomes a failed outcome
         ctx.log(traceback.format_exc(), level="error")
         emit(outcome_message(call_id, "fail", reason=f"{type(err).__name__}: {err}"))
@@ -85,9 +94,11 @@ def run_loop(module_name: str, stdin: TextIO, stdout: TextIO, stderr: TextIO, de
         return 0
     inbox: "queue.Queue[dict | None]" = queue.Queue()
     threading.Thread(target=_reader, args=(stdin, inbox), daemon=True).start()
+    # Messages a call's watcher held back, handled (in order) before the inbox.
+    backlog: "collections.deque[dict | None]" = collections.deque()
     cancel = threading.Event()
     while True:
-        message = inbox.get()
+        message = backlog.popleft() if backlog else inbox.get()
         if message is None:
             return 0
         kind = message.get("type")
@@ -95,9 +106,10 @@ def run_loop(module_name: str, stdin: TextIO, stdout: TextIO, stderr: TextIO, de
             emit(manifest_message(str(message.get("requestId", "")), module_name, registry.stages()))
         elif kind == "call":
             cancel.clear()
-            # Cancel requests that arrive during the call are read by the reader thread
-            # and handled here: drain the inbox non-blockingly from a helper thread.
+            # Messages that arrive during the call are read by the reader thread;
+            # a helper thread watches for this call's `cancel` and holds the rest.
             stop_watch = threading.Event()
+            held: "list[dict | None]" = []
 
             def watch() -> None:
                 while not stop_watch.is_set():
@@ -106,16 +118,16 @@ def run_loop(module_name: str, stdin: TextIO, stdout: TextIO, stderr: TextIO, de
                     except queue.Empty:
                         continue
                     if pending is None:
+                        # stdin closed: stop the stage; the loop ends after it.
                         cancel.set()
-                        inbox.put(None)
+                        held.append(None)
                         return
                     if pending.get("type") == "cancel" and str(pending.get("callId", "")) == str(message.get("callId", "")):
                         cancel.set()
-                    elif pending.get("type") == "shutdown":
+                        continue
+                    if pending.get("type") == "shutdown":
                         cancel.set()
-                        inbox.put(pending)
-                    else:
-                        inbox.put(pending)
+                    held.append(pending)
 
             watcher = threading.Thread(target=watch, daemon=True)
             watcher.start()
@@ -124,9 +136,12 @@ def run_loop(module_name: str, stdin: TextIO, stdout: TextIO, stderr: TextIO, de
             finally:
                 stop_watch.set()
                 watcher.join()
+                backlog.extend(held)
         elif kind == "cancel":
             pass  # nothing is running
         elif kind == "shutdown":
             return 0
+        elif kind == "__invalid__":
+            emit(error_message(None, PROTOCOL, f"{message.get('why')}: {str(message.get('raw'))[:200]}"))
         else:
             emit(error_message(message.get("requestId"), PROTOCOL, f"unknown message type {kind!r}"))

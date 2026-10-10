@@ -12,6 +12,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--module", required=True, help="module that registers the stages")
     parser.add_argument("--describe", action="store_true", help="print the manifest and exit")
     args = parser.parse_args(argv)
+    # The protocol is UTF-8 with `\n` line ends whatever the locale (also
+    # when run without PYTHONUTF8, e.g. by hand on Windows).
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", newline="\n")
+    if hasattr(sys.stdin, "reconfigure"):
+        sys.stdin.reconfigure(encoding="utf-8")
     return run_loop(args.module, sys.stdin, sys.stdout, sys.stderr, describe_only=args.describe)
 
 

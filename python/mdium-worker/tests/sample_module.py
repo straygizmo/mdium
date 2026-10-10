@@ -1,4 +1,5 @@
 """A module with a few stages, used by the worker-loop tests."""
+import sys
 import time
 
 from mdium_worker import Context, StageFailed, Stopped, stage
@@ -35,3 +36,24 @@ def wait(ctx: Context) -> None:
             raise Stopped()
         time.sleep(0.05)
     ctx.output("done", True)
+
+
+@stage("demo.echo", inputs={"text": {"type": "string", "required": True}}, outputs={"text": {"type": "string"}})
+def echo(ctx: Context, text: str) -> None:
+    ctx.log(text)
+    ctx.output("text", text)
+
+
+@stage("demo.optional", inputs={"x": {"type": "string", "default": None}}, outputs={"got": {"type": "bool"}})
+def optional(ctx: Context, x: "str | None" = None) -> None:
+    ctx.output("got", x is not None)
+
+
+@stage("demo.exit")
+def exits(ctx: Context) -> None:
+    sys.exit(3)
+
+
+@stage("demo.nan")
+def nan(ctx: Context) -> None:
+    ctx.output("x", float("nan"))
