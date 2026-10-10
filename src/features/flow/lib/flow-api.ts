@@ -58,7 +58,9 @@ export const flowApi = {
   /** Runs the manifest's setup steps; progress arrives via `subscribeSetupProgress`. */
   projectSetup: (projectRoot: string, sha256: string) => call<SetupResult>("flow_project_setup", { projectRoot, sha256 }),
   /** Starts the runtime's worker only to read its stage manifest. */
-  runtimeDescribe: (projectRoot: string, runtime: string) => call<Manifest>("flow_runtime_describe", { projectRoot, runtime }),
+  /** Runs project code: `sha256` is the manifest hash (`projectLoad`) whose runtimes the user was shown. */
+  runtimeDescribe: (projectRoot: string, runtime: string, sha256: string) =>
+    call<Manifest>("flow_runtime_describe", { projectRoot, runtime, sha256 }),
 };
 
 /** Subscribes to setup progress; resolves to the unsubscribe function. */

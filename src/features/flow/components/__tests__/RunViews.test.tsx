@@ -173,6 +173,32 @@ describe("run formatting", () => {
     expect(describeReason(ft, { code: "SOMETHING_NEW" })).toBe("SOMETHING_NEW");
   });
 
+  it("uses the detail wording of python reasons only when a detail is present", () => {
+    const ft = i18n.getFixedT("en", "flow");
+    expect(describeReason(ft, { code: "FLOW_PYTHON_INPUT_INVALID", params: { input: "n", reason: "type" } })).toBe(
+      'Input "n" is invalid (type).',
+    );
+    expect(
+      describeReason(ft, { code: "FLOW_PYTHON_INPUT_INVALID", params: { entry: "a.b", detail: "n: missing" } }),
+    ).toBe('Stage "a.b" rejected its inputs: n: missing');
+    expect(describeReason(ft, { code: "FLOW_PYTHON_ENTRY_UNKNOWN", params: { runtime: "r", entry: "a.b" } })).toBe(
+      'Stage "a.b" is not provided by the runtime.',
+    );
+    expect(
+      describeReason(ft, { code: "FLOW_PYTHON_PROTOCOL", params: { code: "WEIRD", detail: "odd" } }),
+    ).toBe("The Python worker reported an error (WEIRD): odd");
+    expect(describeReason(ft, { code: "FLOW_PYTHON_PROTOCOL", params: { detail: "" } })).toBe(
+      "The Python worker sent an invalid message.",
+    );
+    expect(describeReason(ft, { code: "FLOW_RUNTIME_UNKNOWN", params: { runtime: "r" } })).toBe(
+      'Runtime "r" is not declared in project.yaml.',
+    );
+    // Reasons without a `_detail` variant keep their wording.
+    expect(describeReason(ft, { code: "FLOW_COMMAND_EXIT_CODE", params: { detail: "3" } })).toBe(
+      "The command exited with code 3.",
+    );
+  });
+
   it("describes errors with details and locations", () => {
     const ft = i18n.getFixedT("en", "flow");
     const described = describeError(ft, {

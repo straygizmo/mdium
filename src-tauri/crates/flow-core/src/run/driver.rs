@@ -3065,16 +3065,15 @@ impl ProtocolCursor {
 }
 
 /// The reason of a call that failed: its `outcome` (`FLOW_NODE_FAILED`) or
-/// an `error` the worker answered with. Worker codes other than the known
-/// `FLOW_PYTHON_*` ones become `FLOW_PYTHON_PROTOCOL` (original in `code`),
-/// so every reason has a translation.
+/// an `error` the worker answered with. Other worker codes than the input
+/// and entry ones become `FLOW_PYTHON_PROTOCOL` with the worker's code in
+/// `code`, so every reason has a translation.
 fn call_failure_reason(error_code: Option<&str>, detail: Option<String>, entry: &str) -> Reason {
     let mut reason = match error_code {
         None => Reason::new(FLOW_NODE_FAILED),
         Some(code @ (FLOW_PYTHON_INPUT_INVALID | FLOW_PYTHON_ENTRY_UNKNOWN)) => {
             Reason::new(code).with("entry", entry)
         }
-        Some(FLOW_PYTHON_PROTOCOL) => Reason::new(FLOW_PYTHON_PROTOCOL),
         Some(code) => Reason::new(FLOW_PYTHON_PROTOCOL).with("code", code),
     };
     if let Some(detail) = detail {

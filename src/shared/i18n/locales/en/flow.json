@@ -176,9 +176,13 @@
   },
   "reason": {
     "FLOW_RUNTIME_START_FAILED": "The Python runtime could not be started: {{message}}",
+    "FLOW_RUNTIME_UNKNOWN": "Runtime \"{{runtime}}\" is not declared in project.yaml.",
     "FLOW_PYTHON_ENTRY_UNKNOWN": "Stage \"{{entry}}\" is not provided by the runtime.",
+    "FLOW_PYTHON_ENTRY_UNKNOWN_detail": "Stage \"{{entry}}\" is not provided by the runtime: {{detail}}",
     "FLOW_PYTHON_INPUT_INVALID": "Input \"{{input}}\" is invalid ({{reason}}).",
+    "FLOW_PYTHON_INPUT_INVALID_detail": "Stage \"{{entry}}\" rejected its inputs: {{detail}}",
     "FLOW_PYTHON_PROTOCOL": "The Python worker sent an invalid message.",
+    "FLOW_PYTHON_PROTOCOL_detail": "The Python worker reported an error ({{code}}): {{detail}}",
     "FLOW_PYTHON_WORKER_EXITED": "The Python worker exited during the stage.",
     "FLOW_NODE_FAILED": "Node \"{{node}}\" failed ({{cause}}).",
     "FLOW_NODE_TIMEOUT": "The node timed out.",

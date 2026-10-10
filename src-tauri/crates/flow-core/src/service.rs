@@ -4,7 +4,7 @@
 
 use crate::load::{self, flow_kind_of, FlowKind, FlowReport, FlowSummary, PathProblem};
 use crate::parse::FlowFormat;
-use crate::project::{load_project, load_project_bytes, ProjectReport, PROJECT_FILE};
+use crate::project::{load_project_bytes, ProjectReport, PROJECT_FILE};
 use crate::run::worker::{
     describe_runtime, worker_spec, Manifest, PipedWorkerLauncher, FLOW_RUNTIME_START_FAILED,
 };
@@ -196,17 +196,44 @@ impl FlowService {
     }
 
     /// Starts the runtime's worker only to read its manifest (spec 3.4).
+    /// This runs project code, so — like setup — `sha256` must be the hash
+    /// of the manifest content the user was shown (`project_load`).
     pub fn runtime_describe(
         &self,
         project_root_arg: &str,
         runtime: &str,
+        sha256: &str,
     ) -> Result<Manifest, FlowCommandError> {
         let root = project_root(project_root_arg)?;
-        let project = match load_project(&root) {
-            Some(report) if report.errors.is_empty() => report.project,
-            _ => None,
+        let (bytes, report) = load_project_bytes(&root).ok_or_else(|| {
+            FlowCommandError::new(FLOW_PROJECT_REQUIRED, "no .mdium/project.yaml")
+        })?;
+        if !report.errors.is_empty() {
+            // The same per-issue details as a run start.
+            let mut err = FlowCommandError::new(
+                FLOW_PROJECT_INVALID,
+                ".mdium/project.yaml has validation errors",
+            );
+            err.details = report
+                .errors
+                .iter()
+                .map(|i| {
+                    Reason {
+                        code: i.code.clone(),
+                        params: i.params.clone(),
+                    }
+                    .with("path", i.path.clone())
+                })
+                .collect();
+            return Err(err);
         }
-        .ok_or_else(|| {
+        if sha256_hex(&bytes) != sha256 {
+            return Err(FlowCommandError::new(
+                FLOW_FILE_CHANGED,
+                "project.yaml changed since it was reviewed",
+            ));
+        }
+        let project = report.project.ok_or_else(|| {
             FlowCommandError::new(FLOW_PROJECT_REQUIRED, "no valid .mdium/project.yaml")
         })?;
         let def = project
@@ -217,13 +244,13 @@ impl FlowService {
             .join(".mdium/flow-runs/.describe")
             .join(crate::fsutil::new_id());
         let start_failed = |r: Reason| {
-            FlowCommandError::new(
-                FLOW_RUNTIME_START_FAILED,
-                r.params
-                    .get("message")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(""),
-            )
+            let detail = r
+                .params
+                .get("message")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+                .unwrap_or_else(|| r.code.clone());
+            FlowCommandError::new(FLOW_RUNTIME_START_FAILED, detail)
         };
         let result = worker_spec(&root, runtime, def, &scratch, &[])
             .map_err(start_failed)
@@ -524,6 +551,7 @@ struct RootArgs {
 struct DescribeArgs {
     project_root: String,
     runtime: String,
+    sha256: String,
 }
 
 #[derive(Deserialize)]
@@ -639,7 +667,7 @@ impl FlowService {
             }
             "flow_runtime_describe" => {
                 let a: DescribeArgs = args(value)?;
-                reply(self.runtime_describe(&a.project_root, &a.runtime)?)
+                reply(self.runtime_describe(&a.project_root, &a.runtime, &a.sha256)?)
             }
             "flow_command_review" => {
                 let a: PathArgs = args(value)?;
@@ -1086,22 +1114,35 @@ mod tests {
         let svc = service(tmp.path());
         let root = tmp.path().to_str().unwrap();
         assert_eq!(
-            svc.runtime_describe(root, "r").unwrap_err().code,
+            svc.runtime_describe(root, "r", "beef").unwrap_err().code,
             FLOW_PROJECT_REQUIRED
         );
         fs::create_dir_all(tmp.path().join(".mdium")).unwrap();
+        // A manifest with errors: FLOW_PROJECT_INVALID with the issues (M10).
         fs::write(
             tmp.path().join(".mdium/project.yaml"),
-            "schemaVersion: 1\nid: p\nname: P\nruntimes:\n  r: { kind: python, python: nope, module: m }\n",
+            "schemaVersion: 1\nid: Bad Id\nname: P\n",
         )
         .unwrap();
+        let err = svc.runtime_describe(root, "r", "beef").unwrap_err();
+        assert_eq!(err.code, FLOW_PROJECT_INVALID);
+        assert_eq!(err.details[0].code, crate::issues::FLOW_INVALID_ID);
+        let text = "schemaVersion: 1\nid: p\nname: P\nruntimes:\n  r: { kind: python, python: nope, module: m }\n";
+        fs::write(tmp.path().join(".mdium/project.yaml"), text).unwrap();
+        let sha = sha256_hex(text.as_bytes());
+        // I7: describe runs project code, so it needs the shown manifest's hash.
         assert_eq!(
-            svc.runtime_describe(root, "zzz").unwrap_err().code,
+            svc.runtime_describe(root, "r", "beef").unwrap_err().code,
+            FLOW_FILE_CHANGED
+        );
+        assert_eq!(
+            svc.runtime_describe(root, "zzz", &sha).unwrap_err().code,
             crate::issues::FLOW_RUNTIME_UNKNOWN
         );
-        // No interpreter at `nope`: the launcher fails before any process starts.
-        let err = svc.runtime_describe(root, "r").unwrap_err();
+        // No interpreter at `nope`: resolution fails before any process starts.
+        let err = svc.runtime_describe(root, "r", &sha).unwrap_err();
         assert_eq!(err.code, crate::run::worker::FLOW_RUNTIME_START_FAILED);
+        assert!(err.message.contains("no interpreter found"), "{}", err.message);
         let describe_dir = tmp.path().join(".mdium/flow-runs/.describe");
         assert!(
             !describe_dir.exists() || fs::read_dir(&describe_dir).unwrap().next().is_none(),
@@ -1110,10 +1151,17 @@ mod tests {
         let via_call = svc
             .call(
                 "flow_runtime_describe",
-                serde_json::json!({ "projectRoot": root, "runtime": "zzz" }),
+                serde_json::json!({ "projectRoot": root, "runtime": "zzz", "sha256": sha }),
             )
             .unwrap_err();
         assert_eq!(via_call.code, crate::issues::FLOW_RUNTIME_UNKNOWN);
+        let no_sha = svc
+            .call(
+                "flow_runtime_describe",
+                serde_json::json!({ "projectRoot": root, "runtime": "r" }),
+            )
+            .unwrap_err();
+        assert_eq!(no_sha.code, FLOW_BAD_ARGS);
     }
 
     #[test]

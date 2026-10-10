@@ -82,8 +82,12 @@ pub async fn flow_runtime_describe(
     state: tauri::State<'_, FlowServiceState>,
     project_root: String,
     runtime: String,
+    sha256: String,
 ) -> Result<Manifest, FlowCommandError> {
-    with_service(state, move |s| s.runtime_describe(&project_root, &runtime)).await
+    with_service(state, move |s| {
+        s.runtime_describe(&project_root, &runtime, &sha256)
+    })
+    .await
 }
 
 #[derive(Debug, Clone, Serialize)]

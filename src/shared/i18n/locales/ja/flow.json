@@ -176,9 +176,13 @@
   },
   "reason": {
     "FLOW_RUNTIME_START_FAILED": "Python ランタイムを起動できませんでした: {{message}}",
+    "FLOW_RUNTIME_UNKNOWN": "ランタイム「{{runtime}}」は project.yaml に宣言されていません。",
     "FLOW_PYTHON_ENTRY_UNKNOWN": "ステージ「{{entry}}」はランタイムに用意されていません。",
+    "FLOW_PYTHON_ENTRY_UNKNOWN_detail": "ステージ「{{entry}}」はランタイムに用意されていません: {{detail}}",
     "FLOW_PYTHON_INPUT_INVALID": "入力「{{input}}」が不正です（{{reason}}）。",
+    "FLOW_PYTHON_INPUT_INVALID_detail": "ステージ「{{entry}}」が入力を受け付けませんでした: {{detail}}",
     "FLOW_PYTHON_PROTOCOL": "Python ワーカーが不正なメッセージを送信しました。",
+    "FLOW_PYTHON_PROTOCOL_detail": "Python ワーカーがエラーを報告しました（{{code}}）: {{detail}}",
     "FLOW_PYTHON_WORKER_EXITED": "ステージの実行中に Python ワーカーが終了しました。",
     "FLOW_NODE_FAILED": "ノード「{{node}}」が失敗しました（{{cause}}）。",
     "FLOW_NODE_TIMEOUT": "ノードがタイムアウトしました。",
