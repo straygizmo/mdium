@@ -48,3 +48,6 @@ resources/claude-sidecar/
 resources/agent-runner/
 
 slides/
+
+# Superpowers SDD scratch (ledger, briefs, review packages)
+.superpowers/sdd/
