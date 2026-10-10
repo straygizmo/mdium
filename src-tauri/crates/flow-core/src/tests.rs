@@ -2,7 +2,7 @@
 
 use crate::issues::*;
 use crate::load::{
-    check_content, check_file, check_text, list_flows, resolve_flow_path, PathProblem,
+    check_content, check_file, check_text, list_flows, resolve_flow_path, FlowKind, PathProblem,
     MAX_FLOW_FILE_BYTES,
 };
 use crate::model::*;
@@ -957,7 +957,7 @@ fn content_is_checked_by_file_name_format() {
 // ------------------------------------------------------------ listing
 
 #[test]
-fn list_flows_summarizes_flow_files_only() {
+fn list_flows_groups_entries_and_lib_parts() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     assert!(
@@ -967,24 +967,49 @@ fn list_flows_summarizes_flow_files_only() {
     let flows = root.join(".mdium/flows");
     write(
         &flows.join("b.flow.yaml"),
-        &flow("nodes:\n  - { id: a, kind: command, run: [x] }\n"),
+        &flow("description: Entry B\nparams: { n: { type: number, default: 1 } }\nnodes:\n  - { id: a, kind: command, run: [x] }\noutputs: { total: \"${{ nodes.a.outputs.n }}\" }\n"),
     );
     write(&flows.join("a.flow.json"), "{ not json");
     write(&flows.join("notes.md"), "ignored");
     write(&flows.join("nested/c.flow.yaml"), "ignored: true");
-    let list = list_flows(root).unwrap();
-    assert_eq!(list.len(), 2);
-    assert_eq!(list[0].path, ".mdium/flows/a.flow.json");
-    assert_eq!((list[0].id.clone(), list[0].error_count), (None, 1));
-    assert_eq!(list[1].path, ".mdium/flows/b.flow.yaml");
-    assert_eq!(
-        (
-            list[1].id.as_deref(),
-            list[1].name.as_deref(),
-            list[1].error_count
-        ),
-        (Some("t"), Some("T"), 0)
+    write(
+        &flows.join("lib/part.flow.yaml"),
+        &flow("nodes:\n  - { id: a, kind: command, run: [x] }\n"),
     );
+    write(
+        &flows.join("lib/deep/inner.flow.yaml"),
+        &flow("nodes:\n  - { id: a, kind: command, run: [x] }\n"),
+    );
+    write(
+        &root.join(".mdium/project.yaml"),
+        "schemaVersion: 1\nid: p\nname: P\nflows: { main: flows/b.flow.yaml }\n",
+    );
+    let list = list_flows(root).unwrap();
+    let paths: Vec<&str> = list.iter().map(|s| s.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        vec![
+            ".mdium/flows/a.flow.json",
+            ".mdium/flows/b.flow.yaml",
+            ".mdium/flows/lib/deep/inner.flow.yaml",
+            ".mdium/flows/lib/part.flow.yaml",
+        ]
+    );
+    assert_eq!(
+        (list[0].kind, list[0].id.clone(), list[0].error_count),
+        (FlowKind::Entry, None, 1)
+    );
+    let b = &list[1];
+    assert_eq!(
+        (b.kind, b.id.as_deref(), b.role.as_deref()),
+        (FlowKind::Entry, Some("t"), Some("main"))
+    );
+    assert_eq!(b.description.as_deref(), Some("Entry B"));
+    assert_eq!(b.params.keys().cloned().collect::<Vec<_>>(), vec!["n"]);
+    assert_eq!(b.outputs, vec!["total"]);
+    assert_eq!(list[2].kind, FlowKind::Part);
+    assert_eq!(list[3].kind, FlowKind::Part);
+    assert!(list[3].role.is_none());
 }
 
 #[test]

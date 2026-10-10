@@ -416,14 +416,42 @@ fn invalid_ref(path: &str, reference: &str, reason: &str) -> FlowIssue {
         .with("ref", reference)
 }
 
+/// Entry flows run directly; parts (`.mdium/flows/lib/**`) are called by others.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FlowKind {
+    Entry,
+    Part,
+}
+
+pub const LIB_DIR_PREFIX: &str = ".mdium/flows/lib/";
+
+/// Kind of a flow by its project-relative display path.
+pub fn flow_kind_of(display_path: &str) -> FlowKind {
+    if display_path.starts_with(LIB_DIR_PREFIX) {
+        FlowKind::Part
+    } else {
+        FlowKind::Entry
+    }
+}
+
 /// One entry of [`list_flows`].
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FlowSummary {
     /// Project-relative path with `/` separators.
     pub path: String,
+    pub kind: FlowKind,
+    /// Role from the manifest's `flows` (e.g. `main`), when listed there.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
     pub id: Option<String>,
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// The signature: declared params and output keys (empty when not decoded).
+    pub params: BTreeMap<String, ParamDef>,
+    pub outputs: Vec<String>,
     pub error_count: usize,
     pub warning_count: usize,
 }
@@ -437,8 +465,9 @@ pub fn relative_display(project_root: &Path, file: &Path) -> String {
         .join("/")
 }
 
-/// Lists and checks the flow files in `<root>/.mdium/flows/` (not
-/// recursive; links are skipped). A missing directory yields an empty list.
+/// Lists and checks the flow files in `<root>/.mdium/flows/` (entries) and
+/// `<root>/.mdium/flows/lib/**` (parts); links are skipped; other
+/// sub-directories are ignored. A missing directory yields an empty list.
 pub fn list_flows(project_root: &Path) -> std::io::Result<Vec<FlowSummary>> {
     let dir = project_root.join(FLOWS_DIR);
     for sub in [project_root.join(".mdium"), dir.clone()] {
@@ -450,28 +479,54 @@ pub fn list_flows(project_root: &Path) -> std::io::Result<Vec<FlowSummary>> {
         }
     }
     let mut files = Vec::new();
-    for entry in std::fs::read_dir(&dir)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if file_type.is_file() && FlowFormat::from_file_name(&name).is_some() {
-            files.push(entry.path());
-        }
+    collect_flow_files(&dir, false, &mut files)?;
+    let lib = dir.join("lib");
+    if matches!(std::fs::symlink_metadata(&lib), Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink())
+    {
+        collect_flow_files(&lib, true, &mut files)?;
     }
     files.sort();
+    let roles = crate::project::load_project(project_root)
+        .and_then(|report| report.project)
+        .map(|project| crate::project::flow_roles(&project))
+        .unwrap_or_default();
     Ok(files
         .iter()
         .map(|file| {
             let report = check_file(project_root, file);
+            let path = relative_display(project_root, file);
+            let flow = report.flow.as_ref();
             FlowSummary {
-                path: relative_display(project_root, file),
-                id: report.flow.as_ref().map(|f| f.id.clone()),
-                name: report.flow.as_ref().map(|f| f.name.clone()),
+                kind: flow_kind_of(&path),
+                role: roles.get(&path).cloned(),
+                id: flow.map(|f| f.id.clone()),
+                name: flow.map(|f| f.name.clone()),
+                description: flow.and_then(|f| f.description.clone()),
+                params: flow.map(|f| f.params.clone()).unwrap_or_default(),
+                outputs: flow
+                    .map(|f| f.outputs.keys().cloned().collect())
+                    .unwrap_or_default(),
                 error_count: report.errors.len(),
                 warning_count: report.warnings.len(),
+                path,
             }
         })
         .collect())
+}
+
+/// Flow files directly in `dir`, descending into sub-directories when `recursive`.
+fn collect_flow_files(dir: &Path, recursive: bool, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if file_type.is_file() && FlowFormat::from_file_name(&name).is_some() {
+            out.push(entry.path());
+        } else if recursive && file_type.is_dir() {
+            collect_flow_files(&entry.path(), true, out)?;
+        }
+    }
+    Ok(())
 }
 
 /// Resolves a project-relative flow path given by the UI: it must stay in

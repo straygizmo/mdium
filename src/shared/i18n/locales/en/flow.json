@@ -199,6 +199,7 @@
     "FLOW_FILE_CHANGED": "The flow file changed after it was reviewed. Review it again.",
     "FLOW_FILE_INVALID": "The flow has validation errors.",
     "FLOW_COMMANDS_UNCONFIRMED": "The commands of this flow were not confirmed on this machine.",
+    "FLOW_RUN_NOT_ENTRY": "This flow is a part (under lib/) and cannot be started directly.",
     "FLOW_RUN_NOT_RUNNABLE": "This flow uses features that cannot run yet.",
     "FLOW_PARAMS_INVALID": "Some parameters are invalid.",
     "FLOW_RUN_NOT_FOUND": "The run was not found.",

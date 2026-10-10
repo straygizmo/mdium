@@ -199,6 +199,7 @@
     "FLOW_FILE_CHANGED": "確認した後にフローファイルが変更されました。もう一度確認してください。",
     "FLOW_FILE_INVALID": "フローに検証エラーがあります。",
     "FLOW_COMMANDS_UNCONFIRMED": "このフローのコマンドはこのマシンで確認されていません。",
+    "FLOW_RUN_NOT_ENTRY": "このフローは部品（lib/ 配下）のため、直接は実行できません。",
     "FLOW_RUN_NOT_RUNNABLE": "このフローはまだ実行できない機能を使っています。",
     "FLOW_PARAMS_INVALID": "引数に誤りがあります。",
     "FLOW_RUN_NOT_FOUND": "実行が見つかりません。",

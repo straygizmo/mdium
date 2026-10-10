@@ -70,8 +70,8 @@ describe("flow views", () => {
 
   it("lists flow files and selects one", async () => {
     invoke.mockResolvedValueOnce([
-      { path: PATH, id: "doc-digest", name: "Document digest", errorCount: 0, warningCount: 1 },
-      { path: ".mdium/flows/broken.flow.yaml", id: null, name: null, errorCount: 2, warningCount: 0 },
+      { path: PATH, kind: "entry", params: {}, outputs: [], id: "doc-digest", name: "Document digest", errorCount: 0, warningCount: 1 },
+      { path: ".mdium/flows/broken.flow.yaml", kind: "entry", params: {}, outputs: [], id: null, name: null, errorCount: 2, warningCount: 0 },
     ]);
     await act(async () => root.render(<FlowPanel />));
     await waitFor(() => expect(container.textContent).toContain("Document digest"));
@@ -97,6 +97,7 @@ describe("flow views", () => {
     const result: FlowLoadResult = {
       path: PATH,
       format: "yaml",
+      kind: "entry",
       flow: docDigest(),
       errors: [],
       warnings: [{ code: "FLOW_UNKNOWN_KEY", path: "labels", params: { key: "labels" } }],
@@ -124,6 +125,7 @@ describe("flow views", () => {
     invoke.mockResolvedValue({
       path: PATH,
       format: "yaml",
+      kind: "entry",
       flow: null,
       errors: [{ code: "FLOW_PARSE_FAILED", path: "", params: { message: "bad", line: 3, column: 7 } }],
       warnings: [],

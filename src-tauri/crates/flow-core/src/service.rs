@@ -2,7 +2,7 @@
 //! exposes as a Tauri command and the flow server exposes over HTTP, as
 //! plain methods on one object (spec 2026-10-10, 10.1 "FlowService").
 
-use crate::load::{self, FlowReport, FlowSummary, PathProblem};
+use crate::load::{self, flow_kind_of, FlowKind, FlowReport, FlowSummary, PathProblem};
 use crate::parse::FlowFormat;
 use crate::run::engine::{CommandReview, EngineError, FlowEngine, RunSnapshot, RunSummary};
 use crate::run::model::Reason;
@@ -69,6 +69,7 @@ pub struct FlowLoadResult {
     /// Project-relative path with `/` separators.
     pub path: String,
     pub format: FlowFormat,
+    pub kind: FlowKind,
     #[serde(flatten)]
     pub report: FlowReport,
 }
@@ -157,8 +158,10 @@ impl FlowService {
     ) -> Result<FlowLoadResult, FlowCommandError> {
         let root = project_root(project_root_arg)?;
         let file = flow_file(&root, path, true)?;
+        let path = load::relative_display(&root, &file);
         Ok(FlowLoadResult {
-            path: load::relative_display(&root, &file),
+            kind: flow_kind_of(&path),
+            path,
             format: format_of(&file),
             report: load::check_file(&root, &file),
         })
@@ -173,8 +176,10 @@ impl FlowService {
     ) -> Result<FlowLoadResult, FlowCommandError> {
         let root = project_root(project_root_arg)?;
         let file = flow_file(&root, path, false)?;
+        let path = load::relative_display(&root, &file);
         Ok(FlowLoadResult {
-            path: load::relative_display(&root, &file),
+            kind: flow_kind_of(&path),
+            path,
             format: format_of(&file),
             report: load::check_content(&root, &file, content),
         })
@@ -778,5 +783,31 @@ mod tests {
             let code = svc.call(name, serde_json::json!({})).unwrap_err().code;
             assert_ne!(code, FLOW_UNKNOWN_COMMAND, "{name}");
         }
+    }
+
+    #[test]
+    fn parts_cannot_be_started() {
+        use crate::run::engine::FLOW_RUN_NOT_ENTRY;
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = service(tmp.path());
+        let root = tmp.path().to_str().unwrap();
+        fs::create_dir_all(tmp.path().join(".mdium/flows/lib")).unwrap();
+        fs::write(tmp.path().join(".mdium/flows/lib/p.flow.yaml"), OK).unwrap();
+        let review = svc
+            .command_review(root, ".mdium/flows/lib/p.flow.yaml")
+            .unwrap();
+        svc.confirm_commands(root, ".mdium/flows/lib/p.flow.yaml", &review.sha256)
+            .unwrap();
+        let err = svc
+            .run_start(
+                root,
+                ".mdium/flows/lib/p.flow.yaml",
+                &BTreeMap::new(),
+                &review.sha256,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, FLOW_RUN_NOT_ENTRY);
+        let loaded = svc.load_flow(root, ".mdium/flows/lib/p.flow.yaml").unwrap();
+        assert_eq!(loaded.kind, crate::load::FlowKind::Part);
     }
 }

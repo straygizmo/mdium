@@ -230,6 +230,7 @@ export interface FlowLoadResult {
   /** Project-relative path with `/` separators. */
   path: string;
   format: FlowFormat;
+  kind: FlowKind;
   /** `null` when the file could not be parsed or decoded. */
   flow: FlowDef | null;
   errors: FlowIssue[];
@@ -237,10 +238,18 @@ export interface FlowLoadResult {
 }
 
 /** One entry of `flow_list`. */
+export type FlowKind = "entry" | "part";
+
 export interface FlowSummary {
   path: string;
+  kind: FlowKind;
+  /** Role from the manifest's `flows` (e.g. `main`). */
+  role?: string;
   id: string | null;
   name: string | null;
+  description?: string;
+  params: Record<string, FlowParamDef>;
+  outputs: string[];
   errorCount: number;
   warningCount: number;
 }

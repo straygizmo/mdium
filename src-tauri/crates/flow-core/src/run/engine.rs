@@ -30,6 +30,7 @@ pub const FLOW_FILE_NOT_FOUND: &str = "FLOW_FILE_NOT_FOUND";
 pub const FLOW_FILE_CHANGED: &str = "FLOW_FILE_CHANGED";
 pub const FLOW_FILE_INVALID: &str = "FLOW_FILE_INVALID";
 pub const FLOW_COMMANDS_UNCONFIRMED: &str = "FLOW_COMMANDS_UNCONFIRMED";
+pub const FLOW_RUN_NOT_ENTRY: &str = "FLOW_RUN_NOT_ENTRY";
 pub const FLOW_RUN_NOT_RUNNABLE: &str = "FLOW_RUN_NOT_RUNNABLE";
 pub const FLOW_PARAMS_INVALID: &str = "FLOW_PARAMS_INVALID";
 pub const FLOW_RUN_NOT_FOUND: &str = "FLOW_RUN_NOT_FOUND";
@@ -537,6 +538,12 @@ impl FlowEngine {
     ) -> Result<RunSummary> {
         self.attach(root)?;
         let bundle = load_bundle(root, rel)?;
+        if crate::load::flow_kind_of(&bundle.display) == crate::load::FlowKind::Part {
+            return Err(EngineError::new(
+                FLOW_RUN_NOT_ENTRY,
+                "flows under .mdium/flows/lib/ are parts and cannot be started directly",
+            ));
+        }
         let actual = bundle.hash();
         if actual != sha256 {
             return Err(EngineError::new(
