@@ -9,9 +9,12 @@ use crate::run::store::{RunMeta, RunStore, RUN_SCHEMA_VERSION};
 use crate::run::test_helper::{
     detached_launcher, fake_worker_launcher, helper_argv, helper_env, process_alive,
 };
-use crate::run::worker::WorkerLauncher;
+use crate::run::worker::{
+    WorkerLauncher, FLOW_PYTHON_ENTRY_UNKNOWN, FLOW_PYTHON_INPUT_INVALID, FLOW_PYTHON_WORKER_EXITED,
+};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -53,7 +56,7 @@ impl ApprovalNotifier for Notifier {
 }
 
 struct Fixture {
-    _tmp: tempfile::TempDir,
+    _tmp: Arc<tempfile::TempDir>,
     root: PathBuf,
     config: PathBuf,
     engine: FlowEngine,
@@ -108,7 +111,7 @@ fn fixture_with_worker(script: Value) -> Fixture {
         fake_worker_launcher(script),
     );
     Fixture {
-        _tmp: tmp,
+        _tmp: Arc::new(tmp),
         root,
         config,
         engine,
@@ -202,6 +205,68 @@ impl Fixture {
 
     fn events(&self, run_id: &str) -> Vec<FlowEvent> {
         RunStore::new(&self.root).read_events(run_id).unwrap()
+    }
+
+    fn engine_store(&self) -> RunStore {
+        RunStore::new(&self.root)
+    }
+
+    /// The pid the fake worker of `runtime` wrote at start (waits for the file).
+    fn worker_pid(&self, run_id: &str, runtime: &str) -> u32 {
+        let path = self
+            .engine_store()
+            .run_dir(run_id)
+            .unwrap()
+            .join("runtimes")
+            .join(runtime)
+            .join("pid");
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Some(pid) = fs::read_to_string(&path)
+                .ok()
+                .and_then(|t| t.trim().parse().ok())
+            {
+                return pid;
+            }
+            if Instant::now() > deadline {
+                panic!("no worker pid file at {}", path.display());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// `describe` requests handled by every fake worker of every run.
+    fn worker_describe_count(&self) -> usize {
+        let mut count = 0;
+        let runs = self.root.join(".mdium/flow-runs");
+        for run in fs::read_dir(&runs).into_iter().flatten().flatten() {
+            let runtimes = run.path().join("runtimes");
+            for runtime in fs::read_dir(&runtimes).into_iter().flatten().flatten() {
+                if let Ok(text) = fs::read_to_string(runtime.path().join("describes.log")) {
+                    count += text.lines().filter(|l| !l.trim().is_empty()).count();
+                }
+            }
+        }
+        count
+    }
+
+    /// A new engine over the same project (an app restart) whose fake
+    /// workers run `script`.
+    fn reopen(&self, script: Value) -> Fixture {
+        let engine = make_engine_with_worker(
+            &self.config,
+            self.sink.clone(),
+            self.notifier.clone(),
+            fake_worker_launcher(script),
+        );
+        Fixture {
+            _tmp: self._tmp.clone(),
+            root: self.root.clone(),
+            config: self.config.clone(),
+            engine,
+            sink: self.sink.clone(),
+            notifier: self.notifier.clone(),
+        }
     }
 }
 
@@ -2267,4 +2332,355 @@ fn manual_check_sample_runs_end_to_end() {
         .log(&f.root, &run_id, "publish", 1, "stdout", 1000)
         .unwrap()
         .contains("published"));
+}
+
+// ------------------------------------------------------------ python nodes
+
+/// A manifest declaring runtime `r` (the fake launcher ignores the interpreter).
+fn write_manifest(root: &Path) {
+    let path = root.join(".mdium/project.yaml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        &path,
+        "schemaVersion: 1\nid: p\nname: P\nruntimes:\n  r: { kind: python, python: nope, module: m }\n",
+    )
+    .unwrap();
+}
+
+fn py(id: &str, entry: &str, with: Value) -> Value {
+    json!({ "id": id, "kind": "python", "runtime": "r", "entry": entry, "with": with })
+}
+
+fn stage(name: &str, inputs: Value) -> Value {
+    json!({ "name": name, "inputs": inputs, "outputs": {} })
+}
+
+fn item(v: Value) -> Value {
+    json!({ "emit": v })
+}
+
+#[test]
+fn python_node_runs_a_stage_and_records_events() {
+    let script = json!({
+        "stages": [stage("a.ok", json!({ "n": { "type": "number", "required": true }, "t": { "type": "string", "default": "x" } }))],
+        "behaviour": { "a.ok": [
+            item(json!({ "type": "progress", "text": "half", "fraction": 0.5 })),
+            { "log": { "level": "info", "text": "hello" } },
+            item(json!({ "type": "output", "key": "sum", "value": 3 })),
+            item(json!({ "type": "cost", "usd": 0.5, "kind": "actual" })),
+            item(json!({ "type": "artifact", "path": "out.txt", "label": "out", "mediaType": "text/plain" })),
+            { "outcome": { "status": "ok" } }
+        ] }
+    });
+    let f = fixture_with_worker(script);
+    write_manifest(&f.root);
+    let rel = write_flow(
+        &f.root,
+        "p",
+        json!({ "params": { "n": { "type": "number" } } }),
+        vec![py("s", "a.ok", json!({ "n": "${{ params.n }}" }))],
+        vec![],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({ "n": 3 }));
+    f.wait_settled(&run_id, RunStatus::Completed);
+    let snap = f.snapshot(&run_id);
+    let s = node(&snap, "s");
+    assert_eq!(s.status, NodeStatus::Succeeded);
+    assert_eq!(s.outputs["sum"], 3);
+    assert!((s.cost.actual - 0.5).abs() < 1e-9);
+    assert_eq!(s.artifacts[0].label.as_deref(), Some("out"));
+    let dir = f.engine_store().node_attempt_dir(&run_id, "s", 1).unwrap();
+    let inputs: Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("inputs.json")).unwrap()).unwrap();
+    assert_eq!(inputs, json!({ "n": 3, "t": "x" }));
+    let events = fs::read_to_string(dir.join("events.jsonl")).unwrap();
+    assert!(events.contains("\"type\":\"output\"") && !events.contains("callId"));
+    assert!(fs::read_to_string(dir.join("stdout.log"))
+        .unwrap()
+        .contains("[info] hello"));
+    assert!(f
+        .root
+        .join(".mdium/flow-runs")
+        .join(&run_id)
+        .join("runtimes/r/stderr.log")
+        .exists());
+}
+
+#[test]
+fn stage_failure_unknown_entry_and_invalid_inputs_fail_the_node() {
+    let script = json!({
+        "stages": [stage("a.fail", json!({})), stage("a.num", json!({ "n": { "type": "number", "required": true } }))],
+        "behaviour": { "a.fail": [ { "outcome": { "status": "fail", "reason": "boom" } } ] }
+    });
+    let f = fixture_with_worker(script);
+    write_manifest(&f.root);
+    let rel = write_flow(
+        &f.root,
+        "p",
+        json!({}),
+        vec![py("a", "a.fail", json!({}))],
+        vec![],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    f.wait_settled(&run_id, RunStatus::Failed);
+    let r = node(&f.snapshot(&run_id), "a").reason.clone().unwrap();
+    assert_eq!(r.code, FLOW_NODE_FAILED);
+    assert_eq!(r.params["detail"], "boom");
+
+    let rel = write_flow(
+        &f.root,
+        "q",
+        json!({}),
+        vec![py("u", "a.nope", json!({}))],
+        vec![],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    f.wait_settled(&run_id, RunStatus::Failed);
+    assert_eq!(
+        node(&f.snapshot(&run_id), "u")
+            .reason
+            .as_ref()
+            .unwrap()
+            .code,
+        FLOW_PYTHON_ENTRY_UNKNOWN
+    );
+
+    // Review Focus 5: a wrong input type fails before the call; the worker stays usable.
+    let rel = write_flow(
+        &f.root,
+        "w",
+        json!({}),
+        vec![
+            py("i", "a.num", json!({ "n": "3" })),
+            py("ok", "a.fail", json!({})),
+        ],
+        vec![json!({ "from": "i", "to": "ok", "port": "failure" })],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    f.wait_settled(&run_id, RunStatus::Failed);
+    let snap = f.snapshot(&run_id);
+    assert_eq!(
+        node(&snap, "i").reason.as_ref().unwrap().code,
+        FLOW_PYTHON_INPUT_INVALID
+    );
+    assert_eq!(
+        node(&snap, "ok").reason.as_ref().unwrap().params["detail"],
+        "boom",
+        "second node reached the same worker"
+    );
+}
+
+#[test]
+fn python_needs_approval_and_stop_work_like_commands() {
+    let script = json!({
+        "stages": [stage("a.ask", json!({})), stage("a.stop", json!({}))],
+        "behaviour": {
+            "a.ask": [ { "outcome": { "status": "needs_approval", "message": "go?" } } ],
+            "a.stop": [ { "wait_stop_ms": 10000 } ]
+        }
+    });
+    let f = fixture_with_worker(script);
+    write_manifest(&f.root);
+    let rel = write_flow(
+        &f.root,
+        "p",
+        json!({}),
+        vec![py("a", "a.ask", json!({}))],
+        vec![],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    // The driver stays active while it waits, so `wait_status` (which wants
+    // an idle driver) does not apply here.
+    f.wait_for(&run_id, "approval", |s| {
+        s.state.status == RunStatus::AwaitingApproval
+    });
+    f.engine
+        .approve(&f.root, &run_id, Some("a"), "approve", None)
+        .unwrap();
+    f.wait_settled(&run_id, RunStatus::Completed);
+
+    let rel = write_flow(
+        &f.root,
+        "s",
+        json!({}),
+        vec![py("st", "a.stop", json!({}))],
+        vec![],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    f.wait_for(&run_id, "running", |s| {
+        node(s, "st").status == NodeStatus::Running
+    });
+    f.engine.stop(&f.root, &run_id).unwrap();
+    f.wait_status(&run_id, RunStatus::Paused);
+    assert_eq!(node(&f.snapshot(&run_id), "st").status, NodeStatus::Ready);
+}
+
+#[test]
+fn worker_exit_mid_call_fails_the_node_and_the_next_node_gets_a_new_worker() {
+    // Review Focus 3.
+    let script = json!({
+        "stages": [stage("a.die", json!({})), stage("a.ok", json!({}))],
+        "behaviour": { "a.die": [ { "exit": 7 } ], "a.ok": [ { "outcome": { "status": "ok" } } ] }
+    });
+    let f = fixture_with_worker(script);
+    write_manifest(&f.root);
+    let rel = write_flow(
+        &f.root,
+        "p",
+        json!({}),
+        vec![py("d", "a.die", json!({})), py("o", "a.ok", json!({}))],
+        vec![json!({ "from": "d", "to": "o", "port": "failure" })],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    f.wait_settled(&run_id, RunStatus::Completed);
+    let snap = f.snapshot(&run_id);
+    assert_eq!(
+        node(&snap, "d").reason.as_ref().unwrap().code,
+        FLOW_PYTHON_WORKER_EXITED
+    );
+    assert_eq!(node(&snap, "o").status, NodeStatus::Succeeded);
+}
+
+#[test]
+fn two_nodes_share_one_worker_and_retry_reuses_it() {
+    let script = json!({
+        "stages": [stage("a.ok", json!({})), stage("a.flaky", json!({}))],
+        "behaviour": {
+            "a.ok": [ { "outcome": { "status": "ok" } } ],
+            "a.flaky": [ { "fail_before_attempt": 2 }, { "outcome": { "status": "ok" } } ]
+        }
+    });
+    let f = fixture_with_worker(script);
+    write_manifest(&f.root);
+    let mut flaky = py("fl", "a.flaky", json!({}));
+    flaky["retry"] = json!({ "max": 1 });
+    let rel = write_flow(
+        &f.root,
+        "p",
+        json!({}),
+        vec![py("a", "a.ok", json!({})), flaky],
+        vec![json!({ "from": "a", "to": "fl" })],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    f.wait_settled(&run_id, RunStatus::Completed);
+    let snap = f.snapshot(&run_id);
+    assert_eq!(node(&snap, "fl").attempt, 2);
+    let describes = f.worker_describe_count();
+    assert_eq!(describes, 1, "one worker served both nodes and the retry");
+}
+
+#[test]
+fn python_timeout_cancels_then_kills_and_cancel_kills_the_worker() {
+    let script = json!({
+        "stages": [stage("a.hang", json!({})), stage("a.polite", json!({}))],
+        "behaviour": { "a.hang": [ { "sleep_ms": 60000 } ], "a.polite": [ { "wait_cancel_ms": 10000 } ] }
+    });
+    let f = fixture_with_worker(script);
+    write_manifest(&f.root);
+    let mut polite = py("p", "a.polite", json!({}));
+    polite["timeout"] = json!("1s");
+    let rel = write_flow(
+        &f.root,
+        "t",
+        json!({ "limits": { "stopGrace": "2s" } }),
+        vec![polite],
+        vec![],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    f.wait_settled(&run_id, RunStatus::Failed);
+    assert_eq!(
+        node(&f.snapshot(&run_id), "p")
+            .reason
+            .as_ref()
+            .unwrap()
+            .code,
+        FLOW_NODE_TIMEOUT
+    );
+
+    let mut hang = py("h", "a.hang", json!({}));
+    hang["timeout"] = json!("1s");
+    let rel = write_flow(
+        &f.root,
+        "u",
+        json!({ "limits": { "stopGrace": "1s" } }),
+        vec![hang],
+        vec![],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    f.wait_settled(&run_id, RunStatus::Failed);
+    assert_eq!(
+        node(&f.snapshot(&run_id), "h")
+            .reason
+            .as_ref()
+            .unwrap()
+            .code,
+        FLOW_NODE_TIMEOUT
+    );
+
+    let rel = write_flow(
+        &f.root,
+        "c",
+        json!({}),
+        vec![py("h2", "a.hang", json!({}))],
+        vec![],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    f.wait_for(&run_id, "running", |s| {
+        node(s, "h2").status == NodeStatus::Running
+    });
+    let pid = f.worker_pid(&run_id, "r");
+    f.engine.cancel(&f.root, &run_id).unwrap();
+    f.wait_settled(&run_id, RunStatus::Cancelled);
+    assert!(!process_alive(pid), "worker killed on cancel");
+}
+
+#[test]
+fn app_exit_interrupts_a_running_stage_and_restart_marks_it_interrupted() {
+    // Review Focus 4.
+    let script = json!({ "stages": [stage("a.hang", json!({}))], "behaviour": { "a.hang": [ { "sleep_ms": 60000 } ] } });
+    let f = fixture_with_worker(script.clone());
+    write_manifest(&f.root);
+    let rel = write_flow(
+        &f.root,
+        "p",
+        json!({}),
+        vec![py("h", "a.hang", json!({}))],
+        vec![],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    f.wait_for(&run_id, "running", |s| {
+        node(s, "h").status == NodeStatus::Running
+    });
+    let pid = f.worker_pid(&run_id, "r");
+    f.engine.shutdown(Duration::from_secs(5));
+    assert!(!process_alive(pid));
+    let f2 = f.reopen(script);
+    let snap = f2.snapshot(&run_id);
+    assert_eq!(snap.state.status, RunStatus::Interrupted);
+    assert_eq!(node(&snap, "h").status, NodeStatus::Interrupted);
+}
+
+#[test]
+fn stray_worker_output_is_logged_not_fatal() {
+    // Review Focus 1.
+    let script = json!({
+        "stages": [stage("a.noisy", json!({}))],
+        "behaviour": { "a.noisy": [ { "raw": "print() output" }, item(json!({ "type": "output", "key": "k", "value": 1 })), { "outcome": { "status": "ok" } } ] }
+    });
+    let f = fixture_with_worker(script);
+    write_manifest(&f.root);
+    let rel = write_flow(
+        &f.root,
+        "p",
+        json!({}),
+        vec![py("n", "a.noisy", json!({}))],
+        vec![],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    f.wait_settled(&run_id, RunStatus::Completed);
+    let events = f.events(&run_id);
+    assert!(events
+        .iter()
+        .any(|e| matches!(&e.body, EventBody::Warning(r) if r.code == FLOW_PROTOCOL_WARNING)));
+    assert_eq!(node(&f.snapshot(&run_id), "n").outputs["k"], 1);
 }

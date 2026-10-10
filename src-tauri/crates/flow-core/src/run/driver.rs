@@ -10,25 +10,34 @@
 
 use crate::condition::Condition;
 use crate::fsutil;
+use crate::issues::FLOW_RUNTIME_UNKNOWN;
 use crate::model::{
     parse_duration, CommandNode, CommandProtocol, CommandRun, FlowDef, FlowNode, LoopBody,
-    LoopMode, LoopNode, NodeKind, OnItemFailure, RetryOn, RetryPolicy, PORT_FAILURE, PORT_SUCCESS,
+    LoopMode, LoopNode, NodeKind, OnItemFailure, PythonNode, RetryOn, RetryPolicy, PORT_FAILURE,
+    PORT_SUCCESS,
 };
+use crate::project::RuntimeDef;
 use crate::run::model::*;
 use crate::run::prepare::{prepare_params, LoopVar, TemplateContext};
 use crate::run::process::{
     decide, CommandResult, LaunchSpec, Launcher, ProcessHandle, ProtocolItem, ProtocolOutcome,
-    ProtocolReader,
+    ProtocolReader, MAX_LINES, MAX_LINE_BYTES,
 };
 use crate::run::scope::{
     self, iteration_prefix, ref_key, split_key, subflow_prefix, Graph, GraphLoc,
 };
 use crate::run::store::{EventLog, RunMeta, RunStore, CHECKPOINT_EVERY};
 use crate::run::supervise::DetachedProcess;
-use crate::run::worker::WorkerLauncher;
+use crate::run::worker::{
+    call_request, cancel_request, describe_request, parse_worker_line, shutdown_request,
+    validate_inputs, worker_spec, CallContext, Manifest, WorkerEvent, WorkerHandle, WorkerLauncher,
+    WorkerMessage, FLOW_PYTHON_ENTRY_UNKNOWN, FLOW_PYTHON_INPUT_INVALID, FLOW_PYTHON_WORKER_EXITED,
+    FLOW_RUNTIME_START_FAILED,
+};
 use crate::template;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::Arc;
@@ -133,6 +142,23 @@ const PROGRESS_INTERVAL: Duration = Duration::from_secs(1);
 /// Commands running at once in a run (PR 4b makes this configurable).
 const MAX_RUNNING_COMMANDS: usize = 1;
 
+/// How long a new worker may take to answer `describe` (the driver blocks).
+const WORKER_READY_TIMEOUT: Duration = Duration::from_secs(30);
+/// Grace after a call's `cancel` (timeout) when `limits.stopGrace` is unset.
+const DEFAULT_CANCEL_GRACE: Duration = Duration::from_secs(5);
+/// How long workers may take to exit after `shutdown` at run end.
+const WORKER_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+/// Ticks to wait for a worker's exit code once it was seen exiting.
+const WORKER_EXIT_TICKS: u32 = 10;
+
+/// Protocol state of one node attempt (commands and python calls).
+#[derive(Default)]
+struct ItemState {
+    outcome: Option<ProtocolOutcome>,
+    last_progress: Option<Instant>,
+    pending_progress: Option<(String, Option<f64>)>,
+}
+
 /// A command being monitored.
 struct RunningCommand {
     key: String,
@@ -141,19 +167,61 @@ struct RunningCommand {
     success_codes: Vec<i32>,
     handle: Box<dyn ProcessHandle>,
     reader: Option<ProtocolReader>,
-    outcome: Option<ProtocolOutcome>,
+    items: ItemState,
     started: Instant,
     timeout: Option<Duration>,
     grace_deadline: Option<Instant>,
-    last_progress: Option<Instant>,
-    pending_progress: Option<(String, Option<f64>)>,
 }
 
-/// How a command's monitoring ended.
+/// The resident worker of one runtime (spec 3.2), shared by the run's calls.
+struct LiveWorker {
+    /// Distinguishes a restarted worker of the same runtime.
+    id: u64,
+    runtime: String,
+    handle: Box<dyn WorkerHandle>,
+    manifest: Manifest,
+    next_request: u64,
+    stdout_log: PathBuf,
+    /// Its stdout closed (`WorkerEvent::Exited`).
+    eof: bool,
+    /// The exit code, once `try_wait` reported one.
+    exit_code: Option<i32>,
+    /// Ticks since it was seen exiting (bounded wait for the exit code).
+    dying_ticks: u32,
+}
+
+/// A stage call in flight on a worker.
+struct RunningCall {
+    key: String,
+    attempt: u32,
+    dir: PathBuf,
+    runtime: String,
+    /// `LiveWorker::id` of the worker the call was sent to.
+    worker: u64,
+    call_id: String,
+    request_id: String,
+    items: ItemState,
+    started: Instant,
+    timeout: Option<Duration>,
+    grace_deadline: Option<Instant>,
+    cancel_sent: bool,
+    /// The timeout's `cancel` was sent: any ending counts as a timeout.
+    timed_out: bool,
+    lines: usize,
+    limit_warned: bool,
+    /// The `code` of an `error` answering the call request.
+    error_code: Option<String>,
+    /// Outputs the stage declares (others are accepted with a warning).
+    declared_outputs: BTreeSet<String>,
+}
+
+/// How a command's (or call's) monitoring ended.
 enum Finish {
     Exited(i32),
     Timeout,
     GraceKilled,
+    /// The python worker running the call is gone (exit code when known).
+    WorkerExited(Option<i32>),
 }
 
 pub struct Driver {
@@ -170,6 +238,10 @@ pub struct Driver {
     shutdown_requested: bool,
     running: Vec<RunningCommand>,
     retry_at: BTreeMap<String, Instant>,
+    workers: BTreeMap<String, LiveWorker>,
+    calls: Vec<RunningCall>,
+    /// Ids handed to started workers.
+    worker_seq: u64,
 }
 
 impl Driver {
@@ -197,6 +269,9 @@ impl Driver {
             shutdown_requested: false,
             running: Vec::new(),
             retry_at: BTreeMap::new(),
+            workers: BTreeMap::new(),
+            calls: Vec::new(),
+            worker_seq: 0,
         })
     }
 
@@ -766,6 +841,12 @@ impl Driver {
                     let mut command = self.running.remove(pos);
                     command.handle.kill_tree();
                 }
+                if let Some(pos) = self.calls.iter().position(|c| c.key == key) {
+                    let call = self.calls.remove(pos);
+                    if self.worker_alive(&call) {
+                        self.drop_worker(&call.runtime);
+                    }
+                }
                 self.close_children(key);
                 self.set_node(key, NodeStatus::Cancelled, node.attempt, reason, None);
             }
@@ -795,8 +876,10 @@ impl Driver {
             let running: Vec<String> = self
                 .running
                 .iter()
-                .filter(|r| r.key.starts_with(&prefix))
-                .map(|r| r.key.clone())
+                .map(|r| &r.key)
+                .chain(self.calls.iter().map(|c| &c.key))
+                .filter(|k| k.starts_with(&prefix))
+                .cloned()
                 .collect();
             for key in running {
                 self.retire(&key);
@@ -913,16 +996,17 @@ impl Driver {
                 break;
             }
             self.poll_running();
+            self.poll_calls();
             self.retry_due();
             if !self.state.status.is_active() {
-                if self.running.is_empty() {
+                if !self.in_flight() {
                     break;
                 }
                 self.wait_control(idle);
                 continue;
             }
             if self.stop_requested {
-                if self.running.is_empty() {
+                if !self.in_flight() {
                     self.set_run(RunStatus::Stopping, Some(Reason::new(FLOW_STOP_REQUESTED)));
                     self.set_run(RunStatus::Paused, Some(Reason::new(FLOW_STOP_REQUESTED)));
                     break;
@@ -939,7 +1023,7 @@ impl Driver {
             if self.start_ready() {
                 continue;
             }
-            if !self.running.is_empty() || !self.retry_at.is_empty() {
+            if self.in_flight() || !self.retry_at.is_empty() {
                 if self.state.status == RunStatus::AwaitingApproval {
                     self.set_run(RunStatus::Running, None);
                 }
@@ -962,8 +1046,14 @@ impl Driver {
             }
             break;
         }
+        self.shutdown_workers();
         self.checkpoint();
         self.state.status
+    }
+
+    /// Commands or python calls are running.
+    fn in_flight(&self) -> bool {
+        !self.running.is_empty() || !self.calls.is_empty()
     }
 
     /// Settles pending nodes, advances loops / sub-flows and finishes
@@ -1149,8 +1239,8 @@ impl Driver {
                 let Some(node) = self.graph_of(&prefix).and_then(|g| g.node(&id)).cloned() else {
                     continue;
                 };
-                if matches!(node.kind, NodeKind::Command(_))
-                    && self.running.len() >= MAX_RUNNING_COMMANDS
+                if matches!(node.kind, NodeKind::Command(_) | NodeKind::Python(_))
+                    && self.running.len() + self.calls.len() >= MAX_RUNNING_COMMANDS
                 {
                     continue;
                 }
@@ -1219,6 +1309,7 @@ impl Driver {
                 }
             }
             NodeKind::Command(command) => self.launch_command(prefix, key, node, command, attempt),
+            NodeKind::Python(py) => self.launch_call(prefix, key, node, py, attempt),
             NodeKind::Loop(lp) => {
                 if lp.mode == LoopMode::Foreach {
                     let items = self.with_ctx(prefix, None, None, None, |ctx| match &lp.items {
@@ -1656,12 +1747,13 @@ impl Driver {
             success_codes: command.success_codes.clone().unwrap_or_else(|| vec![0]),
             handle,
             reader,
-            outcome: saved.outcome,
+            items: ItemState {
+                outcome: saved.outcome,
+                ..ItemState::default()
+            },
             started,
             timeout: self.node_timeout(prefix, node),
             grace_deadline: None,
-            last_progress: None,
-            pending_progress: None,
         });
     }
 
@@ -1688,13 +1780,13 @@ impl Driver {
             if !items.is_empty() {
                 let key = command.key.clone();
                 for item in items {
-                    self.protocol_item(&key, item, command);
+                    self.apply_item(&key, item, &mut command.items);
                 }
                 if let Some(reader) = command.reader.as_ref() {
                     ProtocolCursor {
                         offset: reader.committed_offset(),
                         lines: reader.lines(),
-                        outcome: command.outcome.clone(),
+                        outcome: command.items.outcome.clone(),
                     }
                     .save(&command.dir);
                 }
@@ -1723,19 +1815,25 @@ impl Driver {
         let key = command.key.clone();
         if let Some(mut reader) = command.reader.take() {
             for item in reader.poll(true) {
-                self.protocol_item(&key, item, &mut command);
+                self.apply_item(&key, item, &mut command.items);
             }
         }
-        if let Some((text, fraction)) = command.pending_progress.take() {
-            self.emit(Some(&key), EventBody::NodeProgress { text, fraction });
-        }
+        self.flush_progress(&key, &mut command.items);
         let _ = std::fs::write(
             command.dir.join("outputs.json"),
             serde_json::to_vec_pretty(&self.node(&key).outputs).unwrap_or_default(),
         );
         let attempt = command.attempt;
         let result = match finish {
-            Finish::Exited(code) => decide(command.outcome.as_ref(), code, &command.success_codes),
+            Finish::Exited(code) => {
+                decide(command.items.outcome.as_ref(), code, &command.success_codes)
+            }
+            // Not produced for commands; treated like an unknown exit code.
+            Finish::WorkerExited(code) => decide(
+                command.items.outcome.as_ref(),
+                code.unwrap_or(-1),
+                &command.success_codes,
+            ),
             Finish::Timeout => CommandResult::Failed {
                 code: FLOW_NODE_TIMEOUT,
                 detail: None,
@@ -1765,18 +1863,7 @@ impl Driver {
                 );
             }
             CommandResult::NeedsApproval(message) => {
-                self.set_node(&key, NodeStatus::AwaitingApproval, attempt, None, None);
-                let request = ApprovalRequest {
-                    node_key: Some(key.clone()),
-                    options: COMMAND_APPROVAL_OPTIONS
-                        .iter()
-                        .map(|s| s.to_string())
-                        .collect(),
-                    message,
-                    show: BTreeMap::new(),
-                    reason: Reason::new(FLOW_COMMAND_NEEDS_APPROVAL),
-                };
-                self.emit(Some(&key), EventBody::ApprovalRequested(request));
+                self.request_node_approval(&key, attempt, message)
             }
             CommandResult::Failed { code, detail } => {
                 let mut reason = Reason::new(code);
@@ -1786,6 +1873,22 @@ impl Driver {
                 self.after_failure(&key, attempt, reason, code == FLOW_NODE_TIMEOUT);
             }
         }
+    }
+
+    /// A command or call reported `needs_approval`.
+    fn request_node_approval(&mut self, key: &str, attempt: u32, message: Option<String>) {
+        self.set_node(key, NodeStatus::AwaitingApproval, attempt, None, None);
+        let request = ApprovalRequest {
+            node_key: Some(key.to_string()),
+            options: COMMAND_APPROVAL_OPTIONS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+            message,
+            show: BTreeMap::new(),
+            reason: Reason::new(FLOW_COMMAND_NEEDS_APPROVAL),
+        };
+        self.emit(Some(key), EventBody::ApprovalRequested(request));
     }
 
     /// Retries per the node's policy, or fails it.
@@ -1917,19 +2020,20 @@ impl Driver {
         })
     }
 
-    fn protocol_item(&mut self, key: &str, item: ProtocolItem, command: &mut RunningCommand) {
+    /// Applies one protocol item of a command or call.
+    fn apply_item(&mut self, key: &str, item: ProtocolItem, st: &mut ItemState) {
         match item {
             ProtocolItem::Progress { text, fraction } => {
                 // At most one persisted progress event per second; the latest wins.
-                if command
+                if st
                     .last_progress
                     .is_none_or(|t| t.elapsed() >= PROGRESS_INTERVAL)
                 {
-                    command.last_progress = Some(Instant::now());
-                    command.pending_progress = None;
+                    st.last_progress = Some(Instant::now());
+                    st.pending_progress = None;
                     self.emit(Some(key), EventBody::NodeProgress { text, fraction });
                 } else {
-                    command.pending_progress = Some((text, fraction));
+                    st.pending_progress = Some((text, fraction));
                 }
             }
             ProtocolItem::Cost {
@@ -1961,7 +2065,7 @@ impl Driver {
             ProtocolItem::Artifact { path, label } => {
                 self.emit(Some(key), EventBody::NodeArtifact { path, label });
             }
-            ProtocolItem::Outcome(o) => command.outcome = Some(o),
+            ProtocolItem::Outcome(o) => st.outcome = Some(o),
             ProtocolItem::Warning { reason, line } => {
                 self.emit(
                     Some(key),
@@ -1975,7 +2079,615 @@ impl Driver {
         }
     }
 
+    /// Persists the progress the throttle held back.
+    fn flush_progress(&mut self, key: &str, st: &mut ItemState) {
+        if let Some((text, fraction)) = st.pending_progress.take() {
+            self.emit(Some(key), EventBody::NodeProgress { text, fraction });
+        }
+    }
+
+    // ------------------------------------------------------- python nodes
+
+    /// Starts a stage call on the runtime's resident worker (spec 3.1–3.4).
+    fn launch_call(
+        &mut self,
+        prefix: &str,
+        key: &str,
+        node: &FlowNode,
+        py: &PythonNode,
+        attempt: u32,
+    ) {
+        let runtime = py.runtime.clone();
+        let Some(def) = self
+            .meta
+            .project
+            .as_ref()
+            .and_then(|p| p.runtimes.get(&runtime))
+            .cloned()
+        else {
+            // Validation normally prevents this.
+            return self.fail_node(
+                key,
+                attempt,
+                Reason::new(FLOW_RUNTIME_UNKNOWN).with("runtime", runtime),
+            );
+        };
+        if let Err(reason) = self.ensure_worker(&runtime, &def) {
+            return self.fail_node(key, attempt, reason);
+        }
+        let Some(stage) = self
+            .workers
+            .get(&runtime)
+            .and_then(|w| w.manifest.stage(&py.entry))
+            .cloned()
+        else {
+            return self.fail_node(
+                key,
+                attempt,
+                Reason::new(FLOW_PYTHON_ENTRY_UNKNOWN)
+                    .with("runtime", runtime)
+                    .with("entry", py.entry.clone()),
+            );
+        };
+        let io_failed =
+            |message: String| Reason::new(FLOW_COMMAND_SPAWN_FAILED).with("message", message);
+        let dir = match self
+            .store
+            .node_attempt_dir(&self.run_id, key, attempt)
+            .map_err(|e| e.to_string())
+            .and_then(|dir| {
+                std::fs::create_dir_all(&dir)
+                    .map(|_| dir)
+                    .map_err(|e| e.to_string())
+            }) {
+            Ok(dir) => dir,
+            Err(message) => return self.fail_node(key, attempt, io_failed(message)),
+        };
+        let rendered = self.with_ctx(prefix, None, Some(&dir), None, |ctx| {
+            ctx.render_json(&Value::Object(py.with_args.clone().into_iter().collect()))
+        });
+        let given = match rendered {
+            Ok(Value::Object(given)) => given,
+            Ok(_) => {
+                return self.fail_node(
+                    key,
+                    attempt,
+                    Reason::new(FLOW_PYTHON_INPUT_INVALID).with("reason", "not-an-object"),
+                )
+            }
+            Err(reason) => return self.fail_node(key, attempt, reason),
+        };
+        let inputs_file = dir.join("inputs.json");
+        let inputs = match validate_inputs(&stage, &given) {
+            Ok(inputs) => inputs,
+            Err(errors) => {
+                // Fails before the call: the worker stays alive (Review Focus 5).
+                let _ = std::fs::write(&inputs_file, Value::Object(given).to_string());
+                let details = serde_json::to_value(&errors).unwrap_or(Value::Null);
+                let reason = errors
+                    .into_iter()
+                    .next()
+                    .unwrap_or_else(|| Reason::new(FLOW_PYTHON_INPUT_INVALID))
+                    .with("details", details);
+                return self.fail_node(key, attempt, reason);
+            }
+        };
+        let prepared = std::fs::write(&inputs_file, Value::Object(inputs.clone()).to_string())
+            .and_then(|_| std::fs::File::create(dir.join("events.jsonl")).map(|_| ()))
+            .and_then(|_| std::fs::File::create(dir.join("stdout.log")).map(|_| ()));
+        if let Err(err) = prepared {
+            return self.fail_node(key, attempt, io_failed(err.to_string()));
+        }
+        let call_id = format!("{key}#{attempt}");
+        let context = CallContext {
+            run_id: self.run_id.clone(),
+            node_key: key.to_string(),
+            node_dir: dir.to_string_lossy().into_owned(),
+            project_root: self.store.project_root().to_string_lossy().into_owned(),
+            stop_file: self
+                .store
+                .stop_file(&self.run_id)
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            attempt,
+        };
+        let timeout = self.node_timeout(prefix, node);
+        let Some(worker) = self.workers.get_mut(&runtime) else {
+            return self.fail_node(
+                key,
+                attempt,
+                Reason::new(FLOW_PYTHON_WORKER_EXITED).with("runtime", runtime),
+            );
+        };
+        let worker_id = worker.id;
+        let request_id = worker.next_request.to_string();
+        worker.next_request += 1;
+        let request = call_request(&request_id, &call_id, &py.entry, &inputs, &context);
+        if let Err(err) = worker.handle.send(&request) {
+            self.drop_worker(&runtime);
+            return self.fail_node(
+                key,
+                attempt,
+                Reason::new(FLOW_PYTHON_WORKER_EXITED)
+                    .with("runtime", runtime)
+                    .with("message", err.to_string()),
+            );
+        }
+        self.calls.push(RunningCall {
+            key: key.to_string(),
+            attempt,
+            dir,
+            runtime,
+            worker: worker_id,
+            call_id,
+            request_id,
+            items: ItemState::default(),
+            started: Instant::now(),
+            timeout,
+            grace_deadline: None,
+            cancel_sent: false,
+            timed_out: false,
+            lines: 0,
+            limit_warned: false,
+            error_code: None,
+            declared_outputs: stage.outputs.keys().cloned().collect(),
+        });
+    }
+
+    /// Starts the runtime's worker unless it runs, and waits (blocking) for
+    /// its manifest.
+    fn ensure_worker(&mut self, runtime: &str, def: &RuntimeDef) -> Result<(), Reason> {
+        if self.workers.contains_key(runtime) {
+            return Ok(());
+        }
+        let start_failed = |message: String| {
+            Reason::new(FLOW_RUNTIME_START_FAILED)
+                .with("runtime", runtime)
+                .with("message", message)
+        };
+        let stop_file = self
+            .store
+            .stop_file(&self.run_id)
+            .map_err(|e| start_failed(e.to_string()))?;
+        let extra_env = [
+            ("MDIUM_FLOW_RUN_ID".to_string(), self.run_id.clone()),
+            (
+                "MDIUM_FLOW_STOP_FILE".to_string(),
+                stop_file.to_string_lossy().into_owned(),
+            ),
+        ];
+        let spec = worker_spec(
+            self.store.project_root(),
+            runtime,
+            def,
+            &self.run_dir(),
+            &extra_env,
+        )?;
+        let mut handle = self
+            .env
+            .worker_launcher
+            .launch(&spec)
+            .map_err(|e| start_failed(e.to_string()))?;
+        match self.await_manifest(handle.as_mut(), &spec.stdout_log) {
+            Ok(manifest) => {
+                self.worker_seq += 1;
+                self.workers.insert(
+                    runtime.to_string(),
+                    LiveWorker {
+                        id: self.worker_seq,
+                        runtime: runtime.to_string(),
+                        handle,
+                        manifest,
+                        next_request: 2,
+                        stdout_log: spec.stdout_log,
+                        eof: false,
+                        exit_code: None,
+                        dying_ticks: 0,
+                    },
+                );
+                Ok(())
+            }
+            Err(message) => {
+                handle.kill_tree();
+                Err(start_failed(message))
+            }
+        }
+    }
+
+    /// Sends `describe` (request id `1`) and waits for the manifest; other
+    /// output meanwhile goes to the worker's stdout log.
+    fn await_manifest(
+        &self,
+        handle: &mut dyn WorkerHandle,
+        stdout_log: &Path,
+    ) -> Result<Manifest, String> {
+        handle
+            .send(&describe_request("1"))
+            .map_err(|e| e.to_string())?;
+        let deadline = Instant::now() + WORKER_READY_TIMEOUT;
+        let pause = self.env.poll.max(Duration::from_millis(5));
+        loop {
+            match handle.try_recv() {
+                Some(WorkerEvent::Line(line)) => {
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    match parse_worker_line(&line) {
+                        WorkerMessage::Manifest {
+                            request_id,
+                            manifest,
+                        } if request_id == "1" => return Ok(manifest),
+                        WorkerMessage::Error { message, .. } => return Err(message),
+                        WorkerMessage::Log { level, text, .. } => {
+                            append_line(stdout_log, &format!("[{level}] {text}"))
+                        }
+                        _ => append_line(stdout_log, &line),
+                    }
+                }
+                Some(WorkerEvent::Exited(code)) => {
+                    let code = code.or_else(|| handle.try_wait().ok().flatten());
+                    return Err(match code {
+                        Some(code) => {
+                            format!("the worker exited with code {code} before answering describe")
+                        }
+                        None => "the worker exited before answering describe".to_string(),
+                    });
+                }
+                None => {
+                    if Instant::now() >= deadline {
+                        return Err("timed out waiting for the manifest".to_string());
+                    }
+                    std::thread::sleep(pause);
+                }
+            }
+        }
+    }
+
+    /// Kills a runtime's worker and forgets it (its calls end next tick).
+    fn drop_worker(&mut self, runtime: &str) {
+        if let Some(mut worker) = self.workers.remove(runtime) {
+            worker.handle.kill_tree();
+        }
+    }
+
+    fn kill_workers(&mut self) {
+        for (_, mut worker) in std::mem::take(&mut self.workers) {
+            worker.handle.kill_tree();
+        }
+    }
+
+    /// Run end: asks every worker to exit, then kills the ones that did not.
+    fn shutdown_workers(&mut self) {
+        let mut pending: Vec<LiveWorker> =
+            std::mem::take(&mut self.workers).into_values().collect();
+        for worker in &mut pending {
+            let _ = worker.handle.send(&shutdown_request());
+        }
+        let deadline = Instant::now() + WORKER_SHUTDOWN_GRACE;
+        let pause = self.env.poll.max(Duration::from_millis(5));
+        loop {
+            pending.retain_mut(|w| !matches!(w.handle.try_wait(), Ok(Some(_))));
+            if pending.is_empty() || Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(pause);
+        }
+        for worker in &mut pending {
+            eprintln!(
+                "[flow] worker of runtime {} did not exit after shutdown; killing it",
+                worker.runtime
+            );
+            worker.handle.kill_tree();
+        }
+    }
+
+    /// Drains every worker's output, then settles calls that ended, kills
+    /// workers whose grace passed and sends `cancel` on timeouts.
+    fn poll_calls(&mut self) {
+        let workers: Vec<(String, u64)> = self
+            .workers
+            .iter()
+            .map(|(runtime, w)| (runtime.clone(), w.id))
+            .collect();
+        let mut exited: BTreeMap<u64, Option<i32>> = BTreeMap::new();
+        for (runtime, id) in workers {
+            if let Some(code) = self.poll_worker(&runtime) {
+                exited.insert(id, code);
+            }
+        }
+        let cancel_grace = self.stop_grace().unwrap_or(DEFAULT_CANCEL_GRACE);
+        let mut calls = std::mem::take(&mut self.calls);
+        let mut finished = Vec::new();
+        let mut i = 0;
+        while i < calls.len() {
+            let call = &mut calls[i];
+            let finish = if call.items.outcome.is_some() {
+                // An outcome after the timeout's `cancel` still is a timeout.
+                Some(if call.timed_out {
+                    Finish::Timeout
+                } else {
+                    Finish::Exited(0)
+                })
+            } else if !self.worker_alive(call) {
+                Some(Finish::WorkerExited(
+                    exited.get(&call.worker).copied().flatten(),
+                ))
+            } else if call.grace_deadline.is_some_and(|d| Instant::now() >= d) {
+                self.drop_worker(&call.runtime);
+                Some(if call.timed_out {
+                    Finish::Timeout
+                } else {
+                    Finish::GraceKilled
+                })
+            } else {
+                if !call.cancel_sent && call.timeout.is_some_and(|t| call.started.elapsed() >= t) {
+                    if let Some(worker) = self.workers.get_mut(&call.runtime) {
+                        // A failed send shows up as the worker's exit.
+                        let _ = worker.handle.send(&cancel_request(&call.call_id));
+                    }
+                    call.cancel_sent = true;
+                    call.timed_out = true;
+                    let deadline = Instant::now() + cancel_grace;
+                    call.grace_deadline =
+                        Some(call.grace_deadline.map_or(deadline, |d| d.min(deadline)));
+                }
+                None
+            };
+            match finish {
+                Some(finish) => finished.push((calls.remove(i), finish)),
+                None => i += 1,
+            }
+        }
+        self.calls = calls;
+        for (call, finish) in finished {
+            self.finish_call(call, finish);
+        }
+    }
+
+    /// The worker the call was sent to still runs.
+    fn worker_alive(&self, call: &RunningCall) -> bool {
+        self.workers
+            .get(&call.runtime)
+            .is_some_and(|w| w.id == call.worker)
+    }
+
+    /// Handles a worker's pending output. Returns `Some(exit code)` once the
+    /// worker is gone (it is then removed).
+    fn poll_worker(&mut self, runtime: &str) -> Option<Option<i32>> {
+        let mut events = Vec::new();
+        {
+            let worker = self.workers.get_mut(runtime)?;
+            while let Some(event) = worker.handle.try_recv() {
+                events.push(event);
+            }
+        }
+        for event in events {
+            match event {
+                WorkerEvent::Line(line) => self.worker_line(runtime, &line),
+                WorkerEvent::Exited(code) => {
+                    if let Some(worker) = self.workers.get_mut(runtime) {
+                        worker.eof = true;
+                        worker.exit_code = worker.exit_code.or(code);
+                    }
+                }
+            }
+        }
+        let worker = self.workers.get_mut(runtime)?;
+        if worker.exit_code.is_none() {
+            match worker.handle.try_wait() {
+                Ok(code) => worker.exit_code = code,
+                Err(_) => worker.eof = true,
+            }
+        }
+        if !worker.eof && worker.exit_code.is_none() {
+            return None;
+        }
+        // Exiting: wait a few ticks for the rest of its output and its exit
+        // code, never blocking.
+        worker.dying_ticks += 1;
+        if !(worker.eof && worker.exit_code.is_some()) && worker.dying_ticks <= WORKER_EXIT_TICKS {
+            return None;
+        }
+        let mut worker = self.workers.remove(runtime)?;
+        let code = worker.exit_code;
+        if code.is_none() {
+            // Still running as far as we know (its stdout closed): end it.
+            worker.handle.kill_tree();
+        }
+        Some(code)
+    }
+
+    /// One line of a worker's stdout (spec 3.3).
+    fn worker_line(&mut self, runtime: &str, line: &str) {
+        if line.trim().is_empty() {
+            return;
+        }
+        let Some((stdout_log, worker)) = self
+            .workers
+            .get(runtime)
+            .map(|w| (w.stdout_log.clone(), w.id))
+        else {
+            return;
+        };
+        let mine = |c: &RunningCall| c.runtime == runtime && c.worker == worker;
+        // The call in flight on this worker (one that has no outcome yet).
+        let active = self
+            .calls
+            .iter()
+            .position(|c| mine(c) && c.items.outcome.is_none());
+        let find =
+            |calls: &[RunningCall], id: &str| calls.iter().position(|c| mine(c) && c.call_id == id);
+        match parse_worker_line(line) {
+            WorkerMessage::Item {
+                call_id,
+                item,
+                line: clean,
+            } => {
+                let known = call_id.as_deref().and_then(|id| find(&self.calls, id));
+                match known.filter(|&i| self.calls[i].items.outcome.is_none()) {
+                    Some(idx) => self.call_item(idx, item, &clean, line.len()),
+                    None => {
+                        let key = known.or(active).map(|i| self.calls[i].key.clone());
+                        self.protocol_warning(key.as_deref(), "unexpected-call-id", Vec::new());
+                    }
+                }
+            }
+            WorkerMessage::Log {
+                call_id,
+                level,
+                text,
+            } => {
+                let target = call_id
+                    .as_deref()
+                    .and_then(|id| find(&self.calls, id))
+                    .map(|i| self.calls[i].dir.join("stdout.log"))
+                    .unwrap_or(stdout_log);
+                append_line(&target, &format!("[{level}] {text}"));
+            }
+            WorkerMessage::Error {
+                request_id,
+                code,
+                message,
+            } => {
+                let target = request_id.as_deref().and_then(|id| {
+                    self.calls
+                        .iter()
+                        .position(|c| mine(c) && c.request_id == id && c.items.outcome.is_none())
+                });
+                match target {
+                    Some(idx) => {
+                        let call = &mut self.calls[idx];
+                        call.items.outcome = Some(ProtocolOutcome::Fail(Some(message)));
+                        call.error_code = Some(code);
+                    }
+                    None => append_line(&stdout_log, line),
+                }
+            }
+            // Stray output (e.g. `print`): a warning inside a call, logged outside.
+            WorkerMessage::Invalid { reason } => match active {
+                Some(idx) => {
+                    let key = self.calls[idx].key.clone();
+                    let lines = self.calls[idx].lines;
+                    self.protocol_warning(Some(&key), reason, vec![("line", lines.into())]);
+                }
+                None => append_line(&stdout_log, line),
+            },
+            WorkerMessage::Manifest { .. } => {}
+        }
+    }
+
+    /// Records and applies one protocol item of a running call.
+    fn call_item(&mut self, idx: usize, item: ProtocolItem, clean: &str, raw_len: usize) {
+        let call = &mut self.calls[idx];
+        call.lines += 1;
+        let key = call.key.clone();
+        let line = call.lines;
+        if line > MAX_LINES {
+            if !call.limit_warned {
+                call.limit_warned = true;
+                self.protocol_warning(Some(&key), "too-many-lines", vec![("line", line.into())]);
+            }
+            return;
+        }
+        if raw_len > MAX_LINE_BYTES {
+            self.protocol_warning(Some(&key), "line-too-long", vec![("line", line.into())]);
+            return;
+        }
+        append_line(&call.dir.join("events.jsonl"), clean);
+        if let ProtocolItem::Output { key: name, .. } = &item {
+            if !call.declared_outputs.contains(name) {
+                let name = name.clone();
+                self.protocol_warning(
+                    Some(&key),
+                    "undeclared-output",
+                    vec![("key", name.into()), ("line", line.into())],
+                );
+            }
+        }
+        let mut items = std::mem::take(&mut self.calls[idx].items);
+        self.apply_item(&key, item, &mut items);
+        self.calls[idx].items = items;
+    }
+
+    fn protocol_warning(&mut self, key: Option<&str>, reason: &str, extra: Vec<(&str, Value)>) {
+        let mut warning = Reason::new(FLOW_PROTOCOL_WARNING).with("reason", reason);
+        for (name, value) in extra {
+            warning = warning.with(name, value);
+        }
+        self.emit(key, EventBody::Warning(warning));
+    }
+
+    /// Settles a call like a command (spec 3.5).
+    fn finish_call(&mut self, mut call: RunningCall, finish: Finish) {
+        let key = call.key.clone();
+        let attempt = call.attempt;
+        self.flush_progress(&key, &mut call.items);
+        let _ = std::fs::write(
+            call.dir.join("outputs.json"),
+            serde_json::to_vec_pretty(&self.node(&key).outputs).unwrap_or_default(),
+        );
+        let exit_code = match finish {
+            Finish::Timeout => {
+                return self.after_failure(&key, attempt, Reason::new(FLOW_NODE_TIMEOUT), true)
+            }
+            Finish::GraceKilled => {
+                self.set_node(
+                    &key,
+                    NodeStatus::Ready,
+                    attempt,
+                    Some(Reason::new(FLOW_STOP_GRACE_EXCEEDED)),
+                    None,
+                );
+                return;
+            }
+            Finish::Exited(_) => None,
+            Finish::WorkerExited(code) => code,
+        };
+        match call.items.outcome.take() {
+            Some(ProtocolOutcome::Ok) => {
+                self.settle(&key, attempt, NodeStatus::Succeeded, PORT_SUCCESS, None)
+            }
+            Some(ProtocolOutcome::Fail(detail)) => {
+                let mut reason =
+                    Reason::new(call.error_code.as_deref().unwrap_or(FLOW_NODE_FAILED));
+                if let Some(detail) = detail {
+                    reason = reason.with("detail", detail);
+                }
+                self.after_failure(&key, attempt, reason, false);
+            }
+            Some(ProtocolOutcome::NeedsApproval(message)) => {
+                self.request_node_approval(&key, attempt, message)
+            }
+            Some(ProtocolOutcome::Stopped) => {
+                self.set_node(
+                    &key,
+                    NodeStatus::Ready,
+                    attempt,
+                    Some(Reason::new(FLOW_NODE_STOPPED)),
+                    None,
+                );
+            }
+            None => {
+                let mut reason =
+                    Reason::new(FLOW_PYTHON_WORKER_EXITED).with("runtime", call.runtime.clone());
+                if let Some(code) = exit_code {
+                    reason = reason.with("code", code);
+                }
+                self.after_failure(&key, attempt, reason, false);
+            }
+        }
+    }
+
     // --------------------------------------------- stop / cancel / exit
+
+    fn stop_grace(&self) -> Option<Duration> {
+        self.meta
+            .flow
+            .limits
+            .stop_grace
+            .as_deref()
+            .and_then(parse_duration)
+    }
 
     fn begin_stop(&mut self) {
         if matches!(
@@ -1988,17 +2700,17 @@ impl Driver {
             .store
             .stop_file(&self.run_id)
             .map(|p| std::fs::write(p, b""));
-        let grace = self
-            .meta
-            .flow
-            .limits
-            .stop_grace
-            .as_deref()
-            .and_then(parse_duration);
+        let grace = self.stop_grace();
+        let deadline = || Some(grace.map(|g| Instant::now() + g).unwrap_or_else(far_future));
         for command in &mut self.running {
             if command.grace_deadline.is_none() {
-                command.grace_deadline =
-                    Some(grace.map(|g| Instant::now() + g).unwrap_or_else(far_future));
+                command.grace_deadline = deadline();
+            }
+        }
+        // Calls see the STOP file too; no `cancel` is sent.
+        for call in &mut self.calls {
+            if call.grace_deadline.is_none() {
+                call.grace_deadline = deadline();
             }
         }
     }
@@ -2011,6 +2723,16 @@ impl Driver {
                 &command.key,
                 NodeStatus::Cancelled,
                 command.attempt,
+                Some(Reason::new(FLOW_RUN_CANCELLED)),
+                None,
+            );
+        }
+        self.kill_workers();
+        for call in std::mem::take(&mut self.calls) {
+            self.set_node(
+                &call.key,
+                NodeStatus::Cancelled,
+                call.attempt,
                 Some(Reason::new(FLOW_RUN_CANCELLED)),
                 None,
             );
@@ -2037,6 +2759,18 @@ impl Driver {
             );
             interrupted = true;
         }
+        // Workers never survive the app.
+        self.kill_workers();
+        for call in std::mem::take(&mut self.calls) {
+            self.set_node(
+                &call.key,
+                NodeStatus::Interrupted,
+                call.attempt,
+                Some(Reason::new(FLOW_APP_EXITED)),
+                None,
+            );
+            interrupted = true;
+        }
         if interrupted {
             self.set_run(RunStatus::Interrupted, Some(Reason::new(FLOW_APP_EXITED)));
         }
@@ -2050,7 +2784,9 @@ impl Driver {
             .nodes
             .iter()
             .filter(|(k, n)| {
-                n.status == NodeStatus::Running && !self.running.iter().any(|r| &r.key == *k)
+                n.status == NodeStatus::Running
+                    && !self.running.iter().any(|r| &r.key == *k)
+                    && !self.calls.iter().any(|c| &c.key == *k)
             })
             .map(|(k, n)| (k.clone(), n.clone()))
             .collect();
@@ -2058,9 +2794,21 @@ impl Driver {
             let Some((prefix, node)) = self.def_of(&key) else {
                 continue;
             };
-            let NodeKind::Command(command) = &node.kind else {
+            let command = match &node.kind {
+                NodeKind::Command(command) => command,
+                // Workers never survive a restart: the call is lost.
+                NodeKind::Python(_) => {
+                    self.set_node(
+                        &key,
+                        NodeStatus::Interrupted,
+                        state.attempt,
+                        Some(Reason::new(FLOW_PROCESS_LOST)),
+                        None,
+                    );
+                    continue;
+                }
                 // Loops and sub-flows stay running; their scopes carry on.
-                continue;
+                _ => continue,
             };
             let handle = state.process.as_ref().and_then(|p| {
                 let exit_file = PathBuf::from(p.exit_file.as_ref()?);
@@ -2134,6 +2882,17 @@ impl ProtocolCursor {
         if let Ok(json) = serde_json::to_vec(self) {
             let _ = fsutil::atomic_write(&dir.join("protocol.json"), &json);
         }
+    }
+}
+
+/// Appends one line to a log file (best effort).
+fn append_line(path: &Path, line: &str) {
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(file, "{line}");
     }
 }
 
