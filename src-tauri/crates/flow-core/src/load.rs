@@ -3,10 +3,10 @@
 //! (`promptRef`, `subflow.flow`, file loop bodies): containment in the
 //! project, no links, existence, sub-flow recursion and arguments.
 
-use crate::flow::issues::*;
-use crate::flow::model::*;
-use crate::flow::parse::{decode, parse_text, FlowFormat};
-use crate::flow::validate::validate;
+use crate::issues::*;
+use crate::model::*;
+use crate::parse::{decode, parse_text, FlowFormat};
+use crate::validate::validate;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -252,7 +252,7 @@ impl RefChecker<'_> {
         args: &BTreeMap<String, Value>,
         node_path: &str,
     ) {
-        if reference.trim().is_empty() || crate::flow::template::has_template(reference) {
+        if reference.trim().is_empty() || crate::template::has_template(reference) {
             return; // already reported by the validator
         }
         let file = match resolve_in_project(self.project_root, self.base, reference) {

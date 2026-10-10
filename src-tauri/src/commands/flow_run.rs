@@ -6,13 +6,13 @@
 //! backend's per-machine command confirmation (spec 7.2).
 
 use super::flow::{blocking, project_root, FlowCommandError};
-use crate::flow::run::driver::{ApprovalNotifier, DriverEnv, EventSink};
-use crate::flow::run::engine::{CommandReview, FlowEngine, RunSnapshot, RunSummary};
-use crate::flow::run::model::{
+use flow_core::run::driver::{ApprovalNotifier, DriverEnv, EventSink};
+use flow_core::run::engine::{CommandReview, FlowEngine, RunSnapshot, RunSummary};
+use flow_core::run::model::{
     ApprovalRequest, NodeState, NodeStatus, Progress, Reason, RunState, RunStatus,
 };
-use crate::flow::run::process::{AttachedLauncher, Launcher};
-use crate::flow::run::supervise::DetachedLauncher;
+use flow_core::run::process::{AttachedLauncher, Launcher};
+use flow_core::run::supervise::DetachedLauncher;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -427,7 +427,7 @@ pub async fn flow_gitignore_status(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::flow::run::engine::{EngineError, FLOW_RUN_INVALID_ID};
+    use flow_core::run::engine::{EngineError, FLOW_RUN_INVALID_ID};
 
     #[test]
     fn detects_whether_flow_runs_are_ignored() {

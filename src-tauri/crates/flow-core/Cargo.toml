@@ -22,3 +22,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_
 
 [dev-dependencies]
 tempfile = "3"
+
+# Used by the junction rejection test in src/tests.rs.
+[target.'cfg(windows)'.dev-dependencies]
+junction = "1"

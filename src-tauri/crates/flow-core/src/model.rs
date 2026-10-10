@@ -1,13 +1,13 @@
 //! Data model of a flow definition (`*.flow.yaml`, `*.flow.json`).
 //!
 //! The model mirrors the on-disk format one to one (camelCase keys). It is
-//! deliberately permissive about values: [`crate::flow::parse`] rejects
+//! deliberately permissive about values: [`crate::parse`] rejects
 //! unknown keys and malformed conditions before decoding, and
-//! [`crate::flow::validate`] checks everything that needs the whole graph
+//! [`crate::validate`] checks everything that needs the whole graph
 //! (ids, ports, cycles, references).
 
-use crate::flow::condition::Condition;
-use crate::workflow::model::Provider;
+use crate::condition::Condition;
+use crate::provider::Provider;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;

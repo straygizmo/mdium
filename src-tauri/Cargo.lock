@@ -1072,6 +1072,7 @@ name = "flow-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "junction",
  "rand 0.8.5",
  "serde",
  "serde_json",
@@ -2417,7 +2418,6 @@ dependencies = [
  "tiny_http",
  "tokio",
  "trash",
- "windows-sys 0.61.2",
  "zip",
 ]
 

@@ -5,8 +5,8 @@
 //! `sub/inner`. A node re-entered through a back-edge gets a new instance
 //! in a new pass: `design@2`. One key always names one instance.
 
-use crate::flow::model::{FlowDef, FlowEdge, FlowNode, LoopBody, NodeKind};
-use crate::flow::run::store::RunMeta;
+use crate::model::{FlowDef, FlowEdge, FlowNode, LoopBody, NodeKind};
+use crate::run::store::RunMeta;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -175,8 +175,8 @@ pub fn ref_key(file: &str, reference: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::flow::load::check_text;
-    use crate::flow::parse::FlowFormat;
+    use crate::load::check_text;
+    use crate::parse::FlowFormat;
 
     #[test]
     fn keys_round_trip() {

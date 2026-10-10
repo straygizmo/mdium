@@ -3,8 +3,8 @@
 //! flow definition files only; nothing is executed). The UI that calls
 //! these is gated behind the `experimentalFlows` setting.
 
-use crate::flow::load::{self, FlowReport, FlowSummary, PathProblem};
-use crate::flow::parse::FlowFormat;
+use flow_core::load::{self, FlowReport, FlowSummary, PathProblem};
+use flow_core::parse::FlowFormat;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -28,7 +28,7 @@ pub struct FlowCommandError {
     pub message: String,
     /// Machine-readable details (validation problems, nodes needing action, ...).
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub details: Vec<crate::flow::run::model::Reason>,
+    pub details: Vec<flow_core::run::model::Reason>,
 }
 
 impl FlowCommandError {
@@ -41,8 +41,8 @@ impl FlowCommandError {
     }
 }
 
-impl From<crate::flow::run::engine::EngineError> for FlowCommandError {
-    fn from(err: crate::flow::run::engine::EngineError) -> Self {
+impl From<flow_core::run::engine::EngineError> for FlowCommandError {
+    fn from(err: flow_core::run::engine::EngineError) -> Self {
         Self {
             message: format!("{}: {}", err.code, err.message),
             code: err.code,

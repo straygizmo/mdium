@@ -2,9 +2,9 @@
 //! check of every object (unknown node attributes are errors, unknown
 //! top-level keys are warnings), condition syntax, and the serde decode.
 
-use crate::flow::condition::Condition;
-use crate::flow::issues::*;
-use crate::flow::model::{FlowDef, FlowNode, FLOW_SCHEMA_VERSION};
+use crate::condition::Condition;
+use crate::issues::*;
+use crate::model::{FlowDef, FlowNode, FLOW_SCHEMA_VERSION};
 use serde_json::{Map, Value};
 
 /// On-disk format of a flow file.

@@ -2,7 +2,7 @@
 //! referenced value with a literal, combined with `all` / `any` / `not`.
 //! There is deliberately no expression language (spec 2.6).
 
-use crate::flow::template::{parse_reference, Reference};
+use crate::template::{parse_reference, Reference};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{Map, Value};
 

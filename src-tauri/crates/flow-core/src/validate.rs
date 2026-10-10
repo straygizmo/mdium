@@ -2,12 +2,12 @@
 //! edges and ports, cycles and back-edges, entry/reachability, and
 //! template/condition references (spec 2.3–2.8). File references
 //! (`promptRef`, sub-flows, file loop bodies) are checked by
-//! [`crate::flow::load`], which needs the file system.
+//! [`crate::load`], which needs the file system.
 
-use crate::flow::condition::Condition;
-use crate::flow::issues::*;
-use crate::flow::model::*;
-use crate::flow::template::{self, is_ident, Reference, RESERVED_ROOTS};
+use crate::condition::Condition;
+use crate::issues::*;
+use crate::model::*;
+use crate::template::{self, is_ident, Reference, RESERVED_ROOTS};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 

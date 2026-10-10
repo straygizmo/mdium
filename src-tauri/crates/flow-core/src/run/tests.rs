@@ -1,12 +1,12 @@
 //! End-to-end engine tests with real child processes (the test binary in
 //! helper mode, see `test_helper`).
 
-use crate::flow::run::driver::*;
-use crate::flow::run::engine::*;
-use crate::flow::run::model::*;
-use crate::flow::run::process::AttachedLauncher;
-use crate::flow::run::store::{RunMeta, RunStore, RUN_SCHEMA_VERSION};
-use crate::flow::run::test_helper::{detached_launcher, helper_argv, helper_env, process_alive};
+use crate::run::driver::*;
+use crate::run::engine::*;
+use crate::run::model::*;
+use crate::run::process::AttachedLauncher;
+use crate::run::store::{RunMeta, RunStore, RUN_SCHEMA_VERSION};
+use crate::run::test_helper::{detached_launcher, helper_argv, helper_env, process_alive};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -1005,9 +1005,9 @@ fn crash_recovery_marks_running_runs_interrupted() {
     );
     // Write a run that looks like the app died while `a` was running.
     let review = f.engine.review_commands(&f.root, &rel).unwrap();
-    let (flow, _) = crate::flow::load::check_text(
+    let (flow, _) = crate::load::check_text(
         &std::fs::read_to_string(f.root.join(&rel)).unwrap(),
-        crate::flow::parse::FlowFormat::Json,
+        crate::parse::FlowFormat::Json,
     );
     let store = RunStore::new(&f.root);
     let run_id = "00000000000000aa".to_string();
@@ -1184,9 +1184,9 @@ fn run_data_from_elsewhere_never_executes_without_confirmation() {
         vec![],
     );
     let review = f.engine.review_commands(&f.root, &rel).unwrap();
-    let (flow, _) = crate::flow::load::check_text(
+    let (flow, _) = crate::load::check_text(
         &std::fs::read_to_string(f.root.join(&rel)).unwrap(),
-        crate::flow::parse::FlowFormat::Json,
+        crate::parse::FlowFormat::Json,
     );
     let store = RunStore::new(&f.root);
     let run_id = "00000000000000bb".to_string();
@@ -1277,7 +1277,7 @@ fn detached_commands_record_identity_and_exit_file() {
         "creation-time identity, got {identity}"
     );
     let exit_file = PathBuf::from(exit_file.expect("exit file"));
-    let record = crate::flow::run::supervise::read_exit(&exit_file).expect("exit.json");
+    let record = crate::run::supervise::read_exit(&exit_file).expect("exit.json");
     assert_eq!(record.code, 0);
     assert!(exit_file.parent().unwrap().join("supervise.json").exists());
 }
@@ -1398,9 +1398,9 @@ fn reconnect_rejects_a_reused_pid_and_marks_the_node_interrupted() {
     f.engine
         .confirm_commands(&f.root, &rel, &review.sha256)
         .unwrap();
-    let (flow, _) = crate::flow::load::check_text(
+    let (flow, _) = crate::load::check_text(
         &std::fs::read_to_string(f.root.join(&rel)).unwrap(),
-        crate::flow::parse::FlowFormat::Json,
+        crate::parse::FlowFormat::Json,
     );
     let store = RunStore::new(&f.root);
     let run_id = "00000000000000cc".to_string();
@@ -2175,15 +2175,15 @@ fn nodes_skipped_before_a_back_edge_are_rearmed() {
 #[test]
 fn manual_check_sample_is_runnable() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/flows/valid/manual-check.flow.yaml");
-    let (flow, issues) = crate::flow::load::check_text(
+        .join("../../tests/fixtures/flows/valid/manual-check.flow.yaml");
+    let (flow, issues) = crate::load::check_text(
         &std::fs::read_to_string(&path).unwrap(),
-        crate::flow::parse::FlowFormat::Yaml,
+        crate::parse::FlowFormat::Yaml,
     );
     assert!(issues.errors.is_empty(), "{:#?}", issues.errors);
     let flow = flow.unwrap();
     assert!(
-        crate::flow::run::prepare::check_runnable(&[("manual-check.flow.yaml", &flow)]).is_empty()
+        crate::run::prepare::check_runnable(&[("manual-check.flow.yaml", &flow)]).is_empty()
     );
 }
 
@@ -2197,7 +2197,7 @@ fn manual_check_sample_runs_end_to_end() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::copy(
         Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/flows/valid/manual-check.flow.yaml"),
+            .join("../../tests/fixtures/flows/valid/manual-check.flow.yaml"),
         dir.join("manual-check.flow.yaml"),
     )
     .unwrap();

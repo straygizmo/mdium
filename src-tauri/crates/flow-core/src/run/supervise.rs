@@ -4,10 +4,10 @@
 //! next start it reconnects by pid **and** process creation time, so a
 //! reused pid is never mistaken for the supervisor.
 
-use crate::flow::run::process::{
+use crate::run::process::{
     build_command, kill_tree_by_pid, LaunchSpec, Launcher, ProcessHandle,
 };
-use crate::workflow::fsutil;
+use crate::fsutil;
 use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::{Path, PathBuf};

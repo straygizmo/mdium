@@ -2,13 +2,16 @@
 //! This crate has no Tauri dependency; the desktop app and the flow server
 //! both build on it.
 
+pub mod condition;
 pub mod fsutil;
+pub mod issues;
+pub mod load;
+pub mod model;
+pub mod parse;
 pub mod provider;
+pub mod run;
+pub mod template;
+pub mod validate;
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn crate_builds() {
-        assert_eq!(2 + 2, 4);
-    }
-}
+mod tests;

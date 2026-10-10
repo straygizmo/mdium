@@ -8,24 +8,24 @@
 //! PR 4a: scopes (loops, sub-flows), branches and back-edges. Commands run
 //! one at a time; concurrency limits are PR 4b.
 
-use crate::flow::condition::Condition;
-use crate::flow::model::{
+use crate::condition::Condition;
+use crate::model::{
     parse_duration, CommandNode, CommandProtocol, CommandRun, FlowDef, FlowNode, LoopBody,
     LoopMode, LoopNode, NodeKind, OnItemFailure, RetryOn, RetryPolicy, PORT_FAILURE, PORT_SUCCESS,
 };
-use crate::flow::run::model::*;
-use crate::flow::run::prepare::{prepare_params, LoopVar, TemplateContext};
-use crate::flow::run::process::{
+use crate::run::model::*;
+use crate::run::prepare::{prepare_params, LoopVar, TemplateContext};
+use crate::run::process::{
     decide, CommandResult, LaunchSpec, Launcher, ProcessHandle, ProtocolItem, ProtocolOutcome,
     ProtocolReader,
 };
-use crate::flow::run::scope::{
+use crate::run::scope::{
     self, iteration_prefix, ref_key, split_key, subflow_prefix, Graph, GraphLoc,
 };
-use crate::flow::run::store::{EventLog, RunMeta, RunStore, CHECKPOINT_EVERY};
-use crate::flow::run::supervise::DetachedProcess;
-use crate::flow::template;
-use crate::workflow::fsutil;
+use crate::run::store::{EventLog, RunMeta, RunStore, CHECKPOINT_EVERY};
+use crate::run::supervise::DetachedProcess;
+use crate::template;
+use crate::fsutil;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};

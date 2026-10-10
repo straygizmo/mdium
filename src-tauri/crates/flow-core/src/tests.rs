@@ -1,17 +1,17 @@
 //! Golden-file and behaviour tests of parsing + validation.
 
-use crate::flow::issues::*;
-use crate::flow::load::{
+use crate::issues::*;
+use crate::load::{
     check_content, check_file, check_text, list_flows, resolve_flow_path, PathProblem,
     MAX_FLOW_FILE_BYTES,
 };
-use crate::flow::model::*;
-use crate::flow::parse::FlowFormat;
+use crate::model::*;
+use crate::parse::FlowFormat;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 fn fixtures() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/flows")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/flows")
 }
 
 fn codes(issues: &[FlowIssue]) -> Vec<String> {

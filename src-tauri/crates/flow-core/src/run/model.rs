@@ -376,7 +376,7 @@ pub struct ScopeInit {
     /// file bodies and sub-flows only get `params` (spec 2.5).
     #[serde(default)]
     pub inherits: bool,
-    pub graph: crate::flow::run::scope::GraphLoc,
+    pub graph: crate::run::scope::GraphLoc,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub params: BTreeMap<String, Value>,
     /// Iteration variable name (inline bodies only).
@@ -531,7 +531,7 @@ impl RunState {
 
     /// Key of the current instance of node `id` in scope `prefix`.
     pub fn current_key(&self, prefix: &str, id: &str) -> String {
-        crate::flow::run::scope::instance_key(prefix, id, self.pass(prefix, id))
+        crate::run::scope::instance_key(prefix, id, self.pass(prefix, id))
     }
 }
 
@@ -702,7 +702,7 @@ pub fn apply(state: &mut RunState, event: &FlowEvent) {
                 let pass = state.pass(scope, id) + 1;
                 state.passes.insert(format!("{scope}{id}"), pass);
                 state.nodes.insert(
-                    crate::flow::run::scope::instance_key(scope, id, pass),
+                    crate::run::scope::instance_key(scope, id, pass),
                     NodeState::new(),
                 );
             }
@@ -885,7 +885,7 @@ mod tests {
 
     #[test]
     fn scope_events_round_trip_and_reduce() {
-        use crate::flow::run::scope::GraphLoc;
+        use crate::run::scope::GraphLoc;
         let init = ScopeInit {
             owner: Some("docs".into()),
             parent: Some(String::new()),

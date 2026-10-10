@@ -240,7 +240,7 @@ pub fn parse_line(line: &str) -> Result<ProtocolItem, &'static str> {
         }
         Some("output") => Ok(ProtocolItem::Output {
             key: s("key")
-                .filter(|k| crate::flow::template::is_ident(k))
+                .filter(|k| crate::template::is_ident(k))
                 .ok_or("bad-key")?,
             value: obj.get("value").cloned().unwrap_or(Value::Null),
         }),

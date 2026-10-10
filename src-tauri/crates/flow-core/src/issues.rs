@@ -39,7 +39,7 @@ pub const FLOW_REF_NOT_FOUND: &str = "FLOW_REF_NOT_FOUND";
 pub const FLOW_SUBFLOW_INVALID: &str = "FLOW_SUBFLOW_INVALID";
 /// Arguments passed to a sub-flow don't match its `params`.
 pub const FLOW_PARAM_MISMATCH: &str = "FLOW_PARAM_MISMATCH";
-/// A flow file is larger than [`crate::flow::load::MAX_FLOW_FILE_BYTES`].
+/// A flow file is larger than [`crate::load::MAX_FLOW_FILE_BYTES`].
 pub const FLOW_FILE_TOO_LARGE: &str = "FLOW_FILE_TOO_LARGE";
 
 // Warnings.

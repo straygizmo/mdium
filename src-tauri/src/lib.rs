@@ -1,6 +1,5 @@
 mod commands;
 mod file_watcher;
-mod flow;
 mod http_bridge;
 mod markdown_parser;
 mod workflow;
@@ -75,7 +74,7 @@ fn ensure_loopback_no_proxy() {
 /// Runs the flow command supervisor when the executable was started as one
 /// (`--flow-supervise <spec>`); returns its exit code, or `None` for a normal start.
 pub fn flow_supervise(args: &[String]) -> Option<i32> {
-    flow::run::supervise::supervise_from_args(args)
+    flow_core::run::supervise::supervise_from_args(args)
 }
 
 pub fn run() {

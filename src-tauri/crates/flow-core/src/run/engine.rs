@@ -3,18 +3,18 @@
 //! mark succeeded / delete), recovery after an app exit or crash, and one
 //! driver thread per active run.
 
-use crate::flow::load::{self, check_content, PathProblem, MAX_FLOW_FILE_BYTES};
-use crate::flow::model::NodeKind;
-use crate::flow::run::driver::{Control, Driver, DriverEnv, Editor, FLOW_APP_EXITED, FLOW_RESUMED};
-use crate::flow::run::model::{NodeStatus, Reason, RunState, RunStatus};
-use crate::flow::run::prepare::{
+use crate::load::{self, check_content, PathProblem, MAX_FLOW_FILE_BYTES};
+use crate::model::NodeKind;
+use crate::run::driver::{Control, Driver, DriverEnv, Editor, FLOW_APP_EXITED, FLOW_RESUMED};
+use crate::run::model::{NodeStatus, Reason, RunState, RunStatus};
+use crate::run::prepare::{
     check_runnable, command_summaries, prepare_params, CommandSummary,
 };
-use crate::flow::run::process::tail_file;
-use crate::flow::run::store::{RunMeta, RunStore, StoreError, RUN_SCHEMA_VERSION};
-use crate::flow::run::supervise::DetachedProcess;
-use crate::workflow::fsutil;
-use crate::workflow::state::project_key;
+use crate::run::process::tail_file;
+use crate::run::store::{RunMeta, RunStore, StoreError, RUN_SCHEMA_VERSION};
+use crate::run::supervise::DetachedProcess;
+use crate::fsutil;
+use crate::fsutil::project_key;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -186,9 +186,9 @@ fn read_flow(root: &Path, rel: &str) -> Result<(PathBuf, String, Vec<u8>)> {
 struct Bundle {
     display: String,
     root_sha: String,
-    flow: crate::flow::model::FlowDef,
+    flow: crate::model::FlowDef,
     /// Referenced files by project-relative path: (sha256, flow).
-    others: BTreeMap<String, (String, crate::flow::model::FlowDef)>,
+    others: BTreeMap<String, (String, crate::model::FlowDef)>,
     refs: BTreeMap<String, String>,
 }
 
@@ -213,7 +213,7 @@ impl Bundle {
         sha256_hex(text.as_bytes())
     }
 
-    fn files(&self) -> Vec<(&str, &crate::flow::model::FlowDef)> {
+    fn files(&self) -> Vec<(&str, &crate::model::FlowDef)> {
         let mut out = vec![(self.display.as_str(), &self.flow)];
         out.extend(self.others.iter().map(|(p, (_, f))| (p.as_str(), f)));
         out
@@ -221,8 +221,8 @@ impl Bundle {
 }
 
 /// References to other flow files in `nodes` (sub-flows and file bodies, any depth).
-fn flow_refs(nodes: &[crate::flow::model::FlowNode], out: &mut Vec<String>) {
-    use crate::flow::model::LoopBody;
+fn flow_refs(nodes: &[crate::model::FlowNode], out: &mut Vec<String>) {
+    use crate::model::LoopBody;
     for node in nodes {
         match &node.kind {
             NodeKind::Subflow(sub) => out.push(sub.flow.clone()),
@@ -237,8 +237,8 @@ fn flow_refs(nodes: &[crate::flow::model::FlowNode], out: &mut Vec<String>) {
 
 /// Reads, validates and resolves a flow and everything it references.
 fn load_bundle(root: &Path, rel: &str) -> Result<Bundle> {
-    use crate::flow::load::{check_text, resolve_in_project};
-    use crate::flow::parse::FlowFormat;
+    use crate::load::{check_text, resolve_in_project};
+    use crate::parse::FlowFormat;
     let (file, display, bytes) = read_flow(root, rel)?;
     let root_sha = sha256_hex(&bytes);
     let text = String::from_utf8_lossy(&bytes);
@@ -276,7 +276,7 @@ fn load_bundle(root: &Path, rel: &str) -> Result<Bundle> {
             })?;
             let child_display = load::relative_display(root, &child);
             refs.insert(
-                crate::flow::run::scope::ref_key(&owner, &reference),
+                crate::run::scope::ref_key(&owner, &reference),
                 child_display.clone(),
             );
             if child_display == display || others.contains_key(&child_display) {
@@ -673,11 +673,11 @@ impl FlowEngine {
             let mut editor = self.editor(root, run_id)?;
             editor.set_run(
                 RunStatus::Stopping,
-                Some(Reason::new(crate::flow::run::driver::FLOW_STOP_REQUESTED)),
+                Some(Reason::new(crate::run::driver::FLOW_STOP_REQUESTED)),
             );
             editor.set_run(
                 RunStatus::Paused,
-                Some(Reason::new(crate::flow::run::driver::FLOW_STOP_REQUESTED)),
+                Some(Reason::new(crate::run::driver::FLOW_STOP_REQUESTED)),
             );
             editor.finish();
         }
@@ -701,7 +701,7 @@ impl FlowEngine {
             let mut editor = self.editor(root, run_id)?;
             editor.set_run(
                 RunStatus::Cancelled,
-                Some(Reason::new(crate::flow::run::driver::FLOW_RUN_CANCELLED)),
+                Some(Reason::new(crate::run::driver::FLOW_RUN_CANCELLED)),
             );
             editor.finish();
         }
@@ -790,12 +790,12 @@ impl FlowEngine {
             .ok_or_else(|| EngineError::new(FLOW_APPROVAL_INVALID, "no such pending approval"))?;
         // Only the current pass of a node in a live scope can be answered.
         if let Some(key) = node_key {
-            let (prefix, id, _) = crate::flow::run::scope::split_key(key);
+            let (prefix, id, _) = crate::run::scope::split_key(key);
             let live_scope = prefix.is_empty()
                 || state
                     .scopes
                     .get(prefix)
-                    .is_some_and(|s| s.status == crate::flow::run::model::ScopeStatus::Running);
+                    .is_some_and(|s| s.status == crate::run::model::ScopeStatus::Running);
             if state.current_key(prefix, id) != key || !live_scope {
                 return Err(EngineError::new(
                     FLOW_APPROVAL_INVALID,

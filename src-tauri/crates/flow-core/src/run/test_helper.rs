@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use std::io::Write;
 use std::time::{Duration, Instant};
 
-const TEST_NAME: &str = "flow::run::test_helper::flow_test_helper_entry";
+const TEST_NAME: &str = "run::test_helper::flow_test_helper_entry";
 
 /// argv that runs `steps` as a command node.
 pub fn helper_argv() -> Vec<String> {
@@ -184,19 +184,19 @@ fn flow_supervisor_entry() {
         return;
     }
     let spec = std::env::args().last().expect("spec path");
-    std::process::exit(crate::flow::run::supervise::supervise(
+    std::process::exit(crate::run::supervise::supervise(
         std::path::Path::new(&spec),
     ));
 }
 
 /// A detached launcher whose supervisor is this test binary.
-pub fn detached_launcher() -> crate::flow::run::supervise::DetachedLauncher {
+pub fn detached_launcher() -> crate::run::supervise::DetachedLauncher {
     let exe = std::env::current_exe().expect("test exe");
-    crate::flow::run::supervise::DetachedLauncher {
+    crate::run::supervise::DetachedLauncher {
         supervisor: vec![
             exe.to_string_lossy().into_owned(),
             "--exact".into(),
-            "flow::run::test_helper::flow_supervisor_entry".into(),
+            "run::test_helper::flow_supervisor_entry".into(),
             "--nocapture".into(),
             "--test-threads=1".into(),
             "--quiet".into(),

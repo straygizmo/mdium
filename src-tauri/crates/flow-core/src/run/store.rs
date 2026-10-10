@@ -3,9 +3,9 @@
 //! the `state.json` checkpoint, the `STOP` file and per-attempt node
 //! directories.
 
-use crate::flow::model::FlowDef;
-use crate::flow::run::model::{apply, EventBody, FlowEvent, RunState};
-use crate::workflow::fsutil;
+use crate::model::FlowDef;
+use crate::run::model::{apply, EventBody, FlowEvent, RunState};
+use crate::fsutil;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -306,9 +306,9 @@ impl EventLog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::flow::load::check_text;
-    use crate::flow::parse::FlowFormat;
-    use crate::flow::run::model::{NodeStatus, RunStatus};
+    use crate::load::check_text;
+    use crate::parse::FlowFormat;
+    use crate::run::model::{NodeStatus, RunStatus};
 
     pub(crate) fn meta(run_id: &str) -> RunMeta {
         let yaml = "schemaVersion: 1\nid: t\nname: T\nnodes:\n  - { id: a, kind: command, run: [x] }\n  - { id: b, kind: command, run: [y] }\nedges:\n  - { from: a, to: b }\n";

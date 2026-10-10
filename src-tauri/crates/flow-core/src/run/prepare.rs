@@ -2,9 +2,9 @@
 //! command-safety rules, parameter values, the command list shown for
 //! confirmation (spec 7.2), and the template resolver used while running.
 
-use crate::flow::model::{CommandRun, FlowDef, FlowNode, LoopBody, NodeKind, ParamType};
-use crate::flow::run::model::Reason;
-use crate::flow::template::{self, Reference};
+use crate::model::{CommandRun, FlowDef, FlowNode, LoopBody, NodeKind, ParamType};
+use crate::run::model::Reason;
+use crate::template::{self, Reference};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -297,8 +297,8 @@ impl TemplateContext<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::flow::load::check_text;
-    use crate::flow::parse::FlowFormat;
+    use crate::load::check_text;
+    use crate::parse::FlowFormat;
     use serde_json::json;
 
     fn flow(yaml: &str) -> FlowDef {
