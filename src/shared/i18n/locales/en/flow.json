@@ -161,6 +161,7 @@
     "previewTruncated": "Showing the first {{kib}} KiB.",
     "previewNone": "No preview for this type.",
     "openArtifact": "Open",
+    "bytes": "{{n}} B",
     "commentRequired": "This option needs a comment.",
     "review": "Review",
     "iteration": "Iteration {{n}}",

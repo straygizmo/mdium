@@ -866,3 +866,101 @@ button.flow-issue__button:hover {
   font-size: 11px;
   color: var(--text-muted);
 }
+
+.flow-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.flow-tree__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  margin-bottom: 3px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.flow-tree__row--selected {
+  border-color: var(--primary);
+}
+
+.flow-tree__toggle {
+  width: 16px;
+  flex: none;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.flow-tree__agg {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  color: var(--text-muted);
+}
+
+.flow-node-detail {
+  margin-top: 6px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.flow-node-detail__tabs {
+  margin: 0;
+}
+
+.flow-node-detail__outputs {
+  margin: 0;
+  font-size: 12px;
+}
+
+.flow-node-detail__outputs dt {
+  font-weight: 600;
+}
+
+.flow-node-detail__outputs dd {
+  margin: 0 0 4px;
+}
+
+.flow-node-detail__artifacts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.flow-artifact {
+  font-size: 12px;
+}
+
+.flow-artifact__head {
+  display: flex;
+  gap: 8px;
+}
+
+.flow-artifact__media {
+  max-width: 100%;
+  max-height: 320px;
+}
+
+.flow-artifact__text {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 6px;
+  font-size: 11px;
+  background: var(--bg-base);
+}

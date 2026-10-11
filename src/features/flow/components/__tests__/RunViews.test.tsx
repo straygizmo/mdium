@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import i18n from "@/shared/i18n";
 import type { FlowDef } from "@/shared/types/flow";
-import type { CommandReview, RunSnapshot, RunSummary } from "@/shared/types/flow-run";
+import type { CommandReview, NodeState, RunSnapshot, RunSummary } from "@/shared/types/flow-run";
 
 const invoke = vi.hoisted(() => vi.fn());
 const listeners = vi.hoisted(() => new Map<string, (e: { payload: unknown }) => void>());
@@ -375,8 +375,10 @@ describe("run views", () => {
     await waitFor(() => expect(container.querySelectorAll(".flow-runs__item").length).toBe(1));
     expect(container.textContent).toContain(i18n.t("run.gitignoreHint", { ns: "flow" }));
     await act(async () => container.querySelector<HTMLButtonElement>(".flow-runs__item")!.click());
+    await waitFor(() => expect(container.textContent).toContain("Cost: $0.50"));
+    // The node's reason is part of its detail, opened by selecting the row.
+    await act(async () => container.querySelector<HTMLElement>('[role="treeitem"]')!.click());
     await waitFor(() => expect(container.textContent).toContain("The app exited while this was running."));
-    expect(container.textContent).toContain("Cost: $0.50");
     // Interrupted node: re-run; the run can be resumed or cancelled.
     await act(async () => button(container, "Re-run").click());
     await waitFor(() => expect(calls).toContain("rerun a"));
@@ -456,5 +458,114 @@ describe("node instance keys", () => {
     expect(isLiveInstance(state, "docs[0]/proc")).toBe(false);
     expect(isLiveInstance(state, "docs@2[0]/proc")).toBe(true);
     expect(isLiveInstance(state, "other")).toBe(true);
+  });
+});
+
+describe("run panel tree and artifacts", () => {
+  let root: ReturnType<typeof createRoot>;
+  let container: HTMLDivElement;
+
+  beforeEach(async () => {
+    await i18n.changeLanguage("en");
+    invoke.mockReset();
+    listeners.clear();
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(async () => {
+    await act(async () => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+  });
+
+  /** Builds a node state with sensible defaults. */
+  function node(status: NodeState["status"], extra: Partial<NodeState> = {}): NodeState {
+    return { status, attempt: 1, cost: { actual: 0, estimated: 0 }, costReported: false, ...extra };
+  }
+
+  /** Mounts the run panel and opens run r1 (the routes must already be set). */
+  async function renderPanel() {
+    await act(async () => root.render(<RunPanel projectRoot={ROOT} flowPath={PATH} flow={flow} />));
+    await waitFor(() => expect(container.querySelectorAll(".flow-runs__item").length).toBe(1));
+    await act(async () => container.querySelector<HTMLButtonElement>(".flow-runs__item")!.click());
+    await waitFor(() => expect(container.querySelectorAll('[role="treeitem"]').length).toBeGreaterThan(0));
+    return { container };
+  }
+
+  const clickFirstRow = () => act(async () => container.querySelector<HTMLElement>('[role="treeitem"]')!.click());
+
+  it("renders the node tree with iteration rows and aggregates", async () => {
+    const snap = snapshot("r1", {
+      nodes: { docs: node("running"), "docs[0]/sum": node("succeeded"), "docs[1]/sum": node("running", { progress: { text: "half" } }) },
+      scopes: { "": { status: "running" }, "docs[0]/": { status: "completed", owner: "docs", index: 0 }, "docs[1]/": { status: "running", owner: "docs", index: 1 } },
+    });
+    route({ flow_run_list: () => [summary("r1")], flow_run_get: () => snap, flow_gitignore_status: () => ({ ignored: true }) });
+    await renderPanel();
+    await waitFor(() => expect(container.querySelectorAll('[role="treeitem"]').length).toBeGreaterThanOrEqual(4));
+    const items = [...container.querySelectorAll('[role="treeitem"]')];
+    expect(items.map((i) => i.getAttribute("aria-level"))).toEqual(["1", "2", "2", "3"]);
+    expect(items[0].textContent).toContain("2 running");
+    expect(items[0].textContent).toContain("half");
+    expect(items[1].textContent).toContain("Iteration 0");
+    expect(items[1].getAttribute("aria-expanded")).toBe("false");
+    expect(items[2].getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("shows outputs and artifacts of the selected node with an image preview", async () => {
+    const snap = snapshot("r1", {
+      nodes: { a: node("succeeded", { outputs: { n: 7 }, artifacts: [{ index: 0, path: "C:/p/a.png", label: "pic", mediaType: "image/png", bytes: 3, recordedAt: "t" }] }) },
+    });
+    route({
+      flow_run_list: () => [summary("r1")],
+      flow_run_get: () => snap,
+      flow_gitignore_status: () => ({ ignored: true }),
+      flow_artifact_path: (args) => {
+        expect(args).toEqual({ projectRoot: ROOT, runId: "r1", nodeKey: "a", attempt: 1, index: 0 });
+        return { path: "C:/p/a.png", mediaType: "image/png" };
+      },
+    });
+    await renderPanel();
+    await clickFirstRow();
+    await waitFor(() => expect(container.querySelector(".flow-node-detail dl")).not.toBeNull());
+    expect(container.querySelector(".flow-node-detail dl")!.textContent).toContain("7");
+    await act(async () => button(container, "Artifacts").click());
+    await waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+    expect(container.querySelector("img")!.getAttribute("src")).toBe("asset://C:/p/a.png");
+    expect(container.textContent).toContain("pic");
+  });
+
+  it("previews text artifacts with a truncation notice", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("head", { status: 206, headers: { "Content-Range": "bytes 0-3/999999" } })));
+    const snap = snapshot("r1", { nodes: { a: node("succeeded", { artifacts: [{ index: 0, path: "C:/p/log.txt", mediaType: "text/plain", recordedAt: "t" }] }) } });
+    route({
+      flow_run_list: () => [summary("r1")],
+      flow_run_get: () => snap,
+      flow_gitignore_status: () => ({ ignored: true }),
+      flow_artifact_path: () => ({ path: "C:/p/log.txt", mediaType: "text/plain" }),
+    });
+    await renderPanel();
+    await clickFirstRow();
+    await act(async () => button(container, "Artifacts").click());
+    await waitFor(() => expect(container.querySelector("pre")).not.toBeNull());
+    expect(container.querySelector("pre")!.textContent).toBe("head");
+    expect(container.textContent).toContain("Showing the first 256 KiB.");
+  });
+
+  it("shows an unavailable notice when the artifact url fails", async () => {
+    const snap = snapshot("r1", { nodes: { a: node("succeeded", { artifacts: [{ index: 0, path: "C:/p/gone.png", mediaType: "image/png", recordedAt: "t" }] }) } });
+    route({
+      flow_run_list: () => [summary("r1")],
+      flow_run_get: () => snap,
+      flow_gitignore_status: () => ({ ignored: true }),
+      flow_artifact_path: () => {
+        throw { code: "FLOW_ARTIFACT_NOT_FOUND", message: "x" };
+      },
+    });
+    await renderPanel();
+    await clickFirstRow();
+    await act(async () => button(container, "Artifacts").click());
+    await waitFor(() => expect(container.textContent).toContain("Preview unavailable."));
   });
 });

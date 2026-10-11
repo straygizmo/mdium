@@ -161,6 +161,7 @@
     "previewTruncated": "先頭 {{kib}} KiB を表示しています。",
     "previewNone": "この種類はプレビューできません。",
     "openArtifact": "開く",
+    "bytes": "{{n}} B",
     "commentRequired": "この選択肢にはコメントが必要です。",
     "review": "確認",
     "iteration": "反復 {{n}}",

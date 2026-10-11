@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { showConfirm } from "@/stores/dialog-store";
 import type { FlowDef } from "@/shared/types/flow";
@@ -8,7 +8,6 @@ import {
   splitNodeKey,
   type ApprovalRequest,
   type FlowRunError,
-  type NodeState,
   type RunSnapshot,
   type RunSummary,
 } from "@/shared/types/flow-run";
@@ -16,6 +15,9 @@ import { flowRunApi, subscribeFlowRunEvents, toFlowRunError } from "../lib/flow-
 import { describeError, describeReason, formatUsd } from "../lib/run-format";
 import { RunStartDialog } from "./RunStartDialog";
 import { RunLogDialog } from "./RunLogDialog";
+import { RunNodeTree } from "./RunNodeTree";
+import { RunNodeDetail } from "./RunNodeDetail";
+import { buildRunTree } from "../lib/run-tree";
 
 /** Compares project roots as the backend may spell them differently. */
 export function sameRoot(a: string, b: string): boolean {
@@ -39,6 +41,7 @@ export function RunPanel({ projectRoot, flowPath, flow }: RunPanelProps) {
   const [error, setError] = useState<FlowRunError | null>(null);
   const [starting, setStarting] = useState(false);
   const [logTarget, setLogTarget] = useState<{ nodeKey: string; attempt: number } | null>(null);
+  const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [approvalNotice, setApprovalNotice] = useState(false);
   const [gitignoreHint, setGitignoreHint] = useState(false);
   const selectedRef = useRef<string | null>(null);
@@ -79,6 +82,7 @@ export function RunPanel({ projectRoot, flowPath, flow }: RunPanelProps) {
   }, [loadRuns]);
 
   useEffect(() => {
+    setSelectedNode(null);
     if (selected) void loadSnapshot(selected);
     else setSnapshot(null);
   }, [selected, loadSnapshot]);
@@ -175,6 +179,8 @@ export function RunPanel({ projectRoot, flowPath, flow }: RunPanelProps) {
           snapshot={snapshot}
           onAct={act}
           projectRoot={projectRoot}
+          selectedNode={selectedNode}
+          onSelectNode={setSelectedNode}
           onLog={(nodeKey, attempt) => setLogTarget({ nodeKey, attempt })}
         />
       )}
@@ -207,11 +213,13 @@ export function RunPanel({ projectRoot, flowPath, flow }: RunPanelProps) {
 interface RunDetailProps {
   projectRoot: string;
   snapshot: RunSnapshot;
+  selectedNode: string | null;
+  onSelectNode(key: string): void;
   onAct(op: () => Promise<void>): Promise<void>;
   onLog(nodeKey: string, attempt: number): void;
 }
 
-function RunDetail({ projectRoot, snapshot, onAct, onLog }: RunDetailProps) {
+function RunDetail({ projectRoot, snapshot, selectedNode, onSelectNode, onAct, onLog }: RunDetailProps) {
   const { t } = useTranslation("flow");
   const { meta, state, active } = snapshot;
   const runId = meta.runId;
@@ -223,10 +231,18 @@ function RunDetail({ projectRoot, snapshot, onAct, onLog }: RunDetailProps) {
   /** Top-level definitions (nested nodes are labelled by their key). */
   const rootDef = (key: string) => (splitNodeKey(key).prefix === "" ? meta.flow.nodes.find((n) => n.id === splitNodeKey(key).id) : undefined);
   const isApproval = (key: string) => rootDef(key)?.kind === "approval";
+  const rows = useMemo(() => buildRunTree(state, meta.flow), [state, meta.flow]);
+  const approvalsRef = useRef<HTMLDivElement>(null);
   // Nested scopes' edges are not known here; the backend rejects what it cannot do.
   const hasFailureEdge = (key: string) =>
     splitNodeKey(key).prefix === "" &&
     (meta.flow.edges ?? []).some((e) => e.from === splitNodeKey(key).id && e.port === "failure" && e.maxTraversals === undefined);
+
+  const needsAction = (key: string, node: RunSnapshot["state"]["nodes"][string]) =>
+    !isActive &&
+    !active &&
+    isLiveInstance(state, key) &&
+    (node.status === "interrupted" || node.status === "cancelled" || (node.status === "failed" && !hasFailureEdge(key)));
 
   return (
     <div className="flow-run">
@@ -273,7 +289,7 @@ function RunDetail({ projectRoot, snapshot, onAct, onLog }: RunDetailProps) {
         )}
       </div>
       {(state.approvals ?? []).length > 0 && (
-        <div className="flow-run__approvals">
+        <div className="flow-run__approvals" ref={approvalsRef}>
           {(state.approvals ?? []).map((request) => (
             <ApprovalCard
               key={request.nodeKey ?? "__budget__"}
@@ -286,48 +302,39 @@ function RunDetail({ projectRoot, snapshot, onAct, onLog }: RunDetailProps) {
         </div>
       )}
       <h4 className="flow-run__heading">{t("run.nodes")}</h4>
-      <ul className="flow-run__nodes">
-        {Object.entries(state.nodes).map(([key, node]: [string, NodeState]) => {
-          const def = rootDef(key);
-          const needsAction =
-            !isActive &&
-            !active &&
-            isLiveInstance(state, key) &&
-            (node.status === "interrupted" || node.status === "cancelled" || (node.status === "failed" && !hasFailureEdge(key)));
-          return (
-            <li key={key} className={`flow-run__node flow-run__node--${node.status}`}>
-              <div className="flow-run__node-head">
-                <span className="flow-run__node-name" title={key}>
-                  {def?.name && splitNodeKey(key).pass === 1 ? def.name : key}
-                </span>
-                <span className="flow-run__node-status">{t(`nodeStatus.${node.status}`)}</span>
-                {node.attempt > 1 && <span className="flow-run__muted">{t("run.attempt", { n: node.attempt })}</span>}
-              </div>
-              {node.progress && <div className="flow-run__muted">{node.progress.text}</div>}
-              {node.reason && <div className="flow-run__reason">{describeReason(t, node.reason)}</div>}
-              <div className="flow-run__node-actions">
-                {!isApproval(key) && node.attempt > 0 && (node.process || node.startedAt) && (
-                  <button type="button" onClick={() => onLog(key, node.attempt)}>
-                    {t("run.log")}
-                  </button>
-                )}
-                {needsAction && (
-                  <button type="button" onClick={() => void onAct(() => flowRunApi.rerunNode(projectRoot, runId, key))}>
-                    {t("run.rerun")}
-                  </button>
-                )}
-                {needsAction && node.status === "failed" && (
-                  <button type="button" onClick={() => void onAct(() => flowRunApi.markSucceeded(projectRoot, runId, key))}>
-                    {t("run.markSucceeded")}
-                  </button>
-                )}
-              </div>
-            </li>
-          );
-        })}
-      </ul>
+      <RunNodeTree
+        rows={rows}
+        selectedKey={selectedNode}
+        onSelect={onSelectNode}
+        onOpenApproval={() => approvalsRef.current?.scrollIntoView?.({ block: "nearest" })}
+      />
+      {selectedNode && state.nodes[selectedNode] && (
+        <RunNodeDetail
+          key={selectedNode}
+          projectRoot={projectRoot}
+          runId={runId}
+          nodeKey={selectedNode}
+          node={state.nodes[selectedNode]}
+          name={findLabel(rows, selectedNode)}
+          canRerun={needsAction(selectedNode, state.nodes[selectedNode])}
+          canMarkSucceeded={needsAction(selectedNode, state.nodes[selectedNode]) && state.nodes[selectedNode].status === "failed"}
+          isApproval={isApproval(selectedNode)}
+          onAct={onAct}
+          onLog={onLog}
+        />
+      )}
     </div>
   );
+}
+
+/** Finds the display label of a node row in the tree. */
+function findLabel(rows: ReturnType<typeof buildRunTree>, key: string): string {
+  for (const row of rows) {
+    if (row.key === key) return row.label;
+    const inner = findLabel(row.children, key);
+    if (inner !== key) return inner;
+  }
+  return key;
 }
 
 function ApprovalCard({ request, onChoose }: { request: ApprovalRequest; onChoose(choice: string, comment: string): Promise<void> }) {
