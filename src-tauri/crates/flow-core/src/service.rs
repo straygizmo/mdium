@@ -2,6 +2,7 @@
 //! exposes as a Tauri command and the flow server exposes over HTTP, as
 //! plain methods on one object (spec 2026-10-10, 10.1 "FlowService").
 
+use crate::issues::FLOW_FILE_TOO_LARGE;
 use crate::load::{self, flow_kind_of, FlowKind, FlowReport, FlowSummary, PathProblem};
 use crate::parse::FlowFormat;
 use crate::project::{load_project_bytes, ProjectReport, PROJECT_FILE};
@@ -38,6 +39,8 @@ pub const FLOW_FILE_NOT_FOUND: &str = "FLOW_FILE_NOT_FOUND";
 pub const FLOW_LIST_FAILED: &str = "FLOW_LIST_FAILED";
 /// The blocking task could not be joined (used by the Tauri wrappers).
 pub const FLOW_COMMAND_FAILED: &str = "FLOW_COMMAND_FAILED";
+/// `save` without an expected hash found a file already there.
+pub const FLOW_FILE_EXISTS: &str = "FLOW_FILE_EXISTS";
 /// The command is not one of [`COMMAND_NAMES`].
 pub const FLOW_UNKNOWN_COMMAND: &str = "FLOW_UNKNOWN_COMMAND";
 /// The JSON arguments do not match the command's parameters.
@@ -84,6 +87,10 @@ pub struct FlowLoadResult {
     pub path: String,
     pub format: FlowFormat,
     pub kind: FlowKind,
+    /// The text that was checked (the file for `load`, the given text otherwise).
+    pub content: String,
+    /// Hex sha256 of `content`; `save` requires it to overwrite.
+    pub sha256: String,
     #[serde(flatten)]
     pub report: FlowReport,
 }
@@ -329,12 +336,53 @@ impl FlowService {
         let root = project_root(project_root_arg)?;
         let file = flow_file(&root, path, true)?;
         let path = load::relative_display(&root, &file);
+        // Read once: the checked text is the text the UI edits and hashes.
+        let (content, report) = load::read_and_check(&root, &file);
         Ok(FlowLoadResult {
             kind: flow_kind_of(&path),
             path,
             format: format_of(&file),
-            report: load::check_file(&root, &file),
+            sha256: sha256_hex(content.as_bytes()),
+            content,
+            report,
         })
+    }
+
+    /// Writes `content` to a flow file (the editor's save). `None` creates
+    /// (the file must not exist); `Some(hash)` overwrites only when the file
+    /// still has that content hash. Invalid content is saved too; the
+    /// returned report carries its errors.
+    pub fn save_flow(
+        &self,
+        project_root_arg: &str,
+        path: &str,
+        content: &str,
+        expected_sha256: Option<&str>,
+    ) -> Result<FlowLoadResult, FlowCommandError> {
+        let root = project_root(project_root_arg)?;
+        let file = flow_file(&root, path, false)?;
+        if content.len() as u64 > load::MAX_FLOW_FILE_BYTES {
+            return Err(FlowCommandError::new(FLOW_FILE_TOO_LARGE, path));
+        }
+        match (expected_sha256, std::fs::read(&file)) {
+            (None, Ok(_)) => return Err(FlowCommandError::new(FLOW_FILE_EXISTS, path)),
+            (None, Err(_)) => {}
+            (Some(_), Err(_)) => return Err(FlowCommandError::new(FLOW_FILE_NOT_FOUND, path)),
+            (Some(expected), Ok(bytes)) if sha256_hex(&bytes) != expected => {
+                return Err(FlowCommandError::new(
+                    FLOW_FILE_CHANGED,
+                    "the flow file changed since it was loaded",
+                ));
+            }
+            (Some(_), Ok(_)) => {}
+        }
+        if let Some(parent) = file.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| FlowCommandError::new(FLOW_COMMAND_FAILED, e))?;
+        }
+        crate::fsutil::atomic_write(&file, content.as_bytes())
+            .map_err(|e| FlowCommandError::new(FLOW_COMMAND_FAILED, e))?;
+        self.load_flow(project_root_arg, path)
     }
 
     /// Validates unsaved `content` as if it were the file at `path`.
@@ -351,6 +399,8 @@ impl FlowService {
             kind: flow_kind_of(&path),
             path,
             format: format_of(&file),
+            sha256: sha256_hex(content.as_bytes()),
+            content: content.to_string(),
             report: load::check_content(&root, &file, content),
         })
     }
@@ -531,10 +581,11 @@ impl FlowService {
 
 /// Every command the service dispatches by name (the Tauri command names;
 /// the HTTP server uses the same names, spec 2026-10-10, 10.2).
-pub const COMMAND_NAMES: [&str; 21] = [
+pub const COMMAND_NAMES: [&str; 22] = [
     "flow_list",
     "flow_load",
     "flow_validate",
+    "flow_save",
     "flow_project_load",
     "flow_project_setup",
     "flow_runtime_describe",
@@ -584,6 +635,15 @@ struct ValidateArgs {
     project_root: String,
     path: String,
     content: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SaveArgs {
+    project_root: String,
+    path: String,
+    content: String,
+    expected_sha256: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -683,6 +743,15 @@ impl FlowService {
             "flow_validate" => {
                 let a: ValidateArgs = args(value)?;
                 reply(self.validate_flow(&a.project_root, &a.path, &a.content)?)
+            }
+            "flow_save" => {
+                let a: SaveArgs = args(value)?;
+                reply(self.save_flow(
+                    &a.project_root,
+                    &a.path,
+                    &a.content,
+                    a.expected_sha256.as_deref(),
+                )?)
             }
             "flow_project_load" => {
                 let a: RootArgs = args(value)?;
@@ -802,6 +871,60 @@ mod tests {
     struct NoopNotifier;
     impl ApprovalNotifier for NoopNotifier {
         fn approval_requested(&self, _: &Path, _: &str, _: &ApprovalRequest) {}
+    }
+
+    #[test]
+    fn load_and_validate_return_the_text_and_its_hash() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = service(tmp.path());
+        let root = tmp.path().to_str().unwrap();
+        let text = "schemaVersion: 1\nid: a\nname: A\nnodes: []\n";
+        fs::create_dir_all(tmp.path().join(".mdium/flows")).unwrap();
+        fs::write(tmp.path().join(".mdium/flows/a.flow.yaml"), text).unwrap();
+        let loaded = svc.load_flow(root, ".mdium/flows/a.flow.yaml").unwrap();
+        assert_eq!(loaded.content, text);
+        assert_eq!(loaded.sha256, sha256_hex(text.as_bytes()));
+        let edited = "schemaVersion: 1\nid: a\nname: B\nnodes: []\n";
+        let validated = svc.validate_flow(root, ".mdium/flows/a.flow.yaml", edited).unwrap();
+        assert_eq!(validated.content, edited);
+        assert_eq!(validated.sha256, sha256_hex(edited.as_bytes()));
+        assert_eq!(validated.report.flow.unwrap().name, "B");
+    }
+
+    #[test]
+    fn save_creates_overwrites_and_refuses_stale_or_outside_files() {
+        use serde_json::json;
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = service(tmp.path());
+        let root = tmp.path().to_str().unwrap();
+        let v1 = "schemaVersion: 1\nid: s\nname: S\nnodes: []\n";
+        // Create: the file must not exist yet.
+        let created = svc.save_flow(root, ".mdium/flows/lib/s.flow.yaml", v1, None).unwrap();
+        assert_eq!(created.kind, FlowKind::Part);
+        assert_eq!(fs::read_to_string(tmp.path().join(".mdium/flows/lib/s.flow.yaml")).unwrap(), v1);
+        assert_eq!(svc.save_flow(root, ".mdium/flows/lib/s.flow.yaml", v1, None).unwrap_err().code, FLOW_FILE_EXISTS);
+        // Overwrite with the right hash.
+        let v2 = "schemaVersion: 1\nid: s\nname: S2\nnodes: []\n";
+        let saved = svc.save_flow(root, ".mdium/flows/lib/s.flow.yaml", v2, Some(&created.sha256)).unwrap();
+        assert_eq!(saved.sha256, sha256_hex(v2.as_bytes()));
+        assert_eq!(saved.report.flow.unwrap().name, "S2");
+        // A stale hash is refused and leaves the file alone.
+        let err = svc.save_flow(root, ".mdium/flows/lib/s.flow.yaml", v1, Some(&created.sha256)).unwrap_err();
+        assert_eq!(err.code, FLOW_FILE_CHANGED);
+        assert_eq!(fs::read_to_string(tmp.path().join(".mdium/flows/lib/s.flow.yaml")).unwrap(), v2);
+        // Overwriting a missing file, escaping the project, a bad name, and an oversized body.
+        assert_eq!(svc.save_flow(root, ".mdium/flows/missing.flow.yaml", v1, Some("00")).unwrap_err().code, FLOW_FILE_NOT_FOUND);
+        assert_eq!(svc.save_flow(root, "../x.flow.yaml", v1, None).unwrap_err().code, FLOW_FILE_PATH_INVALID);
+        assert_eq!(svc.save_flow(root, ".mdium/flows/notes.txt", v1, None).unwrap_err().code, FLOW_FILE_PATH_INVALID);
+        let big = "#".repeat(crate::load::MAX_FLOW_FILE_BYTES as usize + 1);
+        assert_eq!(svc.save_flow(root, ".mdium/flows/big.flow.yaml", &big, None).unwrap_err().code, "FLOW_FILE_TOO_LARGE");
+        // Invalid content is still saved; the report carries the errors.
+        let bad = "schemaVersion: 1\nid: s\nname: S\nnodes:\n  - { id: x, kind: nope }\n";
+        let saved = svc.save_flow(root, ".mdium/flows/bad.flow.yaml", bad, None).unwrap();
+        assert!(!saved.report.errors.is_empty());
+        // Dispatch through call().
+        let via_call = svc.call("flow_save", json!({ "projectRoot": root, "path": ".mdium/flows/c.flow.yaml", "content": v1, "expectedSha256": null })).unwrap();
+        assert_eq!(via_call["sha256"], sha256_hex(v1.as_bytes()));
     }
 
     fn service(dir: &Path) -> FlowService {

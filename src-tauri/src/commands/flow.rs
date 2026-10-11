@@ -70,6 +70,20 @@ pub async fn flow_validate(
 }
 
 #[tauri::command]
+pub async fn flow_save(
+    state: tauri::State<'_, FlowServiceState>,
+    project_root: String,
+    path: String,
+    content: String,
+    expected_sha256: Option<String>,
+) -> Result<FlowLoadResult, FlowCommandError> {
+    with_service(state, move |s| {
+        s.save_flow(&project_root, &path, &content, expected_sha256.as_deref())
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn flow_project_load(
     state: tauri::State<'_, FlowServiceState>,
     project_root: String,

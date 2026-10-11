@@ -174,9 +174,18 @@ pub fn check_content(project_root: &Path, file: &Path, text: &str) -> FlowReport
 
 /// Reads and fully checks `file`.
 pub fn check_file(project_root: &Path, file: &Path) -> FlowReport {
+    read_and_check(project_root, file).1
+}
+
+/// Like [`check_file`], also returning the text that was read (empty when
+/// the file could not be read), so callers read the file only once.
+pub fn read_and_check(project_root: &Path, file: &Path) -> (String, FlowReport) {
     match read_flow_file(file) {
-        Ok(text) => check_content(project_root, file, &text),
-        Err(issue) => FlowReport::single_error(issue),
+        Ok(text) => {
+            let report = check_content(project_root, file, &text);
+            (text, report)
+        }
+        Err(issue) => (String::new(), FlowReport::single_error(issue)),
     }
 }
 

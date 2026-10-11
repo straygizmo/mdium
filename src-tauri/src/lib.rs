@@ -397,6 +397,7 @@ pub fn run() {
             commands::flow::flow_list,
             commands::flow::flow_load,
             commands::flow::flow_validate,
+            commands::flow::flow_save,
             commands::flow::flow_project_load,
             commands::flow::flow_project_setup,
             commands::flow::flow_runtime_describe,
