@@ -39,6 +39,9 @@ pub fn resolve_artifact_path(
     node_dir: &Path,
     raw: &str,
 ) -> Result<PathBuf, &'static str> {
+    if raw.trim().is_empty() {
+        return Err("empty");
+    }
     let candidate = Path::new(raw);
     let joined = if candidate.is_absolute() {
         candidate.to_path_buf()
@@ -152,6 +155,14 @@ mod tests {
             resolve_artifact_path(&root, &node_dir, "../../../../../../../etc/passwd")
                 .unwrap_err(),
             "outside-root"
+        );
+        assert_eq!(
+            resolve_artifact_path(&root, &node_dir, "  ").unwrap_err(),
+            "empty"
+        );
+        assert_eq!(
+            resolve_artifact_path(&root, &node_dir, "").unwrap_err(),
+            "empty"
         );
         let outside = tmp.path().join("elsewhere.txt");
         assert_eq!(

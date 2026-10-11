@@ -349,7 +349,8 @@ fn runs_commands_with_protocol_env_and_templates() {
     assert_eq!(a.status, NodeStatus::Succeeded);
     assert_eq!(a.attempt, 1);
     assert_eq!(a.outputs["score"], json!(7));
-    assert!(Path::new(&a.artifacts[0].path).is_absolute() && a.artifacts[0].path.replace('\\', "/").ends_with("/out/a.md"));
+    assert!(Path::new(&a.artifacts[0].path).is_absolute());
+    assert!(a.artifacts[0].path.replace('\\', "/").ends_with("/out/a.md"));
     assert_eq!(
         a.cost,
         CostTotals {
@@ -3150,4 +3151,22 @@ fn a_retry_starts_a_fresh_artifact_list() {
     let store = f.engine_store();
     assert_eq!(crate::run::artifacts::read_artifacts_json(&store.node_attempt_dir(&run_id, "a", 1).unwrap()).len(), 1);
     assert_eq!(crate::run::artifacts::read_artifacts_json(&store.node_attempt_dir(&run_id, "a", 2).unwrap()).len(), 1);
+}
+
+#[test]
+fn an_empty_artifact_path_is_rejected_with_an_empty_reason() {
+    let f = fixture();
+    let rel = write_flow(&f.root, "art5", json!({}), vec![cmd("a", json!([
+        ev(json!({"v":1,"type":"artifact","path":""})),
+    ]))], vec![]);
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    f.wait_settled(&run_id, RunStatus::Completed);
+    let a = node(&f.snapshot(&run_id), "a");
+    assert!(a.artifacts.is_empty());
+    let warnings: Vec<_> = f.events(&run_id).into_iter().filter_map(|e| match e.body {
+        EventBody::Warning(r) if r.code == crate::run::driver::FLOW_ARTIFACT_OUTSIDE_PROJECT => Some(r),
+        _ => None,
+    }).collect();
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].params["reason"], json!("empty"));
 }

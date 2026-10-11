@@ -2832,7 +2832,8 @@ impl Driver {
                 }
             };
         let path = resolved.to_string_lossy().into_owned();
-        let media_type = media_type.unwrap_or_else(|| artifacts::guess_media_type(&path).to_string());
+        let media_type =
+            media_type.unwrap_or_else(|| artifacts::guess_media_type(&path).to_string());
         let bytes = std::fs::metadata(&resolved)
             .ok()
             .filter(|m| m.is_file())
