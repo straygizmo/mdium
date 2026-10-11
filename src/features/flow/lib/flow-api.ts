@@ -52,6 +52,14 @@ export const flowApi = {
   /** Validates unsaved content as if it were the file at `path`. */
   validate: (projectRoot: string, path: string, content: string) =>
     call<FlowLoadResult>("flow_validate", { projectRoot, path, content }),
+  /**
+   * Writes a flow file. `expectedSha256` is the hash the caller loaded
+   * (`null` creates a new file); a mismatch fails with `FLOW_FILE_CHANGED`.
+   */
+  save: (projectRoot: string, path: string, content: string, expectedSha256: string | null) =>
+    call<FlowLoadResult>("flow_save", { projectRoot, path, content, expectedSha256 }),
+  /** Watches a folder for changes; resolves to the stop function. */
+  watchFolder: (folder: string, handler: () => void) => getFlowTransport().watchFolder(folder, handler),
   /** Reads and validates `.mdium/project.yaml`. */
   projectLoad: (projectRoot: string) =>
     call<ProjectLoadResult>("flow_project_load", { projectRoot }),

@@ -253,6 +253,7 @@
     "FLOW_SETUP_FAILED": "セットアップを開始できませんでした。",
     "FLOW_FILE_PATH_INVALID": "フローファイルのパスが不正です。",
     "FLOW_FILE_NOT_FOUND": "フローファイルが見つかりません。",
+    "FLOW_FILE_EXISTS": "同じファイル名のフローが既にあります。",
     "FLOW_FILE_CHANGED": "確認した後にフローファイルが変更されました。もう一度確認してください。",
     "FLOW_FILE_INVALID": "フローに検証エラーがあります。",
     "FLOW_COMMANDS_UNCONFIRMED": "このフローのコマンドはこのマシンで確認されていません。",

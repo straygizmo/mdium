@@ -40,6 +40,7 @@ describe("FlowTransport registry", () => {
       },
       subscribe: async () => () => {},
       artifactUrl: async () => "",
+      watchFolder: async () => () => {},
     };
     setFlowTransport(fake);
     await expect(flowApi.list("C:\\p")).resolves.toBe("ok");
@@ -61,6 +62,7 @@ describe("FlowTransport registry", () => {
         seen.push([root, r]);
         return "blob:fake";
       },
+      watchFolder: async () => () => {},
     });
     await expect(flowRunApi.artifactUrl("C:\\p", ref)).resolves.toBe("blob:fake");
     expect(seen).toEqual([["C:\\p", ref]]);
@@ -73,6 +75,7 @@ describe("FlowTransport registry", () => {
       },
       subscribe: async () => () => {},
       artifactUrl: async () => "",
+      watchFolder: async () => () => {},
     });
     await expect(flowApi.list("")).rejects.toEqual({ code: "FLOW_PROJECT_INVALID", message: "x" });
   });
@@ -83,13 +86,14 @@ describe("FlowTransport registry", () => {
     const first: FlowTransport = {
       call: async <T,>() => undefined as T,
       artifactUrl: async () => "",
+      watchFolder: async () => () => {},
       subscribe: async (event) => () => {
         detached.push(event);
       },
     };
     setFlowTransport(first);
     const unlisten = await subscribeFlowRunEvents({ onRunChanged: vi.fn() });
-    setFlowTransport({ call: async <T,>() => undefined as T, subscribe: async () => () => {}, artifactUrl: async () => "" });
+    setFlowTransport({ call: async <T,>() => undefined as T, subscribe: async () => () => {}, artifactUrl: async () => "", watchFolder: async () => () => {} });
     unlisten();
     expect(detached).toEqual(["flow://run-changed"]);
   });
@@ -117,6 +121,20 @@ describe("Tauri transport", () => {
     const ref = { runId: "r", nodeKey: "a", attempt: 1, index: 0 };
     await expect(flowRunApi.artifactUrl("C:\\p", ref)).resolves.toBe("asset://C:/p/a.png");
     expect(invoke).toHaveBeenCalledWith("flow_artifact_path", { projectRoot: "C:\\p", ...ref });
+  });
+
+  it("watchFolder starts the watcher, fires on its own folder only, and stops on cleanup", async () => {
+    invoke.mockResolvedValue(undefined);
+    const handler = vi.fn();
+    const stop = await createTauriTransport().watchFolder("C:\p", handler);
+    expect(invoke).toHaveBeenCalledWith("watch_folder", { folderPath: "C:\p" });
+    listeners.get("folder-changed")!({ payload: "C:\other" });
+    expect(handler).not.toHaveBeenCalled();
+    listeners.get("folder-changed")!({ payload: "C:\p" });
+    expect(handler).toHaveBeenCalledTimes(1);
+    stop();
+    expect(listeners.has("folder-changed")).toBe(false);
+    expect(invoke).toHaveBeenCalledWith("unwatch_folder", { folderPath: "C:\p" });
   });
 
   it("call forwards to invoke unchanged", async () => {

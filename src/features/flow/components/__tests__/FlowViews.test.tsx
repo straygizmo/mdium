@@ -117,6 +117,8 @@ describe("flow views", () => {
       flow: docDigest(),
       errors: [],
       warnings: [{ code: "FLOW_UNKNOWN_KEY", path: "labels", params: { key: "labels" } }],
+      content: "",
+      sha256: "h",
     };
     invoke.mockResolvedValue(result);
     useFlowViewStore.getState().setSelected(FOLDER, PATH);
@@ -145,6 +147,8 @@ describe("flow views", () => {
       flow: null,
       errors: [{ code: "FLOW_PARSE_FAILED", path: "", params: { message: "bad", line: 3, column: 7 } }],
       warnings: [],
+      content: "x: [",
+      sha256: "h",
     } satisfies FlowLoadResult);
     useFlowViewStore.getState().setSelected(FOLDER, PATH);
     await act(async () => root.render(<FlowWorkspace />));

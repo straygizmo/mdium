@@ -27,6 +27,8 @@ export interface FlowTransport {
   subscribe<T>(event: FlowEventName, handler: (payload: T) => void): Promise<() => void>;
   /** Resolves a recorded artifact to a URL the webview can load. */
   artifactUrl(projectRoot: string, ref: ArtifactRef): Promise<string>;
+  /** Watches a folder; `handler` fires on changes. Resolves to the stop function. */
+  watchFolder(folder: string, handler: () => void): Promise<() => void>;
 }
 
 let current: FlowTransport | null = null;

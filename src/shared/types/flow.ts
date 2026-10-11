@@ -246,6 +246,10 @@ export interface FlowLoadResult {
   flow: FlowDef | null;
   errors: FlowIssue[];
   warnings: FlowIssue[];
+  /** The checked text; empty when the file could not be read (the report then carries the error). */
+  content: string;
+  /** SHA-256 of `content` as the engine read it. */
+  sha256: string;
 }
 
 export type FlowKind = "entry" | "part";

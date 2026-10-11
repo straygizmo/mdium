@@ -253,6 +253,7 @@
     "FLOW_SETUP_FAILED": "Setup could not be started.",
     "FLOW_FILE_PATH_INVALID": "The flow file path is not valid.",
     "FLOW_FILE_NOT_FOUND": "The flow file was not found.",
+    "FLOW_FILE_EXISTS": "A flow with that file name already exists.",
     "FLOW_FILE_CHANGED": "The flow file changed after it was reviewed. Review it again.",
     "FLOW_FILE_INVALID": "The flow has validation errors.",
     "FLOW_COMMANDS_UNCONFIRMED": "The commands of this flow were not confirmed on this machine.",

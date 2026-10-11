@@ -13,6 +13,22 @@ export function createTauriTransport(): FlowTransport {
       const location = await invoke<ArtifactLocation>("flow_artifact_path", { projectRoot, ...ref });
       return convertFileSrc(location.path, "asset");
     },
+    watchFolder: async (folder: string, handler: () => void) => {
+      await invoke("watch_folder", { folderPath: folder });
+      let unlisten: () => void;
+      try {
+        unlisten = await listen<string>("folder-changed", (e) => {
+          if (e.payload === folder) handler();
+        });
+      } catch (err) {
+        await invoke("unwatch_folder", { folderPath: folder }).catch(() => {});
+        throw err;
+      }
+      return () => {
+        unlisten();
+        void invoke("unwatch_folder", { folderPath: folder }).catch(() => {});
+      };
+    },
   };
 }
 

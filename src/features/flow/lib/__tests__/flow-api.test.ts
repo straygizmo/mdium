@@ -28,6 +28,12 @@ describe("flowApi", () => {
       "flow_validate",
       { projectRoot: ROOT, path: PATH, content: "schemaVersion: 1" },
     ],
+    [
+      "save",
+      () => flowApi.save(ROOT, PATH, "schemaVersion: 1", "h1"),
+      "flow_save",
+      { projectRoot: ROOT, path: PATH, content: "schemaVersion: 1", expectedSha256: "h1" },
+    ],
     ["projectLoad", () => flowApi.projectLoad(ROOT), "flow_project_load", { projectRoot: ROOT }],
     ["projectSetup", () => flowApi.projectSetup(ROOT, "abc"), "flow_project_setup", { projectRoot: ROOT, sha256: "abc" }],
     ["runtimeDescribe", () => flowApi.runtimeDescribe(ROOT, "r", "abc"), "flow_runtime_describe", { projectRoot: ROOT, runtime: "r", sha256: "abc" }],
@@ -58,6 +64,7 @@ describe("flowApi", () => {
     setFlowTransport({
       call: async () => undefined as never,
       artifactUrl: async () => "",
+      watchFolder: async () => () => {},
       subscribe: async <T,>(event: string, handler: (payload: T) => void) => {
         seen.push([event, handler as (payload: unknown) => void]);
         return unlisten;
