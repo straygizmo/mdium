@@ -1,3 +1,4 @@
+import { KNOWN_ACTIONS } from "./known-actions";
 import type { FlowDef, FlowEdge, FlowInlineBody, FlowLoopNode, FlowNode, FlowNodeKind } from "@/shared/types/flow";
 
 /** `nodes[i]` or `nodes[i].body.nodes[j]`: the graph's node id. */
@@ -149,7 +150,7 @@ export function defaultsFor(kind: FlowNodeKind): NodeDefaults {
     case "python":
       return { kind, runtime: "", entry: "" };
     case "action":
-      return { kind, uses: "mdium/flow-run-latest" };
+      return { kind, uses: KNOWN_ACTIONS[0] };
   }
 }
 

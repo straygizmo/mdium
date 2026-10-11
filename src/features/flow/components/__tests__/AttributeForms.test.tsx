@@ -549,11 +549,11 @@ describe("PythonForm", () => {
 });
 describe("ActionForm", () => {
   it("chooses a built-in action and edits with rows", async () => {
-    const node: FlowActionNode = { id: "act", kind: "action", uses: "mdium/flow-run-latest" };
+    const node: FlowActionNode = { id: "act", kind: "action", uses: "mdium/screen-input" };
     const patches = await mountKind(ActionForm, node);
 
-    await choose(one("Action"), "mdium/metrics-compare");
-    expect(patches.at(-1)).toEqual({ uses: "mdium/metrics-compare" });
+    await choose(one("Action"), "mdium/issue-close");
+    expect(patches.at(-1)).toEqual({ uses: "mdium/issue-close" });
 
     await typeAndBlur(all("New key")[0], "base");
     await act(async () => button("Add").click());

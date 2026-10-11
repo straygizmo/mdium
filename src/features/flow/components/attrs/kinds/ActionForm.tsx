@@ -1,23 +1,10 @@
 import { useTranslation } from "react-i18next";
 import type { FlowActionNode } from "@/shared/types/flow";
+import { KNOWN_ACTIONS } from "../../../lib/known-actions";
 import { KeyValueEditor } from "../KeyValueEditor";
 import { TextField } from "../fields";
 import { formatValue, parseValue } from "./ValueRows";
 import { recordOrUndefined, type KindFormProps } from "./types";
-
-/** Built-in actions: the `KNOWN_ACTIONS` of flow-core plus the names the editor and project tooling use. */
-export const KNOWN_ACTIONS = [
-  "mdium/flow-run-latest",
-  "mdium/metrics-compare",
-  "mdium/project-setup",
-  "mdium/screen-input",
-  "mdium/git-worktree-create",
-  "mdium/design-doc-commit",
-  "mdium/issue-entry",
-  "mdium/git-merge-local",
-  "mdium/issue-close",
-  "mdium/git-worktree-discard",
-];
 
 export function ActionForm({ node, path, onChange }: KindFormProps<FlowActionNode>) {
   const { t } = useTranslation("flow");
