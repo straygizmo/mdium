@@ -12,3 +12,4 @@ setup:
   - { run: [uv, pip, install, --python, .venv, -e, ../../../../../python/mdium-worker] }
 flows:
   main: flows/demo.flow.yaml
+  artifacts: flows/artifacts.flow.yaml

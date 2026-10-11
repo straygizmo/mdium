@@ -1,0 +1,23 @@
+schemaVersion: 1
+id: artifacts
+name: Artifacts demo flow
+params:
+  text: { type: string, default: "hello from python-demo" }
+nodes:
+  - { id: render, kind: python, runtime: demo, entry: demo.render, with: { text: "${{ params.text }}" } }
+  - id: review
+    kind: approval
+    message: "Check the rendered artifacts"
+    show: [nodes.render.outputs.count, nodes.render.artifacts, nodes.render.artifacts.pic]
+    options: [accept, { name: revise, commentRequired: true }]
+  - id: echo
+    kind: python
+    runtime: demo
+    entry: demo.echo
+    with: { note: "${{ nodes.review.outputs.comment }}", choice: "${{ nodes.review.outputs.choice }}" }
+edges:
+  - { from: render, to: review }
+  - { from: review, to: echo, port: accept }
+  - { from: review, to: echo, port: revise }
+outputs:
+  echoed: "${{ nodes.echo.outputs.echoed }}"

@@ -140,10 +140,16 @@ fn fixture_at(root: &Path, launcher: Arc<dyn WorkerLauncher>) -> Fixture {
 }
 
 /// Recursively copies the directory `src` to `dst`.
+/// Copies a fixture project, leaving out what a developer's own Setup and runs
+/// generate inside it (`.venv`, run and setup records, stage outputs, caches).
 fn copy_dir(src: &Path, dst: &Path) {
+    const GENERATED: [&str; 5] = [".venv", "flow-runs", "setup-runs", "out", "__pycache__"];
     fs::create_dir_all(dst).unwrap();
     for entry in fs::read_dir(src).unwrap() {
         let entry = entry.unwrap();
+        if GENERATED.iter().any(|g| entry.file_name() == *g) {
+            continue;
+        }
         let target = dst.join(entry.file_name());
         if entry.file_type().unwrap().is_dir() {
             copy_dir(&entry.path(), &target);
@@ -3045,7 +3051,7 @@ fn python_demo_end_to_end() {
     // Install the worker package into a fresh venv (what the project's `setup` does).
     let worker_pkg = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../python/mdium-worker");
     assert!(std::process::Command::new("uv")
-        .args(["venv", ".venv"])
+        .args(["venv", "--clear", ".venv"])
         .current_dir(&root)
         .status()
         .unwrap()

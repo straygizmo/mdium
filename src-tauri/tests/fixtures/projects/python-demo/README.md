@@ -23,3 +23,9 @@ do not trigger a restart. Restart `tauri dev` after adding or changing that file
 Open this folder in MDium, then run the `main` flow. `demo.add` computes `a + 1`
 (default `a` is 2, so the `sum` output is 3), and `demo.ask` waits for your
 approval before the run completes.
+
+The `artifacts` flow (`flows/artifacts.flow.yaml`) exercises the artifact
+features: `demo.render` writes `out/pic.png`, `out/notes.md` and `out/data.json`
+and reports them as artifacts; the `review` approval shows them (`show`) and has
+a `revise` option that requires a comment; `demo.echo` receives the chosen option
+and the comment through `nodes.review.outputs.choice` / `.comment`.
