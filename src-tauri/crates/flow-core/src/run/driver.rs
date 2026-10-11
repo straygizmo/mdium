@@ -17,6 +17,7 @@ use crate::model::{
     PORT_SUCCESS,
 };
 use crate::project::RuntimeDef;
+use crate::run::artifacts;
 use crate::run::model::*;
 use crate::run::prepare::{prepare_params, LoopVar, TemplateContext};
 use crate::run::process::{
@@ -61,6 +62,7 @@ pub const FLOW_COMMAND_SPAWN_FAILED: &str = "FLOW_COMMAND_SPAWN_FAILED";
 pub const FLOW_CONDITION_TYPE: &str = "FLOW_CONDITION_TYPE";
 pub const FLOW_APPROVAL_REJECTED: &str = "FLOW_APPROVAL_REJECTED";
 pub const FLOW_PROTOCOL_WARNING: &str = "FLOW_PROTOCOL_WARNING";
+pub const FLOW_ARTIFACT_OUTSIDE_PROJECT: &str = "FLOW_ARTIFACT_OUTSIDE_PROJECT";
 pub const FLOW_RESUMED: &str = "FLOW_RESUMED";
 /// A back-edge was traversed `maxTraversals` times already.
 pub const FLOW_TRAVERSAL_LIMIT: &str = "FLOW_TRAVERSAL_LIMIT";
@@ -1793,7 +1795,7 @@ impl Driver {
             if !items.is_empty() {
                 let key = command.key.clone();
                 for item in items {
-                    self.apply_item(&key, item, &mut command.items);
+                    self.apply_item(&key, item, &mut command.items, &command.dir);
                 }
                 if let Some(reader) = command.reader.as_ref() {
                     ProtocolCursor {
@@ -1828,7 +1830,7 @@ impl Driver {
         let key = command.key.clone();
         if let Some(mut reader) = command.reader.take() {
             for item in reader.poll(true) {
-                self.apply_item(&key, item, &mut command.items);
+                self.apply_item(&key, item, &mut command.items, &command.dir);
             }
         }
         self.flush_progress(&key, &mut command.items);
@@ -2034,7 +2036,7 @@ impl Driver {
     }
 
     /// Applies one protocol item of a command or call.
-    fn apply_item(&mut self, key: &str, item: ProtocolItem, st: &mut ItemState) {
+    fn apply_item(&mut self, key: &str, item: ProtocolItem, st: &mut ItemState, node_dir: &Path) {
         match item {
             ProtocolItem::Progress { text, fraction } => {
                 // At most one persisted progress event per second; the latest wins.
@@ -2075,19 +2077,11 @@ impl Driver {
             ProtocolItem::Output { key: name, value } => {
                 self.emit(Some(key), EventBody::NodeOutput { key: name, value });
             }
-            ProtocolItem::Artifact { path, label, .. } => {
-                self.emit(
-                    Some(key),
-                    EventBody::NodeArtifact {
-                        index: 0,
-                        path,
-                        label,
-                        media_type: "application/octet-stream".into(),
-                        bytes: None,
-                        recorded_at: crate::fsutil::now(),
-                    },
-                );
-            }
+            ProtocolItem::Artifact {
+                path,
+                label,
+                media_type,
+            } => self.record_artifact(key, node_dir, path, label, media_type),
             ProtocolItem::Outcome(o) => st.outcome = Some(o),
             ProtocolItem::Warning { reason, line } => {
                 self.emit(
@@ -2782,7 +2776,8 @@ impl Driver {
         let Some(line) = self.count_line(idx) else {
             if is_outcome {
                 let mut items = std::mem::take(&mut self.calls[idx].items);
-                self.apply_item(&key, item, &mut items);
+                let dir = self.calls[idx].dir.clone();
+                self.apply_item(&key, item, &mut items, &dir);
                 self.calls[idx].items = items;
             }
             return;
@@ -2805,8 +2800,63 @@ impl Driver {
             }
         }
         let mut items = std::mem::take(&mut self.calls[idx].items);
-        self.apply_item(&key, item, &mut items);
+        let dir = self.calls[idx].dir.clone();
+        self.apply_item(&key, item, &mut items, &dir);
         self.calls[idx].items = items;
+    }
+
+    /// Records one reported artifact (spec 5.1): path inside the project,
+    /// media type guessed when absent, index within the attempt, and the
+    /// attempt's `artifacts.json` rewritten. An outside path is a warning.
+    fn record_artifact(
+        &mut self,
+        key: &str,
+        node_dir: &Path,
+        raw: String,
+        label: Option<String>,
+        media_type: Option<String>,
+    ) {
+        let resolved =
+            match artifacts::resolve_artifact_path(self.store.project_root(), node_dir, &raw) {
+                Ok(p) => p,
+                Err(reason) => {
+                    let warning = Reason::new(FLOW_ARTIFACT_OUTSIDE_PROJECT)
+                        .with("path", raw.clone())
+                        .with("reason", reason);
+                    append_line(
+                        &node_dir.join("stdout.log"),
+                        &format!("[mdium] {FLOW_ARTIFACT_OUTSIDE_PROJECT}: {raw}"),
+                    );
+                    self.emit(Some(key), EventBody::Warning(warning));
+                    return;
+                }
+            };
+        let path = resolved.to_string_lossy().into_owned();
+        let media_type = media_type.unwrap_or_else(|| artifacts::guess_media_type(&path).to_string());
+        let bytes = std::fs::metadata(&resolved)
+            .ok()
+            .filter(|m| m.is_file())
+            .map(|m| m.len());
+        let index = self.node(key).artifacts.len() as u32;
+        self.emit(
+            Some(key),
+            EventBody::NodeArtifact {
+                index,
+                path,
+                label,
+                media_type,
+                bytes,
+                recorded_at: fsutil::now(),
+            },
+        );
+        let list = self.node(key).artifacts.clone();
+        if let Err(err) = artifacts::write_artifacts_json(node_dir, &list) {
+            self.protocol_warning(
+                Some(key),
+                "artifacts-json",
+                vec![("message", Value::String(err.to_string()))],
+            );
+        }
     }
 
     fn protocol_warning(&mut self, key: Option<&str>, reason: &str, extra: Vec<(&str, Value)>) {

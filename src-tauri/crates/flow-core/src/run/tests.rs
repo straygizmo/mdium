@@ -349,7 +349,7 @@ fn runs_commands_with_protocol_env_and_templates() {
     assert_eq!(a.status, NodeStatus::Succeeded);
     assert_eq!(a.attempt, 1);
     assert_eq!(a.outputs["score"], json!(7));
-    assert_eq!(a.artifacts[0].path, "out/a.md");
+    assert!(Path::new(&a.artifacts[0].path).is_absolute() && a.artifacts[0].path.replace('\\', "/").ends_with("/out/a.md"));
     assert_eq!(
         a.cost,
         CostTotals {
@@ -2426,6 +2426,7 @@ fn python_node_runs_a_stage_and_records_events() {
     assert_eq!(s.outputs["sum"], 3);
     assert!((s.cost.actual - 0.5).abs() < 1e-9);
     assert_eq!(s.artifacts[0].label.as_deref(), Some("out"));
+    assert_eq!(s.artifacts[0].media_type, "text/plain");
     let dir = f.engine_store().node_attempt_dir(&run_id, "s", 1).unwrap();
     let inputs: Value =
         serde_json::from_str(&fs::read_to_string(dir.join("inputs.json")).unwrap()).unwrap();
@@ -3065,4 +3066,88 @@ fn python_demo_end_to_end() {
     f.wait_settled(&run_id, RunStatus::Completed);
     let snap = f.snapshot(&run_id);
     assert_eq!(node(&snap, "add").outputs["sum"], json!(3));
+}
+
+#[test]
+fn artifacts_are_recorded_with_media_types_and_written_to_artifacts_json() {
+    let f = fixture();
+    let rel = write_flow(&f.root, "art", json!({}), vec![cmd("a", json!([
+        {"write_file": {"path": "out/pic.png", "content": "abc"}},
+        ev(json!({"v":1,"type":"artifact","path":"out/pic.png","label":"pic"})),
+        ev(json!({"v":1,"type":"artifact","path":"out/notes.md"})),
+        ev(json!({"v":1,"type":"artifact","path":"out/blob","label":"blob","mediaType":"application/x-custom"})),
+    ]))], vec![]);
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    f.wait_settled(&run_id, RunStatus::Completed);
+    let a = node(&f.snapshot(&run_id), "a");
+    assert_eq!(a.artifacts.len(), 3);
+    assert_eq!(a.artifacts[0].index, 0);
+    assert_eq!(a.artifacts[0].label.as_deref(), Some("pic"));
+    assert_eq!(a.artifacts[0].media_type, "image/png");
+    assert_eq!(a.artifacts[0].bytes, Some(3));
+    assert!(Path::new(&a.artifacts[0].path).is_absolute());
+    assert_eq!(a.artifacts[1].media_type, "text/markdown");
+    assert_eq!(a.artifacts[1].bytes, None, "missing file keeps no size");
+    assert_eq!(a.artifacts[2].media_type, "application/x-custom");
+    assert!(!a.artifacts[0].recorded_at.is_empty());
+    let dir = f.engine_store().node_attempt_dir(&run_id, "a", 1).unwrap();
+    let on_disk = crate::run::artifacts::read_artifacts_json(&dir);
+    assert_eq!(on_disk, a.artifacts);
+}
+
+#[test]
+fn artifact_without_a_file_is_recorded_without_bytes() {
+    let f = fixture();
+    let rel = write_flow(&f.root, "art2", json!({}), vec![cmd("a", json!([
+        ev(json!({"v":1,"type":"artifact","path":"later.txt","label":"later"})),
+    ]))], vec![]);
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    f.wait_settled(&run_id, RunStatus::Completed);
+    let a = node(&f.snapshot(&run_id), "a");
+    assert_eq!(a.artifacts.len(), 1);
+    assert_eq!(a.artifacts[0].bytes, None);
+    assert_eq!(a.artifacts[0].media_type, "text/plain");
+}
+
+#[test]
+fn artifacts_outside_the_project_are_rejected_with_a_warning() {
+    let f = fixture();
+    let outside = f._tmp.path().join("outside.txt");
+    std::fs::write(&outside, "x").unwrap();
+    let rel = write_flow(&f.root, "art3", json!({}), vec![cmd("a", json!([
+        ev(json!({"v":1,"type":"artifact","path": outside.to_str().unwrap(), "label":"bad"})),
+        ev(json!({"v":1,"type":"artifact","path":"../../../../../../../x.txt"})),
+        ev(json!({"v":1,"type":"artifact","path":"ok.txt"})),
+    ]))], vec![]);
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    f.wait_settled(&run_id, RunStatus::Completed);
+    let a = node(&f.snapshot(&run_id), "a");
+    assert_eq!(a.artifacts.len(), 1, "only the inside path is kept");
+    assert_eq!(a.artifacts[0].index, 0);
+    let warnings: Vec<_> = f.events(&run_id).into_iter().filter(|e| matches!(&e.body, EventBody::Warning(r) if r.code == crate::run::driver::FLOW_ARTIFACT_OUTSIDE_PROJECT)).collect();
+    assert_eq!(warnings.len(), 2);
+    let log = f.engine.log(&f.root, &run_id, "a", 1, "stdout", 4096).unwrap();
+    assert!(log.contains("FLOW_ARTIFACT_OUTSIDE_PROJECT"), "warning is visible in the node log: {log}");
+}
+
+#[test]
+fn a_retry_starts_a_fresh_artifact_list() {
+    let f = fixture();
+    let rel = write_flow(&f.root, "art4", json!({}), vec![{
+        let mut n = cmd("a", json!([
+            ev(json!({"v":1,"type":"artifact","path":"a.txt"})),
+            {"fail_before_attempt": 2},
+        ]));
+        n["retry"] = json!({"max": 1});
+        n
+    }], vec![]);
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    f.wait_settled(&run_id, RunStatus::Completed);
+    let a = node(&f.snapshot(&run_id), "a");
+    assert_eq!(a.attempt, 2);
+    assert_eq!(a.artifacts.len(), 1);
+    assert_eq!(a.artifacts[0].index, 0);
+    let store = f.engine_store();
+    assert_eq!(crate::run::artifacts::read_artifacts_json(&store.node_attempt_dir(&run_id, "a", 1).unwrap()).len(), 1);
+    assert_eq!(crate::run::artifacts::read_artifacts_json(&store.node_attempt_dir(&run_id, "a", 2).unwrap()).len(), 1);
 }

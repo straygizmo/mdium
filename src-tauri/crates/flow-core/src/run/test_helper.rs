@@ -107,6 +107,18 @@ fn flow_test_helper_entry() {
                 .stderr(std::process::Stdio::null());
             let child = command.spawn().unwrap();
             std::fs::write(path, child.id().to_string()).unwrap();
+        } else if let Some(spec) = step.get("write_file") {
+            // Writes a file; a relative path is relative to the node directory.
+            let raw = spec["path"].as_str().unwrap_or_default();
+            let path = if std::path::Path::new(raw).is_absolute() {
+                std::path::PathBuf::from(raw)
+            } else {
+                std::path::PathBuf::from(std::env::var("MDIUM_FLOW_NODE_DIR").unwrap_or_default()).join(raw)
+            };
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            std::fs::write(&path, spec["content"].as_str().unwrap_or_default()).unwrap();
         } else if let Some(n) = step.get("fail_before_attempt").and_then(Value::as_u64) {
             if attempt() < n {
                 std::process::exit(1);
