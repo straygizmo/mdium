@@ -9,7 +9,8 @@ use crate::run::worker::{
     describe_runtime, worker_spec, Manifest, PipedWorkerLauncher, FLOW_RUNTIME_START_FAILED,
 };
 use crate::run::engine::{
-    sha256_hex, CommandReview, EngineError, FlowEngine, RunSnapshot, RunSummary, FLOW_FILE_CHANGED,
+    sha256_hex, ArtifactLocation, CommandReview, EngineError, FlowEngine, RunSnapshot, RunSummary,
+    FLOW_FILE_CHANGED,
 };
 use crate::run::model::Reason;
 use crate::setup::{run_setup, SetupProgress, SetupResult};
@@ -497,6 +498,21 @@ impl FlowService {
             .log(&root, run_id, node_key, attempt, stream, max_bytes)?)
     }
 
+    /// The absolute path of a recorded artifact (only what `artifacts.json` lists).
+    pub fn run_artifact_path(
+        &self,
+        project_root_arg: &str,
+        run_id: &str,
+        node_key: &str,
+        attempt: u32,
+        index: u32,
+    ) -> Result<ArtifactLocation, FlowCommandError> {
+        let root = project_root(project_root_arg)?;
+        Ok(self
+            .engine
+            .artifact_path(&root, run_id, node_key, attempt, index)?)
+    }
+
     pub fn gitignore_status(
         &self,
         project_root_arg: &str,
@@ -515,7 +531,7 @@ impl FlowService {
 
 /// Every command the service dispatches by name (the Tauri command names;
 /// the HTTP server uses the same names, spec 2026-10-10, 10.2).
-pub const COMMAND_NAMES: [&str; 20] = [
+pub const COMMAND_NAMES: [&str; 21] = [
     "flow_list",
     "flow_load",
     "flow_validate",
@@ -535,6 +551,7 @@ pub const COMMAND_NAMES: [&str; 20] = [
     "flow_run_mark_succeeded",
     "flow_run_delete",
     "flow_run_log",
+    "flow_artifact_path",
     "flow_gitignore_status",
 ];
 
@@ -629,6 +646,16 @@ struct LogArgs {
     attempt: u32,
     stream: String,
     max_bytes: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ArtifactArgs {
+    project_root: String,
+    run_id: String,
+    node_key: String,
+    attempt: u32,
+    index: u32,
 }
 
 fn args<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, FlowCommandError> {
@@ -732,6 +759,16 @@ impl FlowService {
                     a.attempt,
                     &a.stream,
                     a.max_bytes,
+                )?)
+            }
+            "flow_artifact_path" => {
+                let a: ArtifactArgs = args(value)?;
+                reply(self.run_artifact_path(
+                    &a.project_root,
+                    &a.run_id,
+                    &a.node_key,
+                    a.attempt,
+                    a.index,
                 )?)
             }
             "flow_gitignore_status" => {
@@ -1380,6 +1417,85 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.code, FLOW_PROJECT_INVALID);
         assert_eq!(err.details[0].code, crate::issues::FLOW_INVALID_ID);
+    }
+
+    #[test]
+    fn artifact_path_returns_recorded_paths_only() {
+        use crate::run::artifacts::write_artifacts_json;
+        use crate::run::engine::FLOW_ARTIFACT_NOT_FOUND;
+        use crate::run::model::Artifact;
+        use crate::run::store::RunStore;
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = service(tmp.path());
+        let root = tmp.path().to_str().unwrap();
+        fs::create_dir_all(tmp.path().join(".mdium/flows")).unwrap();
+        fs::write(tmp.path().join(".mdium/flows/a.flow.yaml"), NO_COMMANDS).unwrap();
+        let review = svc
+            .command_review(root, ".mdium/flows/a.flow.yaml")
+            .unwrap();
+        let started = svc
+            .run_start(
+                root,
+                ".mdium/flows/a.flow.yaml",
+                &BTreeMap::new(),
+                &review.sha256,
+            )
+            .unwrap();
+        let run_id = started.run_id;
+        // Record one artifact for node `a`, attempt 1.
+        let dir = RunStore::new(tmp.path())
+            .node_attempt_dir(&run_id, "a", 1)
+            .unwrap();
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("a.txt"), "x").unwrap();
+        let recorded = |path: &str, media_type: &str| Artifact {
+            index: 0,
+            path: path.into(),
+            label: Some("t".into()),
+            media_type: media_type.into(),
+            bytes: None,
+            recorded_at: String::new(),
+        };
+        write_artifacts_json(&dir, &[recorded("a.txt", "text/plain")]).unwrap();
+
+        let loc = svc.run_artifact_path(root, &run_id, "a", 1, 0).unwrap();
+        assert!(Path::new(&loc.path).is_absolute());
+        assert!(loc.path.ends_with("a.txt"));
+        assert_eq!(loc.media_type, "text/plain");
+        assert_eq!(loc.bytes, Some(1));
+        assert_eq!(
+            svc.run_artifact_path(root, &run_id, "a", 1, 9)
+                .unwrap_err()
+                .code,
+            FLOW_ARTIFACT_NOT_FOUND
+        );
+        assert_eq!(
+            svc.run_artifact_path(root, &run_id, "zzz", 1, 0)
+                .unwrap_err()
+                .code,
+            "FLOW_NODE_NOT_FOUND"
+        );
+        let via_call = svc
+            .call(
+                "flow_artifact_path",
+                serde_json::json!({ "projectRoot": root, "runId": run_id, "nodeKey": "a", "attempt": 1, "index": 0 }),
+            )
+            .unwrap();
+        assert_eq!(via_call["mediaType"], "text/plain");
+        // A tampered artifacts.json pointing outside the project is refused.
+        let outside = if cfg!(windows) {
+            "C:/Windows/notepad.exe"
+        } else {
+            "/etc/passwd"
+        };
+        write_artifacts_json(&dir, &[recorded(outside, "application/octet-stream")]).unwrap();
+        assert_eq!(
+            svc.run_artifact_path(root, &run_id, "a", 1, 0)
+                .unwrap_err()
+                .code,
+            FLOW_ARTIFACT_NOT_FOUND
+        );
+        svc.run_cancel(root, &run_id).unwrap();
     }
 
     #[test]

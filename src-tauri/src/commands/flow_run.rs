@@ -7,7 +7,7 @@
 
 use super::flow::{with_service, FlowCommandError, FlowServiceState};
 use flow_core::run::driver::{ApprovalNotifier, DriverEnv, EventSink};
-use flow_core::run::engine::{CommandReview, FlowEngine, RunSnapshot, RunSummary};
+use flow_core::run::engine::{ArtifactLocation, CommandReview, FlowEngine, RunSnapshot, RunSummary};
 use flow_core::run::model::{
     ApprovalRequest, NodeState, NodeStatus, Progress, Reason, RunState, RunStatus,
 };
@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 pub const RUN_CHANGED_EVENT: &str = "flow://run-changed";
 pub const NODE_CHANGED_EVENT: &str = "flow://node-changed";
@@ -335,6 +335,32 @@ pub async fn flow_run_delete(
 }
 
 /// Tail of a node attempt's `stdout` / `stderr` log (at most 256 KiB).
+#[tauri::command]
+pub async fn flow_artifact_path(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, FlowServiceState>,
+    project_root: String,
+    run_id: String,
+    node_key: String,
+    attempt: u32,
+    index: u32,
+) -> Result<ArtifactLocation, FlowCommandError> {
+    let location = with_service(state, move |s| {
+        s.run_artifact_path(&project_root, &run_id, &node_key, attempt, index)
+    })
+    .await?;
+    // Only recorded artifacts become loadable through the asset protocol.
+    app.asset_protocol_scope()
+        .allow_file(&location.path)
+        .map_err(|e| {
+            FlowCommandError::new(
+                flow_core::run::engine::FLOW_ARTIFACT_NOT_FOUND,
+                e.to_string(),
+            )
+        })?;
+    Ok(location)
+}
+
 #[tauri::command]
 pub async fn flow_run_log(
     state: tauri::State<'_, FlowServiceState>,

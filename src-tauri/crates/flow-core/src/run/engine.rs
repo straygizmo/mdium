@@ -8,6 +8,7 @@ use crate::fsutil::project_key;
 use crate::load::{self, check_content, PathProblem, MAX_FLOW_FILE_BYTES};
 use crate::model::NodeKind;
 use crate::run::driver::{Control, Driver, DriverEnv, Editor, FLOW_APP_EXITED, FLOW_RESUMED};
+use crate::run::artifacts;
 use crate::run::model::{NodeStatus, Reason, RunState, RunStatus};
 use crate::run::prepare::{
     check_runnable, command_summaries, prepare_params, stage_summaries, CommandSummary,
@@ -50,6 +51,7 @@ pub const FLOW_APPROVAL_INVALID: &str = "FLOW_APPROVAL_INVALID";
 pub const FLOW_APPROVAL_COMMENT_REQUIRED: &str = "FLOW_APPROVAL_COMMENT_REQUIRED";
 pub const FLOW_STORE_FAILED: &str = "FLOW_STORE_FAILED";
 pub const FLOW_LOG_INVALID: &str = "FLOW_LOG_INVALID";
+pub const FLOW_ARTIFACT_NOT_FOUND: &str = "FLOW_ARTIFACT_NOT_FOUND";
 
 /// Largest log tail returned at once.
 pub const MAX_LOG_BYTES: u64 = 256 * 1024;
@@ -126,6 +128,16 @@ pub struct CommandReview {
     pub stages: Vec<StageSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project_path: Option<String>,
+}
+
+/// Where a recorded artifact lives on disk.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactLocation {
+    pub path: String,
+    pub media_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
 }
 
 /// A run in a list.
@@ -1095,6 +1107,45 @@ impl FlowEngine {
         let path = store.node_attempt_dir(run_id, key, attempt)?.join(file);
         tail_file(&path, max_bytes.min(MAX_LOG_BYTES))
             .map_err(|e| EngineError::new(FLOW_STORE_FAILED, e.to_string()))
+    }
+
+    /// The absolute path of a recorded artifact: only what `artifacts.json`
+    /// lists, and only inside the project.
+    pub fn artifact_path(
+        &self,
+        root: &Path,
+        run_id: &str,
+        node_key: &str,
+        attempt: u32,
+        index: u32,
+    ) -> Result<ArtifactLocation> {
+        let store = RunStore::new(root);
+        let meta = store.load_meta(run_id)?;
+        let state = store.load_state(run_id, &meta)?;
+        if !state.nodes.contains_key(node_key) {
+            return Err(EngineError::new(FLOW_NODE_NOT_FOUND, node_key));
+        }
+        let dir = store.node_attempt_dir(run_id, node_key, attempt)?;
+        let artifact = artifacts::read_artifacts_json(&dir)
+            .into_iter()
+            .find(|a| a.index == index)
+            .ok_or_else(|| {
+                EngineError::new(
+                    FLOW_ARTIFACT_NOT_FOUND,
+                    format!("{node_key}#{attempt}[{index}]"),
+                )
+            })?;
+        let path = artifacts::resolve_artifact_path(store.project_root(), &dir, &artifact.path)
+            .map_err(|_| EngineError::new(FLOW_ARTIFACT_NOT_FOUND, "outside the project"))?;
+        let bytes = std::fs::metadata(&path)
+            .ok()
+            .filter(|m| m.is_file())
+            .map(|m| m.len());
+        Ok(ArtifactLocation {
+            path: path.to_string_lossy().into_owned(),
+            media_type: artifact.media_type,
+            bytes,
+        })
     }
 
     /// App exit: every driver kills its process and records `interrupted`.
