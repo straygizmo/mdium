@@ -310,7 +310,16 @@ export function FlowWorkspace() {
 
   const onSelect = useCallback((sel: Selection) => editor().select(sel), []);
   const onMoveNode = useCallback(
-    (nodeId: string, position: { x: number; y: number }) => edit((d) => moveNode(d, nodeId, position)),
+    (nodeId: string, position: { x: number; y: number }) => {
+      // Place the node at the drop point in the current layout first: the edit re-derives the
+      // canvas nodes from this layout before the async re-layout (which reads ui.positions) lands.
+      const index = editor().def?.nodes.findIndex((n) => n.id === nodeId) ?? -1;
+      if (index >= 0) {
+        const key = `nodes[${index}]`;
+        setLayout((prev) => (prev && prev[key] ? { ...prev, [key]: { ...prev[key], x: position.x, y: position.y } } : prev));
+      }
+      edit((d) => moveNode(d, nodeId, position));
+    },
     [edit],
   );
 

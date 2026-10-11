@@ -45,7 +45,14 @@ vi.mock("@monaco-editor/react", () => ({
 
 // The real canvas, wrapped so a test can drive the props the workspace passes it (React Flow
 // cannot complete a connection drag without a layout engine).
-const canvasProps = vi.hoisted(() => ({ current: null as { onConnect(req: unknown): void } | null }));
+const canvasProps = vi.hoisted(() => ({
+  current: null as {
+    onConnect(req: unknown): void;
+    onMoveNode(nodeId: string, position: { x: number; y: number }): void;
+    graph: unknown;
+    layout: unknown;
+  } | null,
+}));
 vi.mock("../FlowCanvas", async (orig) => {
   const actual = await orig<typeof import("../FlowCanvas")>();
   return {
@@ -60,7 +67,9 @@ vi.mock("../FlowCanvas", async (orig) => {
 import { useFlowViewStore } from "../../flow-store";
 import { useFlowEditorStore } from "../../editor-store";
 import { parseFlowText, stringifyFlow } from "../../lib/flow-yaml";
-import type { ConnectRequest } from "../FlowCanvas";
+import { toReactFlow, type ConnectRequest } from "../FlowCanvas";
+import type { FlowGraph } from "../../lib/flow-graph";
+import type { FlowLayout } from "../../lib/flow-layout";
 import { FlowPanel } from "../FlowPanel";
 import { FlowWorkspace } from "../FlowWorkspace";
 import { FlowYamlPane } from "../FlowYamlPane";
@@ -509,6 +518,18 @@ describe("flow workspace editing", () => {
     expect(useFlowEditorStore.getState().text).toContain("- { from: done, to: run, port: failure, maxTraversals: 2 }");
     await waitFor(() => expect(useFlowEditorStore.getState().errors).toEqual([]));
     expect(container.textContent).not.toContain("Cycle without a bounded back-edge");
+  });
+
+  it("keeps a dropped node at the drop point before the re-layout lands", async () => {
+    await mountWorkspace();
+    const before = canvasProps.current!;
+    // Synchronous act: renders flush, the async layout promise does not.
+    act(() => before.onMoveNode("run", { x: 300, y: 40 }));
+    const after = canvasProps.current!;
+    expect(after.graph).not.toBe(before.graph);
+    const { nodes } = toReactFlow(after.graph as FlowGraph, after.layout as FlowLayout, null, vi.fn(), true);
+    expect(nodes.find((n) => n.id === "nodes[0]")!.position).toEqual({ x: 300, y: 40 });
+    expect(useFlowEditorStore.getState().def?.ui).toEqual({ positions: { run: { x: 300, y: 40 } } });
   });
 
   it("FlowYamlPane reports typing and shows a new value", async () => {
