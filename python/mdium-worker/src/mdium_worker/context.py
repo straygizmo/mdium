@@ -75,7 +75,13 @@ class Context:
         self._send({"type": "output", "key": key, "value": value})
 
     def artifact(self, path: str | os.PathLike, label: str | None = None, media_type: str | None = None) -> None:
-        message: dict = {"type": "artifact", "path": os.fspath(path)}
+        """Records a file the stage produced.
+
+        A relative `path` is resolved against the worker's current directory
+        (the runtime `cwd`), and MDium receives the absolute path; it must lie
+        inside the project, otherwise MDium ignores it with a warning.
+        """
+        message: dict = {"type": "artifact", "path": os.path.abspath(os.fspath(path))}
         if label is not None:
             message["label"] = label
         if media_type is not None:
