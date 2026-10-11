@@ -263,6 +263,7 @@ def render(ctx: Context, videoDir: str, title: str = "video") -> None:
 - `path` は絶対パスまたはノード実行ディレクトリ相対。**プロジェクトルートまたは実行ディレクトリの外**は拒否して警告する（`FLOW_ARTIFACT_OUTSIDE_PROJECT`。ノードは失敗にしない）。
 - `mediaType` が無い場合は拡張子から推定する（`png` / `jpg` / `webp` / `mp4` / `webm` / `mp3` / `wav` / `json` / `md` / `txt`。それ以外は `application/octet-stream`）。
 - 参照: `nodes.<id>.artifacts`（一覧）、`nodes.<id>.artifacts.<label>`（ラベルで最初に一致したもののパス）。テンプレート `${{ nodes.<id>.artifacts.<label> }}` はパスに展開する。
+- V4 実装メモ: Python ヘルパー（`Context.artifact`）は `path` をワーカーの作業ディレクトリ（ランタイムの `cwd`）基準で絶対パスにしてから送る（Python の作者が期待する解決のため。絶対パスは上の規則どおり受け付ける）。`command` ノードの相対パスはノード実行ディレクトリ（`MDIUM_FLOW_NODE_DIR`）基準のままで、作業ディレクトリ（プロジェクトルート）基準ではないため、コマンドは絶対パスか、そのディレクトリ配下のパスを出す。`artifacts.json` の書き込みに失敗したときは `FLOW_ARTIFACT_WRITE_FAILED`（`message` 付き）の警告を出す（成果物はイベントには記録済み。ノードは失敗にしない）。
 
 ### 5.2 取得
 
@@ -270,6 +271,7 @@ def render(ctx: Context, videoDir: str, title: str = "video") -> None:
   - Tauri 版: アセットプロトコル（`convertFileSrc`）。実行開始時に、その実行ディレクトリとプロジェクトルートをアセットプロトコルのスコープに動的に追加する。CSP の `img-src` / `media-src` に `asset:` と `http://asset.localhost` を加える（プレビューが真っ白なときは CSP を確認する）。
   - Web 版: `GET /api/projects/{projectId}/runs/{runId}/artifacts/{nodeKey}/{attempt}/{index}`（Range 対応。動画のシークのため）。
 - 取得は `artifacts.json` に記録されたパスに限る（任意のパスは読めない）。
+- V4 実装メモ: 実行開始時にディレクトリを追加するのではなく、`flow_artifact_path` が取得のたびに記録とプロジェクト内であることを検証し、取得するそのファイルだけをアセットプロトコルのスコープに追加する（実行ディレクトリやプロジェクトルート全体は追加しない）。ただし `assetProtocol.enable` を有効にしたため、`tauri-plugin-dialog` が利用者のダイアログで選んだフォルダ（再帰）とファイルも同じスコープに追加する（アプリ全体の挙動。メインウィンドウは既に `fs:scope **` を持つため露出は増えない）。「1 ファイルだけ」はこのコマンドについての記述であり、スコープ全体の不変条件として後続 PR が依存してはならない。
 
 ### 5.3 実行パネルと承認
 
@@ -279,6 +281,7 @@ def render(ctx: Context, videoDir: str, title: str = "video") -> None:
   - `show` に `nodes.<id>.outputs.<key>`（値を表示）、`nodes.<id>.artifacts`、`nodes.<id>.artifacts.<label>`（プレビューを表示）を書ける。
   - 出力 `choice`（選んだ選択肢）と `comment`（入力した文字列。空なら `""`）を持ち、後続ノードから `${{ nodes.review.outputs.comment }}` で参照できる。
   - 承認ダイアログにコメント欄を常に出す（選択肢によっては必須にできる: `options` を `[{ name: revise, commentRequired: true }, accept]` の形でも書ける。文字列だけの要素は従来どおり）。
+- V4 実装メモ: 承認の送信に失敗したとき（`FLOW_APPROVAL_COMMENT_REQUIRED`、他所で決着済みの `FLOW_APPROVAL_INVALID` など）は、ダイアログを開いたままダイアログ内にエラーを表示する（パネルのエラー欄はオーバーレイの下に隠れるため）。`commentRequired` の選択肢はコメントが空の間は無効にし、理由を見える文で示す。空白だけのコメントは送らない（`null`）。承認要求の `show` の値は型付きで、成果物は `{ kind: artifacts, nodeKey, attempt, artifacts }`、それ以外は値そのまま（`null` は「—」で表示）。ツリーの反復行は、ノードキーの `[0]` やエンジンの `index` と同じく 0 始まりで表示する。
 
 ---
 
@@ -571,7 +574,7 @@ export interface FlowTransport {
 | V1 | `flow-core` クレート分離、`FlowService`、フロントのトランスポート層（Tauri 実装のみ） | cargo ワークスペース、`transport.ts`、import 検査 | なし（挙動変更なし） |
 | V2（実装済み 2026-10-10。差分: `flow_project_setup` に `sha256` を追加、`ProjectLoadResult.sha256`。V3 への申し送り: マニフェストに誤りがあるときの実行開始の扱い、`python` / `cwd` / `workingDir` のシンボリックリンク拒否、プロジェクトヘッダでのエラー一覧表示） | プロジェクトマニフェストと関数化の基盤 | `project.yaml` の解析・検証、`flow_project_load` / `flow_project_setup`、確認画面へのランタイムと `setup` の追加、`secrets` の検査、セットアップ UI、サブフローの戻り値検証（`FLOW_OUTPUT_UNKNOWN`）、`lib/` と一覧の 3 群（16.1, 16.2） | プロジェクトのセットアップ、部品の区別 |
 | V3（実装 2026-10-11。計画のインタフェースからの差分: `flow_runtime_describe` に `sha256` を追加（3.6）、インタプリタ末端のシンボリックリンクを許可し途中の成分と `cwd` は拒否（2.1）、利用者の中止で `cancel` を送り `stopGrace` 後に終了（計画は即時終了。3.2）、実行終了時の猶予は `limits.stopGrace`（3.2）、想定外例外の `reason` は短い形（4）） | `python` ノードとワーカー | `NodeKind::Python`、ワーカープロトコル、ライフサイクル、`flow_runtime_describe`、`python/mdium-worker/`（pytest 付き）、偽ワーカーでの Rust テスト | Python の段階をノードとして実行 |
-| V4 | 成果物とプレビュー | `artifacts.json`、`mediaType`、アセットプロトコルのスコープと CSP、実行パネルの成果物タブ、承認の `show` と `comment`、実行パネルのサブフロー単位のツリー（16.4） | 画像・動画の確認と、コメント付き承認 |
+| V4（実装 2026-10-11。計画からの差分: アセットプロトコルのスコープは実行ディレクトリ単位ではなく取得するファイル単位（5.2）、承認の `show` は型付き（5.3）、承認の `timeout` は未実装、実行状態・イベント上の選択肢は常にオブジェクト形（フローファイルは文字列も可）、承認エラーはダイアログ内に表示（5.3）、Python ヘルパーは成果物パスを絶対パスで送る（5.1）） | 成果物とプレビュー | `artifacts.json`、`mediaType`、アセットプロトコルのスコープと CSP、実行パネルの成果物タブ、承認の `show` と `comment`、実行パネルのサブフロー単位のツリー（16.4） | 画像・動画の確認と、コメント付き承認 |
 | V5 | エディタ（6 章） | パレット、属性パネル、エッジ編集、YAML 分割表示、保存、新規作成、サブフローの折りたたみ表示・ドリルダウン・抽出（16.3） | キャンバスでの編集 |
 | V6 | video_gen プロジェクト化（video_gen リポジトリ側） | `video_gen_flow/`、`run_video_pipeline` の段階分解、入口 2 本と部品 4 本のフロー、`project.yaml`、デスクトップでの通し確認 | **デスクトップで video_gen をフローとして運用** |
 | V7 | `agent` ノード、組込みアクション、テンプレート | 7.1、8.2 の 7 アクション＋7.2 の 3 アクション、`mdium:` 参照、`dev-workflow` テンプレート（`mergeGate`）、`subflow.projectRoot` | 開発ワークフローをフローとして実行（試験的） |
