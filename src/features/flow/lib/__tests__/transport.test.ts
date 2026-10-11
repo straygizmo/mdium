@@ -126,15 +126,29 @@ describe("Tauri transport", () => {
   it("watchFolder starts the watcher, fires on its own folder only, and stops on cleanup", async () => {
     invoke.mockResolvedValue(undefined);
     const handler = vi.fn();
-    const stop = await createTauriTransport().watchFolder("C:\p", handler);
-    expect(invoke).toHaveBeenCalledWith("watch_folder", { folderPath: "C:\p" });
-    listeners.get("folder-changed")!({ payload: "C:\other" });
+    const stop = await createTauriTransport().watchFolder(String.raw`C:\w1`, handler);
+    expect(invoke).toHaveBeenCalledWith("watch_folder", { folderPath: String.raw`C:\w1` });
+    listeners.get("folder-changed")!({ payload: String.raw`C:\other` });
     expect(handler).not.toHaveBeenCalled();
-    listeners.get("folder-changed")!({ payload: "C:\p" });
+    listeners.get("folder-changed")!({ payload: "c:/W1/" });
     expect(handler).toHaveBeenCalledTimes(1);
     stop();
     expect(listeners.has("folder-changed")).toBe(false);
-    expect(invoke).toHaveBeenCalledWith("unwatch_folder", { folderPath: "C:\p" });
+    expect(invoke).toHaveBeenCalledWith("unwatch_folder", { folderPath: String.raw`C:\w1` });
+  });
+
+  it("two subscribers to one folder unwatch only when the last one stops", async () => {
+    invoke.mockResolvedValue(undefined);
+    const transport = createTauriTransport();
+    const stopA = await transport.watchFolder(String.raw`C:\w2`, vi.fn());
+    const stopB = await transport.watchFolder("c:/w2/", vi.fn());
+    expect(invoke.mock.calls.filter(([c]) => c === "watch_folder")).toHaveLength(1);
+    stopA();
+    expect(invoke.mock.calls.filter(([c]) => c === "unwatch_folder")).toHaveLength(0);
+    stopB();
+    expect(invoke.mock.calls.filter(([c]) => c === "unwatch_folder")).toEqual([
+      ["unwatch_folder", { folderPath: String.raw`C:\w2` }],
+    ]);
   });
 
   it("call forwards to invoke unchanged", async () => {

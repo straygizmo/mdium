@@ -101,6 +101,8 @@ function kindForPath(path: string): FlowKind {
 export const useFlowEditorStore = create<EditorState>()((set, get) => {
   const schedule = () => {
     clearTimer();
+    // Invalidate any request already in flight: its text is outdated.
+    validationSeq++;
     timer = setTimeout(() => {
       timer = null;
       void get().validateNow();
@@ -109,6 +111,7 @@ export const useFlowEditorStore = create<EditorState>()((set, get) => {
 
   const loadInto = async (projectRoot: string, path: string): Promise<void> => {
     const gen = ++generation;
+    validationSeq++;
     clearTimer();
     set({ ...initial, projectRoot, path });
     let result: FlowLoadResult;
@@ -139,6 +142,7 @@ export const useFlowEditorStore = create<EditorState>()((set, get) => {
 
     openNew: (projectRoot, path, def) => {
       generation++;
+      validationSeq++;
       clearTimer();
       set({
         ...initial,
@@ -149,6 +153,7 @@ export const useFlowEditorStore = create<EditorState>()((set, get) => {
         text: stringifyFlow(def),
         def,
         dirty: true,
+        validating: true,
       });
       schedule();
     },
@@ -156,7 +161,7 @@ export const useFlowEditorStore = create<EditorState>()((set, get) => {
     setText: (text) => {
       const s = get();
       if (s.loadError || !s.path) return;
-      set({ text, dirty: true, saveError: null });
+      set({ text, dirty: true, saveError: null, validating: true });
       schedule();
     },
 
@@ -164,7 +169,7 @@ export const useFlowEditorStore = create<EditorState>()((set, get) => {
       const s = get();
       if (s.loadError || !s.path || !s.def) return;
       const next = edit(s.def);
-      set({ text: stringifyFlow(next), def: next, dirty: true, saveError: null });
+      set({ text: stringifyFlow(next), def: next, dirty: true, saveError: null, validating: true });
       schedule();
     },
 
@@ -177,7 +182,7 @@ export const useFlowEditorStore = create<EditorState>()((set, get) => {
       set({ validating: true });
       try {
         const result = await flowApi.validate(projectRoot, path, text);
-        if (gen !== generation || seq !== validationSeq) return;
+        if (gen !== generation || seq !== validationSeq || get().text !== text) return;
         set({
           // Keep the previous decoded flow while the text cannot be decoded.
           def: result.flow ?? get().def,
@@ -235,6 +240,7 @@ export const useFlowEditorStore = create<EditorState>()((set, get) => {
 
     close: () => {
       generation++;
+      validationSeq++;
       clearTimer();
       set({ ...initial });
     },

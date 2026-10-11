@@ -181,4 +181,25 @@ describe("editor store", () => {
     expect(store().dirty).toBe(false);
     expect(store().externalChange).toBe(false);
   });
+
+  it("a validation in flight for older text never overwrites newer state", async () => {
+    await store().open(ROOT, PATH);
+    const resolvers: Array<(r: FlowLoadResult) => void> = [];
+    routes.flow_validate = () => new Promise<FlowLoadResult>((res) => resolvers.push(res));
+    store().setText("a");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(resolvers).toHaveLength(1);
+    store().setText("b");
+    expect(store().validating).toBe(true);
+    resolvers[0](result({ flow: { ...def, name: "A" } }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store().def?.name).toBe("F");
+    expect(store().validating).toBe(true);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(resolvers).toHaveLength(2);
+    resolvers[1](result({ flow: { ...def, name: "B" } }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store().def?.name).toBe("B");
+    expect(store().validating).toBe(false);
+  });
 });
