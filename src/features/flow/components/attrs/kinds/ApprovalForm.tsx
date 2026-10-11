@@ -40,7 +40,7 @@ export function ApprovalForm({ node, path, onChange }: KindFormProps<FlowApprova
         <span>{t("attrs.options")}</span>
         <div className="flow-attrs__list">
           {options.map((option, i) => (
-            <div key={i} className="flow-attrs__row">
+            <div key={`${i}:${nameOf(option)}`} className="flow-attrs__row">
               <input
                 type="text"
                 aria-label={t("attrs.optionName")}

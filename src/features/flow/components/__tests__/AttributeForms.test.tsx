@@ -560,3 +560,35 @@ describe("ActionForm", () => {
     expect(patches.at(-1)).toEqual({ with: { base: "" } });
   });
 });
+
+describe("ApprovalForm option removal", () => {
+  it("keeps the remaining rows in sync after removing the first option", async () => {
+    const node: FlowApprovalNode = { id: "gate", kind: "approval", options: ["a", "b", "c"] };
+    const patches = await mountKind(ApprovalForm, node);
+
+    // The `show` list is empty, so the first "Remove" button belongs to the first option.
+    await act(async () => button("Remove", 0).click());
+    expect(patches.at(-1)).toEqual({ options: ["b", "c"] });
+    expect((all("Option name")[0] as HTMLInputElement).value).toBe("b");
+  });
+});
+
+describe("PartPicker param merge", () => {
+  it("keeps entered values for still-declared keys, adds new defaults and drops stale keys", async () => {
+    const callee: FlowSummary = { ...flowPart, params: { doc: { type: "path", required: true }, lang: { type: "string", required: false } } };
+    const node: FlowSubflowNode = { id: "s", kind: "subflow", flow: "", params: { doc: "${{ item }}", stale: 1 } };
+    const patches = await mountKind(SubflowForm, node, { parts: [callee] });
+
+    await choose(one("Sub-flow"), "lib/p.flow.yaml");
+    expect(patches.at(-1)).toEqual({ flow: "lib/p.flow.yaml", params: { doc: "${{ item }}", lang: "" } });
+  });
+});
+
+describe("LoopForm until", () => {
+  it("clears until when leaving while mode", async () => {
+    const node: FlowLoopNode = { id: "l", kind: "loop", mode: "while", maxIterations: 3, body: "", until: { ref: "params.x", op: "exists" } };
+    const patches = await mountKind(LoopForm, node);
+    await choose(one("Mode"), "foreach");
+    expect(patches.at(-1)).toStrictEqual({ mode: "foreach", until: undefined });
+  });
+});

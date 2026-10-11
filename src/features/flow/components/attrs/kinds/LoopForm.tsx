@@ -31,11 +31,13 @@ function parseItems(text: string | undefined): FlowLoopNode["items"] {
 export function LoopForm({ node, path, parts, currentFile, onChange }: KindFormProps<FlowLoopNode>) {
   const { t } = useTranslation("flow");
   const write = (patch: Partial<FlowLoopNode>) => onChange(path, patch);
+  // `until` only applies to `while` loops.
+  const onModeChange = (mode: FlowLoopNode["mode"]) => write(mode === "while" ? { mode } : { mode, until: undefined });
   return (
     <div className="flow-attrs">
       <label className="flow-attrs__field">
         <span>{t("attrs.mode")}</span>
-        <select aria-label={t("attrs.mode")} value={node.mode} onChange={(e) => write({ mode: e.target.value as FlowLoopNode["mode"] })}>
+        <select aria-label={t("attrs.mode")} value={node.mode} onChange={(e) => onModeChange(e.target.value as FlowLoopNode["mode"])}>
           {MODES.map((mode) => (
             <option key={mode} value={mode}>
               {t(`attrs.modeValue.${mode}`)}
