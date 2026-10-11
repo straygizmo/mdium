@@ -1166,3 +1166,143 @@ button.flow-issue__button:hover {
   overflow: auto;
   font-size: 11px;
 }
+
+/* Editor workspace: toolbar, split view, notices */
+
+.flow-panel__actions {
+  display: flex;
+  gap: 6px;
+}
+
+.flow-panel__new {
+  font-size: 12px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.flow-panel__new:hover:not(:disabled) {
+  border-color: var(--border-hover);
+}
+
+.flow-workspace__dirty,
+.flow-workspace__saved {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.flow-workspace__dirty {
+  color: var(--accent-orange, #e87d0d);
+}
+
+.flow-workspace__saved {
+  color: var(--text-muted);
+}
+
+.flow-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.flow-toolbar__palette-host {
+  position: relative;
+}
+
+.flow-toolbar__palette {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 20;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+.flow-toolbar__button {
+  font-size: 12px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.flow-toolbar__button:hover:not(:disabled) {
+  border-color: var(--border-hover);
+}
+
+.flow-toolbar__button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.flow-toolbar__button--active {
+  border-color: var(--accent-blue);
+  color: var(--accent-blue);
+}
+
+.flow-toolbar__status {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.flow-workspace__main {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Canvas and YAML pane side by side, half each. */
+.flow-workspace--split > .flow-workspace__canvas,
+.flow-workspace--split > .flow-workspace__yaml {
+  flex: 1 1 50%;
+  min-width: 0;
+}
+
+.flow-workspace__yaml {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+}
+
+.flow-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent-red) 12%, var(--bg-surface));
+}
+
+.flow-notice__text {
+  flex: 1;
+}
+
+.flow-notice__button {
+  font-size: 12px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-base);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.flow-notice__button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.flow-dialog__message {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}

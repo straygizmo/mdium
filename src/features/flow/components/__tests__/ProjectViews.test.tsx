@@ -158,7 +158,12 @@ describe("project views", () => {
       const PART = ".mdium/flows/lib/part.flow.yaml";
       useFlowViewStore.setState({ selected: { [FOLDER]: PART } });
       invoke.mockImplementation(async (cmd: string) => {
-        if (cmd === "flow_load") return { path: PART, format: "yaml", kind: "part", flow: docDigest(), errors: [], warnings: [] };
+        if (cmd === "flow_load") {
+          return { path: PART, format: "yaml", kind: "part", flow: docDigest(), errors: [], warnings: [], content: "", sha256: "h" };
+        }
+        if (cmd === "flow_list") return [];
+        if (cmd === "flow_project_load") return { exists: false, path: ".mdium/project.yaml", project: null, errors: [], warnings: [] };
+        if (cmd === "watch_folder" || cmd === "unwatch_folder") return undefined;
         if (cmd === "flow_run_list") return [];
         if (cmd === "flow_gitignore_status") return { ignored: true };
         throw new Error(`unexpected ${cmd}`);

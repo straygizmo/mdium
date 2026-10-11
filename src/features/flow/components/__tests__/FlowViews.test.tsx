@@ -13,6 +13,9 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke,
   convertFileSrc: vi.fn((p: string, proto: string) => `${proto}://${p}`),
 }));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(async () => () => {}),
+}));
 
 import { FlowPanel } from "../FlowPanel";
 import { FlowWorkspace } from "../FlowWorkspace";
@@ -59,6 +62,29 @@ function answerPanel(list: () => Promise<unknown>) {
       return { exists: false, path: ".mdium/project.yaml", project: null, errors: [], warnings: [] };
     }
     throw new Error(`unexpected ${cmd}`);
+  });
+}
+
+/** Answers the workspace's commands: `flow_load` / `flow_validate` with `result`, an empty list, no manifest, no runs. */
+function answerWorkspace(result: FlowLoadResult) {
+  invoke.mockImplementation(async (cmd: string) => {
+    switch (cmd) {
+      case "flow_load":
+      case "flow_validate":
+        return result;
+      case "flow_list":
+      case "flow_run_list":
+        return [];
+      case "flow_project_load":
+        return { exists: false, path: ".mdium/project.yaml", project: null, errors: [], warnings: [] };
+      case "flow_gitignore_status":
+        return { ignored: true };
+      case "watch_folder":
+      case "unwatch_folder":
+        return undefined;
+      default:
+        throw new Error(`unexpected ${cmd}`);
+    }
   });
 }
 
@@ -120,11 +146,15 @@ describe("flow views", () => {
       content: "",
       sha256: "h",
     };
-    invoke.mockResolvedValue(result);
+    answerWorkspace(result);
     useFlowViewStore.getState().setSelected(FOLDER, PATH);
     await act(async () => root.render(<FlowWorkspace />));
     await waitFor(() => expect(container.querySelectorAll(".react-flow__node").length).toBe(9));
     expect(invoke).toHaveBeenCalledWith("flow_load", { projectRoot: FOLDER, path: PATH });
+    // The workspace is an editor now: no read-only badge, a toolbar instead.
+    expect(container.querySelector(".flow-workspace__readonly")).toBeNull();
+    expect(container.querySelector(".flow-toolbar")).not.toBeNull();
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("watch_folder", { folderPath: `${FOLDER}/.mdium/flows` }));
     expect(container.textContent).toContain("Document digest");
     for (const id of ["collect", "docs", "summarize", "check", "quality_gate", "compile", "review", "publish"]) {
       expect(container.querySelector(`[title="${id}"]`), id).not.toBeNull();
@@ -140,7 +170,7 @@ describe("flow views", () => {
   });
 
   it("shows issues without a canvas when the file could not be decoded", async () => {
-    invoke.mockResolvedValue({
+    answerWorkspace({
       path: PATH,
       format: "yaml",
       kind: "entry",

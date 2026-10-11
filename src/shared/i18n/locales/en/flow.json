@@ -13,7 +13,8 @@
     "groupParts": "Parts (lib/)",
     "signature": "{{params}} → {{outputs}}",
     "noParams": "()",
-    "noOutputs": "()"
+    "noOutputs": "()",
+    "newFlow": "New flow"
   },
   "workspace": {
     "noSelection": "Select a flow in the left panel.",
@@ -305,7 +306,32 @@
   },
   "editor": {
     "addNode": "Add node",
-    "choosePort": "Choose exit"
+    "choosePort": "Choose exit",
+    "save": "Save",
+    "saved": "Saved",
+    "unsaved": "Unsaved changes",
+    "yaml": "YAML",
+    "validate": "Validate",
+    "saveWithErrors": "The flow has validation errors. Save anyway?",
+    "commentLoss": "Comments in this file will be lost when saving (the editor writes normalized YAML). Continue?",
+    "continue": "Continue",
+    "cancel": "Cancel",
+    "changedOutside": "The file changed outside the editor.",
+    "reload": "Reload",
+    "overwrite": "Overwrite",
+    "fileExists": "A flow file with that name already exists.",
+    "newFlow": "New flow",
+    "fileName": "File name",
+    "fileNameHint": "Lowercase letters, digits and hyphens; saved as <name>.flow.yaml.",
+    "location": "Location",
+    "locationEntry": "Flow (.mdium/flows/)",
+    "locationPart": "Part (.mdium/flows/lib/)",
+    "flowId": "Flow ID",
+    "flowName": "Display name",
+    "create": "Create",
+    "saveTitle": "Save flow",
+    "saveFailed": "Could not save the flow ({{code}}).",
+    "validating": "Validating…"
   },
   "attrs": {
     "id": "ID",

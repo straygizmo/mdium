@@ -2,9 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { useTabStore } from "@/stores/tab-store";
-import type { FlowSummary, ProjectLoadResult } from "@/shared/types/flow";
+import type { FlowDef, FlowSummary, ProjectLoadResult } from "@/shared/types/flow";
 import { flowApi, isFlowCommandError } from "../lib/flow-api";
 import { useFlowViewStore } from "../flow-store";
+import { useFlowEditorStore } from "../editor-store";
+import { NewFlowDialog } from "./NewFlowDialog";
 import { ProjectSetupDialog } from "./ProjectSetupDialog";
 import "./Flow.css";
 
@@ -32,6 +34,7 @@ export function FlowPanel() {
   const [state, setState] = useState<ListState>({ status: "loading" });
   const [project, setProject] = useState<ProjectLoadResult | null>(null);
   const [setupOpen, setSetupOpen] = useState(false);
+  const [newOpen, setNewOpen] = useState(false);
   const requestId = useRef(0);
 
   const refresh = useCallback(async () => {
@@ -60,6 +63,17 @@ export function FlowPanel() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  /** Opens the new flow in the editor, writes it at once (it must not exist yet) and selects it. */
+  const createFlow = async (path: string, def: FlowDef) => {
+    if (!folder) return;
+    setNewOpen(false);
+    const editor = useFlowEditorStore.getState();
+    editor.openNew(folder, path, def);
+    await editor.save({});
+    setSelected(folder, path);
+    await refresh();
+  };
 
   if (!folder) return null;
 
@@ -101,10 +115,28 @@ export function FlowPanel() {
     <div className="flow-panel">
       <div className="flow-panel__toolbar">
         <span className="flow-panel__badge">{t("experimentalBadge")}</span>
-        <button type="button" className="flow-panel__refresh" onClick={() => void refresh()}>
-          {t("list.refresh")}
-        </button>
+        <span className="flow-panel__actions">
+          <button
+            type="button"
+            className="flow-panel__new"
+            disabled={state.status === "loading"}
+            onClick={() => setNewOpen(true)}
+          >
+            {t("list.newFlow")}
+          </button>
+          <button type="button" className="flow-panel__refresh" onClick={() => void refresh()}>
+            {t("list.refresh")}
+          </button>
+        </span>
       </div>
+      {newOpen && (
+        <NewFlowDialog
+          projectRoot={folder}
+          existing={state.status === "ready" ? state.flows : []}
+          onCreate={(path, def) => void createFlow(path, def)}
+          onClose={() => setNewOpen(false)}
+        />
+      )}
       {project && (
         <div className="flow-panel__project">
           <div className="flow-panel__project-name">

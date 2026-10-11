@@ -13,7 +13,8 @@
     "groupParts": "部品（lib/）",
     "signature": "{{params}} → {{outputs}}",
     "noParams": "()",
-    "noOutputs": "()"
+    "noOutputs": "()",
+    "newFlow": "新しいフロー"
   },
   "workspace": {
     "noSelection": "左のパネルでフローを選んでください。",
@@ -305,7 +306,32 @@
   },
   "editor": {
     "addNode": "ノードを追加",
-    "choosePort": "出口を選択"
+    "choosePort": "出口を選択",
+    "save": "保存",
+    "saved": "保存済み",
+    "unsaved": "未保存の変更",
+    "yaml": "YAML",
+    "validate": "検証",
+    "saveWithErrors": "検証エラーがあります。保存しますか？",
+    "commentLoss": "保存すると、このファイルのコメントは失われます（正規化した YAML を書き出します）。続けますか？",
+    "continue": "続ける",
+    "cancel": "キャンセル",
+    "changedOutside": "ファイルがエディタの外で変更されました。",
+    "reload": "再読み込み",
+    "overwrite": "上書き",
+    "fileExists": "同じ名前のフローファイルが既にあります。",
+    "newFlow": "新しいフロー",
+    "fileName": "ファイル名",
+    "fileNameHint": "英小文字・数字・ハイフンのみ。<name>.flow.yaml として保存します。",
+    "location": "場所",
+    "locationEntry": "フロー (.mdium/flows/)",
+    "locationPart": "パーツ (.mdium/flows/lib/)",
+    "flowId": "フロー ID",
+    "flowName": "表示名",
+    "create": "作成",
+    "saveTitle": "フローの保存",
+    "saveFailed": "フローを保存できませんでした（{{code}}）。",
+    "validating": "検証中…"
   },
   "attrs": {
     "id": "ID",
