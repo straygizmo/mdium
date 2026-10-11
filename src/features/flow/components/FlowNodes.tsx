@@ -6,6 +6,8 @@ import type { GraphNode } from "../lib/flow-graph";
 export interface FlowNodeData extends Record<string, unknown> {
   node: GraphNode;
   onToggle: (id: string) => void;
+  /** True when the canvas is editable (handles become connectable). */
+  editable?: boolean;
 }
 
 export type FlowRfNode = Node<FlowNodeData>;
@@ -16,23 +18,23 @@ export const HANDLE_OUT = "out";
 export const HANDLE_BACK_IN = "back-in";
 export const HANDLE_BACK_OUT = "back-out";
 
-function Handles() {
+function Handles({ editable }: { editable: boolean }) {
   return (
     <>
-      <Handle type="target" id={HANDLE_IN} position={Position.Left} isConnectable={false} />
-      <Handle type="source" id={HANDLE_OUT} position={Position.Right} isConnectable={false} />
+      <Handle type="target" id={HANDLE_IN} position={Position.Left} isConnectable={editable} />
+      <Handle type="source" id={HANDLE_OUT} position={Position.Right} isConnectable={editable} />
       <Handle
         type="target"
         id={HANDLE_BACK_IN}
         position={Position.Bottom}
-        isConnectable={false}
+        isConnectable={editable}
         style={{ left: "30%" }}
       />
       <Handle
         type="source"
         id={HANDLE_BACK_OUT}
         position={Position.Bottom}
-        isConnectable={false}
+        isConnectable={editable}
         style={{ left: "70%" }}
       />
     </>
@@ -123,7 +125,7 @@ export const FlowNodeCard = memo(function FlowNodeCard({ data, selected }: NodeP
   ];
   return (
     <div className={classes.filter(Boolean).join(" ")} data-node-path={node.id}>
-      <Handles />
+      <Handles editable={data.editable === true} />
       <Header {...data} />
       <Details node={node} />
     </div>
@@ -141,7 +143,7 @@ export const FlowGroupNode = memo(function FlowGroupNode({ data, selected }: Nod
   ];
   return (
     <div className={classes.filter(Boolean).join(" ")} data-node-path={node.id}>
-      <Handles />
+      <Handles editable={data.editable === true} />
       <Header {...data} />
       <div className="flow-group__summary">
         {node.details.map((detail) => (

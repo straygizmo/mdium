@@ -17,6 +17,9 @@ type LoadState =
   | { status: "error"; code: string }
   | { status: "ready"; result: FlowLoadResult };
 
+/** Placeholder for the edit callbacks of the read-only canvas. */
+const noop = () => {};
+
 /** Main area of the Flows view: the selected flow's graph and its validation issues. */
 export function FlowWorkspace() {
   const { t } = useTranslation("flow");
@@ -137,9 +140,13 @@ export function FlowWorkspace() {
               <FlowCanvas
                 graph={graph}
                 layout={layout}
-                selectedId={selectedId}
-                onSelect={selectNode}
+                selection={selectedId ? { kind: "node", path: selectedId } : null}
+                editable={false}
+                onSelect={(sel) => selectNode(sel?.kind === "node" ? sel.path : null)}
                 onToggle={onToggle}
+                onMoveNode={noop}
+                onConnect={noop}
+                onDeleteSelection={noop}
               />
             )}
           </div>

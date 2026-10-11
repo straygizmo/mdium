@@ -294,5 +294,8 @@
       "failed": "failed"
     },
     "logDir": "Logs: {{dir}}"
+  },
+  "editor": {
+    "choosePort": "Choose exit"
   }
 }

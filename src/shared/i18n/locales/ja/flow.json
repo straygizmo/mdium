@@ -294,5 +294,8 @@
       "failed": "失敗"
     },
     "logDir": "ログ: {{dir}}"
+  },
+  "editor": {
+    "choosePort": "出口を選択"
   }
 }
