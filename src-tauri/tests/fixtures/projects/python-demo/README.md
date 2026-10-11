@@ -13,6 +13,10 @@ uv pip install --python .venv -e ../../../../../python/mdium-worker
 
 (The `setup` section of `.mdium/project.yaml` runs the same two commands.)
 
+When MDium runs under `tauri dev`, writes under `src-tauri/` would restart the
+app; `src-tauri/.taurignore` excludes `tests/` so Setup and runs of this fixture
+do not trigger a restart. Restart `tauri dev` after adding or changing that file.
+
 ## Run
 
 Open this folder in MDium, then run the `main` flow. `demo.add` computes `a + 1`
