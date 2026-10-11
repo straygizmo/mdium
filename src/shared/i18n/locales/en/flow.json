@@ -330,9 +330,12 @@
     "flowName": "Display name",
     "create": "Create",
     "saveTitle": "Save flow",
-    "saveFailed": "Could not save the flow ({{code}}).",
+    "saveFailed": "Could not save the flow: {{message}}",
     "validating": "Validating…",
-    "discardEdits": "Discard unsaved changes?"
+    "discardEdits": "Discard unsaved changes?",
+    "fixYamlToEdit": "Fix the YAML to edit on the canvas.",
+    "deletedOutside": "The file was deleted outside the editor.",
+    "droppedKeys": "Unknown keys will be dropped: {{keys}}"
   },
   "attrs": {
     "id": "ID",
@@ -351,6 +354,7 @@
     "when": "Run only when",
     "concurrencyKey": "Concurrency key",
     "invalidId": "Use lowercase letters, digits and underscores only.",
+    "idTaken": "This id is already used.",
     "invalidKey": "Use letters, digits, underscores and hyphens, starting with a letter or underscore.",
     "duplicateKey": "That key already exists.",
     "port": "Exit port",

@@ -248,9 +248,20 @@ describe("flow workspace editing", () => {
     await waitFor(() => expect(container.querySelector(".flow-workspace__dirty")).toBeNull());
   });
 
+  it("does not warn about comments that are still in the text", async () => {
+    routes.flow_load = () => loadResult({ content: `# note\n${stringifyFlow(demo)}` });
+    await mountWorkspace();
+    await pressCtrlS();
+    await waitFor(() => expect(callsTo("flow_save")).toHaveLength(1));
+    expect(dialog()).toBeNull();
+    expect(String(callsTo("flow_save")[0].content)).toContain("# note");
+  });
+
   it("warns about comment loss once before the first save", async () => {
     routes.flow_load = () => loadResult({ content: `# note\n${stringifyFlow(demo)}` });
     await mountWorkspace();
+    // A canvas / form edit re-serializes the text, which drops the comment.
+    await editName("nodes[0]", "Run");
 
     await pressCtrlS();
     await waitFor(() => expect(dialog()?.textContent).toContain("Comments in this file will be lost"));
@@ -271,6 +282,7 @@ describe("flow workspace editing", () => {
   it("aborts the save when the comment warning is cancelled", async () => {
     routes.flow_load = () => loadResult({ content: `# note\n${stringifyFlow(demo)}` });
     await mountWorkspace();
+    await editName("nodes[0]", "Run");
     await pressCtrlS();
     await waitFor(() => expect(dialog()).not.toBeNull());
     await click(button("Cancel", dialog()!));
@@ -370,10 +382,99 @@ describe("flow workspace editing", () => {
     await click(button("YAML"));
     expect(container.querySelector<HTMLTextAreaElement>(".test-yaml")!.value).toContain("name: Run");
     expect(container.querySelector(".flow-workspace__dirty")).not.toBeNull();
-    expect(callsTo("flow_load")).toHaveLength(1);
+    // The remount only checks the hash on disk (unchanged here); the edits stay.
+    await waitFor(() => expect(callsTo("flow_load")).toHaveLength(2));
+    expect(useFlowEditorStore.getState().text).toContain("name: Run");
+    expect(container.querySelector(".flow-notice")).toBeNull();
     // The watch is subscribed again for the remounted view.
     await waitFor(() => expect(callsTo("watch_folder")).toHaveLength(2));
     expect(showConfirm).not.toHaveBeenCalled();
+  });
+
+  it("reloads a clean editor on remount when the file changed meanwhile", async () => {
+    await mountWorkspace();
+    await act(async () => root.unmount());
+    routes.flow_load = () => loadResult({ sha256: "h2", flow: { ...demo, name: "Renamed" } });
+    root = createRoot(container);
+    await act(async () => root.render(<FlowWorkspace />));
+    await waitFor(() => expect(container.querySelector(".flow-workspace__name")?.textContent).toBe("Renamed"));
+    expect(useFlowEditorStore.getState().savedSha256).toBe("h2");
+  });
+
+  it("shows the deleted notice and re-creates the file on overwrite", async () => {
+    await mountWorkspace();
+    await waitFor(() => expect(listeners.some((l) => l.name === "folder-changed")).toBe(true));
+    routes.flow_load = () => {
+      throw { code: "FLOW_FILE_NOT_FOUND", message: PATH };
+    };
+    await act(async () => {
+      for (const l of listeners.filter((x) => x.name === "folder-changed")) {
+        l.handler({ payload: `${FOLDER}/.mdium/flows` });
+      }
+    });
+    await waitFor(() => expect(container.querySelector(".flow-notice")).not.toBeNull());
+    const notice = container.querySelector<HTMLElement>(".flow-notice")!;
+    expect(notice.textContent).toContain("The file was deleted outside the editor.");
+    await click(button("Overwrite", notice));
+    await waitFor(() => expect(callsTo("flow_save")).toHaveLength(1));
+    expect(callsTo("flow_save")[0].expectedSha256).toBeNull();
+    await waitFor(() => expect(container.querySelector(".flow-notice")).toBeNull());
+  });
+
+  it("overwrite runs the same warnings as a save", async () => {
+    routes.flow_save = () => {
+      throw { code: "FLOW_FILE_CHANGED", message: "changed" };
+    };
+    await mountWorkspace();
+    await pressCtrlS();
+    await waitFor(() => expect(container.querySelector(".flow-notice")).not.toBeNull());
+    routes.flow_validate = (args) =>
+      validated(args, [{ code: "FLOW_UNKNOWN_NODE_REF", path: "edges[0].to", params: { node: "x" } }]);
+    invoke.mockClear();
+    await click(button("Overwrite", container.querySelector<HTMLElement>(".flow-notice")!));
+    await waitFor(() => expect(dialog()?.textContent).toContain("The flow has validation errors. Save anyway?"));
+    await click(button("Cancel", dialog()!));
+    expect(callsTo("flow_save")).toHaveLength(0);
+    expect(container.querySelector(".flow-notice")).not.toBeNull();
+  });
+
+  it("lists unknown keys that the save drops", async () => {
+    const unknown: FlowIssue = { code: "FLOW_UNKNOWN_KEY", path: "labels", params: { key: "labels" } };
+    routes.flow_load = () => loadResult({ content: `${stringifyFlow(demo)}labels: [a]\n`, warnings: [unknown] });
+    await mountWorkspace();
+    await editName("nodes[0]", "Run");
+    await pressCtrlS();
+    await waitFor(() => expect(dialog()?.textContent).toContain("Unknown keys will be dropped: labels"));
+    expect(callsTo("flow_save")).toHaveLength(0);
+    await click(button("Continue", dialog()!));
+    await waitFor(() => expect(callsTo("flow_save")).toHaveLength(1));
+  });
+
+  it("commits a focused field before saving", async () => {
+    await mountWorkspace();
+    await click(container.querySelector<HTMLElement>('.react-flow__node[data-id="nodes[0]"]')!);
+    const nameInput = container.querySelector<HTMLInputElement>('.flow-workspace__side [aria-label="Name"]')!;
+    nameInput.focus();
+    await type(nameInput, "Typed");
+    expect(useFlowEditorStore.getState().text).not.toContain("name: Typed");
+    await act(async () => {
+      nameInput.dispatchEvent(new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true, cancelable: true }));
+    });
+    await waitFor(() => expect(callsTo("flow_save")).toHaveLength(1));
+    expect(String(callsTo("flow_save")[0].content)).toContain("name: Typed");
+  });
+
+  it("disables canvas and form edits while the YAML cannot be decoded", async () => {
+    await mountWorkspace();
+    await click(button("YAML"));
+    const yaml = container.querySelector<HTMLTextAreaElement>(".test-yaml")!;
+    await type(yaml, "nodes: [");
+    await waitFor(() => expect(container.textContent).toContain("Fix the YAML to edit on the canvas."));
+    expect(button("Add node").disabled).toBe(true);
+    expect(container.querySelector<HTMLFieldSetElement>("fieldset.flow-workspace__attrs")!.disabled).toBe(true);
+    // A late form edit is refused by the store: the typed text survives.
+    useFlowEditorStore.getState().applyEdit((d) => ({ ...d, name: "Z" }));
+    expect(useFlowEditorStore.getState().text).toBe("nodes: [");
   });
 
   it("asks before switching to another flow while dirty", async () => {

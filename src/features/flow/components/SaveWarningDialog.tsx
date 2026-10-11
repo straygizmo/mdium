@@ -2,7 +2,7 @@ import { useTranslation } from "react-i18next";
 import { DialogShell } from "@/features/workflow/components/DialogShell";
 
 interface SaveWarningDialogProps {
-  /** The warning shown above the buttons (already translated). */
+  /** The warning shown above the buttons (already translated; one paragraph per line). */
   message: string;
   onContinue(): void;
   onCancel(): void;
@@ -16,7 +16,11 @@ export function SaveWarningDialog({ message, onContinue, onCancel }: SaveWarning
       <h2 id="flow-save-warning-title" className="flow-dialog__title">
         {t("editor.saveTitle")}
       </h2>
-      <p className="flow-dialog__message">{message}</p>
+      {message.split("\n").map((line, i) => (
+        <p key={i} className="flow-dialog__message">
+          {line}
+        </p>
+      ))}
       <div className="flow-dialog__footer">
         <button type="button" className="flow-dialog__button" onClick={onCancel}>
           {t("editor.cancel")}

@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { FlowDef, FlowFormat, FlowIssue, FlowKind, FlowLoadResult } from "@/shared/types/flow";
 import { flowApi, isFlowCommandError } from "./lib/flow-api";
-import { hasComments, stringifyFlow } from "./lib/flow-yaml";
+import { hasComments, stringifyFlowAs } from "./lib/flow-yaml";
 import { showConfirm } from "@/stores/dialog-store";
 
 export type Selection =
@@ -17,6 +17,11 @@ export const VALIDATE_DEBOUNCE_MS = 300;
 
 const LIB_PREFIX = ".mdium/flows/lib/";
 
+const FILE_NOT_FOUND = "FLOW_FILE_NOT_FOUND";
+const FILE_TOO_LARGE = "FLOW_FILE_TOO_LARGE";
+
+export type LineEnding = "\n" | "\r\n";
+
 export interface EditorState {
   projectRoot: string | null;
   path: string | null;
@@ -28,13 +33,25 @@ export interface EditorState {
   savedSha256: string | null;
   /** Last successfully decoded flow (by Rust). */
   def: FlowDef | null;
+  /**
+   * True when `def` was decoded from the current `text` (or produced it). While false, the text
+   * holds edits Rust has not decoded yet, so structural edits on `def` would overwrite them.
+   */
+  defCurrent: boolean;
+  /** Line ending of the loaded file; re-applied when an edit re-serializes the text. */
+  eol: LineEnding;
   errors: FlowIssue[];
   warnings: FlowIssue[];
   dirty: boolean;
   validating: boolean;
+  /** The file had comments when it was loaded and the user has not yet agreed to drop them. */
   commentWarningPending: boolean;
+  /** Unknown top-level keys present in the file on disk (load / last save). */
+  diskUnknownKeys: string[];
   selection: Selection;
   externalChange: boolean;
+  /** The external change is a deletion of the file. */
+  externalDeleted: boolean;
   /** Set when the file could not be read or is too large: the editor is read-only. */
   loadError: string | null;
   /** Error code of the last failed save, if any. */
@@ -46,7 +63,12 @@ export interface EditorState {
   validateNow(): Promise<void>;
   select(selection: Selection): void;
   save(opts: { overwrite?: boolean }): Promise<SaveOutcome>;
-  markExternalChange(): void;
+  markExternalChange(deleted?: boolean): void;
+  /**
+   * Compares the file on disk with the one the editor holds: a clean editor reloads silently,
+   * a dirty one (or a deleted file) raises the external-change notice.
+   */
+  syncWithDisk(): Promise<void>;
   reload(): Promise<void>;
   close(): void;
 }
@@ -59,13 +81,17 @@ const initial = {
   text: "",
   savedSha256: null,
   def: null,
+  defCurrent: false,
+  eol: "\n" as LineEnding,
   errors: [],
   warnings: [],
   dirty: false,
   validating: false,
   commentWarningPending: false,
+  diskUnknownKeys: [],
   selection: null,
   externalChange: false,
+  externalDeleted: false,
   loadError: null,
   saveError: null,
 } satisfies Partial<EditorState>;
@@ -99,6 +125,33 @@ function kindForPath(path: string): FlowKind {
   return path.startsWith(LIB_PREFIX) ? "part" : "entry";
 }
 
+function formatForPath(path: string): FlowFormat {
+  return path.toLowerCase().endsWith(".json") ? "json" : "yaml";
+}
+
+/** `\r\n` when the text uses it anywhere, else `\n`. */
+export function detectEol(text: string): LineEnding {
+  return text.includes("\r\n") ? "\r\n" : "\n";
+}
+
+/** The unknown top-level keys named by `FLOW_UNKNOWN_KEY` warnings. */
+function unknownKeys(warnings: FlowIssue[]): string[] {
+  return warnings
+    .filter((w) => w.code === "FLOW_UNKNOWN_KEY")
+    .map((w) => (typeof w.params.key === "string" ? w.params.key : w.path));
+}
+
+/** True when the file had comments on load and the current text no longer has them. */
+export function commentLossDue(s: Pick<EditorState, "commentWarningPending" | "text">): boolean {
+  return s.commentWarningPending && !hasComments(s.text);
+}
+
+/** Unknown keys present on disk that the current text no longer carries (normalization dropped them). */
+export function droppedUnknownKeys(s: Pick<EditorState, "diskUnknownKeys" | "warnings">): string[] {
+  const now = new Set(unknownKeys(s.warnings));
+  return s.diskUnknownKeys.filter((key) => !now.has(key));
+}
+
 export const useFlowEditorStore = create<EditorState>()((set, get) => {
   const schedule = () => {
     clearTimer();
@@ -129,9 +182,12 @@ export const useFlowEditorStore = create<EditorState>()((set, get) => {
       text: result.content,
       savedSha256: result.sha256,
       def: result.flow,
+      defCurrent: result.flow !== null,
+      eol: detectEol(result.content),
       errors: result.errors,
       warnings: result.warnings,
       commentWarningPending: hasComments(result.content),
+      diskUnknownKeys: unknownKeys(result.warnings),
       loadError: unreadableCode(result),
     });
   };
@@ -145,14 +201,16 @@ export const useFlowEditorStore = create<EditorState>()((set, get) => {
       generation++;
       validationSeq++;
       clearTimer();
+      const format = formatForPath(path);
       set({
         ...initial,
         projectRoot,
         path,
         kind: kindForPath(path),
-        format: "yaml",
-        text: stringifyFlow(def),
+        format,
+        text: stringifyFlowAs(def, format),
         def,
+        defCurrent: true,
         dirty: true,
         validating: true,
       });
@@ -162,15 +220,20 @@ export const useFlowEditorStore = create<EditorState>()((set, get) => {
     setText: (text) => {
       const s = get();
       if (s.loadError || !s.path) return;
-      set({ text, dirty: true, saveError: null, validating: true });
+      // Monaco's text is kept as given (line endings included); `def` is now behind it.
+      set({ text, defCurrent: false, dirty: true, saveError: null, validating: true });
       schedule();
     },
 
     applyEdit: (edit) => {
       const s = get();
-      if (s.loadError || !s.path || !s.def) return;
+      // Refused while the text holds edits that are not decoded yet: they would be overwritten.
+      if (s.loadError || !s.path || !s.def || !s.defCurrent) return;
       const next = edit(s.def);
-      set({ text: stringifyFlow(next), def: next, dirty: true, saveError: null, validating: true });
+      if (next === s.def) return;
+      const serialized = stringifyFlowAs(next, s.format ?? "yaml");
+      const text = s.eol === "\r\n" ? serialized.replace(/\r?\n/g, "\r\n") : serialized;
+      set({ text, def: next, defCurrent: true, dirty: true, saveError: null, validating: true });
       schedule();
     },
 
@@ -187,6 +250,7 @@ export const useFlowEditorStore = create<EditorState>()((set, get) => {
         set({
           // Keep the previous decoded flow while the text cannot be decoded.
           def: result.flow ?? get().def,
+          defCurrent: result.flow !== null,
           errors: result.errors,
           warnings: result.warnings,
           kind: result.kind,
@@ -207,8 +271,21 @@ export const useFlowEditorStore = create<EditorState>()((set, get) => {
       const gen = generation;
       try {
         let expected = s.savedSha256;
-        // Overwriting adopts whatever is on disk now as the base to replace.
-        if (overwrite && expected !== null) expected = (await flowApi.load(projectRoot, path)).sha256;
+        // Overwriting adopts whatever is on disk now as the base to replace (nothing: re-create it).
+        if (overwrite) {
+          try {
+            const disk = await flowApi.load(projectRoot, path);
+            if (disk.errors.some((e) => e.code === FILE_TOO_LARGE)) {
+              // The hash of an unread file is not the file's: saving against it would loop.
+              if (gen === generation) set({ saveError: FILE_TOO_LARGE });
+              return "error";
+            }
+            expected = disk.sha256;
+          } catch (err) {
+            if (errorCode(err) !== FILE_NOT_FOUND) throw err;
+            expected = null;
+          }
+        }
         if (gen !== generation) return "error";
         const result = await flowApi.save(projectRoot, path, text, expected);
         if (gen !== generation) return "saved";
@@ -216,6 +293,8 @@ export const useFlowEditorStore = create<EditorState>()((set, get) => {
           savedSha256: result.sha256,
           dirty: cur.text !== text,
           externalChange: false,
+          externalDeleted: false,
+          diskUnknownKeys: unknownKeys(result.warnings),
           saveError: null,
         }));
         return "saved";
@@ -223,7 +302,11 @@ export const useFlowEditorStore = create<EditorState>()((set, get) => {
         if (gen !== generation) return "error";
         const code = errorCode(err);
         if (code === "FLOW_FILE_CHANGED") {
-          set({ externalChange: true });
+          set({ externalChange: true, externalDeleted: false });
+          return "changed-outside";
+        }
+        if (code === FILE_NOT_FOUND && s.savedSha256 !== null) {
+          set({ externalChange: true, externalDeleted: true });
           return "changed-outside";
         }
         set({ saveError: code });
@@ -231,7 +314,32 @@ export const useFlowEditorStore = create<EditorState>()((set, get) => {
       }
     },
 
-    markExternalChange: () => set({ externalChange: true }),
+    markExternalChange: (deleted = false) => set({ externalChange: true, externalDeleted: deleted }),
+
+    syncWithDisk: async () => {
+      const { projectRoot, path, savedSha256, loadError } = get();
+      if (!projectRoot || !path) return;
+      const gen = generation;
+      let sha256: string;
+      try {
+        sha256 = (await flowApi.load(projectRoot, path)).sha256;
+      } catch (err) {
+        // A file the editor read before is gone: let the user re-create it (overwrite) or reload.
+        if (gen === generation && errorCode(err) === FILE_NOT_FOUND && savedSha256 !== null && !loadError) {
+          get().markExternalChange(true);
+        }
+        return;
+      }
+      const now = get();
+      if (gen !== generation) return;
+      if (sha256 === now.savedSha256) {
+        // The file came back unchanged.
+        if (now.externalDeleted) set({ externalChange: false, externalDeleted: false });
+        return;
+      }
+      if (now.dirty) now.markExternalChange();
+      else await loadInto(projectRoot, path);
+    },
 
     reload: async () => {
       const { projectRoot, path } = get();

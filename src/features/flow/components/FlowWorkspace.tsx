@@ -19,7 +19,8 @@ import {
 } from "../lib/editor-state";
 import { portsOf } from "../lib/flow-ports";
 import { useFlowViewStore } from "../flow-store";
-import { confirmDiscard, useFlowEditorStore, type Selection } from "../editor-store";
+import { commentLossDue, confirmDiscard, droppedUnknownKeys, useFlowEditorStore, type Selection } from "../editor-store";
+import { describeError } from "../lib/run-format";
 import { FlowCanvas, type ConnectRequest } from "./FlowCanvas";
 import { FlowIssueList } from "./FlowIssueList";
 import { FlowToolbar } from "./FlowToolbar";
@@ -104,6 +105,7 @@ export function FlowWorkspace() {
   const storeRoot = useFlowEditorStore((s) => s.projectRoot);
   const text = useFlowEditorStore((s) => s.text);
   const def = useFlowEditorStore((s) => s.def);
+  const defCurrent = useFlowEditorStore((s) => s.defCurrent);
   const kind = useFlowEditorStore((s) => s.kind);
   const format = useFlowEditorStore((s) => s.format);
   const errors = useFlowEditorStore((s) => s.errors);
@@ -112,6 +114,7 @@ export function FlowWorkspace() {
   const validating = useFlowEditorStore((s) => s.validating);
   const selection = useFlowEditorStore((s) => s.selection);
   const externalChange = useFlowEditorStore((s) => s.externalChange);
+  const externalDeleted = useFlowEditorStore((s) => s.externalDeleted);
   const loadError = useFlowEditorStore((s) => s.loadError);
   const saveError = useFlowEditorStore((s) => s.saveError);
   const setText = useFlowEditorStore((s) => s.setText);
@@ -129,10 +132,13 @@ export function FlowWorkspace() {
   const [project, setProject] = useState<ProjectLoadResult | null>(null);
   const savingRef = useRef(false);
   const confirmRef = useRef<PendingConfirm | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
 
   // The store holds the file this workspace shows (it may already hold it, e.g. a flow just created).
   const current = !!folder && !!path && storeRoot === folder && storePath === path;
   const readOnly = loadError !== null;
+  // Canvas, palette and forms edit `def`; while the YAML holds undecoded edits they would overwrite them.
+  const structural = !readOnly && defCurrent;
   const loading = current && kind === null && loadError === null && def === null;
 
   // The editor state outlives this view (no close on unmount): a remount showing the same
@@ -143,7 +149,11 @@ export function FlowWorkspace() {
     setJustSaved(false);
     if (!folder || !path) return;
     const s = editor();
-    if (s.projectRoot === folder && s.path === path) return;
+    if (s.projectRoot === folder && s.path === path) {
+      // The file may have changed while no watcher was running: a cheap hash check.
+      void s.syncWithDisk();
+      return;
+    }
     let cancelled = false;
     const held = { root: s.projectRoot, path: s.path };
     void askDiscardFor(`${folder}\n${path}`, t("editor.discardEdits")).then((ok) => {
@@ -188,17 +198,9 @@ export function FlowWorkspace() {
     let cancelled = false;
     const onFolderChanged = async () => {
       const before = editor();
-      if (before.projectRoot !== folder || before.path !== path) return;
-      let sha256: string;
-      try {
-        sha256 = (await flowApi.load(folder, path)).sha256;
-      } catch {
-        return;
-      }
-      const now = editor();
-      if (cancelled || now.projectRoot !== folder || now.path !== path || sha256 === now.savedSha256) return;
-      if (now.dirty) now.markExternalChange();
-      else await now.reload();
+      if (cancelled || before.projectRoot !== folder || before.path !== path) return;
+      // Opening another file bumps the store's generation, so a late result is dropped there.
+      await before.syncWithDisk();
     };
     flowApi.watchFolder(watchedFolder(folder, path), () => void onFolderChanged()).then(
       (unwatch) => {
@@ -253,24 +255,37 @@ export function FlowWorkspace() {
     [],
   );
 
-  const runSave = useCallback(async () => {
-    if (savingRef.current || !current || editor().loadError) return;
-    savingRef.current = true;
-    setSaving(true);
-    try {
-      await editor().validateNow();
-      if (editor().errors.length > 0 && !(await ask(t("editor.saveWithErrors")))) return;
-      if (editor().commentWarningPending) {
-        if (!(await ask(t("editor.commentLoss")))) return;
-        useFlowEditorStore.setState({ commentWarningPending: false });
+  /** Validates, asks about errors / dropped keys / lost comments, then saves (or overwrites). */
+  const runSave = useCallback(
+    async (overwrite = false) => {
+      if (savingRef.current || !current || editor().loadError) return;
+      savingRef.current = true;
+      setSaving(true);
+      if (overwrite) setNoticeBusy(true);
+      try {
+        // A field that commits on blur must reach the text before it is validated and saved.
+        const active = document.activeElement;
+        if (active instanceof HTMLElement && rootRef.current?.contains(active)) active.blur();
+        await editor().validateNow();
+        const lines: string[] = [];
+        const dropped = droppedUnknownKeys(editor());
+        if (dropped.length > 0) lines.push(t("editor.droppedKeys", { keys: dropped.join(", ") }));
+        if (editor().errors.length > 0) lines.push(t("editor.saveWithErrors"));
+        if (lines.length > 0 && !(await ask(lines.join("\n")))) return;
+        if (commentLossDue(editor())) {
+          if (!(await ask(t("editor.commentLoss")))) return;
+          useFlowEditorStore.setState({ commentWarningPending: false });
+        }
+        const outcome = await editor().save({ overwrite });
+        if (outcome === "saved") setJustSaved(true);
+      } finally {
+        savingRef.current = false;
+        setSaving(false);
+        if (overwrite) setNoticeBusy(false);
       }
-      const outcome = await editor().save({});
-      if (outcome === "saved") setJustSaved(true);
-    } finally {
-      savingRef.current = false;
-      setSaving(false);
-    }
-  }, [current, ask, t]);
+    },
+    [current, ask, t],
+  );
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "s") {
@@ -290,16 +305,6 @@ export function FlowWorkspace() {
     setNoticeBusy(true);
     try {
       await editor().reload();
-    } finally {
-      setNoticeBusy(false);
-    }
-  };
-
-  const onOverwrite = async () => {
-    setNoticeBusy(true);
-    try {
-      const outcome = await editor().save({ overwrite: true });
-      if (outcome === "saved") setJustSaved(true);
     } finally {
       setNoticeBusy(false);
     }
@@ -378,7 +383,7 @@ export function FlowWorkspace() {
   const allIssues = [...errors, ...warnings];
 
   return (
-    <div className="flow-workspace" onKeyDown={onKeyDown}>
+    <div ref={rootRef} className="flow-workspace" onKeyDown={onKeyDown}>
       <div className="flow-workspace__header">
         <div className="flow-workspace__title">
           <span className="flow-workspace__name">{(current && def?.name) || path}</span>
@@ -397,7 +402,7 @@ export function FlowWorkspace() {
       {showEditor && (
         <FlowToolbar
           editable={!readOnly}
-          canAddNode={def !== null}
+          canAddNode={def !== null && structural}
           yamlOpen={yamlOpen}
           validating={validating}
           saving={saving}
@@ -420,12 +425,20 @@ export function FlowWorkspace() {
         />
       )}
       {showEditor && externalChange && (
-        <ExternalChangeNotice busy={noticeBusy} onReload={() => void onReloadOutside()} onOverwrite={() => void onOverwrite()} />
+        <ExternalChangeNotice
+          busy={noticeBusy}
+          deleted={externalDeleted}
+          onReload={() => void onReloadOutside()}
+          onOverwrite={() => void runSave(true)}
+        />
       )}
       {showEditor && saveError && (
         <div className="flow-workspace__message flow-workspace__message--error" role="alert">
-          {t("editor.saveFailed", { code: saveError })}
+          {t("editor.saveFailed", { message: describeError(t, { code: saveError, message: "" }).message })}
         </div>
+      )}
+      {showEditor && !readOnly && def && !defCurrent && !validating && (
+        <div className="flow-workspace__message">{t("editor.fixYamlToEdit")}</div>
       )}
       {(!current || loading) && <div className="flow-workspace__message">{t("workspace.loading")}</div>}
       {showEditor && loadError && (
@@ -446,7 +459,7 @@ export function FlowWorkspace() {
                   graph={graph}
                   layout={layout}
                   selection={selection}
-                  editable={!readOnly}
+                  editable={structural}
                   onSelect={onSelect}
                   onToggle={onToggle}
                   onMoveNode={onMoveNode}
@@ -484,7 +497,7 @@ export function FlowWorkspace() {
               />
             </section>
             {def && !readOnly && (
-              <section className="flow-workspace__section">
+              <fieldset className="flow-workspace__section flow-workspace__attrs" disabled={!defCurrent}>
                 <AttributePanel
                   def={def}
                   selection={selection}
@@ -502,7 +515,7 @@ export function FlowWorkspace() {
                   }}
                   onEditFlow={(patch: FlowAttrsPatch) => edit((d) => updateFlowAttrs(d, patch))}
                 />
-              </section>
+              </fieldset>
             )}
           </aside>
         </div>

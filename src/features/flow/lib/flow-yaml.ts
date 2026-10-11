@@ -1,5 +1,5 @@
 import { Document, isMap, isScalar, isSeq, parse, parseDocument, visit } from "yaml";
-import type { FlowDef, FlowEdge, FlowInlineBody, FlowNode } from "@/shared/types/flow";
+import type { FlowDef, FlowEdge, FlowFormat, FlowInlineBody, FlowNode } from "@/shared/types/flow";
 
 export const CANONICAL_TOP_KEYS = [
   "schemaVersion", "id", "name", "description", "params", "defaults", "limits",
@@ -60,14 +60,23 @@ function canonicalNode(node: FlowNode): Rec {
   return n;
 }
 
-/** Serialize a flow definition to canonical, stable YAML text. */
-export function stringifyFlow(def: FlowDef): string {
+/** The flow as a plain object with canonical key order and empty collections dropped. */
+function canonicalTop(def: FlowDef): Rec {
   const top = ordered(def as unknown as Rec, CANONICAL_TOP_KEYS);
   for (const k of EMPTY_OMITTED) if (isEmpty(top[k])) delete top[k];
   top.nodes = def.nodes.map(canonicalNode);
   if (top.edges) top.edges = (def.edges ?? []).map(canonicalEdge);
+  return top;
+}
 
-  const doc = new Document(top);
+/** Serialize a flow definition in the given file format (`.flow.json` files stay JSON). */
+export function stringifyFlowAs(def: FlowDef, format: FlowFormat): string {
+  return format === "json" ? `${JSON.stringify(canonicalTop(def), null, 2)}\n` : stringifyFlow(def);
+}
+
+/** Serialize a flow definition to canonical, stable YAML text. */
+export function stringifyFlow(def: FlowDef): string {
+  const doc = new Document(canonicalTop(def));
   visit(doc, {
     Scalar(_, scalar) {
       // Always double-quote strings carrying a `${{ ... }}` template.

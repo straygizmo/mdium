@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FlowDef, FlowIssue, FlowLoadResult } from "@/shared/types/flow";
 import { setFlowTransport, type FlowTransport } from "../lib/transport";
 import { addNode, defaultsFor, emptyFlow } from "../lib/editor-state";
-import { useFlowEditorStore } from "../editor-store";
+import { commentLossDue, droppedUnknownKeys, useFlowEditorStore } from "../editor-store";
 
 const ROOT = "C:\\proj";
 const PATH = ".mdium/flows/a.flow.yaml";
@@ -201,5 +201,118 @@ describe("editor store", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(store().def?.name).toBe("B");
     expect(store().validating).toBe(false);
+  });
+
+  it("an edit to a .flow.json file keeps it JSON", async () => {
+    const jsonPath = ".mdium/flows/a.flow.json";
+    const jsonText = `${JSON.stringify(def, null, 2)}\n`;
+    routes.flow_load = () => result({ path: jsonPath, format: "json", content: jsonText });
+    routes.flow_validate = () => result({ path: jsonPath, format: "json", content: jsonText });
+    await store().open(ROOT, jsonPath);
+    store().applyEdit((d) => ({ ...d, name: "Renamed" }));
+    expect(store().text.startsWith("{")).toBe(true);
+    expect(JSON.parse(store().text)).toMatchObject({ schemaVersion: 1, id: "f", name: "Renamed", nodes: [] });
+    await vi.advanceTimersByTimeAsync(300);
+    const content = callsTo("flow_validate")[0][1].content as string;
+    expect(content.startsWith("{")).toBe(true);
+  });
+
+  it("refuses a structural edit while the typed text is not decoded", async () => {
+    await store().open(ROOT, PATH);
+    expect(store().defCurrent).toBe(true);
+    const parseError: FlowIssue = { code: "FLOW_PARSE_FAILED", path: "", params: { message: "x", line: 1, column: 1 } };
+    routes.flow_validate = () => result({ flow: null, errors: [parseError] });
+    store().setText("nodes: [");
+    expect(store().defCurrent).toBe(false);
+    // Inside the debounce window and after the failed decode alike.
+    store().applyEdit((d) => ({ ...d, name: "Z" }));
+    expect(store().text).toBe("nodes: [");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(store().defCurrent).toBe(false);
+    store().applyEdit((d) => ({ ...d, name: "Z" }));
+    expect(store().text).toBe("nodes: [");
+    // Once the text decodes again, edits apply.
+    routes.flow_validate = () => result();
+    store().setText(TEXT);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(store().defCurrent).toBe(true);
+    store().applyEdit((d) => ({ ...d, name: "Z" }));
+    expect(store().text).toContain("name: Z");
+  });
+
+  it("a CRLF file stays CRLF after a structural edit", async () => {
+    routes.flow_load = () => result({ content: TEXT.replace(/\n/g, "\r\n") });
+    await store().open(ROOT, PATH);
+    store().applyEdit((d) => ({ ...d, name: "Z", description: "two\nlines" }));
+    expect(store().text).toContain("\r\n");
+    expect(store().text.replace(/\r\n/g, "")).not.toContain("\n");
+  });
+
+  it("warns about comment loss only when the comments are actually gone", async () => {
+    await store().open(ROOT, PATH);
+    expect(commentLossDue(store())).toBe(false);
+    store().setText(`${TEXT}# another\n`);
+    expect(commentLossDue(store())).toBe(false);
+    store().setText("schemaVersion: 1\nid: f\nname: F\nnodes: []\n");
+    expect(commentLossDue(store())).toBe(true);
+  });
+
+  it("lists the unknown keys on disk that the text no longer has", async () => {
+    const unknown: FlowIssue = { code: "FLOW_UNKNOWN_KEY", path: "labels", params: { key: "labels" } };
+    routes.flow_load = () => result({ warnings: [unknown] });
+    await store().open(ROOT, PATH);
+    expect(droppedUnknownKeys(store())).toEqual([]);
+    routes.flow_validate = () => result({ warnings: [] });
+    store().applyEdit((d) => ({ ...d, name: "Z" }));
+    await vi.advanceTimersByTimeAsync(300);
+    expect(droppedUnknownKeys(store())).toEqual(["labels"]);
+  });
+
+  it("a file deleted outside raises the notice and overwrite re-creates it", async () => {
+    await store().open(ROOT, PATH);
+    routes.flow_load = () => {
+      throw { code: "FLOW_FILE_NOT_FOUND", message: PATH };
+    };
+    await store().syncWithDisk();
+    expect(store().externalChange).toBe(true);
+    expect(store().externalDeleted).toBe(true);
+    calls = [];
+    await expect(store().save({ overwrite: true })).resolves.toBe("saved");
+    expect(callsTo("flow_save")[0][1]).toMatchObject({ expectedSha256: null });
+    expect(store().externalChange).toBe(false);
+    expect(store().externalDeleted).toBe(false);
+  });
+
+  it("a plain save of a deleted file raises the deleted notice", async () => {
+    await store().open(ROOT, PATH);
+    store().setText(`${TEXT}# x\n`);
+    routes.flow_save = () => {
+      throw { code: "FLOW_FILE_NOT_FOUND", message: PATH };
+    };
+    await expect(store().save({})).resolves.toBe("changed-outside");
+    expect(store().externalDeleted).toBe(true);
+  });
+
+  it("overwriting a file that became too large reports an error instead of looping", async () => {
+    await store().open(ROOT, PATH);
+    routes.flow_load = () =>
+      result({ content: "", sha256: "e3b0", errors: [{ code: "FLOW_FILE_TOO_LARGE", path: "", params: {} }] });
+    await expect(store().save({ overwrite: true })).resolves.toBe("error");
+    expect(store().saveError).toBe("FLOW_FILE_TOO_LARGE");
+    expect(callsTo("flow_save")).toHaveLength(0);
+  });
+
+  it("syncWithDisk reloads a clean editor whose file changed and flags a dirty one", async () => {
+    await store().open(ROOT, PATH);
+    routes.flow_load = () => result({ sha256: "h9", content: `${TEXT}# new\n` });
+    await store().syncWithDisk();
+    expect(store().savedSha256).toBe("h9");
+    expect(store().text).toBe(`${TEXT}# new\n`);
+    store().setText("edited: true\n");
+    routes.flow_load = () => result({ sha256: "h10" });
+    await store().syncWithDisk();
+    expect(store().externalChange).toBe(true);
+    expect(store().externalDeleted).toBe(false);
+    expect(store().text).toBe("edited: true\n");
   });
 });

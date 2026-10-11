@@ -6,6 +6,7 @@ import type { FlowDef, FlowSummary, ProjectLoadResult } from "@/shared/types/flo
 import { flowApi, isFlowCommandError } from "../lib/flow-api";
 import { useFlowViewStore } from "../flow-store";
 import { confirmDiscard, useFlowEditorStore } from "../editor-store";
+import { describeError } from "../lib/run-format";
 import { NewFlowDialog } from "./NewFlowDialog";
 import { ProjectSetupDialog } from "./ProjectSetupDialog";
 import "./Flow.css";
@@ -41,6 +42,7 @@ export function FlowPanel() {
   const refresh = useCallback(async () => {
     if (!folder) return;
     const id = ++requestId.current;
+    setCreateError(null);
     setState({ status: "loading" });
     setProject(null);
     setSetupOpen(false);
@@ -64,6 +66,9 @@ export function FlowPanel() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // A failed create is reported until the next selection.
+  useEffect(() => setCreateError(null), [selected]);
 
   /** Opens the new flow in the editor, writes it at once (it must not exist yet) and selects it. */
   const createFlow = async (path: string, def: FlowDef) => {
@@ -149,7 +154,7 @@ export function FlowPanel() {
       )}
       {createError && (
         <div className="flow-panel__message flow-panel__message--error" role="alert">
-          {t("editor.saveFailed", { code: createError })}
+          {t("editor.saveFailed", { message: describeError(t, { code: createError, message: "" }).message })}
         </div>
       )}
       {project && (

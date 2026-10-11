@@ -191,6 +191,18 @@
   border-bottom: 1px solid var(--border);
 }
 
+/* The attribute forms sit in a fieldset so they can be disabled as a whole. */
+.flow-workspace__attrs {
+  margin: 0;
+  min-width: 0;
+  border: none;
+  border-bottom: 1px solid var(--border);
+}
+
+.flow-workspace__attrs:disabled {
+  opacity: 0.6;
+}
+
 .flow-workspace__section-title {
   margin: 0 0 8px;
   font-size: 12px;

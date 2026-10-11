@@ -330,9 +330,12 @@
     "flowName": "表示名",
     "create": "作成",
     "saveTitle": "フローの保存",
-    "saveFailed": "フローを保存できませんでした（{{code}}）。",
+    "saveFailed": "フローを保存できませんでした: {{message}}",
     "validating": "検証中…",
-    "discardEdits": "未保存の変更を破棄しますか？"
+    "discardEdits": "未保存の変更を破棄しますか？",
+    "fixYamlToEdit": "キャンバスで編集するには YAML を修正してください。",
+    "deletedOutside": "ファイルがエディタの外で削除されました。",
+    "droppedKeys": "未知のキーは削除されます: {{keys}}"
   },
   "attrs": {
     "id": "ID",
@@ -351,6 +354,7 @@
     "when": "実行条件",
     "concurrencyKey": "同時実行キー",
     "invalidId": "小文字の英字・数字・アンダースコアのみ使用できます。",
+    "idTaken": "この ID は既に使われています。",
     "invalidKey": "英字・数字・アンダースコア・ハイフンのみ使用でき、先頭は英字かアンダースコアにしてください。",
     "duplicateKey": "そのキーは既に存在します。",
     "port": "出口ポート",
