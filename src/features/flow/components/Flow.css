@@ -964,3 +964,17 @@ button.flow-issue__button:hover {
   font-size: 11px;
   background: var(--bg-base);
 }
+
+.flow-approval__show {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 6px 0;
+}
+
+.flow-approval__comment {
+  width: 100%;
+  min-height: 4em;
+  box-sizing: border-box;
+  resize: vertical;
+}

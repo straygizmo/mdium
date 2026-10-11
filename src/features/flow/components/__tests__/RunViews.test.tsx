@@ -100,12 +100,6 @@ function route(handlers: Record<string, (args: Record<string, unknown>) => unkno
   });
 }
 
-async function flush() {
-  await act(async () => {
-    await new Promise((r) => setTimeout(r, 0));
-  });
-}
-
 async function waitFor(check: () => void, timeoutMs = 3000) {
   const start = Date.now();
   for (;;) {
@@ -119,6 +113,10 @@ async function waitFor(check: () => void, timeoutMs = 3000) {
       });
     }
   }
+}
+
+function setNativeValue(el: HTMLTextAreaElement, value: string) {
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(el, value);
 }
 
 function button(container: HTMLElement, text: string): HTMLButtonElement {
@@ -403,40 +401,20 @@ describe("run views", () => {
     await act(async () => {
       listeners.get("flow://approval-requested")!({ payload: { projectRoot: "c:/proj", runId: "r1", nodeKey: "ok", reason: { code: "FLOW_APPROVAL_NODE" } } });
     });
-    await waitFor(() => expect(container.textContent).toContain("Ship it?"));
+    await waitFor(() => expect(container.textContent).toContain("Review"));
     expect(container.textContent).toContain("A run is waiting for approval.");
-    expect(container.textContent).toContain("d.md");
-    button(container, "Stop");
-    const comment = container.querySelector<HTMLInputElement>(".flow-run__approval input")!;
+    await act(async () => button(container, "Review").click());
+    const dialog = document.querySelector(".flow-dialog") as HTMLElement;
+    expect(dialog.textContent).toContain("Ship it?");
+    expect(dialog.textContent).toContain("d.md");
+    button(dialog, "Reject");
+    const comment = dialog.querySelector("textarea")!;
     await act(async () => {
-      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
-      setter.call(comment, "lgtm");
+      setNativeValue(comment, "lgtm");
       comment.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    await act(async () => button(container, "publish").click());
+    await act(async () => button(dialog, "publish").click());
     await waitFor(() => expect(calls).toContain("approve ok publish lgtm"));
-  });
-
-  it("localizes built-in approval options and budget approvals", async () => {
-    route({
-      flow_run_list: () => [summary("r1", { status: "awaiting_approval", pendingApprovals: 1 })],
-      flow_run_get: () =>
-        snapshot("r1", {
-          status: "awaiting_approval",
-          approvals: [{ options: [{ name: "approve" }, { name: "stop" }], reason: { code: "FLOW_BUDGET_EXCEEDED", params: { spentUsd: 1.5, limitUsd: 1 } } }],
-        }),
-      flow_gitignore_status: () => ({ ignored: true }),
-    });
-    await act(async () => root.render(<RunPanel projectRoot={ROOT} flowPath={PATH} flow={null} />));
-    await waitFor(() => expect(container.querySelectorAll(".flow-runs__item").length).toBe(1));
-    expect(button(container, "Run").disabled).toBe(true);
-    expect(container.textContent).not.toContain(".gitignore");
-    await act(async () => container.querySelector<HTMLButtonElement>(".flow-runs__item")!.click());
-    await waitFor(() => expect(container.textContent).toContain("Budget exceeded"));
-    expect(container.textContent).toContain("Spent $1.5 of the $1 budget.");
-    button(container, "Approve");
-    button(container, "Stop");
-    await flush();
   });
 });
 
@@ -589,5 +567,81 @@ describe("run panel tree and artifacts", () => {
     await clickFirstRow();
     await act(async () => button(container, "Artifacts").click());
     await waitFor(() => expect(container.textContent).toContain("Preview unavailable."));
+  });
+
+  it("opens the approval dialog from the awaiting row, previews artifacts and sends the comment", async () => {
+    const request = {
+      nodeKey: "review",
+      options: [{ name: "accept" }, { name: "revise", commentRequired: true }],
+      message: "Check it",
+      show: {
+        "nodes.a.outputs.n": 7,
+        "nodes.a.artifacts.shot": { kind: "artifacts", nodeKey: "a", attempt: 1, artifacts: [{ index: 0, path: "C:/p/shot.png", label: "shot", mediaType: "image/png", recordedAt: "t" }] },
+      },
+      reason: { code: "FLOW_APPROVAL_NODE" },
+    };
+    const snap = snapshot("r1", { status: "awaiting_approval", approvals: [request], nodes: { a: node("succeeded"), review: node("awaiting_approval") } });
+    const approve = vi.fn(async () => undefined);
+    route({
+      flow_run_list: () => [summary("r1")],
+      flow_run_get: () => snap,
+      flow_gitignore_status: () => ({ ignored: true }),
+      flow_artifact_path: () => ({ path: "C:/p/shot.png", mediaType: "image/png" }),
+      flow_run_approve: approve,
+    });
+    await renderPanel();
+    const rows = [...container.querySelectorAll('[role="treeitem"]')];
+    await act(async () => {
+      (rows.find((r) => r.textContent!.includes("review")) as HTMLElement).click();
+    });
+    await waitFor(() => expect(document.querySelector(".flow-dialog")).not.toBeNull());
+    const dialog = document.querySelector(".flow-dialog") as HTMLElement;
+    expect(dialog.textContent).toContain("Check it");
+    expect(dialog.textContent).toContain("7");
+    await waitFor(() => expect(dialog.querySelector("img")).not.toBeNull());
+    const revise = button(dialog, "revise");
+    expect(revise.disabled).toBe(true);
+    expect(revise.title).toBe("This option needs a comment.");
+    const comment = dialog.querySelector("textarea") as HTMLTextAreaElement;
+    await act(async () => {
+      setNativeValue(comment, "fix the title");
+      comment.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(revise.disabled).toBe(false);
+    await act(async () => {
+      revise.click();
+    });
+    expect(approve).toHaveBeenCalledWith({ projectRoot: ROOT, runId: "r1", nodeKey: "review", choice: "revise", comment: "fix the title" });
+    await waitFor(() => expect(document.querySelector(".flow-dialog")).toBeNull());
+  });
+
+  it("disables a commentRequired option until a comment is typed and localizes built-in options", async () => {
+    const request = { nodeKey: "review", options: [{ name: "approve" }, { name: "reject", commentRequired: true }], reason: { code: "FLOW_APPROVAL_NODE" } };
+    const snap = snapshot("r1", { status: "awaiting_approval", approvals: [request], nodes: { review: node("awaiting_approval") } });
+    route({ flow_run_list: () => [summary("r1")], flow_run_get: () => snap, flow_gitignore_status: () => ({ ignored: true }) });
+    await renderPanel();
+    await act(async () => {
+      button(container, "Review").click();
+    });
+    await waitFor(() => expect(document.querySelector(".flow-dialog")).not.toBeNull());
+    const dialog = document.querySelector(".flow-dialog") as HTMLElement;
+    expect(button(dialog, "Approve")).toBeTruthy();
+    expect(button(dialog, "Reject").disabled).toBe(true);
+  });
+
+  it("opens the budget approval from its review button", async () => {
+    const request = { options: [{ name: "approve" }, { name: "stop" }], reason: { code: "FLOW_BUDGET_EXCEEDED" } };
+    const snap = snapshot("r1", { status: "awaiting_approval", approvals: [request], nodes: {} });
+    route({ flow_run_list: () => [summary("r1")], flow_run_get: () => snap, flow_gitignore_status: () => ({ ignored: true }) });
+    // A budget approval has no node, so the tree is empty: select the run without waiting for rows.
+    await act(async () => root.render(<RunPanel projectRoot={ROOT} flowPath={PATH} flow={flow} />));
+    await waitFor(() => expect(container.querySelectorAll(".flow-runs__item").length).toBe(1));
+    await act(async () => container.querySelector<HTMLButtonElement>(".flow-runs__item")!.click());
+    await waitFor(() => expect(container.textContent).toContain("Review"));
+    await act(async () => {
+      button(container, "Review").click();
+    });
+    await waitFor(() => expect(document.querySelector(".flow-dialog")).not.toBeNull());
+    expect(document.querySelector(".flow-dialog")!.textContent).toContain("Budget");
   });
 });

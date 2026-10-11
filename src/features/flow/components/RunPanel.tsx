@@ -6,7 +6,6 @@ import {
   ACTIVE_RUN_STATUSES,
   isLiveInstance,
   splitNodeKey,
-  type ApprovalRequest,
   type FlowRunError,
   type RunSnapshot,
   type RunSummary,
@@ -17,7 +16,11 @@ import { RunStartDialog } from "./RunStartDialog";
 import { RunLogDialog } from "./RunLogDialog";
 import { RunNodeTree } from "./RunNodeTree";
 import { RunNodeDetail } from "./RunNodeDetail";
+import { ApprovalDialog } from "./ApprovalDialog";
 import { buildRunTree } from "../lib/run-tree";
+
+/** Key of the budget approval, which has no node. */
+const BUDGET_KEY = "__budget__";
 
 /** Compares project roots as the backend may spell them differently. */
 export function sameRoot(a: string, b: string): boolean {
@@ -234,6 +237,10 @@ function RunDetail({ projectRoot, snapshot, selectedNode, onSelectNode, onAct, o
   const isApproval = (key: string) => rootDef(key)?.kind === "approval";
   const rows = useMemo(() => buildRunTree(state, meta.flow), [state, meta.flow]);
   const approvalsRef = useRef<HTMLDivElement>(null);
+  const approvals = state.approvals ?? [];
+  // Node key (or BUDGET_KEY) of the request whose dialog is open; it closes when the request is gone.
+  const [openApproval, setOpenApproval] = useState<string | null>(null);
+  const openRequest = openApproval === null ? undefined : approvals.find((r) => (r.nodeKey ?? BUDGET_KEY) === openApproval);
   // Nested scopes' edges are not known here; the backend rejects what it cannot do.
   const hasFailureEdge = (key: string) =>
     splitNodeKey(key).prefix === "" &&
@@ -289,16 +296,17 @@ function RunDetail({ projectRoot, snapshot, selectedNode, onSelectNode, onAct, o
           </button>
         )}
       </div>
-      {(state.approvals ?? []).length > 0 && (
+      {approvals.length > 0 && (
         <div className="flow-run__approvals" ref={approvalsRef}>
-          {(state.approvals ?? []).map((request) => (
-            <ApprovalCard
-              key={request.nodeKey ?? "__budget__"}
-              request={request}
-              onChoose={(choice, comment) =>
-                onAct(() => flowRunApi.approve(projectRoot, runId, request.nodeKey ?? null, choice, comment || null))
-              }
-            />
+          {approvals.map((request) => (
+            <div key={request.nodeKey ?? BUDGET_KEY} className="flow-run__approval">
+              <div className="flow-run__approval-title">{request.nodeKey ? `${t("run.approvals")}: ${request.nodeKey}` : t("run.budget")}</div>
+              <div>
+                <button type="button" onClick={() => setOpenApproval(request.nodeKey ?? BUDGET_KEY)}>
+                  {t("run.review")}
+                </button>
+              </div>
+            </div>
           ))}
         </div>
       )}
@@ -307,7 +315,7 @@ function RunDetail({ projectRoot, snapshot, selectedNode, onSelectNode, onAct, o
         rows={rows}
         selectedKey={selectedNode}
         onSelect={onSelectNode}
-        onOpenApproval={() => approvalsRef.current?.scrollIntoView?.({ block: "nearest" })}
+        onOpenApproval={setOpenApproval}
       />
       {selectedNode && state.nodes[selectedNode] && (
         <RunNodeDetail
@@ -324,6 +332,27 @@ function RunDetail({ projectRoot, snapshot, selectedNode, onSelectNode, onAct, o
           onLog={onLog}
         />
       )}
+      {openRequest && (
+        <ApprovalDialog
+          projectRoot={projectRoot}
+          runId={runId}
+          request={openRequest}
+          onClose={() => setOpenApproval(null)}
+          onChoose={async (choice, comment) => {
+            let failed = false;
+            await onAct(async () => {
+              try {
+                await flowRunApi.approve(projectRoot, runId, openRequest.nodeKey ?? null, choice, comment || null);
+              } catch (err) {
+                failed = true;
+                throw err;
+              }
+            });
+            // onAct reports the error itself; the dialog only needs to know it must stay open.
+            if (failed) throw new Error("approval failed");
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -336,36 +365,4 @@ function findLabel(rows: ReturnType<typeof buildRunTree>, key: string): string {
     if (inner !== key) return inner;
   }
   return key;
-}
-
-function ApprovalCard({ request, onChoose }: { request: ApprovalRequest; onChoose(choice: string, comment: string): Promise<void> }) {
-  const { t } = useTranslation("flow");
-  const [comment, setComment] = useState("");
-  return (
-    <div className="flow-run__approval">
-      <div className="flow-run__approval-title">{request.nodeKey ? `${t("run.approvals")}: ${request.nodeKey}` : t("run.budget")}</div>
-      {request.message && <div>{request.message}</div>}
-      {!request.message && <div className="flow-run__muted">{describeReason(t, request.reason)}</div>}
-      {Object.entries(request.show ?? {}).map(([name, value]) => (
-        <div key={name} className="flow-run__muted">
-          {name}: <code>{typeof value === "string" ? value : JSON.stringify(value)}</code>
-        </div>
-      ))}
-      <input
-        className="flow-dialog__input"
-        placeholder={t("run.comment")}
-        aria-label={t("run.comment")}
-        value={comment}
-        onChange={(e) => setComment(e.target.value)}
-      />
-      <div className="flow-run__actions">
-        {request.options.map((option) => (
-          <button key={option.name} type="button" onClick={() => void onChoose(option.name, comment)}>
-            {/* Built-in options are localized; options named in the flow file are shown as written. */}
-            {t(`run.option.${option.name}`, { defaultValue: option.name })}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
 }
