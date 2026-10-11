@@ -6,6 +6,7 @@ import {
   FLOW_PROGRESS_EVENT,
   FLOW_RUN_CHANGED_EVENT,
   type ApprovalRequestedEvent,
+  type ArtifactRef,
   type CommandReview,
   type FlowRunError,
   type NodeChangedEvent,
@@ -66,6 +67,8 @@ export const flowRunApi = {
   log: (projectRoot: string, runId: string, nodeKey: string, attempt: number, stream: "stdout" | "stderr", maxBytes: number) =>
     call<string>("flow_run_log", { projectRoot, runId, nodeKey, attempt, stream, maxBytes }),
   gitignoreStatus: (projectRoot: string) => call<{ ignored: boolean }>("flow_gitignore_status", { projectRoot }),
+  /** A webview-loadable URL for a recorded artifact (not a plain command). */
+  artifactUrl: (projectRoot: string, ref: ArtifactRef) => getFlowTransport().artifactUrl(projectRoot, ref),
 };
 
 export interface FlowRunEventHandlers {

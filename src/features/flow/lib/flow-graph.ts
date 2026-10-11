@@ -70,7 +70,7 @@ function nodeDetails(node: FlowNode): NodeDetail[] {
     case "approval": {
       const details: NodeDetail[] = [];
       if (node.message) details.push({ key: "message", value: truncate(node.message) });
-      details.push({ key: "options", value: (node.options ?? ["approve", "reject"]).join(" / ") });
+      details.push({ key: "options", value: (node.options ?? ["approve", "reject"]).map((o) => (typeof o === "string" ? o : o.name)).join(" / ") });
       return details;
     }
     case "loop": {

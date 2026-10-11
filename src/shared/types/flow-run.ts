@@ -34,12 +34,63 @@ export interface Reason {
   params?: Record<string, unknown>;
 }
 
+/** A file a node recorded as its artifact. */
+export interface Artifact {
+  index: number;
+  path: string;
+  label?: string;
+  mediaType: string;
+  bytes?: number;
+  recordedAt: string;
+}
+
+/** Addresses one recorded artifact. */
+export interface ArtifactRef {
+  runId: string;
+  nodeKey: string;
+  attempt: number;
+  index: number;
+}
+
+/** Where an artifact lives on disk (answer of `flow_artifact_path`). */
+export interface ArtifactLocation {
+  path: string;
+  mediaType: string;
+  bytes?: number;
+}
+
+/** One choice of an approval; the wire form is always an object. */
+export interface ApprovalOption {
+  name: string;
+  commentRequired?: boolean;
+}
+
+/** A `show` entry that points at a node's recorded artifacts. */
+export interface ShowArtifacts {
+  kind: "artifacts";
+  nodeKey: string;
+  attempt: number;
+  artifacts: Artifact[];
+}
+
+/** A `show` value: either artifacts or any plain value. */
+export type ShowValue = ShowArtifacts | unknown;
+
+export function isShowArtifacts(v: unknown): v is ShowArtifacts {
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    (v as { kind?: unknown }).kind === "artifacts" &&
+    Array.isArray((v as { artifacts?: unknown }).artifacts)
+  );
+}
+
 export interface ApprovalRequest {
   /** Absent for the run-level budget approval. */
   nodeKey?: string;
-  options: string[];
+  options: ApprovalOption[];
   message?: string;
-  show?: Record<string, unknown>;
+  show?: Record<string, ShowValue>;
   reason: Reason;
 }
 
@@ -54,7 +105,7 @@ export interface NodeState {
   port?: string;
   reason?: Reason;
   outputs?: Record<string, unknown>;
-  artifacts?: Array<{ path: string; label?: string }>;
+  artifacts?: Artifact[];
   progress?: { text: string; fraction?: number };
   cost: CostTotals;
   costReported: boolean;

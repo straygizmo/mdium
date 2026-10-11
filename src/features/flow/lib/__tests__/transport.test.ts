@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.hoisted(() => vi.fn());
 const listeners = vi.hoisted(() => new Map<string, (e: { payload: unknown }) => void>());
-vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke,
+  convertFileSrc: vi.fn((p: string, proto: string) => `${proto}://${p}`),
+}));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(async (name: string, handler: (e: { payload: unknown }) => void) => {
     listeners.set(name, handler);
@@ -36,6 +39,7 @@ describe("FlowTransport registry", () => {
         return "ok" as T;
       },
       subscribe: async () => () => {},
+      artifactUrl: async () => "",
     };
     setFlowTransport(fake);
     await expect(flowApi.list("C:\\p")).resolves.toBe("ok");
@@ -47,12 +51,28 @@ describe("FlowTransport registry", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
+  it("routes artifactUrl through the registered transport", async () => {
+    const ref = { runId: "r", nodeKey: "a", attempt: 1, index: 0 };
+    const seen: unknown[] = [];
+    setFlowTransport({
+      call: async <T,>() => undefined as T,
+      subscribe: async () => () => {},
+      artifactUrl: async (root, r) => {
+        seen.push([root, r]);
+        return "blob:fake";
+      },
+    });
+    await expect(flowRunApi.artifactUrl("C:\\p", ref)).resolves.toBe("blob:fake");
+    expect(seen).toEqual([["C:\\p", ref]]);
+  });
+
   it("still normalizes command errors coming from a custom transport", async () => {
     setFlowTransport({
       call: async () => {
         throw JSON.stringify({ code: "FLOW_PROJECT_INVALID", message: "x" });
       },
       subscribe: async () => () => {},
+      artifactUrl: async () => "",
     });
     await expect(flowApi.list("")).rejects.toEqual({ code: "FLOW_PROJECT_INVALID", message: "x" });
   });
@@ -62,13 +82,14 @@ describe("FlowTransport registry", () => {
     const detached: string[] = [];
     const first: FlowTransport = {
       call: async <T,>() => undefined as T,
+      artifactUrl: async () => "",
       subscribe: async (event) => () => {
         detached.push(event);
       },
     };
     setFlowTransport(first);
     const unlisten = await subscribeFlowRunEvents({ onRunChanged: vi.fn() });
-    setFlowTransport({ call: async <T,>() => undefined as T, subscribe: async () => () => {} });
+    setFlowTransport({ call: async <T,>() => undefined as T, subscribe: async () => () => {}, artifactUrl: async () => "" });
     unlisten();
     expect(detached).toEqual(["flow://run-changed"]);
   });
@@ -89,6 +110,13 @@ describe("Tauri transport", () => {
     expect(seen).toEqual([{ runId: "r", text: "t" }]);
     off();
     expect(listeners.has("flow://progress")).toBe(false);
+  });
+
+  it("artifactUrl resolves the file and converts it to an asset url", async () => {
+    invoke.mockResolvedValueOnce({ path: "C:/p/a.png", mediaType: "image/png" });
+    const ref = { runId: "r", nodeKey: "a", attempt: 1, index: 0 };
+    await expect(flowRunApi.artifactUrl("C:\\p", ref)).resolves.toBe("asset://C:/p/a.png");
+    expect(invoke).toHaveBeenCalledWith("flow_artifact_path", { projectRoot: "C:\\p", ...ref });
   });
 
   it("call forwards to invoke unchanged", async () => {

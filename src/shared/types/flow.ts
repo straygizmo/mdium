@@ -101,7 +101,7 @@ export interface FlowApprovalNode extends FlowNodeCommon {
   message?: string;
   show?: string[];
   /** Output ports; defaults to `["approve", "reject"]`. */
-  options?: string[];
+  options?: Array<string | { name: string; commentRequired?: boolean }>;
 }
 
 export interface FlowInlineBody {

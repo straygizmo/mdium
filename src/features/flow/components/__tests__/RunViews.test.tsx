@@ -8,7 +8,10 @@ import type { CommandReview, RunSnapshot, RunSummary } from "@/shared/types/flow
 
 const invoke = vi.hoisted(() => vi.fn());
 const listeners = vi.hoisted(() => new Map<string, (e: { payload: unknown }) => void>());
-vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke,
+  convertFileSrc: vi.fn((p: string, proto: string) => `${proto}://${p}`),
+}));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(async (name: string, handler: (e: { payload: unknown }) => void) => {
     listeners.set(name, handler);
@@ -391,7 +394,7 @@ describe("run views", () => {
           a: { status: "succeeded", attempt: 1, cost: { actual: 0, estimated: 0 }, costReported: false },
           ok: { status: "awaiting_approval", attempt: 1, cost: { actual: 0, estimated: 0 }, costReported: false },
         },
-        approvals: [{ nodeKey: "ok", options: ["publish", "reject"], message: "Ship it?", show: { "nodes.a.outputs.doc": "d.md" }, reason: { code: "FLOW_APPROVAL_NODE" } }],
+        approvals: [{ nodeKey: "ok", options: [{ name: "publish" }, { name: "reject" }], message: "Ship it?", show: { "nodes.a.outputs.doc": "d.md" }, reason: { code: "FLOW_APPROVAL_NODE" } }],
       },
       true,
     );
@@ -418,7 +421,7 @@ describe("run views", () => {
       flow_run_get: () =>
         snapshot("r1", {
           status: "awaiting_approval",
-          approvals: [{ options: ["approve", "stop"], reason: { code: "FLOW_BUDGET_EXCEEDED", params: { spentUsd: 1.5, limitUsd: 1 } } }],
+          approvals: [{ options: [{ name: "approve" }, { name: "stop" }], reason: { code: "FLOW_BUDGET_EXCEEDED", params: { spentUsd: 1.5, limitUsd: 1 } } }],
         }),
       flow_gitignore_status: () => ({ ignored: true }),
     });

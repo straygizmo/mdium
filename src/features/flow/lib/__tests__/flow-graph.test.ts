@@ -53,6 +53,19 @@ describe("buildFlowGraph", () => {
     expect(byId.review.details[1]).toEqual({ key: "options", value: "publish / reject" });
   });
 
+  it("shows approval option names for string and object entries", () => {
+    const graph = buildFlowGraph(
+      {
+        schemaVersion: 1,
+        id: "f",
+        name: "f",
+        nodes: [{ id: "gate", kind: "approval", options: ["accept", { name: "revise", commentRequired: true }] }],
+      },
+      new Set(),
+    );
+    expect(graph.nodes[0].details).toContainEqual({ key: "options", value: "accept / revise" });
+  });
+
   it("hides a collapsed body and counts its nodes", () => {
     const graph = buildFlowGraph(docDigest(), new Set(["nodes[1]"]));
     expect(graph.nodes.some((n) => n.parentId)).toBe(false);

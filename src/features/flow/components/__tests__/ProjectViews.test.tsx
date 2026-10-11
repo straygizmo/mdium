@@ -9,7 +9,10 @@ import { docDigest } from "../../lib/__tests__/doc-digest";
 
 const invoke = vi.hoisted(() => vi.fn());
 const listeners = vi.hoisted(() => new Map<string, (e: { payload: unknown }) => void>());
-vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke,
+  convertFileSrc: vi.fn((p: string, proto: string) => `${proto}://${p}`),
+}));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(async (name: string, handler: (e: { payload: unknown }) => void) => {
     listeners.set(name, handler);

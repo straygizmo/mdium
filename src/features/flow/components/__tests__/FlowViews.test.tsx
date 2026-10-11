@@ -9,7 +9,10 @@ import { useFlowViewStore } from "../../flow-store";
 import { docDigest } from "../../lib/__tests__/doc-digest";
 
 const invoke = vi.hoisted(() => vi.fn());
-vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke,
+  convertFileSrc: vi.fn((p: string, proto: string) => `${proto}://${p}`),
+}));
 
 import { FlowPanel } from "../FlowPanel";
 import { FlowWorkspace } from "../FlowWorkspace";

@@ -3,7 +3,10 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const invoke = vi.hoisted(() => vi.fn());
-vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke,
+  convertFileSrc: vi.fn((p: string, proto: string) => `${proto}://${p}`),
+}));
 
 import { flowApi, isFlowCommandError, subscribeSetupProgress } from "../flow-api";
 import { setFlowTransport } from "../transport";
@@ -54,6 +57,7 @@ describe("flowApi", () => {
     const unlisten = () => {};
     setFlowTransport({
       call: async () => undefined as never,
+      artifactUrl: async () => "",
       subscribe: async <T,>(event: string, handler: (payload: T) => void) => {
         seen.push([event, handler as (payload: unknown) => void]);
         return unlisten;

@@ -1,4 +1,5 @@
 import {
+  type ArtifactRef,
   FLOW_APPROVAL_REQUESTED_EVENT,
   FLOW_NODE_CHANGED_EVENT,
   FLOW_PROGRESS_EVENT,
@@ -24,6 +25,8 @@ export interface FlowTransport {
   call<T>(command: string, args: Record<string, unknown>): Promise<T>;
   /** Subscribes to one event; resolves to the unsubscribe function. */
   subscribe<T>(event: FlowEventName, handler: (payload: T) => void): Promise<() => void>;
+  /** Resolves a recorded artifact to a URL the webview can load. */
+  artifactUrl(projectRoot: string, ref: ArtifactRef): Promise<string>;
 }
 
 let current: FlowTransport | null = null;

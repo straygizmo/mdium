@@ -149,7 +149,28 @@
       "reject": "却下",
       "stop": "停止"
     },
-    "partHint": "このフローは部品（lib/ 配下）です。他のフローから呼び出してください。直接は実行できません。"
+    "partHint": "このフローは部品（lib/ 配下）です。他のフローから呼び出してください。直接は実行できません。",
+    "tab": {
+      "overview": "概要",
+      "artifacts": "成果物"
+    },
+    "outputs": "出力",
+    "noOutputs": "出力はありません。",
+    "noArtifacts": "成果物はありません。",
+    "previewUnavailable": "プレビューを表示できません。",
+    "previewTruncated": "先頭 {{kib}} KiB を表示しています。",
+    "previewNone": "この種類はプレビューできません。",
+    "openArtifact": "開く",
+    "commentRequired": "この選択肢にはコメントが必要です。",
+    "review": "確認",
+    "iteration": "反復 {{n}}",
+    "agg": {
+      "running": "実行中 {{n}}",
+      "failed": "失敗 {{n}}",
+      "awaiting": "承認待ち {{n}}"
+    },
+    "expand": "展開",
+    "collapse": "折りたたむ"
   },
   "runStatus": {
     "pending": "準備中",
@@ -218,7 +239,8 @@
     "FLOW_SUBFLOW_MISSING": "参照しているフロー「{{ref}}」がこの実行に含まれていません。",
     "FLOW_PASS_RESET": "新しい周回に置き換えられました。",
     "FLOW_RUN_STUCK": "続行できるノードがありません。",
-    "FLOW_OUTPUT_UNRESOLVED": "出力「{{output}}」を求められませんでした。"
+    "FLOW_OUTPUT_UNRESOLVED": "出力「{{output}}」を求められませんでした。",
+    "FLOW_ARTIFACT_OUTSIDE_PROJECT": "成果物「{{path}}」はプロジェクトの外にあるため無視しました。"
   },
   "runError": {
     "FLOW_PROJECT_INVALID": "プロジェクトフォルダまたは .mdium/project.yaml を使用できません。",
@@ -246,7 +268,9 @@
     "FLOW_APPROVAL_INVALID": "この承認はもう待っていません。",
     "FLOW_STORE_FAILED": "実行データを読み書きできませんでした。",
     "FLOW_LOG_INVALID": "不明なログです。",
-    "FLOW_COMMAND_FAILED": "操作に失敗しました。"
+    "FLOW_COMMAND_FAILED": "操作に失敗しました。",
+    "FLOW_ARTIFACT_NOT_FOUND": "この実行に記録されていない成果物です。",
+    "FLOW_APPROVAL_COMMENT_REQUIRED": "この選択肢にはコメントが必要です。"
   },
   "project": {
     "title": "プロジェクト",

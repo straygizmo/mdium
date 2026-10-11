@@ -352,9 +352,9 @@ function ApprovalCard({ request, onChoose }: { request: ApprovalRequest; onChoos
       />
       <div className="flow-run__actions">
         {request.options.map((option) => (
-          <button key={option} type="button" onClick={() => void onChoose(option, comment)}>
+          <button key={option.name} type="button" onClick={() => void onChoose(option.name, comment)}>
             {/* Built-in options are localized; options named in the flow file are shown as written. */}
-            {t(`run.option.${option}`, { defaultValue: option })}
+            {t(`run.option.${option.name}`, { defaultValue: option.name })}
           </button>
         ))}
       </div>

@@ -149,7 +149,28 @@
       "reject": "Reject",
       "stop": "Stop"
     },
-    "partHint": "This flow is a part (under lib/). Call it from another flow; it cannot be started directly."
+    "partHint": "This flow is a part (under lib/). Call it from another flow; it cannot be started directly.",
+    "tab": {
+      "overview": "Overview",
+      "artifacts": "Artifacts"
+    },
+    "outputs": "Outputs",
+    "noOutputs": "No outputs.",
+    "noArtifacts": "No artifacts.",
+    "previewUnavailable": "Preview unavailable.",
+    "previewTruncated": "Showing the first {{kib}} KiB.",
+    "previewNone": "No preview for this type.",
+    "openArtifact": "Open",
+    "commentRequired": "This option needs a comment.",
+    "review": "Review",
+    "iteration": "Iteration {{n}}",
+    "agg": {
+      "running": "{{n}} running",
+      "failed": "{{n}} failed",
+      "awaiting": "{{n}} awaiting approval"
+    },
+    "expand": "Expand",
+    "collapse": "Collapse"
   },
   "runStatus": {
     "pending": "Pending",
@@ -218,7 +239,8 @@
     "FLOW_SUBFLOW_MISSING": "The referenced flow \"{{ref}}\" is not part of this run.",
     "FLOW_PASS_RESET": "Replaced by a new pass.",
     "FLOW_RUN_STUCK": "No node could continue.",
-    "FLOW_OUTPUT_UNRESOLVED": "Output \"{{output}}\" could not be computed."
+    "FLOW_OUTPUT_UNRESOLVED": "Output \"{{output}}\" could not be computed.",
+    "FLOW_ARTIFACT_OUTSIDE_PROJECT": "Artifact \"{{path}}\" is outside the project and was ignored."
   },
   "runError": {
     "FLOW_PROJECT_INVALID": "The project folder or its .mdium/project.yaml cannot be used.",
@@ -246,7 +268,9 @@
     "FLOW_APPROVAL_INVALID": "This approval is no longer pending.",
     "FLOW_STORE_FAILED": "Run data could not be read or written.",
     "FLOW_LOG_INVALID": "Unknown log.",
-    "FLOW_COMMAND_FAILED": "The operation failed."
+    "FLOW_COMMAND_FAILED": "The operation failed.",
+    "FLOW_ARTIFACT_NOT_FOUND": "The artifact is not recorded for this run.",
+    "FLOW_APPROVAL_COMMENT_REQUIRED": "A comment is required for this option."
   },
   "project": {
     "title": "Project",
