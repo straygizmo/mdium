@@ -1,10 +1,11 @@
-import { useCallback, useMemo, useRef, type KeyboardEvent, type PointerEvent } from "react";
+import { useMemo, useRef, type KeyboardEvent, type PointerEvent } from "react";
 import {
   Background,
   Controls,
   MarkerType,
   ReactFlow,
   ReactFlowProvider,
+  type Connection,
   type Edge,
   type EdgeMouseHandler,
   type IsValidConnection,
@@ -23,10 +24,16 @@ import {
   type FlowRfNode,
 } from "./FlowNodes";
 
-/** A new edge drawn on the canvas; `anchor` is the drop point relative to the canvas wrapper. */
+/**
+ * A new edge drawn on the canvas; `anchor` is the drop point relative to the canvas wrapper.
+ * Whether the edge is a back edge is derived from the flow graph (`maxTraversals`) by the
+ * store, not from the handles used; `fromBackHandle` only tells the UI that the user dragged
+ * from / to a back handle, so it can focus `maxTraversals` in the edge form.
+ */
 export interface ConnectRequest {
   sourcePath: string;
   targetPath: string;
+  fromBackHandle: boolean;
   anchor?: { x: number; y: number };
 }
 
@@ -40,6 +47,25 @@ interface FlowCanvasProps {
   onMoveNode: (nodeId: string, position: { x: number; y: number }) => void;
   onConnect: (req: ConnectRequest) => void;
   onDeleteSelection: () => void;
+}
+
+/** Rejects self-connections and connections between different loop scopes. */
+export function makeIsValidConnection(parentOf: ReadonlyMap<string, string | undefined>): IsValidConnection {
+  return (connection) =>
+    connection.source !== connection.target && parentOf.get(connection.source) === parentOf.get(connection.target);
+}
+
+/** Converts a React Flow connection into the request reported to the workspace. */
+export function toConnectRequest(
+  connection: Pick<Connection, "source" | "target" | "sourceHandle" | "targetHandle">,
+  anchor?: { x: number; y: number },
+): ConnectRequest {
+  return {
+    sourcePath: connection.source,
+    targetPath: connection.target,
+    fromBackHandle: connection.sourceHandle === HANDLE_BACK_OUT || connection.targetHandle === HANDLE_BACK_IN,
+    anchor,
+  };
 }
 
 /** Builds the edge click handler: selects the edge by its graph path. */
@@ -138,11 +164,7 @@ export function FlowCanvas({
   const edgeClick = useMemo(() => handleEdgeClick(onSelect), [onSelect]);
   const dragStop = useMemo(() => handleNodeDragStop(onMoveNode), [onMoveNode]);
 
-  // Connections never cross loop scopes: both ends need the same parent.
-  const isValidConnection = useCallback<IsValidConnection>(
-    (connection) => parentOf.get(connection.source) === parentOf.get(connection.target),
-    [parentOf],
-  );
+  const isValidConnection = useMemo(() => makeIsValidConnection(parentOf), [parentOf]);
 
   const onPointerMove = (e: PointerEvent<HTMLDivElement>) => {
     const rect = wrapperRef.current?.getBoundingClientRect();
@@ -152,7 +174,7 @@ export function FlowCanvas({
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (!editable || !selection || (e.key !== "Delete" && e.key !== "Backspace")) return;
     const target = e.target as HTMLElement;
-    if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+    if (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
     e.preventDefault();
     onDeleteSelection();
   };
@@ -184,7 +206,7 @@ export function FlowCanvas({
           onNodeClick={(_, node) => onSelect({ kind: "node", path: node.id })}
           onEdgeClick={editable ? edgeClick : undefined}
           onNodeDragStop={editable ? dragStop : undefined}
-          onConnect={(c) => onConnect({ sourcePath: c.source, targetPath: c.target, anchor: pointer.current })}
+          onConnect={(c) => onConnect(toConnectRequest(c, pointer.current))}
           onPaneClick={() => onSelect(null)}
         >
           <Background gap={16} />

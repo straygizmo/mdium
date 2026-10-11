@@ -12,7 +12,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 import { docDigest } from "../../lib/__tests__/doc-digest";
 import { buildFlowGraph } from "../../lib/flow-graph";
 import type { FlowLayout } from "../../lib/flow-layout";
-import { FlowCanvas, handleEdgeClick, handleNodeDragStop, toReactFlow } from "../FlowCanvas";
+import { FlowCanvas, handleEdgeClick, handleNodeDragStop, makeIsValidConnection, toConnectRequest, toReactFlow } from "../FlowCanvas";
 import { PortPopover } from "../PortPopover";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -111,7 +111,7 @@ describe("editor views", () => {
     expect(edges.filter((e) => e.selected)).toHaveLength(1);
   });
 
-  it("reports Delete only when something is selected", async () => {
+  it("ignores Delete when nothing is selected", async () => {
     const h = await mountCanvas();
     const wrapper = container.querySelector(".flow-canvas-wrapper") as HTMLElement;
     expect(wrapper).not.toBeNull();
@@ -119,7 +119,42 @@ describe("editor views", () => {
       wrapper.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
     });
     expect(h.onDeleteSelection).not.toHaveBeenCalled();
+  });
 
+  it("ignores Delete typed into an input inside the wrapper", async () => {
+    const h = await mountCanvas({ selection: { kind: "node", path: "nodes[0]" } });
+    const wrapper = container.querySelector(".flow-canvas-wrapper") as HTMLElement;
+    const input = document.createElement("input");
+    wrapper.appendChild(input);
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
+    });
+    expect(h.onDeleteSelection).not.toHaveBeenCalled();
+  });
+
+  it("validates connections: same scope only, never a self-edge", () => {
+    const valid = makeIsValidConnection(
+      new Map<string, string | undefined>([
+        ["a", undefined],
+        ["b", undefined],
+        ["c", "loop"],
+        ["d", "loop"],
+      ]),
+    );
+    const conn = (source: string, target: string) => ({ source, target, sourceHandle: "out", targetHandle: "in" });
+    expect(valid(conn("a", "b"))).toBe(true);
+    expect(valid(conn("c", "d"))).toBe(true);
+    expect(valid(conn("a", "a"))).toBe(false);
+    expect(valid(conn("a", "c"))).toBe(false);
+  });
+
+  it("flags connections that use a back handle", () => {
+    const req = (sourceHandle: string, targetHandle: string) =>
+      toConnectRequest({ source: "nodes[0]", target: "nodes[1]", sourceHandle, targetHandle });
+    expect(req("out", "in").fromBackHandle).toBe(false);
+    expect(req("back-out", "in").fromBackHandle).toBe(true);
+    expect(req("out", "back-in").fromBackHandle).toBe(true);
+    expect(req("out", "in")).toMatchObject({ sourcePath: "nodes[0]", targetPath: "nodes[1]" });
   });
 
   it("reports Delete for a selected edge", async () => {
