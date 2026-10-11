@@ -690,7 +690,10 @@ impl Validator {
             Reference::Param(name) if !self.params.contains(name) => {
                 self.issues.error(bad("unknown-param"));
             }
-            Reference::NodeOutput { node, .. } | Reference::NodeOutputs { node }
+            Reference::NodeOutput { node, .. }
+            | Reference::NodeOutputs { node }
+            | Reference::NodeArtifacts { node }
+            | Reference::NodeArtifact { node, .. }
                 if !ctx.visible.iter().any(|ids| ids.contains(node)) =>
             {
                 self.issues.error(

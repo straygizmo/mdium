@@ -3170,3 +3170,38 @@ fn an_empty_artifact_path_is_rejected_with_an_empty_reason() {
     assert_eq!(warnings.len(), 1);
     assert_eq!(warnings[0].params["reason"], json!("empty"));
 }
+
+#[test]
+fn artifact_label_reference_takes_the_first_match() {
+    let f = fixture();
+    let mut b = cmd("b", json!([{ "emit_arg_as": "got" }]));
+    b["run"].as_array_mut().unwrap().push(json!("${{ nodes.a.artifacts.pic }}"));
+    let mut c = cmd("c", json!([{ "emit_arg_as": "all" }]));
+    c["run"].as_array_mut().unwrap().push(json!("${{ nodes.a.artifacts }}"));
+    let rel = write_flow(&f.root, "artref", json!({}), vec![
+        cmd("a", json!([
+            ev(json!({"v":1,"type":"artifact","path":"one.png","label":"pic"})),
+            ev(json!({"v":1,"type":"artifact","path":"two.png","label":"pic"})),
+        ])),
+        b,
+        c,
+    ], vec![json!({"from":"a","to":"b"}), json!({"from":"b","to":"c"})]);
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    let got = node(&snap, "b").outputs["got"].as_str().unwrap().to_string();
+    assert!(got.ends_with("one.png"), "{got}");
+    let all: Value = serde_json::from_str(node(&snap, "c").outputs["all"].as_str().unwrap()).unwrap();
+    assert_eq!(all.as_array().unwrap().len(), 2);
+    assert_eq!(all[1]["label"], "pic");
+}
+
+#[test]
+fn a_missing_artifact_label_is_unresolved() {
+    let f = fixture();
+    let mut b = cmd("b", json!([]));
+    b["run"].as_array_mut().unwrap().push(json!("${{ nodes.a.artifacts.nope }}"));
+    let rel = write_flow(&f.root, "artref2", json!({}), vec![cmd("a", json!([])), b], vec![json!({"from":"a","to":"b"})]);
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Failed);
+    assert_eq!(node(&snap, "b").reason.clone().unwrap().code, "FLOW_TEMPLATE_UNRESOLVED");
+}

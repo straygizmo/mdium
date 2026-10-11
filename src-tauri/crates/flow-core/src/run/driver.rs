@@ -19,7 +19,7 @@ use crate::model::{
 use crate::project::RuntimeDef;
 use crate::run::artifacts;
 use crate::run::model::*;
-use crate::run::prepare::{prepare_params, LoopVar, TemplateContext};
+use crate::run::prepare::{prepare_params, ArtifactsOf, LoopVar, TemplateContext};
 use crate::run::process::{
     decide, CommandResult, LaunchSpec, Launcher, ProcessHandle, ProtocolItem, ProtocolOutcome,
     ProtocolReader, MAX_LINES,
@@ -536,6 +536,26 @@ impl Driver {
         }
     }
 
+    /// Artifacts of node `id` as seen from a scope (same walk as `outputs_seen`).
+    fn artifacts_seen(&self, prefix: &str, id: &str) -> Option<ArtifactsOf> {
+        let mut current = prefix.to_string();
+        loop {
+            if self.graph_of(&current)?.node(id).is_some() {
+                let key = self.state.current_key(&current, id);
+                return self.state.nodes.get(&key).map(|n| ArtifactsOf {
+                    node_key: key.clone(),
+                    attempt: n.attempt,
+                    artifacts: n.artifacts.clone(),
+                });
+            }
+            let init = self.scope_init(&current)?;
+            match (init.inherits, init.parent) {
+                (true, Some(parent)) => current = parent,
+                _ => return None,
+            }
+        }
+    }
+
     fn passthrough_env(&self, prefix: &str) -> BTreeMap<String, String> {
         self.file_flow(prefix)
             .env_passthrough
@@ -571,9 +591,11 @@ impl Driver {
             .map(|i| i.params)
             .unwrap_or_default();
         let lookup = |id: &str| self.outputs_seen(prefix, id);
+        let artifacts = |id: &str| self.artifacts_seen(prefix, id);
         let ctx = TemplateContext {
             params: &params,
             outputs: &lookup,
+            artifacts: &artifacts,
             vars: &vars,
             iteration,
             run_id: &self.run_id,

@@ -17,6 +17,10 @@ pub enum Reference {
     NodeOutput { node: String, key: String },
     /// `nodes.<id>.outputs` (the whole outputs object of a node)
     NodeOutputs { node: String },
+    /// `nodes.<id>.artifacts` (the artifact records of a node)
+    NodeArtifacts { node: String },
+    /// `nodes.<id>.artifacts.<label>` (path of the first artifact with that label)
+    NodeArtifact { node: String, label: String },
     /// `iteration.outputs.<key>` (only inside a `while` loop's `until`)
     IterationOutput(String),
     /// A loop's iteration variable (`item`, or the loop's `as` name)
@@ -41,6 +45,10 @@ impl fmt::Display for Reference {
             Reference::Param(name) => write!(f, "params.{name}"),
             Reference::NodeOutput { node, key } => write!(f, "nodes.{node}.outputs.{key}"),
             Reference::NodeOutputs { node } => write!(f, "nodes.{node}.outputs"),
+            Reference::NodeArtifacts { node } => write!(f, "nodes.{node}.artifacts"),
+            Reference::NodeArtifact { node, label } => {
+                write!(f, "nodes.{node}.artifacts.{label}")
+            }
             Reference::IterationOutput(key) => write!(f, "iteration.outputs.{key}"),
             Reference::LoopVar(name) => write!(f, "{name}"),
             Reference::Index => write!(f, "index"),
@@ -149,6 +157,13 @@ pub fn parse_reference(expr: &str) -> Result<Reference, TemplateError> {
         },
         ["nodes", node, "outputs"] => Reference::NodeOutputs {
             node: node.to_string(),
+        },
+        ["nodes", node, "artifacts"] => Reference::NodeArtifacts {
+            node: node.to_string(),
+        },
+        ["nodes", node, "artifacts", label] => Reference::NodeArtifact {
+            node: node.to_string(),
+            label: label.to_string(),
         },
         ["iteration", "outputs", key] => Reference::IterationOutput(key.to_string()),
         ["run", "id"] => Reference::RunId,
@@ -266,6 +281,31 @@ mod tests {
             .to_string(),
             "nodes.verify.outputs"
         );
+    }
+
+    #[test]
+    fn parses_artifact_references() {
+        assert_eq!(
+            parse_reference("nodes.a.artifacts").unwrap(),
+            Reference::NodeArtifacts { node: "a".into() }
+        );
+        assert_eq!(
+            parse_reference("nodes.a.artifacts.pic").unwrap(),
+            Reference::NodeArtifact {
+                node: "a".into(),
+                label: "pic".into()
+            }
+        );
+        assert!(parse_reference("nodes.a.artifacts.pic.extra").is_err());
+        for r in [
+            Reference::NodeArtifacts { node: "a".into() },
+            Reference::NodeArtifact {
+                node: "a".into(),
+                label: "pic".into(),
+            },
+        ] {
+            assert_eq!(parse_reference(&r.to_string()).unwrap(), r);
+        }
     }
 
     #[test]

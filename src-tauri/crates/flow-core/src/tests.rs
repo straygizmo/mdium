@@ -1258,3 +1258,13 @@ fn lib_prefix_is_matched_case_insensitively_on_windows() {
     assert_eq!(flow_kind_of(".mdium/flows/LIB/x.flow.yaml"), FlowKind::Part);
     assert_eq!(flow_kind_of(".mdium/flows/x.flow.yaml"), FlowKind::Entry);
 }
+
+#[test]
+fn artifact_references_need_a_visible_node() {
+    let (_, issues) = check_text(
+        &flow("nodes:\n  - { id: a, kind: command, run: [x] }\n  - { id: r, kind: approval, show: ['nodes.a.artifacts', 'nodes.a.artifacts.pic', 'nodes.zzz.artifacts'] }\nedges:\n  - { from: a, to: r }\n"),
+        FlowFormat::Yaml,
+    );
+    assert_eq!(codes(&issues.errors), vec![FLOW_UNKNOWN_NODE_REF]);
+    assert_eq!(issues.errors[0].path, "nodes[1].show[2]");
+}

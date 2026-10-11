@@ -3,7 +3,7 @@
 //! confirmation (spec 7.2), and the template resolver used while running.
 
 use crate::model::{CommandRun, FlowDef, FlowNode, LoopBody, NodeKind, ParamType};
-use crate::run::model::Reason;
+use crate::run::model::{Artifact, Reason};
 use crate::template::{self, Reference};
 use serde::Serialize;
 use serde_json::Value;
@@ -247,11 +247,24 @@ pub struct LoopVar {
 /// Outputs of a node visible from a place in the run.
 pub type OutputsLookup<'a> = &'a dyn Fn(&str) -> Option<BTreeMap<String, Value>>;
 
+/// Artifacts of a node visible from a place in the run (with the instance they belong to).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArtifactsOf {
+    pub node_key: String,
+    pub attempt: u32,
+    pub artifacts: Vec<Artifact>,
+}
+
+/// Artifact lookup by node id (scope rules applied by the caller).
+pub type ArtifactsLookup<'a> = &'a dyn Fn(&str) -> Option<ArtifactsOf>;
+
 /// Values available to templates at one place in a run.
 pub struct TemplateContext<'a> {
     pub params: &'a BTreeMap<String, Value>,
     /// Outputs of a node visible from here (scope rules applied by the caller).
     pub outputs: OutputsLookup<'a>,
+    /// Artifacts of a node visible from here.
+    pub artifacts: ArtifactsLookup<'a>,
     /// Loop variables of the enclosing inline loops, innermost last.
     pub vars: &'a [LoopVar],
     /// Outputs of the iteration that just ended (`while` loop `until` only).
@@ -273,6 +286,13 @@ impl TemplateContext<'_> {
             Reference::NodeOutputs { node } => {
                 (self.outputs)(node).map(|map| Value::Object(map.into_iter().collect()))
             }
+            Reference::NodeArtifacts { node } => (self.artifacts)(node)
+                .map(|a| serde_json::to_value(a.artifacts).unwrap_or(Value::Null)),
+            Reference::NodeArtifact { node, label } => (self.artifacts)(node)?
+                .artifacts
+                .into_iter()
+                .find(|a| a.label.as_deref() == Some(label.as_str()))
+                .map(|a| Value::String(a.path)),
             Reference::RunId => Some(Value::String(self.run_id.to_string())),
             Reference::RunDir => Some(path(self.run_dir)),
             Reference::NodeDir => self.node_dir.map(path),
@@ -478,6 +498,7 @@ mod tests {
         let ctx = TemplateContext {
             params: &params,
             outputs: &outputs,
+            artifacts: &|_| None,
             vars: &vars,
             iteration: Some(&iteration),
             run_id: "r1",
@@ -525,6 +546,7 @@ mod tests {
         let ctx = TemplateContext {
             params: &params,
             outputs: &outputs,
+            artifacts: &|_| None,
             vars: &[],
             iteration: None,
             run_id: "r",
