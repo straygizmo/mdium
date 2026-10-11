@@ -310,17 +310,76 @@ pub struct ApprovalNode {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub show: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub options: Option<Vec<String>>,
+    pub options: Option<Vec<ApprovalOption>>,
+}
+
+/// One approval option (= output port), optionally requiring a comment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovalOption {
+    pub name: String,
+    pub comment_required: bool,
+}
+
+impl ApprovalOption {
+    /// An option that does not require a comment.
+    pub fn plain(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            comment_required: false,
+        }
+    }
+}
+
+impl Serialize for ApprovalOption {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        if self.comment_required {
+            use serde::ser::SerializeStruct;
+            let mut st = s.serialize_struct("ApprovalOption", 2)?;
+            st.serialize_field("name", &self.name)?;
+            st.serialize_field("commentRequired", &true)?;
+            st.end()
+        } else {
+            s.serialize_str(&self.name)
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ApprovalOption {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Name(String),
+            Full {
+                name: String,
+                #[serde(default, rename = "commentRequired")]
+                comment_required: bool,
+            },
+        }
+        Ok(match Raw::deserialize(d)? {
+            Raw::Name(name) => ApprovalOption {
+                name,
+                comment_required: false,
+            },
+            Raw::Full {
+                name,
+                comment_required,
+            } => ApprovalOption {
+                name,
+                comment_required,
+            },
+        })
+    }
 }
 
 impl ApprovalNode {
     /// The options (= output ports), falling back to the defaults.
-    pub fn effective_options(&self) -> Vec<String> {
+    pub fn effective_options(&self) -> Vec<ApprovalOption> {
         match &self.options {
             Some(options) => options.clone(),
             None => DEFAULT_APPROVAL_OPTIONS
                 .iter()
-                .map(|s| s.to_string())
+                .map(|s| ApprovalOption::plain(*s))
                 .collect(),
         }
     }
@@ -504,6 +563,24 @@ mod tests {
             show: vec![],
             options: None,
         };
-        assert_eq!(node.effective_options(), vec!["approve", "reject"]);
+        assert_eq!(
+            node.effective_options()
+                .iter()
+                .map(|o| o.name.as_str())
+                .collect::<Vec<_>>(),
+            ["approve", "reject"]
+        );
+    }
+
+    #[test]
+    fn approval_options_accept_strings_and_objects_and_round_trip() {
+        let node: ApprovalNode = serde_json::from_value(serde_json::json!({"options": ["accept", {"name": "revise", "commentRequired": true}, {"name": "later"}]})).unwrap();
+        let opts = node.effective_options();
+        assert_eq!(opts.iter().map(|o| o.name.as_str()).collect::<Vec<_>>(), ["accept", "revise", "later"]);
+        assert_eq!(opts.iter().map(|o| o.comment_required).collect::<Vec<_>>(), [false, true, false]);
+        let back = serde_json::to_value(&node).unwrap();
+        assert_eq!(back["options"], serde_json::json!(["accept", {"name": "revise", "commentRequired": true}, "later"]));
+        let old: ApprovalNode = serde_json::from_value(serde_json::json!({"options": ["a", "b"]})).unwrap();
+        assert_eq!(old.effective_options().len(), 2);
     }
 }

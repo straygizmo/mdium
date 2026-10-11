@@ -84,6 +84,7 @@ const DEPRECATED_LIMITS_MAX_TRAVERSALS: &str = "maxTraversals";
 const EDGE_KEYS: &[&str] = &["from", "to", "port", "maxTraversals"];
 const BODY_KEYS: &[&str] = &["nodes", "edges", "outputs"];
 const CASE_KEYS: &[&str] = &["when", "port"];
+const OPTION_KEYS: &[&str] = &["name", "commentRequired"];
 const COMMON_NODE_KEYS: &[&str] = &[
     "id",
     "kind",
@@ -330,6 +331,16 @@ fn check_node(node: &Value, path: &str, issues: &mut Issues) {
                 }
             }
         }
+        "approval" => {
+            if let Some(options) = map.get("options").and_then(Value::as_array) {
+                for (i, option) in options.iter().enumerate() {
+                    if option.is_object() {
+                        let option_path = format!("{}[{i}]", join(path, "options"));
+                        check_keys(option, &option_path, OPTION_KEYS, issues);
+                    }
+                }
+            }
+        }
         _ => {}
     }
     // Decode the node on its own so a type error carries the node's path.
@@ -441,6 +452,23 @@ mod tests {
             codes(&decoded.issues.errors),
             vec![(FLOW_INVALID_VALUE.into(), "nodes[1]".into())]
         );
+    }
+
+    #[test]
+    fn approval_option_objects_are_checked_for_unknown_keys() {
+        let flow = |option: Value| {
+            json!({
+                "schemaVersion": 1, "id": "f", "name": "F",
+                "nodes": [ { "id": "a", "kind": "approval", "options": [option] } ]
+            })
+        };
+        let bad = decode(&flow(json!({ "name": "revise", "commentRequired": true, "extra": 1 })));
+        assert_eq!(
+            codes(&bad.issues.errors),
+            vec![(FLOW_UNKNOWN_FIELD.into(), "nodes[0].options[0].extra".into())]
+        );
+        let good = decode(&flow(json!({ "name": "revise", "commentRequired": true })));
+        assert!(good.issues.errors.is_empty(), "{:?}", good.issues.errors);
     }
 
     #[test]

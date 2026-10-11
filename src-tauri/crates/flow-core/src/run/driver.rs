@@ -36,7 +36,7 @@ use crate::run::worker::{
     WorkerLauncher, WorkerMessage, FLOW_PYTHON_ENTRY_UNKNOWN, FLOW_PYTHON_INPUT_INVALID,
     FLOW_PYTHON_PROTOCOL, FLOW_PYTHON_WORKER_EXITED, FLOW_RUNTIME_START_FAILED,
 };
-use crate::template;
+use crate::template::{self, Reference};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -712,9 +712,10 @@ impl Driver {
         else {
             return false;
         };
-        if !request.options.iter().any(|o| o == choice) {
+        if !request.options.iter().any(|o| o.name == choice) {
             return false;
         }
+        let node_comment = comment.clone().unwrap_or_default();
         self.emit(
             node_key,
             EventBody::Approval {
@@ -745,6 +746,20 @@ impl Driver {
                     Some(NodeKind::Approval(_))
                 );
                 if is_approval_node {
+                    self.emit(
+                        Some(key),
+                        EventBody::NodeOutput {
+                            key: "choice".into(),
+                            value: Value::String(choice.to_string()),
+                        },
+                    );
+                    self.emit(
+                        Some(key),
+                        EventBody::NodeOutput {
+                            key: "comment".into(),
+                            value: Value::String(node_comment),
+                        },
+                    );
                     self.settle(key, attempt, NodeStatus::Succeeded, choice, None);
                 } else if choice == "approve" {
                     self.settle(key, attempt, NodeStatus::Succeeded, PORT_SUCCESS, None);
@@ -983,7 +998,7 @@ impl Driver {
         }
         let request = ApprovalRequest {
             node_key: None,
-            options: BUDGET_OPTIONS.iter().map(|s| s.to_string()).collect(),
+            options: BUDGET_OPTIONS.iter().map(|s| RequestOption::plain(*s)).collect(),
             message: None,
             show: BTreeMap::new(),
             reason: Reason::new(FLOW_BUDGET_EXCEEDED)
@@ -1155,7 +1170,7 @@ impl Driver {
                 Some(node) => (
                     node.when.clone(),
                     match &node.kind {
-                        NodeKind::Approval(a) => a.effective_options().first().cloned(),
+                        NodeKind::Approval(a) => a.effective_options().first().map(|o| o.name.clone()),
                         _ => None,
                     },
                 ),
@@ -1301,22 +1316,16 @@ impl Driver {
                         .message
                         .as_deref()
                         .map(|m| ctx.render_string(m).unwrap_or_else(|_| m.to_string()));
-                    let show: BTreeMap<String, Value> = approval
+                    let show: BTreeMap<String, ShowValue> = approval
                         .show
                         .iter()
-                        .map(|name| {
-                            let value = template::parse_reference(name)
-                                .ok()
-                                .and_then(|r| ctx.resolve(&r))
-                                .unwrap_or(Value::Null);
-                            (name.clone(), value)
-                        })
+                        .map(|name| (name.clone(), show_value(ctx, name)))
                         .collect();
                     (message, show)
                 });
                 let request = ApprovalRequest {
                     node_key: Some(key.to_string()),
-                    options: approval.effective_options(),
+                    options: approval.effective_options().iter().map(RequestOption::from).collect(),
                     message,
                     show,
                     reason: Reason::new(FLOW_APPROVAL_NODE),
@@ -1919,7 +1928,7 @@ impl Driver {
             node_key: Some(key.to_string()),
             options: COMMAND_APPROVAL_OPTIONS
                 .iter()
-                .map(|s| s.to_string())
+                .map(|s| RequestOption::plain(*s))
                 .collect(),
             message,
             show: BTreeMap::new(),
@@ -3185,6 +3194,36 @@ impl ProtocolCursor {
         if let Ok(json) = serde_json::to_vec(self) {
             let _ = fsutil::atomic_write(&dir.join("protocol.json"), &json);
         }
+    }
+}
+
+/// Resolves one `show` entry; artifact references keep their typed form.
+fn show_value(ctx: &TemplateContext, name: &str) -> ShowValue {
+    let artifacts = |node: &str, label: Option<&str>| {
+        let Some(seen) = (ctx.artifacts)(node) else {
+            return ShowValue::Value(Value::Null);
+        };
+        let mut artifacts = seen.artifacts;
+        if let Some(label) = label {
+            artifacts.retain(|a| a.label.as_deref() == Some(label));
+            if artifacts.is_empty() {
+                return ShowValue::Value(Value::Null);
+            }
+        }
+        ShowValue::Artifacts(ShowArtifacts {
+            kind: ShowKind::Artifacts,
+            node_key: seen.node_key,
+            attempt: seen.attempt,
+            artifacts,
+        })
+    };
+    match template::parse_reference(name) {
+        Ok(Reference::NodeArtifacts { node }) => artifacts(&node, None),
+        Ok(Reference::NodeArtifact { node, label }) => artifacts(&node, Some(&label)),
+        Ok(reference) => ctx
+            .resolve(&reference)
+            .map_or(ShowValue::Value(Value::Null), ShowValue::Value),
+        Err(_) => ShowValue::Value(Value::Null),
     }
 }
 

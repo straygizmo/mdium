@@ -173,13 +173,91 @@ pub struct ApprovalRequest {
     /// Node waiting for the decision; `None` for a run-level budget approval.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node_key: Option<String>,
-    pub options: Vec<String>,
+    pub options: Vec<RequestOption>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     /// Values named by the approval node's `show`, resolved when it paused.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub show: BTreeMap<String, Value>,
+    pub show: BTreeMap<String, ShowValue>,
     pub reason: Reason,
+}
+
+/// An option as shown to the user; always an object on the wire.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestOption {
+    pub name: String,
+    pub comment_required: bool,
+}
+
+impl RequestOption {
+    /// An option that does not require a comment.
+    pub fn plain(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            comment_required: false,
+        }
+    }
+}
+
+impl From<&crate::model::ApprovalOption> for RequestOption {
+    fn from(o: &crate::model::ApprovalOption) -> Self {
+        Self {
+            name: o.name.clone(),
+            comment_required: o.comment_required,
+        }
+    }
+}
+
+// Old events and checkpoints carry bare strings, so accept those too.
+impl<'de> Deserialize<'de> for RequestOption {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Name(String),
+            Full {
+                name: String,
+                #[serde(default, rename = "commentRequired")]
+                comment_required: bool,
+            },
+        }
+        Ok(match Raw::deserialize(d)? {
+            Raw::Name(name) => RequestOption::plain(name),
+            Raw::Full {
+                name,
+                comment_required,
+            } => RequestOption {
+                name,
+                comment_required,
+            },
+        })
+    }
+}
+
+/// Marker of a `show` entry that carries artifacts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShowKind {
+    Artifacts,
+}
+
+/// Artifacts of one node attempt, shown for previewing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShowArtifacts {
+    pub kind: ShowKind,
+    pub node_key: String,
+    pub attempt: u32,
+    pub artifacts: Vec<Artifact>,
+}
+
+/// A value an approval shows: artifacts (previewed) or any other value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ShowValue {
+    Artifacts(ShowArtifacts),
+    Value(Value),
 }
 
 /// One line of `events.jsonl`: `{seq, ts, type, nodeKey?, data}`.
@@ -886,9 +964,12 @@ mod tests {
             },
             EventBody::ApprovalRequested(ApprovalRequest {
                 node_key: Some("a".into()),
-                options: vec!["approve".into(), "reject".into()],
+                options: vec![
+                    RequestOption { name: "approve".into(), comment_required: false },
+                    RequestOption { name: "reject".into(), comment_required: false },
+                ],
                 message: Some("m".into()),
-                show: BTreeMap::from([("nodes.x.outputs.y".to_string(), json!(1))]),
+                show: BTreeMap::from([("nodes.x.outputs.y".to_string(), ShowValue::Value(json!(1)))]),
                 reason: Reason::new("FLOW_APPROVAL_NODE"),
             }),
             EventBody::Approval {
@@ -1093,7 +1174,7 @@ mod tests {
                 Some("b"),
                 EventBody::ApprovalRequested(ApprovalRequest {
                     node_key: Some("b".into()),
-                    options: vec!["ok".into()],
+                    options: vec![RequestOption { name: "ok".into(), comment_required: false }],
                     message: None,
                     show: BTreeMap::new(),
                     reason: Reason::new("FLOW_APPROVAL_NODE"),
@@ -1196,5 +1277,28 @@ mod tests {
         assert_eq!(state.nodes["a"].artifacts.len(), 1);
         apply(&mut state, &status(3, NodeStatus::Running));
         assert!(state.nodes["a"].artifacts.is_empty());
+    }
+
+    #[test]
+    fn old_show_values_deserialize() {
+        let r: ApprovalRequest = serde_json::from_value(json!({"options": ["approve"], "show": {"nodes.a.outputs.x": 42}, "reason": {"code": "FLOW_APPROVAL_NODE"}})).unwrap();
+        assert_eq!(r.show["nodes.a.outputs.x"], ShowValue::Value(json!(42)));
+        assert_eq!(r.options[0], RequestOption { name: "approve".into(), comment_required: false });
+    }
+
+    #[test]
+    fn request_options_always_serialize_as_objects() {
+        let r = RequestOption { name: "ok".into(), comment_required: false };
+        assert_eq!(serde_json::to_value(&r).unwrap(), json!({"name": "ok", "commentRequired": false}));
+        let back: RequestOption = serde_json::from_value(json!({"name": "ok"})).unwrap();
+        assert_eq!(back, r);
+    }
+
+    #[test]
+    fn show_artifacts_serialize_with_a_kind_marker() {
+        let v = ShowValue::Artifacts(ShowArtifacts { kind: ShowKind::Artifacts, node_key: "a".into(), attempt: 1, artifacts: vec![] });
+        let json = serde_json::to_value(&v).unwrap();
+        assert_eq!(json, json!({"kind": "artifacts", "nodeKey": "a", "attempt": 1, "artifacts": []}));
+        assert_eq!(serde_json::from_value::<ShowValue>(json).unwrap(), v);
     }
 }

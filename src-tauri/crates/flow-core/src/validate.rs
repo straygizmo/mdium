@@ -130,7 +130,7 @@ fn is_env_name(name: &str) -> bool {
 /// Output ports a node can leave through.
 pub fn node_ports(node: &FlowNode) -> Vec<String> {
     let mut ports: Vec<String> = match &node.kind {
-        NodeKind::Approval(a) => a.effective_options(),
+        NodeKind::Approval(a) => a.effective_options().into_iter().map(|o| o.name).collect(),
         NodeKind::Branch(b) => {
             let mut ports: Vec<String> = b.cases.iter().map(|c| c.port.clone()).collect();
             ports.extend(b.default.clone());
@@ -459,7 +459,8 @@ impl Validator {
 
     fn approval(&mut self, approval: &ApprovalNode, path: &str, ctx: &Ctx) {
         if let Some(options) = &approval.options {
-            self.port_names(options, &join(path, "options"));
+            let names: Vec<String> = options.iter().map(|o| o.name.clone()).collect();
+            self.port_names(&names, &join(path, "options"));
         }
         if let Some(message) = &approval.message {
             self.template(message, &join(path, "message"), ctx);

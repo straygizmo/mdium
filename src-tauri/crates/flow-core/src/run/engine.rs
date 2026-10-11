@@ -46,6 +46,8 @@ pub const FLOW_NODE_NOT_FOUND: &str = "FLOW_NODE_NOT_FOUND";
 pub const FLOW_NODE_INVALID_STATE: &str = "FLOW_NODE_INVALID_STATE";
 pub const FLOW_NODE_NEEDS_ACTION: &str = "FLOW_NODE_NEEDS_ACTION";
 pub const FLOW_APPROVAL_INVALID: &str = "FLOW_APPROVAL_INVALID";
+/// The chosen approval option requires a comment and none was given.
+pub const FLOW_APPROVAL_COMMENT_REQUIRED: &str = "FLOW_APPROVAL_COMMENT_REQUIRED";
 pub const FLOW_STORE_FAILED: &str = "FLOW_STORE_FAILED";
 pub const FLOW_LOG_INVALID: &str = "FLOW_LOG_INVALID";
 
@@ -952,10 +954,16 @@ impl FlowEngine {
                 ));
             }
         }
-        if !request.options.iter().any(|o| o == choice) {
+        let Some(option) = request.options.iter().find(|o| o.name == choice) else {
             return Err(EngineError::new(
                 FLOW_APPROVAL_INVALID,
                 format!("unknown option {choice:?}"),
+            ));
+        };
+        if option.comment_required && comment.as_deref().map_or(true, |c| c.trim().is_empty()) {
+            return Err(EngineError::new(
+                FLOW_APPROVAL_COMMENT_REQUIRED,
+                "a comment is required for this option",
             ));
         }
         let control = Control::Approve {

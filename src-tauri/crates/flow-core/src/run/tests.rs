@@ -787,7 +787,7 @@ fn approval_nodes_pause_notify_and_route_by_choice() {
     assert_eq!(node(&snap, "review").status, NodeStatus::AwaitingApproval);
     let request = &snap.state.approvals[0];
     assert_eq!(request.message.as_deref(), Some("Check d.md"));
-    assert_eq!(request.show["nodes.a.outputs.doc"], json!("d.md"));
+    assert_eq!(request.show["nodes.a.outputs.doc"], ShowValue::Value(json!("d.md")));
     assert_eq!(f.notifier.requests.lock().unwrap().len(), 1);
     assert_eq!(
         f.engine
@@ -886,7 +886,10 @@ fn commands_can_ask_for_approval() {
         snap.state.approvals[0].message.as_deref(),
         Some("quota low")
     );
-    assert_eq!(snap.state.approvals[0].options, vec!["approve", "reject"]);
+    assert_eq!(
+        snap.state.approvals[0].options,
+        vec![RequestOption::plain("approve"), RequestOption::plain("reject")]
+    );
     f.engine
         .approve(&f.root, &run_id, Some("a"), "approve", None)
         .unwrap();
@@ -3204,4 +3207,50 @@ fn a_missing_artifact_label_is_unresolved() {
     let run_id = f.confirm_and_start(&rel, json!({}));
     let snap = f.wait_settled(&run_id, RunStatus::Failed);
     assert_eq!(node(&snap, "b").reason.clone().unwrap().code, "FLOW_TEMPLATE_UNRESOLVED");
+}
+
+#[test]
+fn approval_shows_artifacts_and_exposes_choice_and_comment() {
+    let f = fixture();
+    let rel = write_flow(&f.root, "appr", json!({"outputs": {"c": "${{ nodes.review.outputs.comment }}", "ch": "${{ nodes.review.outputs.choice }}"}}), vec![
+        cmd("a", json!([
+            {"write_file": {"path": "shot.png", "content": "png"}},
+            ev(json!({"v":1,"type":"artifact","path":"shot.png","label":"shot"})),
+            ev(json!({"v":1,"type":"output","key":"n","value":7})),
+        ])),
+        json!({"id":"review","kind":"approval","show":["nodes.a.outputs.n","nodes.a.artifacts","nodes.a.artifacts.shot","nodes.a.artifacts.nope"],
+               "options":["accept",{"name":"revise","commentRequired":true}]}),
+    ], vec![json!({"from":"a","to":"review"})]);
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    f.wait_for(&run_id, "awaiting approval", |s| s.state.status == RunStatus::AwaitingApproval);
+    let req = f.notifier.requests.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(req.options.iter().map(|o| (o.name.as_str(), o.comment_required)).collect::<Vec<_>>(), [("accept", false), ("revise", true)]);
+    assert_eq!(req.show["nodes.a.outputs.n"], ShowValue::Value(json!(7)));
+    match &req.show["nodes.a.artifacts"] { ShowValue::Artifacts(s) => { assert_eq!(s.node_key, "a"); assert_eq!(s.attempt, 1); assert_eq!(s.artifacts.len(), 1); } other => panic!("{other:?}") }
+    match &req.show["nodes.a.artifacts.shot"] { ShowValue::Artifacts(s) => assert_eq!(s.artifacts[0].label.as_deref(), Some("shot")), other => panic!("{other:?}") }
+    assert_eq!(req.show["nodes.a.artifacts.nope"], ShowValue::Value(Value::Null));
+    let err = f.engine.approve(&f.root, &run_id, Some("review"), "revise", None).unwrap_err();
+    assert_eq!(err.code, crate::run::engine::FLOW_APPROVAL_COMMENT_REQUIRED);
+    let err = f.engine.approve(&f.root, &run_id, Some("review"), "revise", Some("   ".into())).unwrap_err();
+    assert_eq!(err.code, crate::run::engine::FLOW_APPROVAL_COMMENT_REQUIRED);
+    f.engine.approve(&f.root, &run_id, Some("review"), "accept", None).unwrap();
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    let review = node(&snap, "review");
+    assert_eq!(review.outputs["choice"], "accept");
+    assert_eq!(review.outputs["comment"], "");
+    assert_eq!(review.port.as_deref(), Some("accept"));
+}
+
+#[test]
+fn comment_required_option_refuses_an_empty_comment() {
+    let f = fixture();
+    let rel = write_flow(&f.root, "appr2", json!({}), vec![
+        json!({"id":"review","kind":"approval","options":[{"name":"revise","commentRequired":true},"accept"]}),
+    ], vec![]);
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    f.wait_for(&run_id, "awaiting approval", |s| s.state.status == RunStatus::AwaitingApproval);
+    assert_eq!(f.engine.approve(&f.root, &run_id, Some("review"), "revise", Some("".into())).unwrap_err().code, crate::run::engine::FLOW_APPROVAL_COMMENT_REQUIRED);
+    f.engine.approve(&f.root, &run_id, Some("review"), "revise", Some("fix the title".into())).unwrap();
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(node(&snap, "review").outputs["comment"], "fix the title");
 }
