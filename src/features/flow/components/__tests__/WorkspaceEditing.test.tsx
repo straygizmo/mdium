@@ -22,6 +22,8 @@ vi.mock("@tauri-apps/api/event", () => ({
     };
   }),
 }));
+const showConfirm = vi.hoisted(() => vi.fn(async (_text: string, _options?: unknown) => true));
+vi.mock("@/stores/dialog-store", async (orig) => ({ ...(await orig<object>()), showConfirm }));
 vi.mock("@monaco-editor/react", () => ({
   default: ({
     value,
@@ -177,11 +179,18 @@ describe("flow workspace editing", () => {
   const click = async (el: HTMLElement) => {
     await act(async () => el.click());
   };
-  const pressCtrlS = async () => {
-    const ws = container.querySelector<HTMLElement>(".flow-workspace")!;
+  /** Presses Ctrl+S inside the YAML pane when it is open, else on the workspace root. */
+  const pressCtrlS = async (): Promise<KeyboardEvent> => {
+    const target = container.querySelector<HTMLElement>(".test-yaml") ?? container.querySelector<HTMLElement>(".flow-workspace")!;
+    const event = new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true, cancelable: true });
     await act(async () => {
-      ws.dispatchEvent(new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true, cancelable: true }));
+      target.dispatchEvent(event);
     });
+    return event;
+  };
+  const editName = async (nodeId: string, name: string) => {
+    await click(container.querySelector<HTMLElement>(`.react-flow__node[data-id="${nodeId}"]`)!);
+    await typeAndBlur(container.querySelector('.flow-workspace__side [aria-label="Name"]')!, name);
   };
   const dialog = () => document.querySelector<HTMLElement>(".flow-dialog");
 
@@ -194,6 +203,8 @@ describe("flow workspace editing", () => {
   beforeEach(async () => {
     await i18n.changeLanguage("en");
     invoke.mockReset();
+    showConfirm.mockReset();
+    showConfirm.mockImplementation(async () => true);
     listeners.length = 0;
     installRoutes();
     useTabStore.setState({ activeFolderPath: FOLDER });
@@ -226,7 +237,8 @@ describe("flow workspace editing", () => {
     const yaml = container.querySelector<HTMLTextAreaElement>(".test-yaml")!;
     expect(yaml.value).toContain("name: Run");
 
-    await pressCtrlS();
+    const keydown = await pressCtrlS();
+    expect(keydown.defaultPrevented).toBe(true);
     await waitFor(() => expect(callsTo("flow_save")).toHaveLength(1));
     const saved = callsTo("flow_save")[0];
     expect(saved.expectedSha256).toBe("h1");
@@ -339,13 +351,73 @@ describe("flow workspace editing", () => {
     expect(container.querySelector(".flow-workspace__name")?.textContent).toBe("Demo");
   });
 
-  it("stops watching when the workspace closes", async () => {
+  it("stops watching when the workspace closes but keeps the editor state", async () => {
     await mountWorkspace();
     await waitFor(() => expect(listeners.some((l) => l.name === "folder-changed")).toBe(true));
     await act(async () => root.render(<div />));
     await waitFor(() => expect(callsTo("unwatch_folder")).toEqual([{ folderPath: `${FOLDER}/.mdium/flows` }]));
     expect(listeners.some((l) => l.name === "folder-changed")).toBe(false);
-    expect(useFlowEditorStore.getState().path).toBeNull();
+    expect(useFlowEditorStore.getState().path).toBe(PATH);
+  });
+
+  it("keeps edits when the Flows view is unmounted and remounted", async () => {
+    await mountWorkspace();
+    await editName("nodes[0]", "Run");
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await act(async () => root.render(<FlowWorkspace />));
+    await waitFor(() => expect(container.querySelectorAll(".react-flow__node").length).toBe(2));
+    await click(button("YAML"));
+    expect(container.querySelector<HTMLTextAreaElement>(".test-yaml")!.value).toContain("name: Run");
+    expect(container.querySelector(".flow-workspace__dirty")).not.toBeNull();
+    expect(callsTo("flow_load")).toHaveLength(1);
+    // The watch is subscribed again for the remounted view.
+    await waitFor(() => expect(callsTo("watch_folder")).toHaveLength(2));
+    expect(showConfirm).not.toHaveBeenCalled();
+  });
+
+  it("asks before switching to another flow while dirty", async () => {
+    const OTHER = ".mdium/flows/other.flow.yaml";
+    routes.flow_load = (args) =>
+      args.path === OTHER ? loadResult({ path: OTHER, flow: { ...demo, name: "Other" }, sha256: "h-other" }) : loadResult();
+    await mountWorkspace();
+    await editName("nodes[0]", "Run");
+
+    showConfirm.mockImplementation(async () => false);
+    await act(async () => useFlowViewStore.getState().setSelected(FOLDER, OTHER));
+    await waitFor(() => expect(useFlowViewStore.getState().selected[FOLDER]).toBe(PATH));
+    expect(showConfirm).toHaveBeenCalledWith("Discard unsaved changes?", { kind: "warning" });
+    expect(useFlowEditorStore.getState().path).toBe(PATH);
+    expect(useFlowEditorStore.getState().text).toContain("name: Run");
+    expect(callsTo("flow_load").filter((a) => a.path === OTHER)).toHaveLength(0);
+
+    showConfirm.mockImplementation(async () => true);
+    await act(async () => useFlowViewStore.getState().setSelected(FOLDER, OTHER));
+    await waitFor(() => expect(container.querySelector(".flow-workspace__name")?.textContent).toBe("Other"));
+    expect(callsTo("flow_load").filter((a) => a.path === OTHER)).toHaveLength(1);
+    expect(useFlowEditorStore.getState().dirty).toBe(false);
+    expect(showConfirm).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks before reload while dirty", async () => {
+    await mountWorkspace();
+    await act(async () => button("Reload").click());
+    expect(showConfirm).not.toHaveBeenCalled();
+    await waitFor(() => expect(callsTo("flow_load")).toHaveLength(2));
+
+    await waitFor(() => expect(container.querySelectorAll(".react-flow__node").length).toBe(2));
+    await editName("nodes[0]", "Run");
+    showConfirm.mockImplementation(async () => false);
+    await act(async () => button("Reload").click());
+    expect(showConfirm).toHaveBeenCalledWith("Discard unsaved changes?", { kind: "warning" });
+    expect(callsTo("flow_load")).toHaveLength(2);
+    expect(useFlowEditorStore.getState().text).toContain("name: Run");
+
+    showConfirm.mockImplementation(async () => true);
+    await act(async () => button("Reload").click());
+    await waitFor(() => expect(callsTo("flow_load")).toHaveLength(3));
+    await waitFor(() => expect(useFlowEditorStore.getState().dirty).toBe(false));
+    expect(useFlowEditorStore.getState().text).not.toContain("name: Run");
   });
 
   it("renders read-only when the file cannot be loaded", async () => {

@@ -6,6 +6,7 @@ import i18n from "@/shared/i18n";
 import { FLOW_ERROR_CODES, FLOW_WARNING_CODES, type FlowLoadResult } from "@/shared/types/flow";
 import { useTabStore } from "@/stores/tab-store";
 import { useFlowViewStore } from "../../flow-store";
+import { useFlowEditorStore } from "../../editor-store";
 import { docDigest } from "../../lib/__tests__/doc-digest";
 
 const invoke = vi.hoisted(() => vi.fn());
@@ -97,6 +98,8 @@ describe("flow views", () => {
     invoke.mockReset();
     useTabStore.setState({ activeFolderPath: FOLDER });
     useFlowViewStore.setState({ selected: {} });
+    // The editor state outlives the workspace view: start every test from a closed editor.
+    useFlowEditorStore.getState().close();
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);

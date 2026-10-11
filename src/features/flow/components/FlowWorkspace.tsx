@@ -19,7 +19,7 @@ import {
 } from "../lib/editor-state";
 import { portsOf } from "../lib/flow-ports";
 import { useFlowViewStore } from "../flow-store";
-import { useFlowEditorStore, type Selection } from "../editor-store";
+import { confirmDiscard, useFlowEditorStore, type Selection } from "../editor-store";
 import { FlowCanvas, type ConnectRequest } from "./FlowCanvas";
 import { FlowIssueList } from "./FlowIssueList";
 import { FlowToolbar } from "./FlowToolbar";
@@ -82,6 +82,18 @@ interface PendingConfirm {
 
 const editor = () => useFlowEditorStore.getState();
 
+/** The discard question in flight, so a re-run effect (StrictMode) does not ask twice. */
+let pendingDiscard: { key: string; answer: Promise<boolean> } | null = null;
+
+function askDiscardFor(key: string, message: string): Promise<boolean> {
+  if (pendingDiscard?.key === key) return pendingDiscard.answer;
+  const answer = confirmDiscard(message).finally(() => {
+    if (pendingDiscard?.answer === answer) pendingDiscard = null;
+  });
+  pendingDiscard = { key, answer };
+  return answer;
+}
+
 /** Main area of the Flows view: the selected flow's editor (canvas, YAML, attributes, runs). */
 export function FlowWorkspace() {
   const { t } = useTranslation("flow");
@@ -123,17 +135,33 @@ export function FlowWorkspace() {
   const readOnly = loadError !== null;
   const loading = current && kind === null && loadError === null && def === null;
 
+  // The editor state outlives this view (no close on unmount): a remount showing the same
+  // file reuses it, edits included. Replacing a dirty file needs the user's consent.
   useEffect(() => {
     setCollapsed(new Set());
     setConnect(null);
     setJustSaved(false);
     if (!folder || !path) return;
     const s = editor();
-    if (s.projectRoot !== folder || s.path !== path) void s.open(folder, path);
+    if (s.projectRoot === folder && s.path === path) return;
+    let cancelled = false;
+    const held = { root: s.projectRoot, path: s.path };
+    void askDiscardFor(`${folder}\n${path}`, t("editor.discardEdits")).then((ok) => {
+      if (cancelled) return;
+      if (ok) {
+        void editor().open(folder, path);
+        return;
+      }
+      // Declined: keep the open file selected.
+      const select = useFlowViewStore.getState().setSelected;
+      if (held.root === folder) select(folder, held.path);
+      else select(folder, null);
+    });
     return () => {
-      const now = editor();
-      if (now.projectRoot === folder && now.path === path) now.close();
+      cancelled = true;
     };
+    // `t` is stable per language; re-running on a language change must not re-ask.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [folder, path]);
 
   // Parts (for the palette and the sub-flow / loop forms) and the project manifest.
@@ -251,6 +279,13 @@ export function FlowWorkspace() {
     }
   };
 
+  const onReloadHeader = async () => {
+    if (!current) return;
+    if (!(await confirmDiscard(t("editor.discardEdits")))) return;
+    setJustSaved(false);
+    await editor().reload();
+  };
+
   const onReloadOutside = async () => {
     setNoticeBusy(true);
     try {
@@ -355,7 +390,7 @@ export function FlowWorkspace() {
         {showEditor && dirty && <span className="flow-workspace__dirty">{t("editor.unsaved")}</span>}
         {showEditor && !dirty && justSaved && <span className="flow-workspace__saved">{t("editor.saved")}</span>}
         {showEditor && readOnly && <span className="flow-workspace__readonly">{t("workspace.readOnly")}</span>}
-        <button type="button" className="flow-workspace__reload" onClick={() => void editor().reload()}>
+        <button type="button" className="flow-workspace__reload" onClick={() => void onReloadHeader()}>
           {t("workspace.reload")}
         </button>
       </div>

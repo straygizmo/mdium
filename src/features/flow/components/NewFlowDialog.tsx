@@ -20,8 +20,6 @@ export function newFlowPath(fileName: string, location: Location): string {
 }
 
 interface NewFlowDialogProps {
-  /** Project folder the flow is created in. */
-  projectRoot: string;
   /** Flow files already in the project; their paths are refused. */
   existing: FlowSummary[];
   onCreate(path: string, def: FlowDef): void;

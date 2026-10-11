@@ -5,7 +5,7 @@ import { useTabStore } from "@/stores/tab-store";
 import type { FlowDef, FlowSummary, ProjectLoadResult } from "@/shared/types/flow";
 import { flowApi, isFlowCommandError } from "../lib/flow-api";
 import { useFlowViewStore } from "../flow-store";
-import { useFlowEditorStore } from "../editor-store";
+import { confirmDiscard, useFlowEditorStore } from "../editor-store";
 import { NewFlowDialog } from "./NewFlowDialog";
 import { ProjectSetupDialog } from "./ProjectSetupDialog";
 import "./Flow.css";
@@ -35,6 +35,7 @@ export function FlowPanel() {
   const [project, setProject] = useState<ProjectLoadResult | null>(null);
   const [setupOpen, setSetupOpen] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
   const requestId = useRef(0);
 
   const refresh = useCallback(async () => {
@@ -68,11 +69,21 @@ export function FlowPanel() {
   const createFlow = async (path: string, def: FlowDef) => {
     if (!folder) return;
     setNewOpen(false);
+    setCreateError(null);
+    if (!(await confirmDiscard(t("editor.discardEdits")))) return;
     const editor = useFlowEditorStore.getState();
+    const previous = { root: editor.projectRoot, path: editor.path };
     editor.openNew(folder, path, def);
-    await editor.save({});
-    setSelected(folder, path);
-    await refresh();
+    const outcome = await editor.save({});
+    if (outcome === "saved") {
+      setSelected(folder, path);
+      await refresh();
+      return;
+    }
+    // Not written: report it and put the previously open file back.
+    setCreateError(useFlowEditorStore.getState().saveError ?? "FLOW_COMMAND_FAILED");
+    if (previous.root && previous.path) void editor.open(previous.root, previous.path);
+    else editor.close();
   };
 
   if (!folder) return null;
@@ -131,11 +142,15 @@ export function FlowPanel() {
       </div>
       {newOpen && (
         <NewFlowDialog
-          projectRoot={folder}
           existing={state.status === "ready" ? state.flows : []}
           onCreate={(path, def) => void createFlow(path, def)}
           onClose={() => setNewOpen(false)}
         />
+      )}
+      {createError && (
+        <div className="flow-panel__message flow-panel__message--error" role="alert">
+          {t("editor.saveFailed", { code: createError })}
+        </div>
       )}
       {project && (
         <div className="flow-panel__project">

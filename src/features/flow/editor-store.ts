@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { FlowDef, FlowFormat, FlowIssue, FlowKind, FlowLoadResult } from "@/shared/types/flow";
 import { flowApi, isFlowCommandError } from "./lib/flow-api";
 import { hasComments, stringifyFlow } from "./lib/flow-yaml";
+import { showConfirm } from "@/stores/dialog-store";
 
 export type Selection =
   | { kind: "node"; path: string }
@@ -246,3 +247,12 @@ export const useFlowEditorStore = create<EditorState>()((set, get) => {
     },
   };
 });
+
+/**
+ * The single guard before the open file is replaced (another flow, a new flow, a reload):
+ * resolves `true` when nothing is unsaved or the user agrees to discard the edits.
+ */
+export async function confirmDiscard(message: string): Promise<boolean> {
+  if (!useFlowEditorStore.getState().dirty) return true;
+  return showConfirm(message, { kind: "warning" });
+}

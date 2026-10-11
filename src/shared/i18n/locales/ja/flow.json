@@ -331,7 +331,8 @@
     "create": "作成",
     "saveTitle": "フローの保存",
     "saveFailed": "フローを保存できませんでした（{{code}}）。",
-    "validating": "検証中…"
+    "validating": "検証中…",
+    "discardEdits": "未保存の変更を破棄しますか？"
   },
   "attrs": {
     "id": "ID",

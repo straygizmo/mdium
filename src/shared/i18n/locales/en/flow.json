@@ -331,7 +331,8 @@
     "create": "Create",
     "saveTitle": "Save flow",
     "saveFailed": "Could not save the flow ({{code}}).",
-    "validating": "Validating…"
+    "validating": "Validating…",
+    "discardEdits": "Discard unsaved changes?"
   },
   "attrs": {
     "id": "ID",
