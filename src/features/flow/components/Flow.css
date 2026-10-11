@@ -1046,3 +1046,53 @@ button.flow-issue__button:hover {
   box-sizing: border-box;
   resize: vertical;
 }
+
+.flow-palette {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 200px;
+  max-height: 360px;
+  overflow: auto;
+  padding: 8px;
+  font-size: 12px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-color, #888);
+  border-radius: 6px;
+}
+
+.flow-palette__title,
+.flow-palette__label {
+  font-weight: 600;
+  opacity: 0.8;
+}
+
+.flow-palette__group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.flow-palette__item {
+  text-align: left;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.flow-palette__item:hover,
+.flow-palette__item--active {
+  background: rgba(128, 128, 128, 0.2);
+}
+
+.flow-palette__signature,
+.flow-palette__notice {
+  opacity: 0.7;
+}
+
+.flow-palette__error {
+  color: #d33;
+}

@@ -295,7 +295,16 @@
     },
     "logDir": "Logs: {{dir}}"
   },
+  "palette": {
+    "title": "Palette",
+    "loading": "Loading…",
+    "pickPart": "Choose a part",
+    "noParts": "No parts in .mdium/flows/lib/.",
+    "pythonStages": "Python stages",
+    "noRuntime": "No python runtime in project.yaml."
+  },
   "editor": {
+    "addNode": "Add node",
     "choosePort": "Choose exit"
   }
 }
