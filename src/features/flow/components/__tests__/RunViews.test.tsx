@@ -627,6 +627,15 @@ describe("run panel tree and artifacts", () => {
     const dialog = document.querySelector(".flow-dialog") as HTMLElement;
     expect(button(dialog, "Approve")).toBeTruthy();
     expect(button(dialog, "Reject").disabled).toBe(true);
+    // The reason is visible text, not only the disabled button's title.
+    expect(dialog.textContent).toContain("This option needs a comment.");
+    const comment = dialog.querySelector("textarea") as HTMLTextAreaElement;
+    await act(async () => {
+      setNativeValue(comment, "why");
+      comment.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(button(dialog, "Reject").disabled).toBe(false);
+    expect(dialog.textContent).not.toContain("This option needs a comment.");
   });
 
   it("opens the budget approval from its review button", async () => {
@@ -643,5 +652,111 @@ describe("run panel tree and artifacts", () => {
     });
     await waitFor(() => expect(document.querySelector(".flow-dialog")).not.toBeNull());
     expect(document.querySelector(".flow-dialog")!.textContent).toContain("Budget");
+  });
+
+  it("selects a node from its focusable label button", async () => {
+    route({ flow_run_list: () => [summary("r1")], flow_run_get: () => snapshot("r1"), flow_gitignore_status: () => ({ ignored: true }) });
+    await renderPanel();
+    const select = button(container, "a");
+    expect(select.classList.contains("flow-tree__select")).toBe(true);
+    select.focus();
+    expect(document.activeElement).toBe(select);
+    await act(async () => select.click());
+    await waitFor(() => expect(button(container, "Re-run")).toBeTruthy());
+  });
+
+  it("shows an unavailable notice when a media element fails to load", async () => {
+    const snap = snapshot("r1", { nodes: { a: node("succeeded", { artifacts: [{ index: 0, path: "C:/p/gone.png", mediaType: "image/png", recordedAt: "t" }] }) } });
+    route({
+      flow_run_list: () => [summary("r1")],
+      flow_run_get: () => snap,
+      flow_gitignore_status: () => ({ ignored: true }),
+      flow_artifact_path: () => ({ path: "C:/p/gone.png", mediaType: "image/png" }),
+    });
+    await renderPanel();
+    await clickFirstRow();
+    await act(async () => button(container, "Artifacts").click());
+    await waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+    await act(async () => {
+      container.querySelector("img")!.dispatchEvent(new Event("error"));
+    });
+    await waitFor(() => expect(container.textContent).toContain("Preview unavailable."));
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("shows an empty text artifact without fetching it", async () => {
+    const fetchMock = vi.fn(async () => new Response("", { status: 416 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const snap = snapshot("r1", { nodes: { a: node("succeeded", { artifacts: [{ index: 0, path: "C:/p/empty.txt", mediaType: "text/plain", bytes: 0, recordedAt: "t" }] }) } });
+    route({
+      flow_run_list: () => [summary("r1")],
+      flow_run_get: () => snap,
+      flow_gitignore_status: () => ({ ignored: true }),
+      flow_artifact_path: () => ({ path: "C:/p/empty.txt", mediaType: "text/plain" }),
+    });
+    await renderPanel();
+    await clickFirstRow();
+    await act(async () => button(container, "Artifacts").click());
+    await waitFor(() => expect(container.querySelector("pre")).not.toBeNull());
+    expect(container.querySelector("pre")!.textContent).toBe("");
+    expect(container.textContent).not.toContain("Preview unavailable.");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the dialog open and shows the error when the approval fails", async () => {
+    const request = { nodeKey: "review", options: [{ name: "accept" }], reason: { code: "FLOW_APPROVAL_NODE" } };
+    const snap = snapshot("r1", { status: "awaiting_approval", approvals: [request], nodes: { review: node("awaiting_approval") } });
+    let fail = true;
+    const approve = vi.fn(async () => {
+      if (fail) throw { code: "FLOW_APPROVAL_INVALID", message: "gone" };
+    });
+    route({ flow_run_list: () => [summary("r1")], flow_run_get: () => snap, flow_gitignore_status: () => ({ ignored: true }), flow_run_approve: approve });
+    await renderPanel();
+    await act(async () => button(container, "Review").click());
+    await waitFor(() => expect(document.querySelector(".flow-dialog")).not.toBeNull());
+    const dialog = document.querySelector(".flow-dialog") as HTMLElement;
+    // A whitespace-only comment is sent as no comment.
+    const comment = dialog.querySelector("textarea") as HTMLTextAreaElement;
+    await act(async () => {
+      setNativeValue(comment, "   ");
+      comment.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => button(dialog, "accept").click());
+    await waitFor(() => expect(dialog.querySelector('[role="alert"]')?.textContent).toBe("This approval is no longer pending."));
+    expect(approve).toHaveBeenCalledWith({ projectRoot: ROOT, runId: "r1", nodeKey: "review", choice: "accept", comment: null });
+    expect(document.querySelector(".flow-dialog")).toBe(dialog);
+    expect(button(dialog, "accept").disabled).toBe(false);
+    // The next attempt clears the error.
+    fail = false;
+    await act(async () => button(dialog, "accept").click());
+    await waitFor(() => expect(document.querySelector(".flow-dialog")).toBeNull());
+  });
+
+  it("closes the dialog when its request disappears and does not reopen it for a later request", async () => {
+    const request = { nodeKey: "review", options: [{ name: "accept" }], show: { "nodes.a.outputs.none": null }, reason: { code: "FLOW_APPROVAL_NODE" } };
+    const awaiting = snapshot("r1", { status: "awaiting_approval", approvals: [request], nodes: { review: node("awaiting_approval") } });
+    let current = awaiting;
+    route({ flow_run_list: () => [summary("r1")], flow_run_get: () => current, flow_gitignore_status: () => ({ ignored: true }) });
+    await renderPanel();
+    await act(async () => button(container, "Review").click());
+    await waitFor(() => expect(document.querySelector(".flow-dialog")).not.toBeNull());
+    // A null show value renders as a dash instead of "null".
+    expect(document.querySelector(".flow-dialog")!.textContent).toContain("\u2014");
+    expect(document.querySelector(".flow-dialog")!.textContent).not.toContain("null");
+    // Settled elsewhere: the request is gone from the next snapshot.
+    current = snapshot("r1", { status: "running", approvals: [], nodes: { review: node("running") } });
+    await act(async () => {
+      listeners.get("flow://run-changed")!({ payload: { projectRoot: ROOT, runId: "r1" } });
+    });
+    await waitFor(() => expect(document.querySelector(".flow-dialog")).toBeNull());
+    // The same node asks again later: the dialog waits for the user.
+    current = awaiting;
+    await act(async () => {
+      listeners.get("flow://run-changed")!({ payload: { projectRoot: ROOT, runId: "r1" } });
+    });
+    await waitFor(() => expect(container.querySelector(".flow-run__approvals")).not.toBeNull());
+    expect(document.querySelector(".flow-dialog")).toBeNull();
+    await act(async () => button(container, "Review").click());
+    await waitFor(() => expect(document.querySelector(".flow-dialog")).not.toBeNull());
   });
 });

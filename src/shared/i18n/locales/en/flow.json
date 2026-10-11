@@ -160,7 +160,7 @@
     "previewUnavailable": "Preview unavailable.",
     "previewTruncated": "Showing the first {{kib}} KiB.",
     "previewNone": "No preview for this type.",
-    "openArtifact": "Open",
+    "noValue": "—",
     "bytes": "{{n}} B",
     "commentRequired": "This option needs a comment.",
     "review": "Review",

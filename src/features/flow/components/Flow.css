@@ -899,6 +899,25 @@ button.flow-issue__button:hover {
   cursor: pointer;
 }
 
+.flow-tree__select {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.flow-tree__select:focus-visible {
+  outline: 1px solid var(--primary);
+  outline-offset: 1px;
+}
+
 .flow-tree__agg {
   margin-left: auto;
   display: flex;
@@ -918,6 +937,12 @@ button.flow-issue__button:hover {
 
 .flow-node-detail__tabs {
   margin: 0;
+}
+
+.flow-node-detail__heading {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .flow-node-detail__outputs {

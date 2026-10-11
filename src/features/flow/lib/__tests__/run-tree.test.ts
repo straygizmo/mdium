@@ -43,6 +43,18 @@ describe("buildRunTree", () => {
     const rows = buildRunTree(state({ nodes: { "fin@2": n("ready"), "ghost/x": n("ready") }, scopes: { "": { status: "running" } }, passes: { fin: 2 } }), flow);
     expect(rows.map((r) => r.label)).toEqual(["fin@2", "x"]);
   });
+  it("orders passes of the same node numerically among siblings", () => {
+    const rows = buildRunTree(
+      state({
+        nodes: { sub: n("succeeded"), "sub/a@10": n("ready"), "sub/a": n("succeeded"), "sub/a@2": n("succeeded"), "sub/b": n("pending"), "fin@10": n("ready"), fin: n("succeeded"), "fin@2": n("succeeded") },
+        scopes: { "": { status: "running" }, "sub/": { status: "running", owner: "sub" } },
+        passes: { fin: 10 },
+      }),
+      flow,
+    );
+    expect(rows.map((r) => r.key)).toEqual(["sub", "fin", "fin@2", "fin@10"]);
+    expect(rows[0].children.map((c) => c.key)).toEqual(["sub/a", "sub/a@2", "sub/a@10", "sub/b"]);
+  });
   it("builds a flat tree when scopes are absent", () => {
     const rows = buildRunTree({ seq: 1, status: "completed", cost: { actual: 0, estimated: 0 }, nodes: { fin: n("succeeded") } } as RunState, flow);
     expect(rows).toHaveLength(1);

@@ -160,7 +160,7 @@
     "previewUnavailable": "プレビューを表示できません。",
     "previewTruncated": "先頭 {{kib}} KiB を表示しています。",
     "previewNone": "この種類はプレビューできません。",
-    "openArtifact": "開く",
+    "noValue": "—",
     "bytes": "{{n}} B",
     "commentRequired": "この選択肢にはコメントが必要です。",
     "review": "確認",

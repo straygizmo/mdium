@@ -57,6 +57,10 @@ export function buildRunTree(state: RunState, flow: FlowDef): RunTreeRow[] {
         const ob = order.get(splitNodeKey(b.key).id) ?? Number.MAX_SAFE_INTEGER;
         if (oa !== ob) return oa - ob;
       }
+      // Passes of the same node sort numerically (a@2 before a@10).
+      const ka = splitNodeKey(a.key);
+      const kb = splitNodeKey(b.key);
+      if (ka.prefix === kb.prefix && ka.id === kb.id) return ka.pass - kb.pass;
       return a.key.localeCompare(b.key);
     });
   const finish = (row: RunTreeRow, depth: number): RunAggregate => {
@@ -92,7 +96,9 @@ export function defaultExpandedKeys(rows: RunTreeRow[]): Set<string> {
   const out = new Set<string>();
   const visit = (row: RunTreeRow) => {
     if (row.children.length === 0) return;
-    const hot = row.agg.running + row.agg.failed + row.agg.awaiting - (row.node ? aggregateOf(row.node).running + aggregateOf(row.node).failed + aggregateOf(row.node).awaiting : 0);
+    // Only descendants count: a running loop node alone does not expand itself.
+    const own = aggregateOf(row.node);
+    const hot = row.agg.running + row.agg.failed + row.agg.awaiting - (own.running + own.failed + own.awaiting);
     if (hot > 0) out.add(row.key);
     row.children.forEach(visit);
   };

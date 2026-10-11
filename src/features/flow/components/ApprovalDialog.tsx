@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { DialogShell } from "@/features/workflow/components/DialogShell";
-import { isShowArtifacts, type ApprovalRequest } from "@/shared/types/flow-run";
-import { describeReason } from "../lib/run-format";
+import { isShowArtifacts, type ApprovalRequest, type FlowRunError } from "@/shared/types/flow-run";
+import { toFlowRunError } from "../lib/flow-run-api";
+import { describeError, describeReason } from "../lib/run-format";
 import { ArtifactPreview } from "./ArtifactPreview";
 
 interface ApprovalDialogProps {
@@ -10,7 +11,7 @@ interface ApprovalDialogProps {
   runId: string;
   request: ApprovalRequest;
   onClose(): void;
-  /** Sends the decision; a rejection keeps the dialog open. */
+  /** Sends the decision; it rejects with a `FlowRunError`, which the dialog shows while staying open. */
   onChoose(choice: string, comment: string): Promise<void>;
 }
 
@@ -19,14 +20,19 @@ export function ApprovalDialog({ projectRoot, runId, request, onClose, onChoose 
   const { t } = useTranslation("flow");
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<FlowRunError | null>(null);
+  const commentMissing = comment.trim() === "";
+  const blocked = commentMissing && request.options.some((option) => option.commentRequired);
 
   const choose = async (choice: string) => {
     setBusy(true);
+    setError(null);
     try {
       await onChoose(choice, comment);
       onClose();
-    } catch {
-      // The caller surfaces the error; the dialog stays open for another try.
+    } catch (err) {
+      // The overlay hides the panel's error box, so the dialog shows the failure itself.
+      setError(toFlowRunError(err) ?? { code: "FLOW_COMMAND_FAILED", message: String(err) });
       setBusy(false);
     }
   };
@@ -43,7 +49,7 @@ export function ApprovalDialog({ projectRoot, runId, request, onClose, onChoose 
           {isShowArtifacts(value) ? (
             value.artifacts.map((artifact) => (
               <ArtifactPreview
-                key={artifact.index}
+                key={`${artifact.index}:${artifact.path}`}
                 projectRoot={projectRoot}
                 runId={runId}
                 nodeKey={value.nodeKey}
@@ -51,6 +57,8 @@ export function ApprovalDialog({ projectRoot, runId, request, onClose, onChoose 
                 artifact={artifact}
               />
             ))
+          ) : value === null || value === undefined ? (
+            <span className="flow-run__muted">{t("run.noValue")}</span>
           ) : (
             <code>{typeof value === "string" ? value : JSON.stringify(value)}</code>
           )}
@@ -63,9 +71,15 @@ export function ApprovalDialog({ projectRoot, runId, request, onClose, onChoose 
         value={comment}
         onChange={(e) => setComment(e.target.value)}
       />
+      {blocked && <div className="flow-run__muted">{t("run.commentRequired")}</div>}
+      {error && (
+        <div className="flow-dialog__error" role="alert">
+          {describeError(t, error).message}
+        </div>
+      )}
       <div className="flow-run__actions">
         {request.options.map((option) => {
-          const missing = !!option.commentRequired && comment.trim() === "";
+          const missing = !!option.commentRequired && commentMissing;
           return (
             <button
               key={option.name}

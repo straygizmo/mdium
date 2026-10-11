@@ -65,28 +65,32 @@ export function RunNodeDetail({
           </button>
         ))}
       </div>
-      {tab === "overview" &&
-        (outputs.length === 0 ? (
-          <div className="flow-run__muted">{t("run.noOutputs")}</div>
-        ) : (
-          <dl className="flow-node-detail__outputs">
-            {outputs.map(([key, value]) => (
-              <div key={key}>
-                <dt>{key}</dt>
-                <dd>
-                  <code>{typeof value === "string" ? value : JSON.stringify(value)}</code>
-                </dd>
-              </div>
-            ))}
-          </dl>
-        ))}
+      {tab === "overview" && (
+        <>
+          <h5 className="flow-node-detail__heading">{t("run.outputs")}</h5>
+          {outputs.length === 0 ? (
+            <div className="flow-run__muted">{t("run.noOutputs")}</div>
+          ) : (
+            <dl className="flow-node-detail__outputs">
+              {outputs.map(([key, value]) => (
+                <div key={key}>
+                  <dt>{key}</dt>
+                  <dd>
+                    <code>{typeof value === "string" ? value : JSON.stringify(value)}</code>
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          )}
+        </>
+      )}
       {tab === "artifacts" &&
         (artifacts.length === 0 ? (
           <div className="flow-run__muted">{t("run.noArtifacts")}</div>
         ) : (
           <ul className="flow-node-detail__artifacts">
             {artifacts.map((artifact) => (
-              <li key={artifact.index} className="flow-artifact">
+              <li key={`${artifact.index}:${artifact.path}`} className="flow-artifact">
                 <div className="flow-artifact__head">
                   <span title={artifact.path}>{artifact.label ?? fileName(artifact.path)}</span>
                   <span className="flow-run__muted">{artifact.mediaType}</span>

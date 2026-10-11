@@ -17,7 +17,7 @@ import { RunLogDialog } from "./RunLogDialog";
 import { RunNodeTree } from "./RunNodeTree";
 import { RunNodeDetail } from "./RunNodeDetail";
 import { ApprovalDialog } from "./ApprovalDialog";
-import { buildRunTree } from "../lib/run-tree";
+import { buildRunTree, type RunTreeRow } from "../lib/run-tree";
 
 /** Key of the budget approval, which has no node. */
 const BUDGET_KEY = "__budget__";
@@ -124,6 +124,11 @@ export function RunPanel({ projectRoot, flowPath, flow }: RunPanelProps) {
     };
   }, [projectRoot, loadRuns, loadSnapshot]);
 
+  const refresh = async () => {
+    await loadRuns();
+    if (selected) await loadSnapshot(selected);
+  };
+
   const act = async (op: () => Promise<void>) => {
     setError(null);
     try {
@@ -131,8 +136,7 @@ export function RunPanel({ projectRoot, flowPath, flow }: RunPanelProps) {
     } catch (err) {
       setError(toFlowRunError(err) ?? { code: "FLOW_COMMAND_FAILED", message: String(err) });
     }
-    await loadRuns();
-    if (selected) await loadSnapshot(selected);
+    await refresh();
   };
 
   const described = error ? describeError(t, error) : null;
@@ -182,6 +186,7 @@ export function RunPanel({ projectRoot, flowPath, flow }: RunPanelProps) {
           key={snapshot.meta.runId}
           snapshot={snapshot}
           onAct={act}
+          onRefresh={refresh}
           projectRoot={projectRoot}
           selectedNode={selectedNode}
           onSelectNode={setSelectedNode}
@@ -220,10 +225,12 @@ interface RunDetailProps {
   selectedNode: string | null;
   onSelectNode(key: string): void;
   onAct(op: () => Promise<void>): Promise<void>;
+  /** Reloads the run list and the selected run. */
+  onRefresh(): Promise<void>;
   onLog(nodeKey: string, attempt: number): void;
 }
 
-function RunDetail({ projectRoot, snapshot, selectedNode, onSelectNode, onAct, onLog }: RunDetailProps) {
+function RunDetail({ projectRoot, snapshot, selectedNode, onSelectNode, onAct, onRefresh, onLog }: RunDetailProps) {
   const { t } = useTranslation("flow");
   const { meta, state, active } = snapshot;
   const runId = meta.runId;
@@ -236,11 +243,25 @@ function RunDetail({ projectRoot, snapshot, selectedNode, onSelectNode, onAct, o
   const rootDef = (key: string) => (splitNodeKey(key).prefix === "" ? meta.flow.nodes.find((n) => n.id === splitNodeKey(key).id) : undefined);
   const isApproval = (key: string) => rootDef(key)?.kind === "approval";
   const rows = useMemo(() => buildRunTree(state, meta.flow), [state, meta.flow]);
-  const approvalsRef = useRef<HTMLDivElement>(null);
+  const labels = useMemo(() => labelsOf(rows), [rows]);
   const approvals = state.approvals ?? [];
   // Node key (or BUDGET_KEY) of the request whose dialog is open; it closes when the request is gone.
   const [openApproval, setOpenApproval] = useState<string | null>(null);
   const openRequest = openApproval === null ? undefined : approvals.find((r) => (r.nodeKey ?? BUDGET_KEY) === openApproval);
+  // Forget a request that was settled elsewhere, so a later request on the same key does not reopen the dialog.
+  useEffect(() => {
+    if (openApproval !== null && !openRequest) setOpenApproval(null);
+  }, [openApproval, openRequest]);
+
+  const approve = async (nodeKey: string | null, choice: string, comment: string) => {
+    try {
+      await flowRunApi.approve(projectRoot, runId, nodeKey, choice, comment.trim() || null);
+    } catch (err) {
+      // The dialog shows the error; refreshing now could close it before the user reads it.
+      throw toFlowRunError(err) ?? { code: "FLOW_COMMAND_FAILED", message: String(err) };
+    }
+    await onRefresh();
+  };
   // Nested scopes' edges are not known here; the backend rejects what it cannot do.
   const hasFailureEdge = (key: string) =>
     splitNodeKey(key).prefix === "" &&
@@ -297,7 +318,7 @@ function RunDetail({ projectRoot, snapshot, selectedNode, onSelectNode, onAct, o
         )}
       </div>
       {approvals.length > 0 && (
-        <div className="flow-run__approvals" ref={approvalsRef}>
+        <div className="flow-run__approvals">
           {approvals.map((request) => (
             <div key={request.nodeKey ?? BUDGET_KEY} className="flow-run__approval">
               <div className="flow-run__approval-title">{request.nodeKey ? `${t("run.approvals")}: ${request.nodeKey}` : t("run.budget")}</div>
@@ -324,7 +345,7 @@ function RunDetail({ projectRoot, snapshot, selectedNode, onSelectNode, onAct, o
           runId={runId}
           nodeKey={selectedNode}
           node={state.nodes[selectedNode]}
-          name={findLabel(rows, selectedNode)}
+          name={labels.get(selectedNode) ?? selectedNode}
           canRerun={needsAction(selectedNode, state.nodes[selectedNode])}
           canMarkSucceeded={needsAction(selectedNode, state.nodes[selectedNode]) && state.nodes[selectedNode].status === "failed"}
           isApproval={isApproval(selectedNode)}
@@ -338,31 +359,20 @@ function RunDetail({ projectRoot, snapshot, selectedNode, onSelectNode, onAct, o
           runId={runId}
           request={openRequest}
           onClose={() => setOpenApproval(null)}
-          onChoose={async (choice, comment) => {
-            let failed = false;
-            await onAct(async () => {
-              try {
-                await flowRunApi.approve(projectRoot, runId, openRequest.nodeKey ?? null, choice, comment || null);
-              } catch (err) {
-                failed = true;
-                throw err;
-              }
-            });
-            // onAct reports the error itself; the dialog only needs to know it must stay open.
-            if (failed) throw new Error("approval failed");
-          }}
+          onChoose={(choice, comment) => approve(openRequest.nodeKey ?? null, choice, comment)}
         />
       )}
     </div>
   );
 }
 
-/** Finds the display label of a node row in the tree. */
-function findLabel(rows: ReturnType<typeof buildRunTree>, key: string): string {
-  for (const row of rows) {
-    if (row.key === key) return row.label;
-    const inner = findLabel(row.children, key);
-    if (inner !== key) return inner;
-  }
-  return key;
+/** Display labels of every row in the tree, by key. */
+function labelsOf(rows: RunTreeRow[]): Map<string, string> {
+  const out = new Map<string, string>();
+  const visit = (row: RunTreeRow) => {
+    out.set(row.key, row.label);
+    row.children.forEach(visit);
+  };
+  rows.forEach(visit);
+  return out;
 }

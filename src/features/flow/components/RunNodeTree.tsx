@@ -40,6 +40,11 @@ export function RunNodeTree({ rows, selectedKey, onSelect, onOpenApproval }: Run
         const isOpen = expanded.has(row.key);
         const status = row.node?.status;
         const { agg } = row;
+        // The whole row is a mouse target; the label button is the keyboard target.
+        const choose = () => {
+          onSelect(row.key);
+          if (row.kind === "node" && status === "awaiting_approval") onOpenApproval(row.key);
+        };
         return (
           <li
             key={row.key}
@@ -49,10 +54,7 @@ export function RunNodeTree({ rows, selectedKey, onSelect, onOpenApproval }: Run
             aria-selected={row.key === selectedKey}
             className={`flow-tree__row${status ? ` flow-run__node--${status}` : ""}${row.key === selectedKey ? " flow-tree__row--selected" : ""}`}
             style={{ paddingLeft: `${row.depth * 16 + 6}px` }}
-            onClick={() => {
-              onSelect(row.key);
-              if (row.kind === "node" && status === "awaiting_approval") onOpenApproval(row.key);
-            }}
+            onClick={choose}
           >
             {hasChildren ? (
               <button
@@ -69,16 +71,25 @@ export function RunNodeTree({ rows, selectedKey, onSelect, onOpenApproval }: Run
             ) : (
               <span className="flow-tree__toggle" aria-hidden="true" />
             )}
-            <span className="flow-run__node-name" title={row.key}>
-              {row.kind === "iteration" ? t("run.iteration", { n: row.iterationIndex }) : row.label}
-            </span>
+            <button
+              type="button"
+              className="flow-tree__select"
+              onClick={(e) => {
+                e.stopPropagation();
+                choose();
+              }}
+            >
+              <span className="flow-run__node-name" title={row.key}>
+                {row.kind === "iteration" ? t("run.iteration", { n: row.iterationIndex }) : row.label}
+              </span>
+            </button>
             {status && <span className="flow-run__node-status">{t(`nodeStatus.${status}`)}</span>}
             {hasChildren && (
               <span className="flow-tree__agg">
                 {agg.running > 0 && <span>{t("run.agg.running", { n: agg.running })}</span>}
                 {agg.failed > 0 && <span>{t("run.agg.failed", { n: agg.failed })}</span>}
                 {agg.awaiting > 0 && <span>{t("run.agg.awaiting", { n: agg.awaiting })}</span>}
-                {agg.costUsd > 0 && <span>${formatUsd(agg.costUsd)}</span>}
+                {agg.costUsd > 0 && <span>{t("run.cost", { usd: formatUsd(agg.costUsd) })}</span>}
                 {agg.progress && <span>{agg.progress}</span>}
               </span>
             )}
