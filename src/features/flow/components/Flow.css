@@ -1096,3 +1096,73 @@ button.flow-issue__button:hover {
 .flow-palette__error {
   color: #d33;
 }
+
+.flow-attrs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.flow-attrs__field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.flow-attrs__field input[type="text"],
+.flow-attrs__field textarea,
+.flow-attrs__row input[type="text"],
+.flow-attrs select {
+  min-width: 0;
+  font: inherit;
+}
+
+.flow-attrs__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.flow-attrs__check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.flow-attrs__section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.flow-attrs__condition,
+.flow-attrs__children {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.flow-attrs__children {
+  margin-left: 12px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border-color, #8884);
+}
+
+.flow-attrs__error {
+  color: #d33;
+}
+
+.flow-attrs__issues {
+  margin: 0;
+  padding-left: 16px;
+}
+
+.flow-attrs__json {
+  overflow: auto;
+  font-size: 11px;
+}
