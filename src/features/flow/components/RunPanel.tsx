@@ -176,6 +176,7 @@ export function RunPanel({ projectRoot, flowPath, flow }: RunPanelProps) {
       )}
       {snapshot && selected && (
         <RunDetail
+          key={snapshot.meta.runId}
           snapshot={snapshot}
           onAct={act}
           projectRoot={projectRoot}

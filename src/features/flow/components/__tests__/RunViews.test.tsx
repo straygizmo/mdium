@@ -553,6 +553,28 @@ describe("run panel tree and artifacts", () => {
     expect(container.textContent).toContain("Showing the first 256 KiB.");
   });
 
+  it("re-seeds the tree expansion when another run is selected", async () => {
+    const hotState = {
+      nodes: { docs: node("running"), "docs[1]/sum": node("running") },
+      scopes: { "": { status: "running" as const }, "docs[1]/": { status: "running" as const, owner: "docs", index: 1 } },
+    };
+    route({
+      flow_run_list: () => [summary("r1"), summary("r2")],
+      flow_run_get: (args) => snapshot(args.runId as string, hotState),
+      flow_gitignore_status: () => ({ ignored: true }),
+    });
+    await act(async () => root.render(<RunPanel projectRoot={ROOT} flowPath={PATH} flow={flow} />));
+    await waitFor(() => expect(container.querySelectorAll(".flow-runs__item").length).toBe(2));
+    await act(async () => container.querySelectorAll<HTMLButtonElement>(".flow-runs__item")[0].click());
+    await waitFor(() => expect(container.querySelectorAll('[role="treeitem"]').length).toBe(3));
+    expect(container.querySelector('[role="treeitem"]')!.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => container.querySelector<HTMLButtonElement>('[role="treeitem"] button')!.click());
+    expect(container.querySelector('[role="treeitem"]')!.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => container.querySelectorAll<HTMLButtonElement>(".flow-runs__item")[1].click());
+    await waitFor(() => expect(container.querySelectorAll('[role="treeitem"]').length).toBe(3));
+    expect(container.querySelector('[role="treeitem"]')!.getAttribute("aria-expanded")).toBe("true");
+  });
+
   it("shows an unavailable notice when the artifact url fails", async () => {
     const snap = snapshot("r1", { nodes: { a: node("succeeded", { artifacts: [{ index: 0, path: "C:/p/gone.png", mediaType: "image/png", recordedAt: "t" }] }) } });
     route({
