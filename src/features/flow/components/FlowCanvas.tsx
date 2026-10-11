@@ -1,14 +1,16 @@
-import { useMemo, useRef, type KeyboardEvent, type PointerEvent } from "react";
+import { useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import {
   Background,
   Controls,
   MarkerType,
   ReactFlow,
   ReactFlowProvider,
+  applyNodeChanges,
   type Connection,
   type Edge,
   type EdgeMouseHandler,
   type IsValidConnection,
+  type NodeChange,
   type OnNodeDrag,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -80,6 +82,16 @@ export function handleNodeDragStop(
   return (_event, node) => {
     onMoveNode(node.data.node.nodeId, { x: node.position.x, y: node.position.y });
   };
+}
+
+/**
+ * Applies React Flow's live geometry changes (drag positions, measured sizes) to the local
+ * node copy, so a dragged node follows the pointer. Selection and removal stay controlled
+ * by the editor store and are ignored here.
+ */
+export function applyGeometryChanges(changes: NodeChange<FlowRfNode>[], nodes: FlowRfNode[]): FlowRfNode[] {
+  const geometry = changes.filter((c) => c.type === "position" || c.type === "dimensions");
+  return geometry.length > 0 ? applyNodeChanges(geometry, nodes) : nodes;
 }
 
 /** Edge label: the port unless it is `success`, plus the bound of a back-edge. */
@@ -158,6 +170,14 @@ export function FlowCanvas({
     () => toReactFlow(graph, layout, selection, onToggle, editable),
     [graph, layout, selection, onToggle, editable],
   );
+  // A local copy React Flow can move during a drag; reset whenever the derived nodes change
+  // (graph, layout, selection), so the store's positions win after the drop.
+  const [rfNodes, setRfNodes] = useState(nodes);
+  const [syncedFrom, setSyncedFrom] = useState(nodes);
+  if (syncedFrom !== nodes) {
+    setSyncedFrom(nodes);
+    setRfNodes(nodes);
+  }
   const parentOf = useMemo(() => new Map(graph.nodes.map((n) => [n.id, n.parentId])), [graph]);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const pointer = useRef<{ x: number; y: number } | undefined>(undefined);
@@ -190,8 +210,9 @@ export function FlowCanvas({
       <ReactFlowProvider>
         <ReactFlow
           className={editable ? "flow-canvas flow-canvas--editable" : "flow-canvas"}
-          nodes={nodes}
+          nodes={rfNodes}
           edges={edges}
+          onNodesChange={(changes) => setRfNodes((current) => applyGeometryChanges(changes, current))}
           nodeTypes={flowNodeTypes}
           nodesDraggable={editable}
           nodesConnectable={editable}

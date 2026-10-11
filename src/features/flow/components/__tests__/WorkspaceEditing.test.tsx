@@ -43,11 +43,27 @@ vi.mock("@monaco-editor/react", () => ({
   ),
 }));
 
+// The real canvas, wrapped so a test can drive the props the workspace passes it (React Flow
+// cannot complete a connection drag without a layout engine).
+const canvasProps = vi.hoisted(() => ({ current: null as { onConnect(req: unknown): void } | null }));
+vi.mock("../FlowCanvas", async (orig) => {
+  const actual = await orig<typeof import("../FlowCanvas")>();
+  return {
+    ...actual,
+    FlowCanvas: (props: Parameters<typeof actual.FlowCanvas>[0]) => {
+      canvasProps.current = props;
+      return <actual.FlowCanvas {...props} />;
+    },
+  };
+});
+
 import { useFlowViewStore } from "../../flow-store";
 import { useFlowEditorStore } from "../../editor-store";
 import { parseFlowText, stringifyFlow } from "../../lib/flow-yaml";
+import type { ConnectRequest } from "../FlowCanvas";
 import { FlowPanel } from "../FlowPanel";
 import { FlowWorkspace } from "../FlowWorkspace";
+import { FlowYamlPane } from "../FlowYamlPane";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -464,6 +480,61 @@ describe("flow workspace editing", () => {
     expect(String(callsTo("flow_save")[0].content)).toContain("name: Typed");
   });
 
+  it("connects a back edge on the failure port and bounds it from the edge form", async () => {
+    const cycle: FlowIssue = { code: "FLOW_CYCLE_WITHOUT_LIMIT", path: "edges", params: { nodes: ["done", "run"] } };
+    routes.flow_validate = (args) => {
+      const parsed = parseFlowText(String(args.content));
+      const flow = "value" in parsed ? (parsed.value as FlowDef) : null;
+      const back = flow?.edges?.find((e) => e.from === "done" && e.to === "run");
+      return validated(args, back && back.maxTraversals === undefined ? [cycle] : []);
+    };
+    await mountWorkspace();
+    expect(canvasProps.current).not.toBeNull();
+
+    const request: ConnectRequest = { sourcePath: "nodes[1]", targetPath: "nodes[0]", fromBackHandle: true, anchor: { x: 30, y: 40 } };
+    await act(async () => canvasProps.current!.onConnect(request));
+    const options = [...container.querySelectorAll<HTMLElement>('[role="option"]')];
+    expect(options.map((o) => o.textContent)).toEqual(["approve", "reject", "failure"]);
+    await click(options.find((o) => o.textContent === "failure")!);
+    expect(container.querySelector('[role="listbox"]')).toBeNull();
+
+    const store = useFlowEditorStore.getState();
+    expect(store.text).toContain("- { from: done, to: run, port: failure }");
+    // The new back edge is opened in the attribute panel.
+    expect(store.selection).toEqual({ kind: "edge", path: "edges[1]" });
+    await waitFor(() => expect(container.textContent).toContain("Cycle without a bounded back-edge"));
+
+    const maxTraversals = container.querySelector('.flow-workspace__side [aria-label="Max traversals"]')!;
+    await typeAndBlur(maxTraversals, "2");
+    expect(useFlowEditorStore.getState().text).toContain("- { from: done, to: run, port: failure, maxTraversals: 2 }");
+    await waitFor(() => expect(useFlowEditorStore.getState().errors).toEqual([]));
+    expect(container.textContent).not.toContain("Cycle without a bounded back-edge");
+  });
+
+  it("FlowYamlPane reports typing and shows a new value", async () => {
+    const onChange = vi.fn();
+    await act(async () => root.render(<FlowYamlPane value={"id: a\n"} onChange={onChange} />));
+    const pane = container.querySelector<HTMLTextAreaElement>(".test-yaml")!;
+    expect(pane.value).toBe("id: a\n");
+    await type(pane, "id: b\n");
+    expect(onChange).toHaveBeenCalledWith("id: b\n");
+    await act(async () => root.render(<FlowYamlPane value={"id: c\n"} onChange={onChange} />));
+    expect(container.querySelector<HTMLTextAreaElement>(".test-yaml")!.value).toBe("id: c\n");
+  });
+
+  it("shows a localized save error", async () => {
+    routes.flow_save = () => {
+      throw { code: "FLOW_FILE_PATH_INVALID", message: "bad" };
+    };
+    await mountWorkspace();
+    await pressCtrlS();
+    await waitFor(() =>
+      expect(container.querySelector(".flow-workspace__message--error")?.textContent).toBe(
+        "Could not save the flow: The flow file path is not valid.",
+      ),
+    );
+  });
+
   it("disables canvas and form edits while the YAML cannot be decoded", async () => {
     await mountWorkspace();
     await click(button("YAML"));
@@ -621,6 +692,37 @@ describe("flow workspace editing", () => {
       const saved = callsTo("flow_save")[0];
       expect(saved.path).toBe(".mdium/flows/lib/helper.flow.yaml");
       expect(String(saved.content)).toContain("name: Helper");
+    });
+
+    it("puts the previous file back and reports a failed create until the next selection", async () => {
+      await openDialog();
+      await waitFor(() => expect(useFlowEditorStore.getState().path).toBeNull());
+      // Open a file first so there is something to restore.
+      await act(async () => useFlowViewStore.getState().setSelected(FOLDER, PATH));
+      await waitFor(() => expect(useFlowEditorStore.getState().path).toBe(PATH));
+      await waitFor(() => expect(useFlowEditorStore.getState().def).not.toBeNull());
+      const loadsBefore = callsTo("flow_load").length;
+
+      routes.flow_save = () => {
+        throw { code: "FLOW_FILE_EXISTS", message: "exists" };
+      };
+      await click(container.querySelector<HTMLElement>(".flow-panel__new")!);
+      await waitFor(() => expect(dialog()).not.toBeNull());
+      await type(dialog()!.querySelector('[aria-label="File name"]')!, "fresh");
+      await click(button("Create", dialog()!));
+      await waitFor(() =>
+        expect(container.querySelector(".flow-panel__message--error")?.textContent).toBe(
+          "Could not save the flow: A flow with that file name already exists.",
+        ),
+      );
+      // The previously open file is loaded again; the selection did not move.
+      await waitFor(() => expect(useFlowEditorStore.getState().path).toBe(PATH));
+      await waitFor(() => expect(callsTo("flow_load").length).toBe(loadsBefore + 1));
+      expect(useFlowViewStore.getState().selected[FOLDER]).toBe(PATH);
+
+      // The banner goes away with the next list refresh.
+      await click(button("Refresh"));
+      await waitFor(() => expect(container.querySelector(".flow-panel__message--error")).toBeNull());
     });
 
     it("refuses flow ids and file names the engine rejects", async () => {

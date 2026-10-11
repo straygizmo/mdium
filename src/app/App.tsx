@@ -26,6 +26,7 @@ import { Toolbar } from "./components/Toolbar";
 import { FolderTabBar, TabBar } from "./components/TabBar";
 import { StatusBar } from "./components/StatusBar";
 import { MainArea } from "./components/MainArea";
+import { hasUnsavedFlowEdits, isFlowEditorShortcut } from "@/features/flow/lib/app-guards";
 import { startWorkflowEventBridge } from "@/features/workflow/workflow-store";
 import { startWorkflowFolderSync, startWorkflowOpenTaskListener } from "@/features/workflow/folder-sync";
 import { startSettingsSync } from "@/shared/lib/settings-sync";
@@ -385,7 +386,7 @@ export function App() {
 
     let unlisten: (() => void) | null = null;
     getCurrentWindow().onCloseRequested(async (e) => {
-      const hasDirty = useTabStore.getState().tabs.some((tab) => tab.dirty);
+      const hasDirty = useTabStore.getState().tabs.some((tab) => tab.dirty) || hasUnsavedFlowEdits();
       if (hasDirty) {
         const yes = await showConfirm(t("unsavedChanges"), { kind: "warning" });
         if (!yes) {
@@ -1083,6 +1084,8 @@ export function App() {
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // The flow editor handles its own undo / redo / save / find; they must not reach the Markdown tab.
+      if (isFlowEditorShortcut(e)) return;
       if (e.ctrlKey && e.key === "z") {
         if (activeTab?.isCodeFile) return;
         if ((e.target as HTMLElement).closest?.(".oc-chat__input")) return;

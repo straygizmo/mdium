@@ -936,6 +936,35 @@ mod tests {
         assert_eq!(via_call["sha256"], sha256_hex(v1.as_bytes()));
     }
 
+    #[test]
+    fn save_confinement_checks_the_folder_not_a_name_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = service(tmp.path());
+        let root = tmp.path().to_str().unwrap();
+        let v1 = "schemaVersion: 1\nid: s\nname: S\nnodes: []\n";
+        // A sibling folder that merely starts with "flows" is outside.
+        assert_eq!(
+            svc.save_flow(root, ".mdium/flowsX/a.flow.yaml", v1, None).unwrap_err().code,
+            FLOW_FILE_PATH_INVALID
+        );
+        assert!(!tmp.path().join(".mdium/flowsX").exists());
+        // Nested folders under lib/ are inside and are created on save.
+        let nested = svc.save_flow(root, ".mdium/flows/lib/sub/x.flow.yaml", v1, None).unwrap();
+        assert_eq!(nested.kind, FlowKind::Part);
+        assert_eq!(fs::read_to_string(tmp.path().join(".mdium/flows/lib/sub/x.flow.yaml")).unwrap(), v1);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn save_accepts_backslash_separators_on_windows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = service(tmp.path());
+        let root = tmp.path().to_str().unwrap();
+        let v1 = "schemaVersion: 1\nid: s\nname: S\nnodes: []\n";
+        svc.save_flow(root, ".mdium\\flows\\a.flow.yaml", v1, None).unwrap();
+        assert_eq!(fs::read_to_string(tmp.path().join(".mdium/flows/a.flow.yaml")).unwrap(), v1);
+    }
+
     fn service(dir: &Path) -> FlowService {
         service_with_env(dir, BTreeMap::new())
     }

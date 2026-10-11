@@ -12,7 +12,15 @@ vi.mock("@tauri-apps/api/core", () => ({
 import { docDigest } from "../../lib/__tests__/doc-digest";
 import { buildFlowGraph } from "../../lib/flow-graph";
 import type { FlowLayout } from "../../lib/flow-layout";
-import { FlowCanvas, handleEdgeClick, handleNodeDragStop, makeIsValidConnection, toConnectRequest, toReactFlow } from "../FlowCanvas";
+import {
+  FlowCanvas,
+  applyGeometryChanges,
+  handleEdgeClick,
+  handleNodeDragStop,
+  makeIsValidConnection,
+  toConnectRequest,
+  toReactFlow,
+} from "../FlowCanvas";
 import { PortPopover } from "../PortPopover";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -189,6 +197,30 @@ describe("editor views", () => {
     const node = { id: "nodes[0]", data: { node: { nodeId: "collect" } }, position: { x: 3, y: 4 } };
     handler({} as never, node as never, [] as never);
     expect(onMoveNode).toHaveBeenCalledWith("collect", { x: 3, y: 4 });
+  });
+
+  it("applies live drag positions locally and ignores selection changes", () => {
+    const graph = buildFlowGraph(docDigest(), new Set());
+    const { nodes } = toReactFlow(graph, gridLayout(graph.nodes.map((n) => n.id)), null, vi.fn(), true);
+    const moved = applyGeometryChanges([{ type: "position", id: nodes[0].id, position: { x: 50, y: 60 }, dragging: true }], nodes);
+    expect(moved[0].position).toEqual({ x: 50, y: 60 });
+    expect(moved[1]).toBe(nodes[1]);
+    // Selection stays controlled by the editor store.
+    expect(applyGeometryChanges([{ type: "select", id: nodes[0].id, selected: true }], nodes)).toBe(nodes);
+    expect(applyGeometryChanges([{ type: "remove", id: nodes[0].id }], nodes)).toBe(nodes);
+  });
+
+  it("resets the local node copy when the layout changes", async () => {
+    const graph = buildFlowGraph(docDigest(), new Set());
+    const ids = graph.nodes.map((n) => n.id);
+    const props = { graph, selection: null, editable: true, onSelect: vi.fn(), onToggle: vi.fn(), onMoveNode: vi.fn(), onConnect: vi.fn(), onDeleteSelection: vi.fn() };
+    await act(async () => root.render(<FlowCanvas {...props} layout={gridLayout(ids)} />));
+    const first = () => container.querySelector<HTMLElement>(`.react-flow__node[data-id="${ids[0]}"]`)!;
+    expect(first().style.transform.replace(/\s/g, "")).toContain("translate(0px,0px)");
+    const shifted = gridLayout(ids);
+    shifted[ids[0]] = { ...shifted[ids[0]], x: 40, y: 70 };
+    await act(async () => root.render(<FlowCanvas {...props} layout={shifted} />));
+    expect(first().style.transform.replace(/\s/g, "")).toContain("translate(40px,70px)");
   });
 
   it("PortPopover lists ports with success first and confirms with Enter", async () => {
