@@ -1,14 +1,48 @@
 // @vitest-environment happy-dom
-import { useState } from "react";
+import { useState, type ComponentType } from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import i18n from "@/shared/i18n";
-import type { FlowCondition, FlowDef, FlowNode } from "@/shared/types/flow";
+import type {
+  FlowActionNode,
+  FlowAgentNode,
+  FlowApprovalNode,
+  FlowBranchNode,
+  FlowCommandNode,
+  FlowCondition,
+  FlowDef,
+  FlowLoopNode,
+  FlowNode,
+  FlowPythonNode,
+  FlowSubflowNode,
+  FlowSummary,
+  Manifest,
+  ProjectLoadResult,
+} from "@/shared/types/flow";
+
+const invoke = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke,
+  convertFileSrc: vi.fn((p: string, proto: string) => `${proto}://${p}`),
+}));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(async () => () => {}),
+}));
+
 import { AttributePanel } from "../attrs/AttributePanel";
 import { ConditionEditor } from "../attrs/ConditionEditor";
 import { FlowAttrsForm } from "../attrs/FlowAttrsForm";
 import { NodeCommonForm } from "../attrs/NodeCommonForm";
+import { ActionForm } from "../attrs/kinds/ActionForm";
+import { AgentForm } from "../attrs/kinds/AgentForm";
+import { ApprovalForm } from "../attrs/kinds/ApprovalForm";
+import { BranchForm } from "../attrs/kinds/BranchForm";
+import { CommandForm } from "../attrs/kinds/CommandForm";
+import { LoopForm } from "../attrs/kinds/LoopForm";
+import { PythonForm } from "../attrs/kinds/PythonForm";
+import { SubflowForm } from "../attrs/kinds/SubflowForm";
+import type { KindFormProps } from "../attrs/kinds/types";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -66,6 +100,9 @@ function button(text: string, index = 0): HTMLButtonElement {
   return found[index];
 }
 
+const ROOT = "C:/proj";
+const ENTRY = ".mdium/flows/main.flow.yaml";
+
 const runNode: FlowNode = { id: "run", kind: "command", run: ["echo"], shell: false, protocol: "none", timeout: "30s" };
 
 describe("NodeCommonForm", () => {
@@ -109,6 +146,8 @@ describe("EdgeForm", () => {
           issues={[]}
           parts={[]}
           project={null}
+          projectRoot={ROOT}
+          currentFile={ENTRY}
           onEditNode={vi.fn()}
           onRenameNode={vi.fn()}
           onEditEdge={onEditEdge}
@@ -144,6 +183,8 @@ describe("EdgeForm", () => {
           issues={[]}
           parts={[]}
           project={null}
+          projectRoot={ROOT}
+          currentFile={ENTRY}
           onEditNode={vi.fn()}
           onRenameNode={vi.fn()}
           onEditEdge={onEditEdge}
@@ -219,5 +260,303 @@ describe("ConditionEditor", () => {
       ],
     });
     expect(all("Value")).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Kind forms
+// ---------------------------------------------------------------------------
+
+type Patch = Record<string, unknown>;
+
+/** Applies a patch the way `updateNode` does: `undefined` deletes the key. */
+function applyPatch<N extends FlowNode>(node: N, patch: Patch): N {
+  const merged: Record<string, unknown> = { ...node, ...patch };
+  for (const key of Object.keys(merged)) if (merged[key] === undefined) delete merged[key];
+  return merged as unknown as N;
+}
+
+const flowPart: FlowSummary = {
+  path: ".mdium/flows/lib/p.flow.yaml",
+  kind: "part",
+  id: "p",
+  name: "P",
+  params: { doc: { type: "path", required: true } },
+  outputs: ["summary"],
+  errorCount: 0,
+  warningCount: 0,
+};
+
+const pythonProject: ProjectLoadResult = {
+  exists: true,
+  path: ".mdium/project.yaml",
+  sha256: "abc",
+  project: {
+    schemaVersion: 1,
+    runtimes: { demo: { kind: "python", python: "python", module: "demo", cwd: "." } },
+  } as unknown as ProjectLoadResult["project"],
+  errors: [],
+  warnings: [],
+};
+
+const manifest: Manifest = {
+  module: "demo",
+  stages: [
+    {
+      name: "demo.add",
+      inputs: { a: { type: "number", required: true }, b: { type: "number", required: false, default: 1 } },
+      outputs: {},
+      artifacts: [],
+    },
+  ],
+};
+
+async function waitFor(check: () => void, timeoutMs = 3000) {
+  const start = Date.now();
+  for (;;) {
+    try {
+      check();
+      return;
+    } catch (err) {
+      if (Date.now() - start > timeoutMs) throw err;
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 10));
+      });
+    }
+  }
+}
+
+/** Mounts a kind form over a stateful node and records every patch it writes. */
+async function mountKind<N extends FlowNode>(
+  Form: ComponentType<KindFormProps<N>>,
+  initial: N,
+  extra: { parts?: FlowSummary[]; project?: ProjectLoadResult | null } = {},
+): Promise<Patch[]> {
+  const patches: Patch[] = [];
+  function Harness() {
+    const [node, setNode] = useState(initial);
+    return (
+      <Form
+        node={node}
+        path="nodes[0]"
+        parts={extra.parts ?? []}
+        project={extra.project ?? null}
+        currentFile={ENTRY}
+        onChange={(_path, patch) => {
+          patches.push(patch as Patch);
+          setNode((n) => applyPatch(n, patch as Patch));
+        }}
+      />
+    );
+  }
+  await act(async () => root.render(<Harness />));
+  return patches;
+}
+
+/** Clicks the checkbox / radio inside the label with this text. */
+async function toggle(text: string, index = 0) {
+  const labels = [...container.querySelectorAll("label")].filter((l) => l.textContent === text);
+  if (!labels[index]) throw new Error(`no label "${text}" (#${index})`);
+  await act(async () => (labels[index].querySelector("input") as HTMLInputElement).click());
+}
+
+describe("CommandForm", () => {
+  it("writes argv per line, converts to a shell string and back", async () => {
+    const node: FlowCommandNode = { id: "c", kind: "command", run: [""], shell: false, protocol: "mdium-v1" };
+    const patches = await mountKind(CommandForm, node);
+
+    await typeAndBlur(one("Command (one argument per line)"), "python\nx.py");
+    expect(patches.at(-1)).toEqual({ run: ["python", "x.py"] });
+
+    await toggle("Run through a shell");
+    expect(patches.at(-1)).toEqual({ shell: true, run: "python x.py" });
+    await typeAndBlur(one("Shell command"), "python x.py --fast");
+    expect(patches.at(-1)).toEqual({ run: "python x.py --fast" });
+
+    await toggle("Run through a shell");
+    expect(patches.at(-1)).toEqual({ shell: false, run: ["python x.py --fast"] });
+
+    await typeAndBlur(one("Success exit codes (comma-separated)"), "0, 2");
+    expect(patches.at(-1)).toEqual({ successCodes: [0, 2] });
+
+    await choose(one("Protocol"), "none");
+    expect(patches.at(-1)).toEqual({ protocol: "none" });
+
+    await toggle("Detach (do not wait for exit)");
+    expect(patches.at(-1)).toEqual({ detach: true });
+
+    await typeAndBlur(all("New key")[0], "FOO");
+    await act(async () => button("Add").click());
+    expect(patches.at(-1)).toEqual({ env: { FOO: "" } });
+  });
+});
+
+describe("ApprovalForm", () => {
+  it("serializes options: plain strings unless a comment is required", async () => {
+    const node: FlowApprovalNode = { id: "gate", kind: "approval" };
+    const patches = await mountKind(ApprovalForm, node);
+
+    await typeAndBlur(all("Option name").at(-1)!, "ok");
+    await act(async () => button("Add", 1).click());
+    expect(patches.at(-1)).toEqual({ options: ["ok"] });
+
+    await typeAndBlur(all("Option name").at(-1)!, "fix");
+    await act(async () => button("Add", 1).click());
+    expect(patches.at(-1)).toEqual({ options: ["ok", "fix"] });
+
+    await toggle("Comment required", 1);
+    expect(patches.at(-1)).toEqual({ options: ["ok", { name: "fix", commentRequired: true }] });
+
+    await toggle("Comment required", 1);
+    expect(patches.at(-1)).toEqual({ options: ["ok", "fix"] });
+    await toggle("Comment required", 1);
+
+    await typeAndBlur(one("Message"), "Please review");
+    expect(patches.at(-1)).toEqual({ message: "Please review" });
+  });
+});
+
+describe("BranchForm", () => {
+  it("adds a case with a condition and a port, and sets the default port", async () => {
+    const node: FlowBranchNode = { id: "b", kind: "branch", cases: [] };
+    const patches = await mountKind(BranchForm, node);
+
+    await act(async () => button("Add case").click());
+    await typeAndBlur(one("Reference"), "params.p");
+    await choose(one("Operator"), "exists");
+    await typeAndBlur(one("Case exit port"), "yes");
+    expect(patches.at(-1)).toEqual({ cases: [{ when: { ref: "params.p", op: "exists" }, port: "yes" }] });
+
+    await typeAndBlur(one("Default exit port"), "no");
+    expect(patches.at(-1)).toEqual({ default: "no" });
+  });
+});
+
+describe("LoopForm", () => {
+  const loop: FlowLoopNode = { id: "l", kind: "loop", mode: "foreach", items: "${{ params.items }}", maxIterations: 10, body: "" };
+
+  it("chooses a part body, fills params from its signature and edits the other fields", async () => {
+    const patches = await mountKind(LoopForm, loop, { parts: [flowPart] });
+
+    await choose(one("Body"), "lib/p.flow.yaml");
+    expect(patches.at(-1)).toEqual({ body: "lib/p.flow.yaml", params: { doc: "" } });
+    expect(container.textContent).toContain("doc");
+
+    await typeAndBlur(one("doc *"), "a.md");
+    expect(patches.at(-1)).toEqual({ params: { doc: "a.md" } });
+
+    await typeAndBlur(one("Items"), '["a","b"]');
+    expect(patches.at(-1)).toEqual({ items: ["a", "b"] });
+    await typeAndBlur(one("Max iterations"), "3");
+    expect(patches.at(-1)).toEqual({ maxIterations: 3 });
+    await typeAndBlur(one("Parallelism"), "2");
+    expect(patches.at(-1)).toEqual({ parallelism: 2 });
+    await typeAndBlur(one("Item variable"), "doc");
+    expect(patches.at(-1)).toEqual({ as: "doc" });
+    await choose(one("On item failure"), "continue");
+    expect(patches.at(-1)).toEqual({ onItemFailure: "continue" });
+
+    expect(all("Stop when")).toHaveLength(0);
+    await choose(one("Mode"), "while");
+    expect(patches.at(-1)).toEqual({ mode: "while" });
+    await toggle("Enable");
+    expect(patches.at(-1)).toEqual({ until: { ref: "", op: "==" } });
+  });
+
+  it("shows only a hint for an inline body", async () => {
+    const inline: FlowLoopNode = { ...loop, body: { nodes: [{ id: "x", kind: "approval" }] } };
+    await mountKind(LoopForm, inline, { parts: [flowPart] });
+    expect(container.textContent).toContain(i18n.t("attrs.inlineBodyHint", { ns: "flow" }));
+    expect(all("Body")).toHaveLength(0);
+  });
+});
+
+describe("SubflowForm", () => {
+  it("chooses a part and writes its params", async () => {
+    const node: FlowSubflowNode = { id: "s", kind: "subflow", flow: "" };
+    const patches = await mountKind(SubflowForm, node, { parts: [flowPart] });
+
+    await choose(one("Sub-flow"), "lib/p.flow.yaml");
+    expect(patches.at(-1)).toEqual({ flow: "lib/p.flow.yaml", params: { doc: "" } });
+
+    await typeAndBlur(one("doc *"), "x.md");
+    expect(patches.at(-1)).toEqual({ params: { doc: "x.md" } });
+  });
+});
+
+describe("AgentForm", () => {
+  it("switches the prompt to a file reference and clears the inline prompt", async () => {
+    const node: FlowAgentNode = { id: "a", kind: "agent", provider: "claude", permission: "read-only", outputContract: "outcome", prompt: "hi" };
+    const patches = await mountKind(AgentForm, node);
+
+    await toggle("Prompt file");
+    await typeAndBlur(one("Prompt file path"), "prompts/a.md");
+    expect(patches.at(-1)).toStrictEqual({ promptRef: "prompts/a.md", prompt: undefined });
+
+    await choose(one("Provider"), "codex");
+    expect(patches.at(-1)).toEqual({ provider: "codex" });
+    await choose(one("Permission"), "full-access");
+    expect(patches.at(-1)).toEqual({ permission: "full-access" });
+    await choose(one("Output contract"), "free");
+    expect(patches.at(-1)).toEqual({ outputContract: "free" });
+    await typeAndBlur(one("Model"), "opus");
+    expect(patches.at(-1)).toEqual({ model: "opus" });
+  });
+});
+
+function PythonWithRoot(props: KindFormProps<FlowPythonNode>) {
+  return <PythonForm {...props} projectRoot={ROOT} />;
+}
+
+describe("PythonForm", () => {
+  it("lists the stages of the runtime and generates the with rows from the input schema", async () => {
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "flow_runtime_describe") return manifest;
+      throw { code: "FLOW_COMMAND_FAILED", message: `unexpected ${command}` };
+    });
+    const node: FlowPythonNode = { id: "p", kind: "python", runtime: "demo", entry: "" };
+    const patches = await mountKind(PythonWithRoot, node, { project: pythonProject });
+
+    await waitFor(() => {
+      const options = [...one("Stage").querySelectorAll("option")].map((o) => o.value);
+      expect(options).toContain("demo.add");
+    });
+    expect(invoke).toHaveBeenCalledWith("flow_runtime_describe", { projectRoot: ROOT, runtime: "demo", sha256: "abc" });
+
+    await choose(one("Stage"), "demo.add");
+    expect(patches.at(-1)).toEqual({ entry: "demo.add", with: { a: "", b: 1 } });
+
+    // Required marker on `a`, the default value on `b`.
+    expect(one("a *")).toBeTruthy();
+    expect((one("b") as HTMLInputElement).value).toBe("1");
+
+    await typeAndBlur(one("a *"), "5");
+    expect(patches.at(-1)).toEqual({ with: { a: 5, b: 1 } });
+  });
+
+  it("shows keys outside the schema as removable rows", async () => {
+    invoke.mockImplementation(async () => manifest);
+    const node: FlowPythonNode = { id: "p", kind: "python", runtime: "demo", entry: "demo.add", with: { a: 1, b: 2, zz: "old" } };
+    const patches = await mountKind(PythonWithRoot, node, { project: pythonProject });
+    await waitFor(() => expect(all("a *")).toHaveLength(1));
+
+    expect(container.textContent).toContain("zz");
+    const removeButtons = [...container.querySelectorAll("button")].filter((b) => b.textContent === "Remove");
+    expect(removeButtons).toHaveLength(1);
+    await act(async () => removeButtons[0].click());
+    expect(patches.at(-1)).toEqual({ with: { a: 1, b: 2 } });
+  });
+});
+describe("ActionForm", () => {
+  it("chooses a built-in action and edits with rows", async () => {
+    const node: FlowActionNode = { id: "act", kind: "action", uses: "mdium/flow-run-latest" };
+    const patches = await mountKind(ActionForm, node);
+
+    await choose(one("Action"), "mdium/metrics-compare");
+    expect(patches.at(-1)).toEqual({ uses: "mdium/metrics-compare" });
+
+    await typeAndBlur(all("New key")[0], "base");
+    await act(async () => button("Add").click());
+    expect(patches.at(-1)).toEqual({ with: { base: "" } });
   });
 });

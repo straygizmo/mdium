@@ -4,6 +4,7 @@ import type { FlowDef, FlowNode, FlowNodeKind, FlowSummary, Manifest, ProjectLoa
 import { flowApi, isFlowCommandError } from "../lib/flow-api";
 import { nextNodeId } from "../lib/flow-ports";
 import { defaultsFor } from "../lib/editor-state";
+import { paramsFor, partLabel, relativeRef } from "../lib/part-ref";
 import { describeError } from "../lib/run-format";
 import { signatureText } from "./FlowPanel";
 import "./Flow.css";
@@ -25,31 +26,6 @@ interface NodePaletteProps {
   project: ProjectLoadResult | null;
   onAdd: (node: FlowNode) => void;
   onClose: () => void;
-}
-
-function dirOf(path: string): string[] {
-  return path.replace(/\\/g, "/").split("/").slice(0, -1);
-}
-
-/** Path of `target` relative to the directory of `from` (both project-relative, forward slashes). */
-export function relativeRef(from: string, target: string): string {
-  const base = dirOf(from);
-  const dest = target.replace(/\\/g, "/").split("/");
-  const file = dest.pop() ?? "";
-  let i = 0;
-  while (i < base.length && i < dest.length && base[i] === dest[i]) i++;
-  return [...base.slice(i).map(() => ".."), ...dest.slice(i), file].join("/");
-}
-
-function partLabel(part: FlowSummary): string {
-  return part.path.replace(/\\/g, "/").split("/").pop()?.replace(/\.flow\.ya?ml$/, "") ?? part.path;
-}
-
-/** One key per callee param: its default when declared, otherwise an empty string. */
-function paramsFor(part: FlowSummary): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [name, def] of Object.entries(part.params)) out[name] = def.default !== undefined ? def.default : "";
-  return out;
 }
 
 /** Popover listing the node kinds, python stages and (for loop / sub-flow) the callable parts. */
