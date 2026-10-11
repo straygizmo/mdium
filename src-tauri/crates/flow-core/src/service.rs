@@ -88,6 +88,7 @@ pub struct FlowLoadResult {
     pub format: FlowFormat,
     pub kind: FlowKind,
     /// The text that was checked (the file for `load`, the given text otherwise).
+    /// Empty when the file could not be read (the report then carries the error).
     pub content: String,
     /// Hex sha256 of `content`; `save` requires it to overwrite.
     pub sha256: String,
@@ -361,6 +362,13 @@ impl FlowService {
     ) -> Result<FlowLoadResult, FlowCommandError> {
         let root = project_root(project_root_arg)?;
         let file = flow_file(&root, path, false)?;
+        // Saves are confined to the flows folder (load/validate are not).
+        if !load::relative_display(&root, &file).starts_with(".mdium/flows/") {
+            return Err(FlowCommandError::new(
+                FLOW_FILE_PATH_INVALID,
+                format!("{path} (outside .mdium/flows)"),
+            ));
+        }
         if content.len() as u64 > load::MAX_FLOW_FILE_BYTES {
             return Err(FlowCommandError::new(FLOW_FILE_TOO_LARGE, path));
         }
@@ -376,10 +384,7 @@ impl FlowService {
             }
             (Some(_), Ok(_)) => {}
         }
-        if let Some(parent) = file.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| FlowCommandError::new(FLOW_COMMAND_FAILED, e))?;
-        }
+        // `atomic_write` creates missing parent directories.
         crate::fsutil::atomic_write(&file, content.as_bytes())
             .map_err(|e| FlowCommandError::new(FLOW_COMMAND_FAILED, e))?;
         self.load_flow(project_root_arg, path)
@@ -918,6 +923,10 @@ mod tests {
         assert_eq!(svc.save_flow(root, ".mdium/flows/notes.txt", v1, None).unwrap_err().code, FLOW_FILE_PATH_INVALID);
         let big = "#".repeat(crate::load::MAX_FLOW_FILE_BYTES as usize + 1);
         assert_eq!(svc.save_flow(root, ".mdium/flows/big.flow.yaml", &big, None).unwrap_err().code, "FLOW_FILE_TOO_LARGE");
+        // Saves stay inside .mdium/flows/.
+        assert_eq!(svc.save_flow(root, "src/evil.flow.yaml", v1, None).unwrap_err().code, FLOW_FILE_PATH_INVALID);
+        assert_eq!(svc.save_flow(root, ".git/x.flow.json", v1, None).unwrap_err().code, FLOW_FILE_PATH_INVALID);
+        assert!(!tmp.path().join("src").exists() && !tmp.path().join(".git").exists());
         // Invalid content is still saved; the report carries the errors.
         let bad = "schemaVersion: 1\nid: s\nname: S\nnodes:\n  - { id: x, kind: nope }\n";
         let saved = svc.save_flow(root, ".mdium/flows/bad.flow.yaml", bad, None).unwrap();
