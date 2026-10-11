@@ -334,7 +334,7 @@ pub async fn flow_run_delete(
     with_service(state, move |s| s.run_delete(&project_root, &run_id)).await
 }
 
-/// Tail of a node attempt's `stdout` / `stderr` log (at most 256 KiB).
+/// Absolute path of a recorded artifact; the file joins the asset-protocol scope (spec 5.2).
 #[tauri::command]
 pub async fn flow_artifact_path(
     app: tauri::AppHandle,
@@ -361,6 +361,7 @@ pub async fn flow_artifact_path(
     Ok(location)
 }
 
+/// Tail of a node attempt's `stdout` / `stderr` log (at most 256 KiB).
 #[tauri::command]
 pub async fn flow_run_log(
     state: tauri::State<'_, FlowServiceState>,

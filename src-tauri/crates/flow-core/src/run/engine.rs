@@ -1136,7 +1136,12 @@ impl FlowEngine {
                 )
             })?;
         let path = artifacts::resolve_artifact_path(store.project_root(), &dir, &artifact.path)
-            .map_err(|_| EngineError::new(FLOW_ARTIFACT_NOT_FOUND, "outside the project"))?;
+            .map_err(|reason| {
+                EngineError::new(
+                    FLOW_ARTIFACT_NOT_FOUND,
+                    format!("not inside the project ({reason})"),
+                )
+            })?;
         let bytes = std::fs::metadata(&path)
             .ok()
             .filter(|m| m.is_file())

@@ -1460,6 +1460,8 @@ mod tests {
 
         let loc = svc.run_artifact_path(root, &run_id, "a", 1, 0).unwrap();
         assert!(Path::new(&loc.path).is_absolute());
+        #[cfg(windows)]
+        assert!(!loc.path.starts_with(r"\\?\"));
         assert!(loc.path.ends_with("a.txt"));
         assert_eq!(loc.media_type, "text/plain");
         assert_eq!(loc.bytes, Some(1));

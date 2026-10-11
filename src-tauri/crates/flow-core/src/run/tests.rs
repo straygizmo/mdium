@@ -3090,6 +3090,8 @@ fn artifacts_are_recorded_with_media_types_and_written_to_artifacts_json() {
     assert_eq!(a.artifacts[0].media_type, "image/png");
     assert_eq!(a.artifacts[0].bytes, Some(3));
     assert!(Path::new(&a.artifacts[0].path).is_absolute());
+    #[cfg(windows)]
+    assert!(!a.artifacts[0].path.starts_with(r"\\?\"));
     assert_eq!(a.artifacts[1].media_type, "text/markdown");
     assert_eq!(a.artifacts[1].bytes, None, "missing file keeps no size");
     assert_eq!(a.artifacts[2].media_type, "application/x-custom");

@@ -52,7 +52,7 @@ pub fn resolve_artifact_path(
     let root = project_root.canonicalize().map_err(|_| "outside-root")?;
     // Compare without the Windows `\\?\` verbatim prefix on either side.
     if strip_verbatim(&resolved).starts_with(strip_verbatim(&root)) {
-        Ok(resolved)
+        Ok(strip_verbatim(&resolved))
     } else {
         Err("outside-root")
     }
@@ -145,11 +145,13 @@ mod tests {
         std::fs::create_dir_all(&node_dir).unwrap();
         let ok = resolve_artifact_path(&root, &node_dir, "out/a.png").unwrap();
         assert!(ok.ends_with("out/a.png") || ok.ends_with("out\\a.png"));
-        assert!(ok.starts_with(root.canonicalize().unwrap()));
+        assert!(ok.starts_with(strip_verbatim(&root.canonicalize().unwrap())));
+        #[cfg(windows)]
+        assert!(!ok.to_string_lossy().starts_with(r"\\?\"));
         let abs = root.join("x.txt");
         assert_eq!(
             resolve_artifact_path(&root, &node_dir, abs.to_str().unwrap()).unwrap(),
-            root.canonicalize().unwrap().join("x.txt")
+            strip_verbatim(&root.canonicalize().unwrap()).join("x.txt")
         );
         assert_eq!(
             resolve_artifact_path(&root, &node_dir, "../../../../../../../etc/passwd")
