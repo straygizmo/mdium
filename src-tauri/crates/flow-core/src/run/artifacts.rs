@@ -205,7 +205,7 @@ mod tests {
             bytes: Some(3),
             recorded_at: "2026-10-11T00:00:00.000Z".into(),
         };
-        write_artifacts_json(tmp.path(), &[a.clone()]).unwrap();
+        write_artifacts_json(tmp.path(), std::slice::from_ref(&a)).unwrap();
         assert_eq!(read_artifacts_json(tmp.path()), vec![a]);
         std::fs::write(tmp.path().join("artifacts.json"), "{not json").unwrap();
         assert!(read_artifacts_json(tmp.path()).is_empty());

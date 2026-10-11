@@ -972,7 +972,7 @@ impl FlowEngine {
                 format!("unknown option {choice:?}"),
             ));
         };
-        if option.comment_required && comment.as_deref().map_or(true, |c| c.trim().is_empty()) {
+        if option.comment_required && comment.as_deref().is_none_or(|c| c.trim().is_empty()) {
             return Err(EngineError::new(
                 FLOW_APPROVAL_COMMENT_REQUIRED,
                 "a comment is required for this option",

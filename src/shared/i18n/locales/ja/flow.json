@@ -241,7 +241,8 @@
     "FLOW_PASS_RESET": "新しい周回に置き換えられました。",
     "FLOW_RUN_STUCK": "続行できるノードがありません。",
     "FLOW_OUTPUT_UNRESOLVED": "出力「{{output}}」を求められませんでした。",
-    "FLOW_ARTIFACT_OUTSIDE_PROJECT": "成果物「{{path}}」はプロジェクトの外にあるため無視しました。"
+    "FLOW_ARTIFACT_OUTSIDE_PROJECT": "成果物「{{path}}」はプロジェクトの外にあるため無視しました。",
+    "FLOW_ARTIFACT_WRITE_FAILED": "成果物の一覧を書き込めませんでした: {{message}}"
   },
   "runError": {
     "FLOW_PROJECT_INVALID": "プロジェクトフォルダまたは .mdium/project.yaml を使用できません。",

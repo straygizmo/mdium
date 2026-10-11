@@ -241,7 +241,8 @@
     "FLOW_PASS_RESET": "Replaced by a new pass.",
     "FLOW_RUN_STUCK": "No node could continue.",
     "FLOW_OUTPUT_UNRESOLVED": "Output \"{{output}}\" could not be computed.",
-    "FLOW_ARTIFACT_OUTSIDE_PROJECT": "Artifact \"{{path}}\" is outside the project and was ignored."
+    "FLOW_ARTIFACT_OUTSIDE_PROJECT": "Artifact \"{{path}}\" is outside the project and was ignored.",
+    "FLOW_ARTIFACT_WRITE_FAILED": "The artifact list could not be written: {{message}}"
   },
   "runError": {
     "FLOW_PROJECT_INVALID": "The project folder or its .mdium/project.yaml cannot be used.",

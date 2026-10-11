@@ -63,6 +63,8 @@ pub const FLOW_CONDITION_TYPE: &str = "FLOW_CONDITION_TYPE";
 pub const FLOW_APPROVAL_REJECTED: &str = "FLOW_APPROVAL_REJECTED";
 pub const FLOW_PROTOCOL_WARNING: &str = "FLOW_PROTOCOL_WARNING";
 pub const FLOW_ARTIFACT_OUTSIDE_PROJECT: &str = "FLOW_ARTIFACT_OUTSIDE_PROJECT";
+/// The attempt's `artifacts.json` could not be written (the events still hold the artifact).
+pub const FLOW_ARTIFACT_WRITE_FAILED: &str = "FLOW_ARTIFACT_WRITE_FAILED";
 pub const FLOW_RESUMED: &str = "FLOW_RESUMED";
 /// A back-edge was traversed `maxTraversals` times already.
 pub const FLOW_TRAVERSAL_LIMIT: &str = "FLOW_TRAVERSAL_LIMIT";
@@ -2883,11 +2885,8 @@ impl Driver {
         );
         let list = self.node(key).artifacts.clone();
         if let Err(err) = artifacts::write_artifacts_json(node_dir, &list) {
-            self.protocol_warning(
-                Some(key),
-                "artifacts-json",
-                vec![("message", Value::String(err.to_string()))],
-            );
+            let warning = Reason::new(FLOW_ARTIFACT_WRITE_FAILED).with("message", err.to_string());
+            self.emit(Some(key), EventBody::Warning(warning));
         }
     }
 
