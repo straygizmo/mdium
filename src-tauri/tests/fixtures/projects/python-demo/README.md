@@ -7,11 +7,12 @@ A sample project with two python stages that run through `mdium-worker`.
 From this directory, create the virtual environment and install the worker package:
 
 ```
-uv venv .venv
+uv venv --clear .venv
 uv pip install --python .venv -e ../../../../../python/mdium-worker
 ```
 
-(The `setup` section of `.mdium/project.yaml` runs the same two commands.)
+(The `setup` section of `.mdium/project.yaml` runs the same two commands;
+`--clear` makes Setup re-runnable after an interrupted or broken install.)
 
 When MDium runs under `tauri dev`, writes under `src-tauri/` would restart the
 app; `src-tauri/.taurignore` excludes `tests/` so Setup and runs of this fixture

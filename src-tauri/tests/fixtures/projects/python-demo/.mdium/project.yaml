@@ -8,7 +8,7 @@ runtimes:
     python: [.venv/Scripts/python.exe, .venv/bin/python]
     module: demo_flow
 setup:
-  - { run: [uv, venv, .venv] }
+  - { run: [uv, venv, --clear, .venv] }
   - { run: [uv, pip, install, --python, .venv, -e, ../../../../../python/mdium-worker] }
 flows:
   main: flows/demo.flow.yaml
