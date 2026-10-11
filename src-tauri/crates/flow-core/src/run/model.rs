@@ -222,9 +222,17 @@ pub enum EventBody {
     },
     #[serde(rename_all = "camelCase")]
     NodeArtifact {
+        #[serde(default)]
+        index: u32,
         path: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         label: Option<String>,
+        #[serde(default = "default_media_type")]
+        media_type: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bytes: Option<u64>,
+        #[serde(default)]
+        recorded_at: String,
     },
     #[serde(rename_all = "camelCase")]
     NodeProgress {
@@ -340,9 +348,22 @@ pub struct ProcessInfo {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Artifact {
+    /// Position within the attempt (0-based).
+    #[serde(default)]
+    pub index: u32,
     pub path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    #[serde(default = "default_media_type")]
+    pub media_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
+    #[serde(default)]
+    pub recorded_at: String,
+}
+
+fn default_media_type() -> String {
+    crate::run::artifacts::DEFAULT_MEDIA_TYPE.to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -571,6 +592,7 @@ pub fn apply(state: &mut RunState, event: &FlowEvent) {
                         n.finished_at = None;
                         n.process = None;
                         n.progress = None;
+                        n.artifacts.clear();
                     }
                     NodeStatus::Ready | NodeStatus::Pending => {
                         n.finished_at = None;
@@ -594,11 +616,22 @@ pub fn apply(state: &mut RunState, event: &FlowEvent) {
                 n.outputs.insert(key.clone(), value.clone());
             }
         }
-        EventBody::NodeArtifact { path, label } => {
+        EventBody::NodeArtifact {
+            index,
+            path,
+            label,
+            media_type,
+            bytes,
+            recorded_at,
+        } => {
             if let Some(n) = node(state, event) {
                 n.artifacts.push(Artifact {
+                    index: *index,
                     path: path.clone(),
                     label: label.clone(),
+                    media_type: media_type.clone(),
+                    bytes: *bytes,
+                    recorded_at: recorded_at.clone(),
                 });
             }
         }
@@ -833,8 +866,12 @@ mod tests {
                 value: json!([1, 2]),
             },
             EventBody::NodeArtifact {
+                index: 0,
                 path: "p".into(),
                 label: Some("l".into()),
+                media_type: "text/plain".into(),
+                bytes: Some(1),
+                recorded_at: "t".into(),
             },
             EventBody::NodeProgress {
                 text: "t".into(),
@@ -1112,5 +1149,52 @@ mod tests {
             ),
         );
         assert!(state.nodes.contains_key("zzz"));
+    }
+
+    #[test]
+    fn old_artifact_records_deserialize() {
+        let a: Artifact = serde_json::from_str(r#"{"path":"out/a.md","label":"doc"}"#).unwrap();
+        assert_eq!(a.index, 0);
+        assert_eq!(a.media_type, "application/octet-stream");
+        assert_eq!(a.bytes, None);
+        assert_eq!(a.recorded_at, "");
+        let json = serde_json::to_value(&a).unwrap();
+        assert_eq!(json["mediaType"], "application/octet-stream");
+        assert!(json.get("bytes").is_none());
+    }
+
+    #[test]
+    fn running_clears_the_previous_attempts_artifacts() {
+        let mut state = RunState::new(["a"]);
+        let artifact = |seq| FlowEvent {
+            seq,
+            ts: "t".into(),
+            node_key: Some("a".into()),
+            body: EventBody::NodeArtifact {
+                index: 0,
+                path: "p".into(),
+                label: None,
+                media_type: "text/plain".into(),
+                bytes: None,
+                recorded_at: "t".into(),
+            },
+        };
+        let status = |seq, to| FlowEvent {
+            seq,
+            ts: "t".into(),
+            node_key: Some("a".into()),
+            body: EventBody::NodeStatus {
+                from: NodeStatus::Ready,
+                to,
+                attempt: 1,
+                reason: None,
+                port: None,
+            },
+        };
+        apply(&mut state, &status(1, NodeStatus::Running));
+        apply(&mut state, &artifact(2));
+        assert_eq!(state.nodes["a"].artifacts.len(), 1);
+        apply(&mut state, &status(3, NodeStatus::Running));
+        assert!(state.nodes["a"].artifacts.is_empty());
     }
 }

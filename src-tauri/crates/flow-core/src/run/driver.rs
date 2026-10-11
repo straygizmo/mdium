@@ -2075,8 +2075,18 @@ impl Driver {
             ProtocolItem::Output { key: name, value } => {
                 self.emit(Some(key), EventBody::NodeOutput { key: name, value });
             }
-            ProtocolItem::Artifact { path, label } => {
-                self.emit(Some(key), EventBody::NodeArtifact { path, label });
+            ProtocolItem::Artifact { path, label, .. } => {
+                self.emit(
+                    Some(key),
+                    EventBody::NodeArtifact {
+                        index: 0,
+                        path,
+                        label,
+                        media_type: "application/octet-stream".into(),
+                        bytes: None,
+                        recorded_at: crate::fsutil::now(),
+                    },
+                );
             }
             ProtocolItem::Outcome(o) => st.outcome = Some(o),
             ProtocolItem::Warning { reason, line } => {

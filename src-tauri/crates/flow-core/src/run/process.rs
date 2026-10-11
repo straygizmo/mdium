@@ -194,6 +194,7 @@ pub enum ProtocolItem {
     Artifact {
         path: String,
         label: Option<String>,
+        media_type: Option<String>,
     },
     Outcome(ProtocolOutcome),
     /// A line that was dropped (`reason`: too-long / too-many / invalid / ...).
@@ -247,6 +248,7 @@ pub fn parse_line(line: &str) -> Result<ProtocolItem, &'static str> {
         Some("artifact") => Ok(ProtocolItem::Artifact {
             path: s("path").ok_or("missing-path")?,
             label: s("label"),
+            media_type: s("mediaType"),
         }),
         Some("outcome") => Ok(ProtocolItem::Outcome(
             match obj.get("status").and_then(Value::as_str) {
@@ -459,7 +461,8 @@ mod tests {
             parse_line(r#"{"v":1,"type":"artifact","path":"out/a.md"}"#),
             Ok(ProtocolItem::Artifact {
                 path: "out/a.md".into(),
-                label: None
+                label: None,
+                media_type: None
             })
         );
         assert_eq!(
@@ -539,7 +542,8 @@ mod tests {
             reader.poll(true),
             vec![ProtocolItem::Artifact {
                 path: "p".into(),
-                label: None
+                label: None,
+                media_type: None
             }]
         );
     }
@@ -611,5 +615,29 @@ mod tests {
         assert_eq!(tail_file(&path, 1000).unwrap(), "line1\nline2\nline3\n");
         assert_eq!(tail_file(&path, 8).unwrap(), "line3\n");
         assert_eq!(tail_file(&tmp.path().join("none"), 10).unwrap(), "");
+    }
+
+    #[test]
+    fn artifact_lines_keep_an_optional_media_type() {
+        let item =
+            parse_line(r#"{"v":1,"type":"artifact","path":"a.bin","mediaType":"image/png"}"#)
+                .unwrap();
+        assert_eq!(
+            item,
+            ProtocolItem::Artifact {
+                path: "a.bin".into(),
+                label: None,
+                media_type: Some("image/png".into())
+            }
+        );
+        let item = parse_line(r#"{"v":1,"type":"artifact","path":"a.bin","label":"x"}"#).unwrap();
+        assert_eq!(
+            item,
+            ProtocolItem::Artifact {
+                path: "a.bin".into(),
+                label: Some("x".into()),
+                media_type: None
+            }
+        );
     }
 }

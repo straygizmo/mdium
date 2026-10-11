@@ -2,6 +2,7 @@
 //! command processes and the `mdium-v1` protocol, and the engine that
 //! owns the drivers. Agent and action nodes and concurrency limits come later.
 
+pub mod artifacts;
 pub mod driver;
 pub mod engine;
 pub mod model;
