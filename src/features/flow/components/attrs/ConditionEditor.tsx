@@ -14,7 +14,8 @@ const NUMERIC = /^-?\d+(\.\d+)?$/;
 export function parseConditionValue(text: string): ConditionValue {
   const trimmed = text.trim();
   if (trimmed === "") return undefined;
-  if (NUMERIC.test(trimmed)) return Number(trimmed);
+  // Only text that is the canonical spelling of its number ("7", not "007" or "1.50") becomes a number.
+  if (NUMERIC.test(trimmed) && String(Number(trimmed)) === trimmed) return Number(trimmed);
   if (trimmed === "true") return true;
   if (trimmed === "false") return false;
   if (trimmed.startsWith("[")) {

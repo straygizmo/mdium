@@ -79,8 +79,9 @@ export function stringifyFlow(def: FlowDef): string {
   const doc = new Document(canonicalTop(def));
   visit(doc, {
     Scalar(_, scalar) {
-      // Always double-quote strings carrying a `${{ ... }}` template.
-      if (typeof scalar.value === "string" && scalar.value.includes("${{")) {
+      // Double-quote single-line strings carrying a `${{ ... }}` template; multi-line ones
+      // (agent prompts) keep their block scalar so they stay readable in diffs.
+      if (typeof scalar.value === "string" && scalar.value.includes("${{") && !scalar.value.includes("\n")) {
         scalar.type = "QUOTE_DOUBLE";
       }
     },

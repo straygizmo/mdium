@@ -31,14 +31,14 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import { AttributePanel } from "../attrs/AttributePanel";
-import { ConditionEditor } from "../attrs/ConditionEditor";
+import { ConditionEditor, parseConditionValue } from "../attrs/ConditionEditor";
 import { FlowAttrsForm } from "../attrs/FlowAttrsForm";
 import { NodeCommonForm } from "../attrs/NodeCommonForm";
 import { ActionForm } from "../attrs/kinds/ActionForm";
 import { AgentForm } from "../attrs/kinds/AgentForm";
 import { ApprovalForm } from "../attrs/kinds/ApprovalForm";
 import { BranchForm } from "../attrs/kinds/BranchForm";
-import { CommandForm } from "../attrs/kinds/CommandForm";
+import { CommandForm, joinArgv } from "../attrs/kinds/CommandForm";
 import { LoopForm } from "../attrs/kinds/LoopForm";
 import { PythonForm } from "../attrs/kinds/PythonForm";
 import { SubflowForm } from "../attrs/kinds/SubflowForm";
@@ -109,7 +109,9 @@ describe("NodeCommonForm", () => {
   it("writes name on blur, clears timeout to undefined, and validates the id", async () => {
     const onChange = vi.fn();
     const onRename = vi.fn();
-    await act(async () => root.render(<NodeCommonForm node={runNode} path="nodes[0]" issues={[]} onChange={onChange} onRename={onRename} />));
+    await act(async () =>
+      root.render(<NodeCommonForm node={runNode} path="nodes[0]" issues={[]} usedIds={new Set(["run", "done", "inner"])} onChange={onChange} onRename={onRename} />),
+    );
 
     await typeAndBlur(one("Name"), "Run");
     expect(onChange).toHaveBeenCalledWith("nodes[0]", { name: "Run" });
@@ -123,8 +125,31 @@ describe("NodeCommonForm", () => {
     expect(container.textContent).toContain(i18n.t("attrs.invalidId", { ns: "flow" }));
     expect(onRename).not.toHaveBeenCalled();
 
+    // An id used elsewhere in the flow (an inline body included) is vetoed.
+    await typeAndBlur(one("ID"), "inner");
+    expect(container.textContent).toContain(i18n.t("attrs.idTaken", { ns: "flow" }));
+    expect(onRename).not.toHaveBeenCalled();
+
     await typeAndBlur(one("ID"), "run_1");
     expect(onRename).toHaveBeenCalledWith("nodes[0]", "run_1");
+    expect(container.textContent).not.toContain(i18n.t("attrs.idTaken", { ns: "flow" }));
+  });
+});
+
+describe("parseConditionValue", () => {
+  it("coerces only canonical numbers", () => {
+    expect(parseConditionValue("7")).toBe(7);
+    expect(parseConditionValue(" -2.5 ")).toBe(-2.5);
+    expect(parseConditionValue("007")).toBe("007");
+    expect(parseConditionValue("1.50")).toBe("1.50");
+    expect(parseConditionValue("true")).toBe(true);
+    expect(parseConditionValue("")).toBeUndefined();
+  });
+});
+
+describe("joinArgv", () => {
+  it("quotes arguments containing whitespace", () => {
+    expect(joinArgv(["python", "my script.py", "--fast"])).toBe('python "my script.py" --fast');
   });
 });
 
@@ -162,8 +187,13 @@ describe("EdgeForm", () => {
     const onEditEdge = vi.fn();
     await mount(onEditEdge);
     const options = [...one("Exit port").querySelectorAll("option")].map((o) => o.value);
-    expect(options).toEqual(["approve", "reject", "failure"]);
+    // The edge has no port (success), which the approval lacks: it is listed last so the
+    // first real option is a change the select reports.
+    expect(options).toEqual(["approve", "reject", "failure", "success"]);
+    expect((one("Exit port") as HTMLSelectElement).value).toBe("success");
 
+    await choose(one("Exit port"), "approve");
+    expect(onEditEdge).toHaveBeenCalledWith("edges[0]", { port: "approve" });
     await choose(one("Exit port"), "reject");
     expect(onEditEdge).toHaveBeenCalledWith("edges[0]", { port: "reject" });
 
@@ -370,6 +400,10 @@ describe("CommandForm", () => {
 
     await toggle("Run through a shell");
     expect(patches.at(-1)).toEqual({ shell: true, run: "python x.py" });
+    await toggle("Run through a shell");
+    await typeAndBlur(one("Command (one argument per line)"), "python\nmy script.py");
+    await toggle("Run through a shell");
+    expect(patches.at(-1)).toEqual({ shell: true, run: 'python "my script.py"' });
     await typeAndBlur(one("Shell command"), "python x.py --fast");
     expect(patches.at(-1)).toEqual({ run: "python x.py --fast" });
 
@@ -580,7 +614,43 @@ describe("PartPicker param merge", () => {
     const patches = await mountKind(SubflowForm, node, { parts: [callee] });
 
     await choose(one("Sub-flow"), "lib/p.flow.yaml");
-    expect(patches.at(-1)).toEqual({ flow: "lib/p.flow.yaml", params: { doc: "${{ item }}", lang: "" } });
+    // `lang` is optional without a default: not filled in.
+    expect(patches.at(-1)).toEqual({ flow: "lib/p.flow.yaml", params: { doc: "${{ item }}" } });
+  });
+
+  it("keeps a value the user set for an optional param on re-pick", async () => {
+    const callee: FlowSummary = { ...flowPart, params: { doc: { type: "path", required: true }, lang: { type: "string", required: false } } };
+    const other: FlowSummary = { ...callee, path: ".mdium/flows/lib/q.flow.yaml", id: "q" };
+    const node: FlowSubflowNode = { id: "s", kind: "subflow", flow: "lib/p.flow.yaml", params: { doc: "a", lang: "ja", constructor: 1 } };
+    const patches = await mountKind(SubflowForm, node, { parts: [callee, other] });
+    await choose(one("Sub-flow"), "lib/q.flow.yaml");
+    expect(patches.at(-1)).toEqual({ flow: "lib/q.flow.yaml", params: { doc: "a", lang: "ja" } });
+  });
+
+  it("does not copy Object.prototype members for params named like them", async () => {
+    // Built from JSON, as the signature arrives from the backend.
+    const params = JSON.parse(
+      '{"toString":{"type":"string","required":false},"constructor":{"type":"string","default":"x"}}',
+    ) as FlowSummary["params"];
+    const callee: FlowSummary = { ...flowPart, params };
+    const node: FlowSubflowNode = { id: "s", kind: "subflow", flow: "", params: {} };
+    const patches = await mountKind(SubflowForm, node, { parts: [callee] });
+    await choose(one("Sub-flow"), "lib/p.flow.yaml");
+    expect(patches.at(-1)).toEqual({ flow: "lib/p.flow.yaml", params: { constructor: "x" } });
+  });
+});
+
+describe("ValueRows clearing", () => {
+  it("removes a declared key when its field is cleared", async () => {
+    const callee: FlowSummary = { ...flowPart, params: { doc: { type: "path", required: true }, lang: { type: "string", required: false } } };
+    const node: FlowSubflowNode = { id: "s", kind: "subflow", flow: "lib/p.flow.yaml", params: { doc: "a", lang: "ja" } };
+    const patches = await mountKind(SubflowForm, node, { parts: [callee] });
+    await typeAndBlur(one("lang"), "");
+    expect(patches.at(-1)).toEqual({ params: { doc: "a" } });
+    const count = patches.length;
+    // Blurring an empty field whose key is absent writes nothing.
+    await typeAndBlur(one("lang"), "");
+    expect(patches).toHaveLength(count);
   });
 });
 

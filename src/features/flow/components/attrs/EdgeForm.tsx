@@ -15,7 +15,9 @@ interface EdgeFormProps {
 export function EdgeForm({ edge, path, ports, onChange, onDelete }: EdgeFormProps) {
   const { t } = useTranslation("flow");
   const port = edge.port ?? "success";
-  const options = edge.port !== undefined && !ports.includes(port) ? [...ports, port] : ports;
+  // The current port is always listed (even an implicit `success` the source lacks), so every
+  // real option, the first included, is a change the select reports.
+  const options = ports.includes(port) ? ports : [...ports, port];
   return (
     <div className="flow-attrs">
       <TextField label={t("attrs.from")} value={edge.from} readOnly onCommit={() => undefined} />

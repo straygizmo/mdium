@@ -1,14 +1,12 @@
 import { useTranslation } from "react-i18next";
 import type { FlowSummary } from "@/shared/types/flow";
-import { paramsFor, partLabel, relativeRef } from "../../../lib/part-ref";
+import { mergeValues, paramsFor, partLabel, relativeRef } from "../../../lib/part-ref";
 import { signatureText } from "../../FlowPanel";
 import { ValueRows, type ValueFieldSpec } from "./ValueRows";
 
-/** Callee defaults, overridden by the current value of every key the callee still declares. */
-function mergeParams(defaults: Record<string, unknown>, current: Record<string, unknown> | undefined): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(defaults)) out[key] = current && key in current ? current[key] : value;
-  return out;
+/** Callee initial params, overridden by the current value of every key the callee still declares. */
+function mergeParams(part: FlowSummary, current: Record<string, unknown> | undefined): Record<string, unknown> {
+  return mergeValues(Object.keys(part.params), paramsFor(part), current);
 }
 
 interface PartPickerProps {
@@ -46,7 +44,7 @@ export function PartPicker({ label, value, parts, currentFile, params, onPick, o
           value={value}
           onChange={(e) => {
             const picked = entries.find((x) => x.ref === e.target.value);
-            if (picked) onPick(picked.ref, mergeParams(paramsFor(picked.part), params));
+            if (picked) onPick(picked.ref, mergeParams(picked.part, params));
           }}
         >
           {!selected && <option value={value}>{value === "" ? t("attrs.choosePart") : value}</option>}

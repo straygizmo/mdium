@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { FlowPythonNode, Manifest, StageDef } from "@/shared/types/flow";
 import { flowApi, isFlowCommandError } from "../../../lib/flow-api";
+import { initialValues, mergeValues } from "../../../lib/part-ref";
 import { describeError } from "../../../lib/run-format";
 import { ValueRows, type ValueFieldSpec } from "./ValueRows";
 import type { KindFormProps } from "./types";
@@ -16,13 +17,9 @@ interface PythonFormProps extends KindFormProps<FlowPythonNode> {
   projectRoot: string;
 }
 
-/** Initial `with` for a stage: the current value of a key when present, else its default, else an empty string. */
+/** `with` for a stage: the current value of a key when present, else its initial value (see `initialValues`). */
 function withFor(stage: StageDef, current: Record<string, unknown> | undefined): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [key, input] of Object.entries(stage.inputs)) {
-    out[key] = current && key in current ? current[key] : input.default !== undefined ? input.default : "";
-  }
-  return out;
+  return mergeValues(Object.keys(stage.inputs), initialValues(stage.inputs), current);
 }
 
 export function PythonForm({ node, path, project, projectRoot, onChange }: PythonFormProps) {

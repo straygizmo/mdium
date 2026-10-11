@@ -28,7 +28,12 @@ const manifest: Manifest = {
   stages: [
     {
       name: "demo.add",
-      inputs: { a: { type: "number", required: true }, b: { type: "number", required: false, default: 1 } },
+      inputs: {
+        a: { type: "number", required: true },
+        b: { type: "number", required: false, default: 1 },
+        // Optional without a default: left out of `with`.
+        c: { type: "number", required: false },
+      },
       outputs: {},
       artifacts: [],
     },
@@ -53,7 +58,12 @@ const parts: FlowSummary[] = [
     kind: "part",
     id: "per-doc",
     name: "Per doc",
-    params: { doc: { type: "path", required: true } },
+    params: {
+      doc: { type: "path", required: true },
+      // Optional without a default: left out of `params`; with a default: filled in.
+      lang: { type: "string", required: false },
+      depth: { type: "number", default: 2 },
+    },
     outputs: ["summary"],
     errorCount: 0,
     warningCount: 0,
@@ -172,7 +182,7 @@ describe("NodePalette", () => {
       items: "${{ params.items }}",
       maxIterations: 10,
       body: "lib/per-doc.flow.yaml",
-      params: { doc: "" },
+      params: { doc: "", depth: 2 },
     });
   });
 
@@ -181,7 +191,7 @@ describe("NodePalette", () => {
     await click(button("Sub-flow"));
     await click(button("per-doc"));
     expect(onAdd).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "subflow", flow: "per-doc.flow.yaml", params: { doc: "" } }),
+      expect.objectContaining({ kind: "subflow", flow: "per-doc.flow.yaml", params: { doc: "", depth: 2 } }),
     );
   });
 

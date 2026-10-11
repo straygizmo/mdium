@@ -4,7 +4,7 @@ import type { FlowDef, FlowNode, FlowNodeKind, FlowSummary, Manifest, ProjectLoa
 import { flowApi, isFlowCommandError } from "../lib/flow-api";
 import { nextNodeId } from "../lib/flow-ports";
 import { defaultsFor } from "../lib/editor-state";
-import { paramsFor, partLabel, relativeRef } from "../lib/part-ref";
+import { initialValues, paramsFor, partLabel, relativeRef } from "../lib/part-ref";
 import { describeError } from "../lib/run-format";
 import { signatureText } from "./FlowPanel";
 import "./Flow.css";
@@ -75,9 +75,7 @@ export function NodePalette({ projectRoot, currentFile, def, parts, project, onA
   const addStage = (runtime: string, manifest: Manifest, stageName: string) => {
     const stage = manifest.stages.find((s) => s.name === stageName);
     if (!stage) return;
-    const withInputs: Record<string, unknown> = {};
-    for (const [key, input] of Object.entries(stage.inputs)) withInputs[key] = input.default !== undefined ? input.default : "";
-    add("python", { runtime, entry: stage.name, with: withInputs }, stage.name);
+    add("python", { runtime, entry: stage.name, with: initialValues(stage.inputs) }, stage.name);
   };
 
   return (

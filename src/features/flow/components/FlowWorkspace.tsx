@@ -8,11 +8,13 @@ import { layoutFlowGraph, savedPositions, type FlowLayout } from "../lib/flow-la
 import {
   addEdge,
   addNode,
+  edgePathOf,
   moveNode,
   nodeAt,
   removeEdge,
   removeNode,
   renameNode,
+  scopeOf,
   updateEdge,
   updateFlowAttrs,
   updateNode,
@@ -47,24 +49,6 @@ export function dirname(path: string): string {
 export function watchedFolder(projectRoot: string, path: string): string {
   const dir = dirname(path);
   return dir ? `${projectRoot.replace(/[\\/]+$/, "")}/${dir}` : projectRoot;
-}
-
-/** The scope (`""` or the owning loop's node path) of the node at `nodePath`. */
-function scopeOf(nodePath: string): string {
-  const i = nodePath.lastIndexOf(".body.");
-  return i < 0 ? "" : nodePath.slice(0, i);
-}
-
-/** Graph path of the edge `from → to (port)` in `scope`, or `null` when absent. */
-function edgePathOf(def: FlowDef, scope: string, edge: FlowEdge): string | null {
-  let edges: FlowEdge[] | undefined = def.edges;
-  if (scope) {
-    const owner = nodeAt(def, scope);
-    edges = owner && owner.kind === "loop" && typeof owner.body !== "string" ? owner.body.edges : undefined;
-  }
-  const index = (edges ?? []).findIndex((e) => e.from === edge.from && e.to === edge.to && e.port === edge.port);
-  if (index < 0) return null;
-  return scope ? `${scope}.body.edges[${index}]` : `edges[${index}]`;
 }
 
 interface PendingConnect {

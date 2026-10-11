@@ -8,6 +8,11 @@ const PROTOCOLS: FlowCommandNode["protocol"][] = ["mdium-v1", "none"];
 
 const toLines = (text: string): string[] => text.split(/\r?\n/).filter((line) => line.trim() !== "");
 
+/** Joins argv into one shell command; an argument containing whitespace is quoted so it stays one argument. */
+export function joinArgv(argv: string[]): string {
+  return argv.map((a) => (/\s/.test(a) ? JSON.stringify(a) : a)).join(" ");
+}
+
 /** Parses comma-separated exit codes; returns `null` when an entry is not a number. */
 function parseCodes(text: string): number[] | null {
   const parts = text.split(",").map((p) => p.trim()).filter((p) => p !== "");
@@ -33,7 +38,7 @@ export function CommandForm({ node, path, onChange }: KindFormProps<FlowCommandN
           checked={node.shell}
           onChange={(e) => {
             const shell = e.target.checked;
-            if (shell) write({ shell, run: Array.isArray(node.run) ? node.run.join(" ") : node.run });
+            if (shell) write({ shell, run: Array.isArray(node.run) ? joinArgv(node.run) : node.run });
             else write({ shell, run: Array.isArray(node.run) ? node.run : toLines(node.run) });
           }}
         />

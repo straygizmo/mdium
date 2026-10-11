@@ -16,7 +16,8 @@ export function portsOf(node: FlowNode): string[] {
   let ports: string[];
   switch (node.kind) {
     case "approval": {
-      const options = node.options && node.options.length > 0 ? node.options : ["approve", "reject"];
+      // Like Rust's `effective_options`: only a missing list falls back; `options: []` has no ports.
+      const options = node.options ?? ["approve", "reject"];
       ports = options.map((o) => (typeof o === "string" ? o : o.name));
       break;
     }
@@ -34,7 +35,8 @@ export function portsOf(node: FlowNode): string[] {
   return ports;
 }
 
-function collectIds(nodes: FlowNode[], out: Set<string>): void {
+/** Adds the id of every node in `nodes`, inline loop bodies included, to `out`. */
+export function collectIds(nodes: FlowNode[], out: Set<string>): void {
   for (const node of nodes) {
     out.add(node.id);
     if (node.kind === "loop" && typeof node.body !== "string") collectIds(node.body.nodes, out);

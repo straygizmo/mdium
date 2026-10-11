@@ -60,7 +60,17 @@ export function ValueRows({ fields, values, onChange }: ValueRowsProps) {
           <TextField
             label={field.required ? `${field.name} *` : field.name}
             value={formatValue(current[field.name])}
-            onCommit={(text) => onChange({ ...current, [field.name]: parseValue(text, field.type, current[field.name]) })}
+            onCommit={(text) => {
+              if (text !== undefined) {
+                onChange({ ...current, [field.name]: parseValue(text, field.type, current[field.name]) });
+                return;
+              }
+              // Cleared: drop the key rather than writing "" (an empty value is not "unset").
+              if (!Object.hasOwn(current, field.name)) return;
+              const rest = { ...current };
+              delete rest[field.name];
+              onChange(rest);
+            }}
           />
           <span className="flow-attrs__type">{field.type}</span>
         </div>

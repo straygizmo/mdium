@@ -1,4 +1,5 @@
 import { KNOWN_ACTIONS } from "./known-actions";
+import { collectIds } from "./flow-ports";
 import type { FlowDef, FlowEdge, FlowInlineBody, FlowLoopNode, FlowNode, FlowNodeKind } from "@/shared/types/flow";
 
 /** `nodes[i]` or `nodes[i].body.nodes[j]`: the graph's node id. */
@@ -8,7 +9,8 @@ type Position = { x: number; y: number };
 type Scope = { nodes: FlowNode[]; edges?: FlowEdge[] };
 
 const NODE_INDEX = /nodes\[(\d+)\]/g;
-const EDGE_PATH = /^(.*?)(?:\.body\.)?edges\[(\d+)\]$/;
+/** `edges[i]` or `<loop node path>.body.edges[j]`: group 1 is the owning loop's path (`""` at the top level). */
+export const EDGE_PATH = /^(.*?)(?:\.body\.)?edges\[(\d+)\]$/;
 
 /** Indices of every `nodes[i]` segment, outermost first. */
 function nodeIndices(path: string): number[] {
@@ -95,12 +97,45 @@ export function moveNode(def: FlowDef, nodeId: string, position: Position): Flow
   return withPositions(def, { ...positionsOf(def), [nodeId]: position });
 }
 
+/** The port an edge leaves by (`port` omitted means `success`). */
+const portOf = (edge: FlowEdge): string => edge.port ?? "success";
+
+const sameEdge = (a: FlowEdge, b: FlowEdge): boolean => a.from === b.from && a.to === b.to && portOf(a) === portOf(b);
+
 export function addEdge(def: FlowDef, scopePath: "" | NodePath, edge: FlowEdge): FlowDef {
   return editScope(def, nodeIndices(scopePath), (s) => {
     const edges = s.edges ?? [];
-    const duplicate = edges.some((e) => e.from === edge.from && e.to === edge.to && e.port === edge.port);
-    return duplicate ? {} : { edges: [...edges, edge] };
+    return edges.some((e) => sameEdge(e, edge)) ? {} : { edges: [...edges, edge] };
   });
+}
+
+/** The scope (`""` or the owning loop's node path) of the node at `nodePath`. */
+export function scopeOf(nodePath: NodePath): string {
+  const i = nodePath.lastIndexOf(".body.");
+  return i < 0 ? "" : nodePath.slice(0, i);
+}
+
+/** The edges and nodes of a scope (`""` or a loop node path with an inline body), or `null`. */
+function scopeLists(def: FlowDef, scope: string): { edges: FlowEdge[]; nodes: FlowNode[] } | null {
+  if (scope === "") return { edges: def.edges ?? [], nodes: def.nodes };
+  const body = inlineBody(nodeAt(def, scope));
+  return body ? { edges: body.edges ?? [], nodes: body.nodes } : null;
+}
+
+/** Graph path of the edge `from → to (port)` in `scope`, or `null` when absent. */
+export function edgePathOf(def: FlowDef, scope: string, edge: FlowEdge): string | null {
+  const index = (scopeLists(def, scope)?.edges ?? []).findIndex((e) => sameEdge(e, edge));
+  if (index < 0) return null;
+  return scope ? `${scope}.body.edges[${index}]` : `edges[${index}]`;
+}
+
+/** The edge at `edgePath` (`edges[i]` or `nodes[i].body.edges[j]`) and the nodes of its scope. */
+export function edgeAt(def: FlowDef, edgePath: string): { edge: FlowEdge; scope: FlowNode[] } | null {
+  const m = EDGE_PATH.exec(edgePath);
+  if (!m) return null;
+  const lists = scopeLists(def, m[1]);
+  const edge = lists?.edges[Number(m[2])];
+  return lists && edge ? { edge, scope: lists.nodes } : null;
 }
 
 /** Splits an edge id into the owning loop indices and the edge index. */
@@ -177,6 +212,10 @@ export function updateNode(def: FlowDef, path: NodePath, patch: Partial<FlowNode
 export function renameNode(def: FlowDef, path: NodePath, newId: string): FlowDef {
   const current = nodeAt(def, path);
   if (!current || current.id === newId) return def;
+  // An id used anywhere in the flow would merge the two nodes' edges irreversibly.
+  const used = new Set<string>();
+  collectIds(def.nodes, used);
+  if (used.has(newId)) return def;
   const oldId = current.id;
   const at = nodeIndices(path).slice(-1)[0];
   const topLevel = nodeIndices(path).length === 1;

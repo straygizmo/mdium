@@ -4,10 +4,10 @@ import { DialogShell } from "@/features/workflow/components/DialogShell";
 import type { FlowDef, FlowSummary } from "@/shared/types/flow";
 import { emptyFlow } from "../lib/editor-state";
 
-/** File names (without the suffix): lowercase letters, digits and hyphens. */
-const FILE_NAME = /^[a-z0-9-]+$/;
-/** Flow ids: letters, digits, underscores and hyphens. */
-const FLOW_ID = /^[A-Za-z0-9_-]+$/;
+/** Flow ids: lowercase letters, digits and hyphens, not starting with a hyphen (validate.rs `is_flow_id`). */
+const FLOW_ID = /^[a-z0-9][a-z0-9-]*$/;
+/** File names (without the suffix): the same rule, since the id follows the file name. */
+const FILE_NAME = FLOW_ID;
 const SUFFIX = ".flow.yaml";
 const ENTRY_DIR = ".mdium/flows/";
 const PART_DIR = ".mdium/flows/lib/";

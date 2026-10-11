@@ -11,6 +11,8 @@ interface NodeCommonFormProps {
   path: string;
   /** Validation issues of the whole flow; the ones under this node are listed. */
   issues: FlowIssue[];
+  /** Every node id in the flow (inline bodies included); a rename to one of them is vetoed. */
+  usedIds: ReadonlySet<string>;
   onChange: (path: string, patch: Partial<FlowNode>) => void;
   onRename: (path: string, id: string) => void;
 }
@@ -23,9 +25,9 @@ function belongsTo(issue: FlowIssue, path: string): boolean {
 }
 
 /** Attributes shared by every node kind. */
-export function NodeCommonForm({ node, path, issues, onChange, onRename }: NodeCommonFormProps) {
+export function NodeCommonForm({ node, path, issues, usedIds, onChange, onRename }: NodeCommonFormProps) {
   const { t } = useTranslation("flow");
-  const [idError, setIdError] = useState(false);
+  const [idError, setIdError] = useState<"invalidId" | "idTaken" | null>(null);
   const own = issues.filter((i) => belongsTo(i, path));
   const write = (patch: Partial<FlowNode>) => onChange(path, patch);
   const writeCost = (patch: Partial<FlowCostSpec>) => write({ cost: compact({ estimateUsd: node.cost?.estimateUsd, budgetUsd: node.cost?.budgetUsd, ...patch }) });
@@ -35,13 +37,14 @@ export function NodeCommonForm({ node, path, issues, onChange, onRename }: NodeC
         label={t("attrs.id")}
         value={node.id}
         validate={(text) => {
-          const ok = isNodeId(text);
-          setIdError(!ok);
-          return ok;
+          const error = !isNodeId(text) ? "invalidId" : text !== node.id && usedIds.has(text) ? "idTaken" : null;
+          setIdError(error);
+          return error === null;
         }}
         onCommit={(id) => id !== undefined && onRename(path, id)}
       />
-      {idError && <div className="flow-attrs__error">{t("attrs.invalidId")}</div>}
+      {idError === "invalidId" && <div className="flow-attrs__error">{t("attrs.invalidId")}</div>}
+      {idError === "idTaken" && <div className="flow-attrs__error">{t("attrs.idTaken")}</div>}
       <TextField label={t("attrs.name")} value={node.name} onCommit={(name) => write({ name })} />
       <TextField label={t("attrs.description")} value={node.description} multiline onCommit={(description) => write({ description })} />
       <TextField label={t("attrs.timeout")} value={node.timeout} placeholder="30s" onCommit={(timeout) => write({ timeout })} />

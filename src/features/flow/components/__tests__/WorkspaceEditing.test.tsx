@@ -623,6 +623,20 @@ describe("flow workspace editing", () => {
       expect(String(saved.content)).toContain("name: Helper");
     });
 
+    it("refuses flow ids and file names the engine rejects", async () => {
+      await openDialog();
+      await type(dialog()!.querySelector('[aria-label="File name"]')!, "my-flow");
+      expect(button("Create", dialog()!).disabled).toBe(false);
+      await type(dialog()!.querySelector('[aria-label="Flow ID"]')!, "My_Flow");
+      expect(button("Create", dialog()!).disabled).toBe(true);
+      await type(dialog()!.querySelector('[aria-label="Flow ID"]')!, "-flow");
+      expect(button("Create", dialog()!).disabled).toBe(true);
+      await type(dialog()!.querySelector('[aria-label="Flow ID"]')!, "my-flow-2");
+      expect(button("Create", dialog()!).disabled).toBe(false);
+      await type(dialog()!.querySelector('[aria-label="File name"]')!, "-x");
+      expect(button("Create", dialog()!).disabled).toBe(true);
+    });
+
     it("refuses an existing path", async () => {
       routes.flow_list = () => [existing];
       await openDialog();

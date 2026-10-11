@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FlowDef } from "@/shared/types/flow";
-import { hasComments, parseFlowText, stringifyFlow } from "../flow-yaml";
+import { hasComments, parseFlowText, stringifyFlow, stringifyFlowAs } from "../flow-yaml";
 
 const def: FlowDef = {
   schemaVersion: 1, id: "demo", name: "Demo",
@@ -47,6 +47,61 @@ describe("stringifyFlow", () => {
     const text = stringifyFlow(def);
     expect(text).toContain("- { from: a, to: b }");
     expect(text).toContain("with: { a: \"${{ params.a }}\", b: 1 }");
+  });
+  it("keeps a multi-line template string as a block scalar", () => {
+    const prompt = "Summarize ${{ params.doc }}.\nAnswer in ${{ params.lang }}.";
+    const agent: FlowDef = {
+      schemaVersion: 1, id: "a", name: "A",
+      nodes: [{ id: "g", kind: "agent", provider: "claude", permission: "read-only", outputContract: "outcome", prompt }],
+    };
+    const text = stringifyFlow(agent);
+    expect(text).toMatch(/prompt: \|-?\n {6}Summarize \$\{\{ params\.doc \}\}\.\n {6}Answer in/);
+    const parsed = parseFlowText(text);
+    expect("value" in parsed && (parsed.value as FlowDef).nodes[0]).toMatchObject({ prompt });
+  });
+  it("canonicalises inline loop bodies (key order, empty lists dropped, flow-style edges)", () => {
+    const loop: FlowDef = {
+      schemaVersion: 1, id: "l", name: "L",
+      nodes: [
+        {
+          maxIterations: 2, mode: "foreach", items: [1], kind: "loop", id: "loop",
+          body: {
+            outputs: {},
+            edges: [{ to: "y", from: "x" }],
+            nodes: [{ kind: "approval", id: "x" }, { name: "Y", kind: "approval", id: "y" }],
+          },
+        } as unknown as FlowDef["nodes"][number],
+      ],
+    };
+    const text = stringifyFlow(loop);
+    const body = text.slice(text.indexOf("body:"));
+    expect(body.indexOf("nodes:")).toBeLessThan(body.indexOf("edges:"));
+    expect(body).not.toContain("outputs");
+    expect(body).toContain("- id: x\n          kind: approval");
+    expect(body).toContain("- id: y\n          kind: approval\n          name: Y");
+    expect(body).toContain("- { from: x, to: y }");
+    const head = text.slice(text.indexOf("- id: loop"));
+    expect(head.indexOf("kind: loop")).toBeLessThan(head.indexOf("maxIterations"));
+  });
+  it("quotes strings that would otherwise read as other types", () => {
+    const ambiguous: FlowDef = { ...def, outputs: { t: "true", n: "1", e: "", z: "007", s: "plain" } };
+    const text = stringifyFlow(ambiguous);
+    const parsed = parseFlowText(text);
+    expect("value" in parsed && (parsed.value as FlowDef).outputs).toEqual({ t: "true", n: "1", e: "", z: "007", s: "plain" });
+    expect(text).toMatch(/t: "true"|t: 'true'/);
+    expect(text).toMatch(/n: "1"|n: '1'/);
+    expect(text).toMatch(/e: ""|e: ''/);
+  });
+});
+
+describe("stringifyFlowAs", () => {
+  it("writes canonical JSON for json files and YAML otherwise", () => {
+    const json = stringifyFlowAs(def, "json");
+    expect(json.startsWith("{\n  \"schemaVersion\": 1,\n  \"id\": \"demo\"")).toBe(true);
+    expect(json.endsWith("}\n")).toBe(true);
+    expect(JSON.parse(json)).toEqual(def);
+    expect(Object.keys(JSON.parse(json) as object)).toEqual(["schemaVersion", "id", "name", "params", "nodes", "edges", "outputs", "ui"]);
+    expect(stringifyFlowAs(def, "yaml")).toBe(stringifyFlow(def));
   });
 });
 

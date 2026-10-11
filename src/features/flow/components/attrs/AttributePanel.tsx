@@ -1,8 +1,8 @@
 import { useTranslation } from "react-i18next";
 import type { FlowDef, FlowEdge, FlowIssue, FlowNode, FlowSummary, ProjectLoadResult } from "@/shared/types/flow";
 import type { Selection } from "../../editor-store";
-import { nodeAt } from "../../lib/editor-state";
-import { portsOf } from "../../lib/flow-ports";
+import { edgeAt, nodeAt } from "../../lib/editor-state";
+import { collectIds, portsOf } from "../../lib/flow-ports";
 import { EdgeForm } from "./EdgeForm";
 import { FlowAttrsForm, type FlowAttrsPatch } from "./FlowAttrsForm";
 import { NodeCommonForm } from "./NodeCommonForm";
@@ -31,23 +31,6 @@ interface AttributePanelProps {
   onEditEdge: (path: string, patch: Partial<FlowEdge>) => void;
   onDeleteEdge: (path: string) => void;
   onEditFlow: (patch: FlowAttrsPatch) => void;
-}
-
-const EDGE_PATH = /^(.*?)(?:\.body\.)?edges\[(\d+)\]$/;
-
-/** The edge at `edgePath` (`edges[i]` or `nodes[i].body.edges[j]`) and the nodes of its scope. */
-function edgeAt(def: FlowDef, edgePath: string): { edge: FlowEdge; scope: FlowNode[] } | null {
-  const m = EDGE_PATH.exec(edgePath);
-  if (!m) return null;
-  const index = Number(m[2]);
-  if (m[1] === "") {
-    const edge = def.edges?.[index];
-    return edge ? { edge, scope: def.nodes } : null;
-  }
-  const owner = nodeAt(def, m[1]);
-  if (!owner || owner.kind !== "loop" || typeof owner.body === "string") return null;
-  const edge = owner.body.edges?.[index];
-  return edge ? { edge, scope: owner.body.nodes } : null;
 }
 
 interface KindContext {
@@ -86,9 +69,11 @@ export function AttributePanel({ def, selection, issues, parts, project, project
   if (selection?.kind === "node") {
     const node = nodeAt(def, selection.path);
     if (!node) return <div className="flow-attrs__empty">{t("workspace.noNodeSelected")}</div>;
+    const usedIds = new Set<string>();
+    collectIds(def.nodes, usedIds);
     return (
       <div key={`${selection.path}:${node.id}`} className="flow-attrs__panel">
-        <NodeCommonForm node={node} path={selection.path} issues={issues} onChange={onEditNode} onRename={onRenameNode} />
+        <NodeCommonForm node={node} path={selection.path} issues={issues} usedIds={usedIds} onChange={onEditNode} onRename={onRenameNode} />
         {renderKindForm(node, selection.path, { parts, project, projectRoot, currentFile, onChange: onEditNode })}
       </div>
     );
