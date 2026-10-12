@@ -456,5 +456,12 @@
       "addGroup": "Add group",
       "enable": "Enable"
     }
+  },
+  "signature": {
+    "params": "Arguments",
+    "outputs": "Outputs",
+    "undeclared": "not declared by the callee",
+    "unset": "not set",
+    "missing": "File not found in this project"
   }
 }

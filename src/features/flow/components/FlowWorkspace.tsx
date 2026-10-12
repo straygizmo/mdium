@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useTabStore } from "@/stores/tab-store";
 import type { FlowDef, FlowEdge, FlowNode, FlowSummary, ProjectLoadResult } from "@/shared/types/flow";
 import { flowApi } from "../lib/flow-api";
-import { buildFlowGraph } from "../lib/flow-graph";
+import { buildFlowGraph, type CalleeSignature } from "../lib/flow-graph";
 import { layoutFlowGraph, savedPositions, type FlowLayout } from "../lib/flow-layout";
 import {
   addEdge,
@@ -113,6 +113,7 @@ export function FlowWorkspace() {
   const [justSaved, setJustSaved] = useState(false);
   const [noticeBusy, setNoticeBusy] = useState(false);
   const [parts, setParts] = useState<FlowSummary[]>([]);
+  const [signatures, setSignatures] = useState<Record<string, CalleeSignature>>({});
   const [project, setProject] = useState<ProjectLoadResult | null>(null);
   const savingRef = useRef(false);
   const confirmRef = useRef<PendingConfirm | null>(null);
@@ -163,8 +164,19 @@ export function FlowWorkspace() {
     if (!folder || !path) return;
     let cancelled = false;
     flowApi.list(folder).then(
-      (flows) => !cancelled && setParts(flows.filter((f) => f.kind === "part" && f.path !== path)),
-      () => !cancelled && setParts([]),
+      (flows) => {
+        if (cancelled) return;
+        setParts(flows.filter((f) => f.kind === "part" && f.path !== path));
+        // Any in-project flow can be a sub-flow callee, so the map covers entries and parts.
+        setSignatures(
+          Object.fromEntries(flows.map((f) => [f.path.replace(/\\/g, "/"), { params: f.params, outputs: f.outputs }] as const)),
+        );
+      },
+      () => {
+        if (cancelled) return;
+        setParts([]);
+        setSignatures({});
+      },
     );
     flowApi.projectLoad(folder).then(
       (loaded) => !cancelled && setProject(loaded),
@@ -200,7 +212,10 @@ export function FlowWorkspace() {
   }, [folder, path]);
 
   const issues = useMemo(() => ({ errors, warnings }), [errors, warnings]);
-  const graph = useMemo(() => (current && def ? buildFlowGraph(def, collapsed, issues) : null), [current, def, collapsed, issues]);
+  const graph = useMemo(
+    () => (current && def ? buildFlowGraph(def, collapsed, issues, signatures, path ?? "") : null),
+    [current, def, collapsed, issues, signatures, path],
+  );
 
   useEffect(() => {
     let cancelled = false;

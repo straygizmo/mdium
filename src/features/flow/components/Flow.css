@@ -1318,3 +1318,47 @@ button.flow-issue__button:hover {
   font-size: 13px;
   line-height: 1.5;
 }
+
+.flow-node__signature {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(128, 128, 128, 0.3);
+  font-size: 11px;
+}
+
+.flow-node__signature--missing {
+  color: #d93025;
+}
+
+.flow-node__signature-title {
+  display: block;
+  opacity: 0.6;
+}
+
+.flow-node__param {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flow-node__param-note {
+  margin-left: 6px;
+  opacity: 0.6;
+  font-style: italic;
+}
+
+.flow-node__signature-outputs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.flow-node__chip {
+  padding: 0 6px;
+  border-radius: 8px;
+  background: rgba(128, 128, 128, 0.2);
+}

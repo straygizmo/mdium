@@ -456,5 +456,12 @@
       "addGroup": "グループを追加",
       "enable": "有効にする"
     }
+  },
+  "signature": {
+    "params": "引数",
+    "outputs": "出力",
+    "undeclared": "呼び出し先に未宣言",
+    "unset": "未設定",
+    "missing": "このプロジェクトにファイルがありません"
   }
 }

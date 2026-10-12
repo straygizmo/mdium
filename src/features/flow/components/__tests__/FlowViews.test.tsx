@@ -172,6 +172,49 @@ describe("flow views", () => {
     expect(container.textContent).toContain("3 nodes inside");
   });
 
+  it("shows a sub-flow node's argument mapping and outputs on its card", async () => {
+    const result: FlowLoadResult = {
+      path: PATH,
+      format: "yaml",
+      kind: "entry",
+      flow: {
+        schemaVersion: 1,
+        id: "m",
+        name: "Main",
+        nodes: [{ id: "call", kind: "subflow", flow: "lib/p.flow.yaml", params: { doc: "${{ item }}" } }],
+      } as unknown as FlowLoadResult["flow"],
+      errors: [],
+      warnings: [],
+      content: "",
+      sha256: "h",
+    };
+    answerWorkspace(result);
+    const base = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (cmd: string, args: unknown) =>
+      cmd === "flow_list"
+        ? [
+            {
+              path: ".mdium/flows/lib/p.flow.yaml",
+              kind: "part",
+              id: "p",
+              name: "P",
+              params: { doc: { type: "string" }, lang: { type: "string" } },
+              outputs: ["summary"],
+              errorCount: 0,
+              warningCount: 0,
+            },
+          ]
+        : base(cmd, args),
+    );
+    useFlowViewStore.getState().setSelected(FOLDER, PATH);
+    await act(async () => root.render(<FlowWorkspace />));
+    await waitFor(() => expect(container.querySelector(".flow-node__signature")).not.toBeNull());
+    const text = container.querySelector(".flow-node__signature")!.textContent!;
+    expect(text).toContain("doc = ${{ item }}");
+    const chips = [...container.querySelectorAll(".flow-node__chip")].map((el) => el.textContent);
+    expect(chips).toContain("summary");
+  });
+
   it("shows issues without a canvas when the file could not be decoded", async () => {
     answerWorkspace({
       path: PATH,

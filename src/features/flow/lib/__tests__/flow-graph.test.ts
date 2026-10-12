@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FlowDef, FlowIssue } from "@/shared/types/flow";
-import { buildFlowGraph, issueNodePath, issuesForNode, nodeAtPath } from "../flow-graph";
+import { buildFlowGraph, issueNodePath, issuesForNode, nodeAtPath, resolvePartPath } from "../flow-graph";
 import { docDigest } from "./doc-digest";
 
 const issue = (path: string, code = "FLOW_INVALID_VALUE"): FlowIssue => ({
@@ -139,5 +139,68 @@ describe("issue paths", () => {
     expect(nodeAtPath(def, "nodes[0]")?.id).toBe("collect");
     expect(nodeAtPath(def, "nodes[9]")).toBeUndefined();
     expect(nodeAtPath(def, "nodes[0].body.nodes[0]")).toBeUndefined();
+  });
+});
+
+describe("signatures", () => {
+  const FILE = ".mdium/flows/main.flow.yaml";
+  const def = (nodes: unknown[]) => ({ schemaVersion: 1, id: "m", name: "m", nodes }) as unknown as FlowDef;
+  const sigs = {
+    ".mdium/flows/lib/p.flow.yaml": {
+      params: { doc: { type: "string" as const }, lang: { type: "string" as const } },
+      outputs: ["summary"],
+    },
+  };
+
+  it("resolves a part reference relative to the current file", () => {
+    expect(resolvePartPath(".mdium/flows/lib/a.flow.yaml", "../b.flow.yaml")).toBe(".mdium/flows/b.flow.yaml");
+    expect(resolvePartPath(".mdium/flows/a.flow.yaml", "./lib\\p.flow.yaml")).toBe(".mdium/flows/lib/p.flow.yaml");
+  });
+
+  it("gives a sub-flow node the callee's argument mapping and outputs", () => {
+    const graph = buildFlowGraph(
+      def([{ id: "s", kind: "subflow", flow: "lib/p.flow.yaml", params: { doc: "${{ item }}", extra: 1 } }]),
+      new Set(),
+      undefined,
+      sigs,
+      FILE,
+    );
+    expect(graph.nodes[0].signature).toEqual({
+      file: ".mdium/flows/lib/p.flow.yaml",
+      params: [
+        { name: "doc", value: "${{ item }}", declared: true },
+        { name: "lang", value: undefined, declared: true },
+        { name: "extra", value: "1", declared: false },
+      ],
+      outputs: ["summary"],
+      missing: false,
+    });
+  });
+
+  it("marks a reference to an unknown file as missing", () => {
+    const graph = buildFlowGraph(def([{ id: "s", kind: "subflow", flow: "nope.flow.yaml" }]), new Set(), undefined, sigs, FILE);
+    expect(graph.nodes[0].signature).toMatchObject({ missing: true, params: [], outputs: [] });
+  });
+
+  it("gives a file-bodied loop a signature, and an inline-bodied one none", () => {
+    const loop = { id: "l", kind: "loop", mode: "foreach", items: "${{ x }}", maxIterations: 3 };
+    const graph = buildFlowGraph(
+      def([
+        { ...loop, body: "lib/p.flow.yaml", params: { doc: "${{ item }}" } },
+        { ...loop, id: "l2", body: { nodes: [] } },
+      ]),
+      new Set(),
+      undefined,
+      sigs,
+      FILE,
+    );
+    expect(graph.nodes[0].signature?.missing).toBe(false);
+    expect(graph.nodes[0].signature?.params[0]).toEqual({ name: "doc", value: "${{ item }}", declared: true });
+    expect(graph.nodes[1].signature).toBeUndefined();
+  });
+
+  it("draws no signature without a signatures map", () => {
+    const graph = buildFlowGraph(def([{ id: "s", kind: "subflow", flow: "lib/p.flow.yaml" }]), new Set());
+    expect(graph.nodes[0].signature).toBeUndefined();
   });
 });

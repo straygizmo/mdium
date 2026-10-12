@@ -1,9 +1,25 @@
-import type { FlowDef, FlowEdge, FlowIssue, FlowNode, FlowNodeKind } from "@/shared/types/flow";
+import type { FlowDef, FlowEdge, FlowIssue, FlowNode, FlowNodeKind, FlowParamDef } from "@/shared/types/flow";
 
 /** One line of a node's summary: an i18n key under `flow:detail.*` and its value. */
 export interface NodeDetail {
   key: string;
   value: string;
+}
+
+/** A callee's interface as the editor knows it (from the project's flow list). */
+export interface CalleeSignature {
+  params: Record<string, FlowParamDef>;
+  outputs: string[];
+}
+
+/** What a sub-flow / file-loop node passes to its callee and what comes back. */
+export interface NodeSignature {
+  /** The callee's project-relative path. */
+  file: string;
+  params: Array<{ name: string; value: string | undefined; declared: boolean }>;
+  outputs: string[];
+  /** The referenced file is not in the project's flow list. */
+  missing: boolean;
 }
 
 /** A node to draw. `id` is the node's path in the file (unique even when ids clash). */
@@ -25,6 +41,8 @@ export interface GraphNode {
   hiddenChildren: number;
   errorCount: number;
   warningCount: number;
+  /** Set for `subflow` nodes and loops with a file body, when signatures are known. */
+  signature?: NodeSignature;
 }
 
 export interface GraphEdge {
@@ -63,6 +81,50 @@ export function issueContext(issue: Pick<FlowIssue, "code" | "path" | "params">)
     return "nodesEmpty";
   }
   return undefined;
+}
+
+/** Resolves a part reference (relative to the current file's directory) to a project-relative path. */
+export function resolvePartPath(currentFile: string, ref: string): string {
+  const segments = currentFile.replace(/\\/g, "/").split("/").slice(0, -1);
+  for (const part of ref.replace(/\\/g, "/").split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") segments.pop();
+    else segments.push(part);
+  }
+  return segments.join("/");
+}
+
+function stringifyValue(value: unknown): string {
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+function nodeSignature(
+  node: FlowNode,
+  currentFile: string,
+  signatures: Record<string, CalleeSignature>,
+): NodeSignature | undefined {
+  const ref = node.kind === "subflow" ? node.flow : node.kind === "loop" && typeof node.body === "string" ? node.body : null;
+  if (ref === null) return undefined;
+  const file = resolvePartPath(currentFile, ref);
+  const callee = signatures[file];
+  const given = (node.kind === "subflow" || node.kind === "loop" ? node.params : undefined) ?? {};
+  if (!callee) {
+    return {
+      file,
+      params: Object.entries(given).map(([name, value]) => ({ name, value: stringifyValue(value), declared: false })),
+      outputs: [],
+      missing: true,
+    };
+  }
+  const params = Object.keys(callee.params).map((name) => ({
+    name,
+    value: name in given ? stringifyValue(given[name]) : undefined,
+    declared: true,
+  }));
+  for (const [name, value] of Object.entries(given)) {
+    if (!(name in callee.params)) params.push({ name, value: stringifyValue(value), declared: false });
+  }
+  return { file, params, outputs: callee.outputs, missing: false };
 }
 
 function truncate(text: string, max = 48): string {
@@ -134,6 +196,9 @@ export function buildFlowGraph(
   def: FlowDef,
   collapsed: ReadonlySet<string>,
   issues: { errors: FlowIssue[]; warnings: FlowIssue[] } = { errors: [], warnings: [] },
+  signatures?: Record<string, CalleeSignature>,
+  /** The project-relative path of the file `def` was loaded from; part references resolve against it. */
+  currentFile = "",
 ): FlowGraph {
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
@@ -160,6 +225,7 @@ export function buildFlowGraph(
         hiddenChildren: expanded ? 0 : countBody(node),
         errorCount: 0,
         warningCount: 0,
+        signature: signatures ? nodeSignature(node, currentFile, signatures) : undefined,
       });
       visible.add(path);
       if (inlineBody && expanded) {
