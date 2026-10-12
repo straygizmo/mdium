@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Spec 7.4 / 1.2: **no video_gen-specific code in mdium.** The only mdium change is Task 1 (param types). Everything else lives in `C:\Users\mtmar\source\repos\video_gen`.
-- Spec 9.2 / 14: existing video_gen behaviour is preserved. `run_video_pipeline(story_text, out_dir, cfg=None, *, labeler=None, script_provider=None, image_provider=None, tts=None, renderer=None, evaluator=None, repace_synth=None, title="video", resume=True, story_dir=None, continuity_gate=False, force_continuity=False, auditor=None, min_continuity_score=None) -> VideoRunResult` keeps its signature, keyword names, stage marks (`label`, `script`, `voice`, `assets`, `ir`, `render`, `improve`, `pacing`, `review`) and the files it writes. `orchestrator.run_cycle` / `_generate` / `_observe` and the `generate_fn(...)` kwargs stay unchanged. All existing tests in `video_gen/tests/` keep passing (`uv run pytest -q` from the repo root; there is no conftest, the repo root is the import root).
+- Spec 9.2 / 14: existing video_gen behaviour is preserved. `run_video_pipeline(story_text, out_dir, cfg=None, *, labeler=None, script_provider=None, image_provider=None, tts=None, renderer=None, evaluator=None, repace_synth=None, title="video", resume=True, story_dir=None, continuity_gate=False, force_continuity=False, auditor=None, min_continuity_score=None) -> VideoRunResult` keeps its signature, keyword names, stage marks (`label`, `script`, `voice`, `assets`, `ir`, `render`, `improve`, `pacing`, `review`) and the files it writes. `orchestrator.run_cycle` / `_generate` / `_observe` and the `generate_fn(...)` kwargs stay unchanged. All existing tests in the **scoped suite** keep passing. The whole `tests/` directory has many pre-existing failures on main (and one crashes pytest's reporter), and `uv run pytest -q` from the root also collects a stray junk directory, so the suite for this plan is the 17 modules that cover the touched code plus this plan's new files — the SCOPED SUITE command: `uv run pytest tests/test_orchestrator.py tests/test_orchestrator_e2e.py tests/test_production_planner.py tests/test_portfolio_evaluator.py tests/test_production_ledger.py tests/test_multi_story_resume_scan.py tests/test_multi_story_finalize.py tests/test_video_pipeline.py tests/test_story_continuity_audit.py tests/test_video_revise.py tests/test_video_repace.py tests/test_video_composition.py tests/test_video_evaluator.py tests/test_video_ffmpeg_compiler.py tests/test_video_mlt_exporter.py tests/test_rate_limit_retry.py tests/test_quota_error_handling.py tests/test_video_gen_flow_*.py tests/test_video_pipeline_stages.py -q -p no:cacheprovider` (glob files that do not exist yet are simply absent). Baseline on main 93af470: 379 passed. There is no conftest; the repo root is the import root.
 - Spec 4: stages are `@stage("<group>.<name>", description=..., inputs={...}, outputs={...}, artifacts=[...])` functions `fn(ctx: Context, **inputs)`; input types are `string` / `number` / `bool` / `path` / `object` / `array`; failures raise `mdium_worker.StageFailed(reason)`; `ctx.should_stop()` is checked at story and scene boundaries; `ctx.artifact(path, label=, media_type=)` records files (relative paths resolve against the runtime `cwd`, which is the project root).
 - Spec 9.2: stage names are exactly `portfolio.observe`, `portfolio.evaluate`, `portfolio.plan`, `portfolio.record`, `story.init_run`, `story.generate_next`, `story.list_stories`, `story.continuity_audit`, `video.label`, `video.script`, `video.voice`, `video.assets`, `video.ir`, `video.render`, `video.quality`, `video.pacing`, `video.review_build`, `video.revise`, plus the added `video.review_ready` (see Task 7). `video.assets` records scene images and audio with `label: scene_NN` and character references with `label: char_<name>`.
 - Spec 2.1 / 9.1: `.mdium/project.yaml` has `schemaVersion: 1`, `id: video-gen`, `runtimes.video_gen: { kind: python, python: [.venv/Scripts/python.exe, .venv/bin/python], module: video_gen_flow, cwd: ., env: { PYTHONUTF8: "1" } }`, `setup: [{ run: [uv, sync] }]`, `secrets: [GOOGLE_API_KEY, ANTHROPIC_API_KEY]`, `flows: { main: flows/production-cycle.flow.yaml }`, `metrics` as in 2.1. `pyproject.toml` adds `mdium-worker` as a path dependency on `../mdium/python/mdium-worker` (editable, `[tool.uv.sources]`).
@@ -21,7 +21,7 @@
 - Spec 9.4 / 12: `improve.flow.yaml` is **not** part of V6 (it needs V7's `agent` nodes and `mdium:` templates and V8's actions); V6 delivers one entry flow and four parts. Record this in spec chapter 12 row V6 (Task 8).
 - Spec 9.5: no chapter-level nodes; Gradio UIs and `run_story_loop.ps1` untouched; `rate_limit_retry` untouched (its sleeps are bounded by node `timeout`).
 - Env: `video_gen_flow/__init__.py` calls `load_dotenv()` once (the repo keeps optional keys in `.env`); the two secrets are still required in the machine environment (mdium checks them before starting a run).
-- Rust sources are CRLF: no line-ending churn. Commit messages end with `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`. Never commit `src-tauri/gen/schemas/*.json` in mdium. Baselines: mdium on afec34e — flow-core 242 / mdium 731 / vitest 2048 / pytest 31; video_gen `uv run pytest -q` — record the count before Task 2 and keep it (new tests only add).
+- Rust sources are CRLF: no line-ending churn. Commit messages end with `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`. Never commit `src-tauri/gen/schemas/*.json` in mdium. Baselines: mdium on afec34e — flow-core 242 / mdium 731 / vitest 2048 / pytest 31; video_gen SCOPED SUITE — 379 passed on main; new tests only add.
 - Execution note for the controller: Task 1 runs in an mdium worktree (branch `feat/param-object-array` from `docs/portable-projects-spec`); Tasks 2–8 run in the video_gen repository on a new branch `feat/mdium-flow` (create a worktree `video_gen/.worktrees/feat-mdium-flow` only if the main checkout is dirty; `.venv` is in-repo, so a worktree needs its own `uv sync`). The video_gen tasks import `mdium_worker` from the mdium checkout at `../mdium` (path dependency).
 
 ## Review Focus
@@ -120,7 +120,7 @@ Run: `npx vitest run src/features/flow/components/__tests__/AttributeForms.test.
     - `portfolio.record` inputs like `observe` → outputs `recordedCount (number)`, `avgVideoCoherence (number)`, `coverage (number)`.
   - Module-level injection points (tests monkeypatch them): `portfolio.agent_runner_factory: Callable[[], AgentRunner]` (default `lambda: claude_agent_runner.ClaudeAgentRunner()`), `portfolio.planner_llm_factory: Callable[[str], Callable[[str], str]]` (default `orchestrate._make_planner_llm`), `portfolio.total_vocab: Callable[[list[str]], dict[str, int]]` (default `orchestrator.load_total_vocab`).
 
-- [ ] **Step 1: Baseline** — `cd C:\Users\mtmar\source\repos\video_gen && git checkout -b feat/mdium-flow && uv run pytest -q 2>&1 | tail -1`; record the count in the ledger.
+- [ ] **Step 1: Baseline** — `cd C:\Users\mtmar\source\repos\video_gen && git checkout -b feat/mdium-flow` (already done by the controller) and run the SCOPED SUITE command from Global Constraints; record the count in the ledger (379 on main).
 
 - [ ] **Step 2: Dependency** — in `pyproject.toml` add `"mdium-worker"` to `dependencies` and under `[tool.uv.sources]` add `mdium-worker = { path = "../mdium/python/mdium-worker", editable = true }`; run `uv sync`; verify `uv run python -c "import mdium_worker; print(mdium_worker.__name__)"`.
 
@@ -300,7 +300,7 @@ def observe(ctx: Context, outputRoot: str = "output", ledgerPath: str = pl.DEFAU
 
 `record`: `records = orchestrator._observe(outputRoot, ledgerPath)`; `state = compute…`; `coherences = [r.video_coherence for r in records if r.video_coherence is not None]`; outputs `recordedCount = len(records)`, `avgVideoCoherence = sum(coherences)/len(coherences) if coherences else 0.0`, `coverage = sum(state.coverage_by_level.values())/len(state.coverage_by_level) if state.coverage_by_level else 0.0`.
 
-- [ ] **Step 7: Run** `uv run pytest tests/test_video_gen_flow_portfolio.py -q` → PASS; `uv run python -m mdium_worker --module video_gen_flow --describe | head -c 400` prints a manifest containing `portfolio.observe`; `uv run pytest -q` → baseline + new tests.
+- [ ] **Step 7: Run** `uv run pytest tests/test_video_gen_flow_portfolio.py -q` → PASS; `uv run python -m mdium_worker --module video_gen_flow --describe | head -c 400` prints a manifest containing `portfolio.observe`; the SCOPED SUITE → baseline + new tests.
 
 - [ ] **Step 8: Commit** `feat(flow): mdium project manifest and portfolio stages`.
 
@@ -441,7 +441,7 @@ def test_continuity_audit_reports_score_and_artifact(tmp_path, monkeypatch):
 
 - [ ] **Step 3: Implement** `video_gen_flow/story.py` per the Interfaces block. `init_run`'s season naming: `base = f"{level.upper()}_{datetime.date.today():%Y%m%d}_season_"`; `n = 1; while os.path.exists(os.path.join(outputRoot, f"{base}{n:02d}")): n += 1`; `os.makedirs(path)`. `list_stories` uses `multi_story._scan_run_directory(runDir)[0]` sorted by `.index`; coverage from the union of `c.used_words` over the completed stories and `total_vocab([level]).get(level, 0)`. Add `from . import story` to `video_gen_flow/__init__.py`.
 
-- [ ] **Step 4: Run** the file → PASS; `uv run pytest -q` → all green.
+- [ ] **Step 4: Run** the file → PASS; the SCOPED SUITE → all green.
 
 - [ ] **Step 5: Commit** `feat(flow): story stages (init, generate next, list, continuity audit)`.
 
@@ -556,7 +556,7 @@ def test_run_video_pipeline_result_is_unchanged(tmp_path, stub_probe):
 
 - [ ] **Step 3: Implement** the decomposition in `video_pipeline.py` as specified. Add `save_scenes` / `load_scenes` (`dataclasses.asdict`; convert `Path` fields to `str` on save and back on load — look at `VideoSceneResult`'s field types), `load_script` (`json.load` + `validate_script_schema`), `load_labeled`.
 
-- [ ] **Step 4: Run** `uv run pytest tests/test_video_pipeline.py tests/test_video_pipeline_stages.py tests/test_video_revise.py tests/test_video_repace.py -q` → PASS, then `uv run pytest -q` → all green (baseline + new).
+- [ ] **Step 4: Run** `uv run pytest tests/test_video_pipeline.py tests/test_video_pipeline_stages.py tests/test_video_revise.py tests/test_video_repace.py -q` → PASS, then the SCOPED SUITE → all green (baseline + new).
 
 - [ ] **Step 5: Commit** `refactor(video): run the pipeline as a sequence of stage functions`.
 
@@ -713,7 +713,7 @@ def test_revise_applies_a_revision(tmp_path, fakes, stub_probe, monkeypatch):
 
 - [ ] **Step 3: Implement** `video_gen_flow/video.py` per the Interfaces block; add `from . import video` to `video_gen_flow/__init__.py`.
 
-- [ ] **Step 4: Run** `uv run pytest tests/test_video_gen_flow_video.py -q` → PASS; `uv run pytest -q` → all green; `uv run python -m mdium_worker --module video_gen_flow --describe` lists all 19 stages.
+- [ ] **Step 4: Run** `uv run pytest tests/test_video_gen_flow_video.py -q` → PASS; the SCOPED SUITE → all green; `uv run python -m mdium_worker --module video_gen_flow --describe` lists all 19 stages.
 
 - [ ] **Step 5: Commit** `feat(flow): video stages over the pipeline stage functions`.
 
@@ -1070,7 +1070,7 @@ outputs:
   revisionCount: "${{ nodes.ready.outputs.revisionCount }}"
 ```
 
-- [ ] **Step 4: Run** `uv run pytest tests/test_video_gen_flow_definitions.py -q` → PASS; `uv run pytest -q` → all green.
+- [ ] **Step 4: Run** `uv run pytest tests/test_video_gen_flow_definitions.py -q` → PASS; the SCOPED SUITE → all green.
 
 - [ ] **Step 5: Validate with the engine** — open `C:\Users\mtmar\source\repos\video_gen` in the mdium desktop app (built from a branch that includes Task 1). The flow list must show `Production cycle` (main) and the four parts with **no validation errors or warnings**; open each file in the editor and check the validation panel. Fix the YAML until clean (`FLOW_OUTPUT_UNKNOWN`, `FLOW_PARAM_MISMATCH`, `FLOW_PARAM_TYPE` and `FLOW_REF_NOT_FOUND` are the likely findings). Record the result in the task report.
 
@@ -1084,7 +1084,7 @@ outputs:
 - Modify (video_gen): `CLAUDE.md` (a short "mdium flow" section after the meta-orchestration section: how to open the project in mdium, run Setup, run `Production cycle`, where the run data lives, the revise JSON example, what is not migrated — 9.5)
 - Modify (mdium, on `docs/portable-projects-spec`): `.superpowers/specs/2026-10-10-portable-projects-and-improvement-loop-design.md` chapter 12 row V6 — append the deviations: `improve.flow.yaml` deferred to V8; `video.review_ready` added and the review loop closes on it; `quality` / `pacing` / `review_build` run unconditionally (the stages are no-ops when `qualityIters` is 0 / `audioPacing` is false; `review_build` is idempotent) so the part's outputs always resolve, instead of the spec's `when` conditions; the video dir is derived by `video.label` and later stages take only `videoDir` (config persisted in `flow_config.json`); `portfolio.evaluate` / `plan` take `ledgerPath` (state recomputed) instead of `statePath`; `story.generate_next` takes the whole `genres` list and `count` (the loop's `maxIterations` is a literal cap of 50); `video.assets` reports stop only at the stage boundary (no per-scene stop); `mdium-worker` is a path dependency on the sibling checkout.
 
-- [ ] **Step 1: Final verification (video_gen)**: `uv run pytest -q` (all green; count = baseline + new), `uv run ruff check video_gen_flow tests/test_video_gen_flow_*.py tests/test_video_pipeline_stages.py` (clean), `uv run python -m mdium_worker --module video_gen_flow --describe > /dev/null` (exit 0).
+- [ ] **Step 1: Final verification (video_gen)**: the SCOPED SUITE (all green; count = 379 + new), `uv run ruff check video_gen_flow tests/test_video_gen_flow_*.py tests/test_video_pipeline_stages.py` (clean), `uv run python -m mdium_worker --module video_gen_flow --describe > /dev/null` (exit 0).
 - [ ] **Step 2: Final verification (mdium)**: `cargo test --workspace` (flow-core 244 / mdium 731), `npx vitest run`, `npx tsc --noEmit -p tsconfig.json`, `uv run --project python/mdium-worker pytest -q`.
 - [ ] **Step 3: Docs** as listed; commit `docs: mdium flow usage and V6 deviations` (video_gen) and `docs(spec): record the V6 deviations` (mdium).
 - [ ] **Step 4: Desktop smoke (human)**, with `GOOGLE_API_KEY` / `ANTHROPIC_API_KEY` in the environment and the `claude` CLI on PATH: open `video_gen` in mdium → Setup (`uv sync`) → run `Production cycle` with `maxStories: 1`, `qualityIters: 0`, `audioPacing: false` → confirm the runtime in the confirmation dialog → `observe` / `evaluate` / `plan` complete and `approve_order` shows `order.json` → approve → `stories` generates one story (long) → `videos` produces its video → `review` shows the review video → answer `revise` with `{"revisions":[{"scene":1,"target":"image"}]}` → the back edge re-renders and `review` shows again → `accept` → `record` completes and the run outputs show `coverage` / `avgVideoCoherence` / `storyCount`. Also: reject at `approve_order` ends the run cleanly; stop during `stories` and re-run with `resumeDir` set to the run dir continues the same run.
