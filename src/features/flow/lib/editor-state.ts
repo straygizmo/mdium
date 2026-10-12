@@ -109,6 +109,11 @@ export function addEdge(def: FlowDef, scopePath: "" | NodePath, edge: FlowEdge):
   });
 }
 
+/** Rewrites the nodes / edges of a scope (`""` or a loop node path with an inline body). */
+export function mapScope(def: FlowDef, scope: string, fn: (s: Scope) => Partial<Scope>): FlowDef {
+  return editScope(def, nodeIndices(scope), fn);
+}
+
 /** The scope (`""` or the owning loop's node path) of the node at `nodePath`. */
 export function scopeOf(nodePath: NodePath): string {
   const i = nodePath.lastIndexOf(".body.");
