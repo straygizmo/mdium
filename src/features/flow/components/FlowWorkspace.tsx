@@ -33,6 +33,7 @@ import { PortPopover } from "./PortPopover";
 import { RunPanel } from "./RunPanel";
 import { ExtractDialog } from "./ExtractDialog";
 import { SaveWarningDialog } from "./SaveWarningDialog";
+import { CallersNotice } from "./CallersNotice";
 import { ExternalChangeNotice } from "./ExternalChangeNotice";
 import { AttributePanel } from "./attrs/AttributePanel";
 import type { FlowAttrsPatch } from "./attrs/FlowAttrsForm";
@@ -65,6 +66,11 @@ interface PendingConnect {
 interface PendingConfirm {
   message: string;
   resolve(ok: boolean): void;
+}
+
+/** Signature map of every listed flow (any in-project flow can be a sub-flow callee). */
+function signaturesOf(flows: FlowSummary[]): Record<string, CalleeSignature> {
+  return Object.fromEntries(flows.map((f) => [f.path.replace(/\\/g, "/"), { params: f.params, outputs: f.outputs }] as const));
 }
 
 const editor = () => useFlowEditorStore.getState();
@@ -120,6 +126,7 @@ export function FlowWorkspace() {
   const [partsVersion, setPartsVersion] = useState(0);
   const [parts, setParts] = useState<FlowSummary[]>([]);
   const [signatures, setSignatures] = useState<Record<string, CalleeSignature>>({});
+  const [callers, setCallers] = useState<string[]>([]);
   const [project, setProject] = useState<ProjectLoadResult | null>(null);
   const savingRef = useRef(false);
   const confirmRef = useRef<PendingConfirm | null>(null);
@@ -178,7 +185,7 @@ export function FlowWorkspace() {
         setParts(flows.filter((f) => f.kind === "part" && f.path !== path));
         // Any in-project flow can be a sub-flow callee, so the map covers entries and parts.
         setSignatures(
-          Object.fromEntries(flows.map((f) => [f.path.replace(/\\/g, "/"), { params: f.params, outputs: f.outputs }] as const)),
+          signaturesOf(flows),
         );
       },
       () => {
@@ -195,6 +202,9 @@ export function FlowWorkspace() {
       cancelled = true;
     };
   }, [folder, path, partsVersion]);
+
+  // The callers notice belongs to the file it was raised for.
+  useEffect(() => setCallers([]), [folder, path]);
 
   // External changes: compare the hash on disk with the one the editor holds.
   useEffect(() => {
@@ -263,6 +273,24 @@ export function FlowWorkspace() {
     [],
   );
 
+  /**
+   * After saving a part: refresh the signatures and list the other flows with errors
+   * (callers are approximated by error count; the list has no call graph).
+   */
+  const refreshAfterPartSave = useCallback(async () => {
+    const { projectRoot: root, path: saved, kind: savedKind } = editor();
+    if (!root || !saved) return;
+    try {
+      const flows = await flowApi.list(root);
+      const now = editor();
+      if (now.projectRoot !== root || now.path !== saved) return;
+      setSignatures(signaturesOf(flows));
+      if (savedKind === "part") setCallers(flows.filter((f) => f.errorCount > 0 && f.path !== saved).map((f) => f.path));
+    } catch {
+      // The notice is advisory; a failed list leaves the previous state.
+    }
+  }, []);
+
   /** Validates, asks about errors / dropped keys / lost comments, then saves (or overwrites). */
   const runSave = useCallback(
     async (overwrite = false) => {
@@ -285,7 +313,10 @@ export function FlowWorkspace() {
           useFlowEditorStore.setState({ commentWarningPending: false });
         }
         const outcome = await editor().save({ overwrite });
-        if (outcome === "saved") setJustSaved(true);
+        if (outcome === "saved") {
+          setJustSaved(true);
+          void refreshAfterPartSave();
+        }
       } finally {
         savingRef.current = false;
         setSaving(false);
@@ -518,6 +549,13 @@ export function FlowWorkspace() {
           onOverwrite={() => void runSave(true)}
         />
       )}
+      {showEditor && callers.length > 0 && (
+        <CallersNotice
+          paths={callers}
+          onOpen={(p) => folder && useFlowViewStore.getState().setSelected(folder, p)}
+          onDismiss={() => setCallers([])}
+        />
+      )}
       {showEditor && saveError && (
         <div className="flow-workspace__message flow-workspace__message--error" role="alert">
           {t("editor.saveFailed", { message: describeError(t, { code: saveError, message: "" }).message })}
@@ -595,6 +633,7 @@ export function FlowWorkspace() {
                   project={project}
                   projectRoot={folder}
                   currentFile={path}
+                  kind={kind}
                   onEditNode={(p, patch) => edit((d) => updateNode(d, p, patch))}
                   onRenameNode={(p, id) => edit((d) => renameNode(d, p, id))}
                   onEditEdge={(p, patch) => edit((d) => updateEdge(d, p, patch))}

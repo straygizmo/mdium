@@ -627,6 +627,58 @@ describe("flow workspace editing", () => {
     expect(container.querySelector<HTMLTextAreaElement>(".test-yaml")!.readOnly).toBe(true);
   });
 
+  describe("parts", () => {
+    const PART = ".mdium/flows/lib/p.flow.yaml";
+    const partDef: FlowDef = { ...demo, id: "p", name: "P", params: { target: { type: "string", required: true } }, outputs: { out: "{{ nodes.run.stdout }}" } };
+
+    function partRoutes(over: Record<string, Handler> = {}) {
+      installRoutes({
+        flow_load: () => loadResult({ path: PART, kind: "part", flow: partDef, content: stringifyFlow(partDef) }),
+        flow_save: (args) => loadResult({ path: PART, kind: "part", flow: partDef, content: String(args.content), sha256: "h-saved" }),
+        flow_validate: (args) => ({ ...validated(args), kind: "part" }),
+        ...over,
+      });
+    }
+    async function mountPart() {
+      useFlowViewStore.getState().setSelected(FOLDER, PART);
+      await act(async () => root.render(<FlowWorkspace />));
+      await waitFor(() => expect(container.querySelectorAll(".react-flow__node").length).toBe(2));
+    }
+
+    it("a part opens with the signature form first", async () => {
+      partRoutes();
+      await mountPart();
+      const side = container.querySelector(".flow-workspace__attrs")!;
+      expect(side.querySelector("h3")?.textContent).toBe("Signature");
+      const block = side.querySelector(".flow-attrs__signature")!;
+      expect([...block.querySelectorAll("h4")].map((h) => h.textContent)).toEqual(["Parameters", "Outputs"]);
+      expect(block.textContent).toContain("target");
+    });
+
+    it("lists callers with errors after saving a part", async () => {
+      partRoutes();
+      await mountPart();
+      const caller: FlowSummary = {
+        path: ".mdium/flows/main.flow.yaml",
+        kind: "entry",
+        id: "main",
+        name: "Main",
+        params: {},
+        outputs: [],
+        errorCount: 1,
+        warningCount: 0,
+      };
+      routes.flow_list = () => [{ ...caller, path: PART, kind: "part", errorCount: 0 }, caller];
+      await typeAndBlur(container.querySelector('.flow-workspace__attrs [aria-label="Name"]')!, "P2");
+      await click(button("Save"));
+      await waitFor(() => expect(container.querySelector(".flow-notice")?.textContent).toContain("main.flow.yaml"));
+      expect(container.querySelector(".flow-notice")?.textContent).not.toContain("lib/p.flow.yaml");
+
+      await click(button(caller.path));
+      expect(useFlowViewStore.getState().selected[FOLDER]).toBe(caller.path);
+    });
+  });
+
   it("adds a node from the palette and closes it on Escape", async () => {
     await mountWorkspace();
     await click(button("Add node"));

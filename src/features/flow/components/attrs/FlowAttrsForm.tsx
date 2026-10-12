@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import type { FlowDef, FlowParamDef, FlowParamType } from "@/shared/types/flow";
+import type { FlowDef, FlowKind, FlowParamDef, FlowParamType } from "@/shared/types/flow";
 import type { updateFlowAttrs } from "../../lib/editor-state";
 import { NumberField, RetryFields, TextField, compact } from "./fields";
 import { KeyValueEditor, type ColumnSpec } from "./KeyValueEditor";
@@ -10,6 +10,8 @@ export type FlowAttrsPatch = Parameters<typeof updateFlowAttrs>[1];
 interface FlowAttrsFormProps {
   def: FlowDef;
   onChange: (patch: FlowAttrsPatch) => void;
+  /** A part opens with its signature (params / outputs) first. */
+  kind?: FlowKind | null;
 }
 
 const PARAM_TYPES: FlowParamType[] = ["string", "number", "bool", "path"];
@@ -40,7 +42,7 @@ function StringCell({ label, value, onChange }: { label: string; value: string; 
 }
 
 /** Flow-level attributes: name, params, defaults, limits, env and outputs. */
-export function FlowAttrsForm({ def, onChange }: FlowAttrsFormProps) {
+export function FlowAttrsForm({ def, onChange, kind = null }: FlowAttrsFormProps) {
   const { t } = useTranslation("flow");
   const defaults = def.defaults;
   const limits = def.limits;
@@ -91,22 +93,46 @@ export function FlowAttrsForm({ def, onChange }: FlowAttrsFormProps) {
     { id: "value", label, render: (v, set) => <StringCell label={label} value={v} onChange={set} /> },
   ];
 
+  const paramsSection = (
+    <section className="flow-attrs__section">
+      <h4>{t("attrs.params")}</h4>
+      <KeyValueEditor<FlowParamDef>
+        entries={def.params ?? {}}
+        columns={paramColumns}
+        addLabel={t("attrs.addRow")}
+        makeEntry={() => ({ type: "string", required: false })}
+        onChange={(params) => onChange({ params: orUndefined(params) })}
+      />
+    </section>
+  );
+
+  const outputsSection = (
+    <section className="flow-attrs__section">
+      <h4>{t("attrs.outputs")}</h4>
+      <KeyValueEditor<string>
+        entries={def.outputs ?? {}}
+        columns={stringColumn(t("attrs.outputTemplate"))}
+        addLabel={t("attrs.addRow")}
+        makeEntry={() => ""}
+        onChange={(outputs) => onChange({ outputs: orUndefined(outputs) })}
+      />
+    </section>
+  );
+
   return (
     <div className="flow-attrs">
+      {kind === "part" && (
+        <section className="flow-attrs__section flow-attrs__signature">
+          <h3 className="flow-attrs__title">{t("signature.title")}</h3>
+          {paramsSection}
+          {outputsSection}
+        </section>
+      )}
       <h3 className="flow-attrs__title">{t("attrs.flowTitle")}</h3>
       <TextField label={t("attrs.name")} value={def.name} onCommit={(name) => onChange({ name: name ?? "" })} />
       <TextField label={t("attrs.description")} value={def.description} multiline onCommit={(description) => onChange({ description })} />
 
-      <section className="flow-attrs__section">
-        <h4>{t("attrs.params")}</h4>
-        <KeyValueEditor<FlowParamDef>
-          entries={def.params ?? {}}
-          columns={paramColumns}
-          addLabel={t("attrs.addRow")}
-          makeEntry={() => ({ type: "string", required: false })}
-          onChange={(params) => onChange({ params: orUndefined(params) })}
-        />
-      </section>
+      {kind !== "part" && paramsSection}
 
       <section className="flow-attrs__section">
         <h4>{t("attrs.defaults")}</h4>
@@ -155,16 +181,7 @@ export function FlowAttrsForm({ def, onChange }: FlowAttrsFormProps) {
         />
       </section>
 
-      <section className="flow-attrs__section">
-        <h4>{t("attrs.outputs")}</h4>
-        <KeyValueEditor<string>
-          entries={def.outputs ?? {}}
-          columns={stringColumn(t("attrs.outputTemplate"))}
-          addLabel={t("attrs.addRow")}
-          makeEntry={() => ""}
-          onChange={(outputs) => onChange({ outputs: orUndefined(outputs) })}
-        />
-      </section>
+      {kind !== "part" && outputsSection}
     </div>
   );
 }

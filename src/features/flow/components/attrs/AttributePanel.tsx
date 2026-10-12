@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import type { FlowDef, FlowEdge, FlowIssue, FlowNode, FlowSummary, ProjectLoadResult } from "@/shared/types/flow";
+import type { FlowDef, FlowEdge, FlowKind, FlowIssue, FlowNode, FlowSummary, ProjectLoadResult } from "@/shared/types/flow";
 import type { Selection } from "../../editor-store";
 import { edgeAt, nodeAt } from "../../lib/editor-state";
 import { collectIds, portsOf } from "../../lib/flow-ports";
@@ -26,6 +26,8 @@ interface AttributePanelProps {
   projectRoot: string;
   /** Project-relative path of the open file (decides how parts are referenced). */
   currentFile: string;
+  /** Kind of the open flow (a part shows its signature form first). */
+  kind?: FlowKind | null;
   onEditNode: (path: string, patch: Partial<FlowNode>) => void;
   onRenameNode: (path: string, id: string) => void;
   onEditEdge: (path: string, patch: Partial<FlowEdge>) => void;
@@ -64,7 +66,7 @@ function renderKindForm(node: FlowNode, path: string, ctx: KindContext) {
 }
 
 /** Right-hand attribute panel: routes by what is selected. */
-export function AttributePanel({ def, selection, issues, parts, project, projectRoot, currentFile, onEditNode, onRenameNode, onEditEdge, onDeleteEdge, onEditFlow }: AttributePanelProps) {
+export function AttributePanel({ def, selection, issues, parts, project, projectRoot, currentFile, kind, onEditNode, onRenameNode, onEditEdge, onDeleteEdge, onEditFlow }: AttributePanelProps) {
   const { t } = useTranslation("flow");
   if (selection?.kind === "node") {
     const node = nodeAt(def, selection.path);
@@ -86,5 +88,5 @@ export function AttributePanel({ def, selection, issues, parts, project, project
       <EdgeForm edge={found.edge} path={selection.path} ports={source ? portsOf(source) : []} onChange={onEditEdge} onDelete={onDeleteEdge} />
     );
   }
-  return <FlowAttrsForm def={def} onChange={onEditFlow} />;
+  return <FlowAttrsForm def={def} kind={kind} onChange={onEditFlow} />;
 }

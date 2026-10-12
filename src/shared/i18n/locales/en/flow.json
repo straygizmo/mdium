@@ -336,6 +336,8 @@
     "discardEdits": "Discard unsaved changes?",
     "drillDown": "Double-click to open the referenced flow",
     "fixYamlToEdit": "Fix the YAML to edit on the canvas.",
+    "callersWithErrors": "Flows with validation errors after this change:",
+    "dismiss": "Dismiss",
     "deletedOutside": "The file was deleted outside the editor.",
     "droppedKeys": "Unknown keys will be dropped: {{keys}}",
     "extract": "Extract"
@@ -460,6 +462,7 @@
     }
   },
   "signature": {
+    "title": "Signature",
     "params": "Arguments",
     "outputs": "Outputs",
     "undeclared": "not declared by the callee",

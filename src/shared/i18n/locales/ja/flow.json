@@ -336,6 +336,8 @@
     "discardEdits": "未保存の変更を破棄しますか？",
     "drillDown": "ダブルクリックで参照先のフローを開く",
     "fixYamlToEdit": "キャンバスで編集するには YAML を修正してください。",
+    "callersWithErrors": "この変更後に検証エラーのあるフロー:",
+    "dismiss": "閉じる",
     "deletedOutside": "ファイルがエディタの外で削除されました。",
     "droppedKeys": "未知のキーは削除されます: {{keys}}",
     "extract": "抽出"
@@ -460,6 +462,7 @@
     }
   },
   "signature": {
+    "title": "シグネチャ",
     "params": "引数",
     "outputs": "出力",
     "undeclared": "呼び出し先に未宣言",
