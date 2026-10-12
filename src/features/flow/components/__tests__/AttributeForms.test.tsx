@@ -32,7 +32,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 import { AttributePanel } from "../attrs/AttributePanel";
 import { ConditionEditor, parseConditionValue } from "../attrs/ConditionEditor";
-import { FlowAttrsForm } from "../attrs/FlowAttrsForm";
+import { FlowAttrsForm, parseDefault } from "../attrs/FlowAttrsForm";
 import { NodeCommonForm } from "../attrs/NodeCommonForm";
 import { ActionForm } from "../attrs/kinds/ActionForm";
 import { AgentForm } from "../attrs/kinds/AgentForm";
@@ -230,6 +230,15 @@ describe("EdgeForm", () => {
 
     await act(async () => button("Delete edge").click());
     expect(onDeleteEdge).toHaveBeenCalledWith("edges[0]");
+  });
+});
+
+describe("parseDefault", () => {
+  it("parses object and array defaults as JSON", () => {
+    expect(parseDefault("array", '["a", "b"]')).toEqual(["a", "b"]);
+    expect(parseDefault("object", '{"x": 1}')).toEqual({ x: 1 });
+    expect(parseDefault("array", '{"x": 1}')).toBeUndefined();
+    expect(parseDefault("object", "not json")).toBeUndefined();
   });
 });
 

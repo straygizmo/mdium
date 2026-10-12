@@ -267,6 +267,23 @@ fn schema_version_must_be_present_and_supported() {
 // ------------------------------------------------------- per-rule checks
 
 #[test]
+fn object_param_default_must_be_an_object() {
+    let bad = flow("params:
+  c: { type: object, default: [1] }
+nodes:
+  - { id: a, kind: command, run: [echo] }
+");
+    assert_eq!(reasons_of(&bad)[0].2, "type-mismatch");
+    let ok = flow("params:
+  c: { type: object, default: { x: 1 } }
+  l: { type: array, default: [] }
+nodes:
+  - { id: a, kind: command, run: [echo] }
+");
+    assert!(errors_of(&ok).is_empty());
+}
+
+#[test]
 fn flow_level_values_are_checked() {
     let yaml = "schemaVersion: 1\nid: Bad_Id\nname: ' '\n\
         params: { n: { type: number, default: 'x' }, 1p: { type: string } }\n\

@@ -131,6 +131,8 @@ pub fn prepare_params(
             ParamType::String | ParamType::Path => value.is_string(),
             ParamType::Number => value.is_number(),
             ParamType::Bool => value.is_boolean(),
+            ParamType::Object => value.is_object(),
+            ParamType::Array => value.is_array(),
         };
         if !ok {
             problems.push(Reason::new(FLOW_PARAM_INVALID).with("param", name.clone()));
@@ -442,6 +444,25 @@ mod tests {
             errors,
             vec![FLOW_PARAM_INVALID, FLOW_PARAM_MISSING, FLOW_PARAM_UNKNOWN]
         );
+    }
+
+    #[test]
+    fn prepare_params_accepts_object_and_array_values() {
+        let def = flow(
+            "params:
+  genres: { type: array }
+  constraints: { type: object, default: {} }
+nodes:
+  - { id: a, kind: approval }
+",
+        );
+        let given = BTreeMap::from([("genres".to_string(), json!(["Mystery", "Comedy"]))]);
+        let out = prepare_params(&def, &given).expect("array accepted");
+        assert_eq!(out["genres"], json!(["Mystery", "Comedy"]));
+        assert_eq!(out["constraints"], json!({}));
+        let bad = BTreeMap::from([("genres".to_string(), json!("Mystery"))]);
+        let err = prepare_params(&def, &bad).unwrap_err();
+        assert_eq!(err[0].code, FLOW_PARAM_INVALID);
     }
 
     #[test]

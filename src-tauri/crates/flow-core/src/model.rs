@@ -77,6 +77,8 @@ pub enum ParamType {
     Number,
     Bool,
     Path,
+    Object,
+    Array,
 }
 
 /// Declaration of one flow parameter.

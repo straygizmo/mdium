@@ -205,6 +205,8 @@ impl Validator {
                     ParamType::String | ParamType::Path => default.is_string(),
                     ParamType::Number => default.is_number(),
                     ParamType::Bool => default.is_boolean(),
+                    ParamType::Object => default.is_object(),
+                    ParamType::Array => default.is_array(),
                 };
                 if !ok {
                     self.issues

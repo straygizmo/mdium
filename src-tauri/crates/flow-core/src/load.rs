@@ -398,6 +398,8 @@ impl RefChecker<'_> {
                 ParamType::String | ParamType::Path => value.is_string(),
                 ParamType::Number => value.is_number(),
                 ParamType::Bool => value.is_boolean(),
+                ParamType::Object => value.is_object(),
+                ParamType::Array => value.is_array(),
             };
             if !ok {
                 self.issues.error(
@@ -433,6 +435,8 @@ fn param_type_name(ty: ParamType) -> &'static str {
         ParamType::Number => "number",
         ParamType::Bool => "bool",
         ParamType::Path => "path",
+        ParamType::Object => "object",
+        ParamType::Array => "array",
     }
 }
 

@@ -15,7 +15,7 @@ export type FlowFormat = "yaml" | "json";
 /** Which coding agent runs an `agent` node (same set as the dev workflow). */
 export type FlowAgentProvider = "codex" | "copilot" | "opencode" | "claude";
 
-export type FlowParamType = "string" | "number" | "bool" | "path";
+export type FlowParamType = "string" | "number" | "bool" | "path" | "object" | "array";
 
 export interface FlowParamDef {
   type: FlowParamType;

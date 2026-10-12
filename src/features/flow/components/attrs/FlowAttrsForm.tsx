@@ -14,7 +14,7 @@ interface FlowAttrsFormProps {
   kind?: FlowKind | null;
 }
 
-const PARAM_TYPES: FlowParamType[] = ["string", "number", "bool", "path"];
+const PARAM_TYPES: FlowParamType[] = ["string", "number", "bool", "path", "object", "array"];
 
 /** An empty record deletes its key. */
 function orUndefined<T>(record: Record<string, T>): Record<string, T> | undefined {
@@ -22,13 +22,23 @@ function orUndefined<T>(record: Record<string, T>): Record<string, T> | undefine
 }
 
 /** Parses a param default by the param's type; blank is `undefined`. */
-function parseDefault(type: FlowParamType, text: string): unknown {
+export function parseDefault(type: FlowParamType, text: string): unknown {
   if (text === "") return undefined;
   if (type === "number") {
     const n = Number(text);
     return Number.isNaN(n) ? undefined : n;
   }
   if (type === "bool") return text === "true";
+  if (type === "object" || type === "array") {
+    // JSON text; a value of the wrong shape (or invalid JSON) is dropped.
+    try {
+      const parsed: unknown = JSON.parse(text);
+      if (type === "array") return Array.isArray(parsed) ? parsed : undefined;
+      return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : undefined;
+    } catch {
+      return undefined;
+    }
+  }
   return text;
 }
 
