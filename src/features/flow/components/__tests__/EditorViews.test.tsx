@@ -316,4 +316,23 @@ describe("editor views", () => {
     await dbl("nodes[0]");
     expect(onDrill).toHaveBeenCalledWith("nodes[0]");
   });
+  it("keeps a shift-click out of the single selection", async () => {
+    const handlers = await mountCanvas();
+    const nodeEl = (path: string) => container.querySelector<HTMLElement>(`.react-flow__node[data-id="${path}"]`)!;
+    const clickNode = async (path: string, init: MouseEventInit = {}) =>
+      act(async () => {
+        nodeEl(path).dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ...init }));
+      });
+    await clickNode("nodes[0]");
+    expect(handlers.onSelect).toHaveBeenCalledWith({ kind: "node", path: "nodes[0]" });
+    handlers.onSelect.mockClear();
+    // The multi-selection comes from React Flow's selection changes; the click must not collapse it.
+    await clickNode("nodes[1]", { shiftKey: true });
+    expect(handlers.onSelect).not.toHaveBeenCalled();
+    await clickNode("nodes[1]", { ctrlKey: true });
+    await clickNode("nodes[1]", { metaKey: true });
+    expect(handlers.onSelect).not.toHaveBeenCalled();
+    await clickNode("nodes[1]");
+    expect(handlers.onSelect).toHaveBeenCalledWith({ kind: "node", path: "nodes[1]" });
+  });
 });

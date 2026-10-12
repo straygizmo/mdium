@@ -97,6 +97,18 @@ describe("editor store", () => {
     expect(store().selection).toBeNull();
   });
 
+  it("select keeps the multi-selection when the node is part of it", async () => {
+    await store().open(ROOT, PATH);
+    store().selectMany(["nodes[0]", "nodes[1]"]);
+    store().select({ kind: "node", path: "nodes[1]" });
+    expect(store().selectedMany).toEqual(["nodes[0]", "nodes[1]"]);
+    expect(store().selection).toEqual({ kind: "node", path: "nodes[1]" });
+    store().select({ kind: "node", path: "nodes[2]" });
+    expect(store().selectedMany).toEqual(["nodes[2]"]);
+    store().select(null);
+    expect(store().selectedMany).toEqual([]);
+  });
+
   it("keeps the node selection when a text edit leaves the selected nodes in place", async () => {
     const two: FlowDef = {
       ...def,

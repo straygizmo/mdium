@@ -284,7 +284,14 @@ export const useFlowEditorStore = create<EditorState>()((set, get) => {
       }
     },
 
-    select: (selection) => set({ selection, selectedMany: selection?.kind === "node" ? [selection.path] : [] }),
+    select: (selection) =>
+      set((s) => {
+        // Picking a node of the multi-selection keeps the set (a click on one of several selected nodes).
+        if (selection?.kind === "node" && s.selectedMany.length > 1 && s.selectedMany.includes(selection.path)) {
+          return { selection, selectedMany: s.selectedMany };
+        }
+        return { selection, selectedMany: selection?.kind === "node" ? [selection.path] : [] };
+      }),
 
     selectMany: (paths) =>
       set((s) => {

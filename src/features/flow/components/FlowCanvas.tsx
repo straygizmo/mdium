@@ -262,7 +262,12 @@ export function FlowCanvas({
           fitViewOptions={{ padding: 0.15 }}
           minZoom={0.1}
           proOptions={{ hideAttribution: true }}
-          onNodeClick={(_, node) => onSelect({ kind: "node", path: node.id })}
+          onNodeClick={(event, node) => {
+            // A modifier click extends the multi-selection (reported through onSelectMany);
+            // selecting the clicked node alone would collapse it.
+            if (event.shiftKey || event.metaKey || event.ctrlKey) return;
+            onSelect({ kind: "node", path: node.id });
+          }}
           onNodeDoubleClick={
             onDrill
               ? (_, node) => {
