@@ -88,6 +88,17 @@ function askDiscardFor(key: string, message: string): Promise<boolean> {
 }
 
 /** Main area of the Flows view: the selected flow's editor (canvas, YAML, attributes, runs). */
+/** State of the open extraction dialog. */
+interface ExtractState {
+  busy: boolean;
+  /** Validation errors of the last attempt. */
+  failure: FlowIssue[];
+  /** Code and message of a failed save of the part file. */
+  saveError: string | null;
+}
+
+const IDLE_EXTRACT: ExtractState = { busy: false, failure: [], saveError: null };
+
 export function FlowWorkspace() {
   const { t } = useTranslation("flow");
   const folder = useTabStore((s) => s.activeFolderPath);
@@ -122,7 +133,7 @@ export function FlowWorkspace() {
   const [saving, setSaving] = useState(false);
   const [justSaved, setJustSaved] = useState(false);
   const [noticeBusy, setNoticeBusy] = useState(false);
-  const [extracting, setExtracting] = useState<{ busy: boolean; failure: FlowIssue[] } | null>(null);
+  const [extracting, setExtracting] = useState<ExtractState | null>(null);
   const [partsVersion, setPartsVersion] = useState(0);
   const [parts, setParts] = useState<FlowSummary[]>([]);
   const [signatures, setSignatures] = useState<Record<string, CalleeSignature>>({});
@@ -434,7 +445,7 @@ export function FlowWorkspace() {
   const onConfirmExtract = async (name: string) => {
     const s = editor();
     if (!s.def || !s.projectRoot || !s.path || !s.defCurrent) return;
-    setExtracting({ busy: true, failure: [] });
+    setExtracting({ ...IDLE_EXTRACT, busy: true });
     try {
       const outcome = await commitExtraction({
         projectRoot: s.projectRoot,
@@ -442,18 +453,21 @@ export function FlowWorkspace() {
         selectedPaths: s.selectedMany,
         name,
         currentFile: s.path,
+        format: s.format ?? "yaml",
       });
       if (!outcome.ok) {
-        setExtracting({ busy: false, failure: outcome.errors });
+        setExtracting({ ...IDLE_EXTRACT, failure: outcome.errors });
         return;
       }
       edit(() => outcome.updated);
-      if (outcome.newNodePath) editor().select({ kind: "node", path: outcome.newNodePath });
+      editor().select({ kind: "node", path: outcome.newNodePath });
       setPartsVersion((v) => v + 1);
       setExtracting(null);
     } catch (err) {
-      const code = (err as { code?: string } | null)?.code ?? "FLOW_SAVE_FAILED";
-      setExtracting({ busy: false, failure: [{ code, path: "", params: {} } as FlowIssue] });
+      const failure = err as { code?: unknown; message?: unknown } | null;
+      const code = typeof failure?.code === "string" ? failure.code : "";
+      const message = typeof failure?.message === "string" ? failure.message : String(err);
+      setExtracting({ ...IDLE_EXTRACT, saveError: code ? `${code}: ${message}` : message });
     }
   };
 
@@ -522,7 +536,7 @@ export function FlowWorkspace() {
           validating={validating}
           saving={saving}
           selectedCount={selectedMany.length}
-          onExtract={() => setExtracting({ busy: false, failure: [] })}
+          onExtract={() => setExtracting(IDLE_EXTRACT)}
           onSave={() => void runSave()}
           onValidate={() => void editor().validateNow()}
           onToggleYaml={() => setYamlOpen((open) => !open)}
@@ -655,9 +669,12 @@ export function FlowWorkspace() {
           currentFile={path}
           existingParts={parts.map((p) => p.path)}
           failure={extracting.failure}
+          saveError={extracting.saveError}
           busy={extracting.busy}
           onConfirm={(name) => void onConfirmExtract(name)}
-          onClose={() => setExtracting(null)}
+          onNameChange={() => setExtracting((x) => (x && !x.busy ? IDLE_EXTRACT : x))}
+          // A running extraction cannot be cancelled: the part may already be written.
+          onClose={() => setExtracting((x) => (x?.busy ? x : null))}
         />
       )}
       {confirm && (

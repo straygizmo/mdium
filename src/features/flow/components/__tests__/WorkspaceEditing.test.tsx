@@ -918,12 +918,117 @@ describe("flow workspace editing", () => {
       invoke.mockClear();
       await click(button("Extract", dialog()!));
       await waitFor(() => expect(callsTo("flow_save").length).toBe(1));
-      expect(callsTo("flow_validate").length).toBe(2);
+      const validations = callsTo("flow_validate");
+      expect(validations.length).toBe(2);
+      const partCall = validations.find((a) => a.path === PART_PATH)!;
+      expect(String(partCall.content)).toContain("id: part-1");
+      expect(String(partCall.content)).toContain("kind: command");
+      const callerCall = validations.find((a) => a.path === PATH)!;
+      expect(String(callerCall.content)).toContain("kind: subflow");
+      expect(String(callerCall.content)).toContain("flow: lib/part-1.flow.yaml");
       expect(callsTo("flow_save")[0]).toMatchObject({ path: PART_PATH, expectedSha256: null });
+      expect(callsTo("flow_save")[0].content).toBe(partCall.content);
       await waitFor(() => expect(dialog()).toBeNull());
       await click(button("YAML"));
       expect((container.querySelector(".test-yaml") as HTMLTextAreaElement).value).toContain("kind: subflow");
       expect(useFlowEditorStore.getState().selection).toEqual({ kind: "node", path: "nodes[0]" });
+    });
+
+    it("tolerates the caller's unresolved reference to the part being created", async () => {
+      const pending: FlowIssue = { code: "FLOW_REF_NOT_FOUND", path: "nodes[0].flow", params: { ref: "lib/part-1.flow.yaml" } } as FlowIssue;
+      installRoutes({
+        flow_validate: (args) =>
+          validated(args, String(args.path) === PATH && String(args.content).includes("kind: subflow") ? [pending] : []),
+      });
+      await mountWorkspace();
+      await selectMany(["nodes[0]", "nodes[1]"]);
+      await click(extractButton());
+      await click(button("Extract", dialog()!));
+      await waitFor(() => expect(callsTo("flow_save").length).toBe(1));
+      expect(callsTo("flow_save")[0]).toMatchObject({ path: PART_PATH, expectedSha256: null });
+      await waitFor(() => expect(dialog()).toBeNull());
+      await click(button("YAML"));
+      expect((container.querySelector(".test-yaml") as HTMLTextAreaElement).value).toContain("kind: subflow");
+    });
+
+    it("cancels when the caller has another validation error", async () => {
+      const other: FlowIssue = { code: "FLOW_REF_NOT_FOUND", path: "nodes[1].flow", params: {} } as FlowIssue;
+      installRoutes({
+        flow_validate: (args) =>
+          validated(args, String(args.path) === PATH && String(args.content).includes("kind: subflow") ? [other] : []),
+      });
+      await mountWorkspace();
+      const before = useFlowEditorStore.getState().text;
+      await selectMany(["nodes[0]", "nodes[1]"]);
+      await click(extractButton());
+      await click(button("Extract", dialog()!));
+      await waitFor(() => expect(dialog()?.textContent).toContain("did not validate"));
+      expect(callsTo("flow_save").length).toBe(0);
+      expect(useFlowEditorStore.getState().text).toBe(before);
+    });
+
+    it("validates a .flow.json caller as JSON", async () => {
+      const JSON_PATH = ".mdium/flows/demo.flow.json";
+      installRoutes({
+        flow_load: () => loadResult({ path: JSON_PATH, format: "json", content: JSON.stringify(demo, null, 2) }),
+      });
+      useFlowViewStore.getState().setSelected(FOLDER, JSON_PATH);
+      await act(async () => root.render(<FlowWorkspace />));
+      await waitFor(() => expect(container.querySelectorAll(".react-flow__node").length).toBe(2));
+      await selectMany(["nodes[0]", "nodes[1]"]);
+      await click(extractButton());
+      invoke.mockClear();
+      await click(button("Extract", dialog()!));
+      await waitFor(() => expect(callsTo("flow_save").length).toBe(1));
+      const caller = callsTo("flow_validate").find((a) => a.path === JSON_PATH)!;
+      const parsed = JSON.parse(String(caller.content)) as FlowDef;
+      expect(parsed.nodes[0]).toMatchObject({ kind: "subflow", flow: "lib/part-1.flow.yaml" });
+      const part = callsTo("flow_validate").find((a) => a.path === PART_PATH)!;
+      expect(String(part.content)).toContain("id: part-1");
+    });
+
+    it("cannot be cancelled while the extraction runs", async () => {
+      let release: () => void = () => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      installRoutes();
+      const plain = routes.flow_validate;
+      routes.flow_validate = async (args) => {
+        if (String(args.path) === PART_PATH) await gate;
+        return plain(args);
+      };
+      await mountWorkspace();
+      await selectMany(["nodes[0]", "nodes[1]"]);
+      await click(extractButton());
+      await click(button("Extract", dialog()!));
+      const cancel = button("Cancel", dialog()!);
+      expect(cancel.disabled).toBe(true);
+      await click(cancel);
+      await act(async () => {
+        dialog()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+      });
+      expect(dialog()).not.toBeNull();
+      await act(async () => release());
+      await waitFor(() => expect(callsTo("flow_save").length).toBe(1));
+      await waitFor(() => expect(dialog()).toBeNull());
+    });
+
+    it("shows a failed save with its code and clears it when the name changes", async () => {
+      installRoutes({
+        flow_save: () => {
+          throw { code: "FLOW_FILE_EXISTS", message: "exists" };
+        },
+      });
+      await mountWorkspace();
+      await selectMany(["nodes[0]", "nodes[1]"]);
+      await click(extractButton());
+      await click(button("Extract", dialog()!));
+      await waitFor(() => expect(dialog()?.textContent).toContain("could not be saved"));
+      expect(dialog()!.textContent).toContain("FLOW_FILE_EXISTS: exists");
+      expect(dialog()!.textContent).not.toContain("did not validate");
+      await type(dialog()!.querySelector("input")!, "part-2");
+      expect(dialog()!.textContent).not.toContain("could not be saved");
     });
 
     it("refuses an ambiguous selection with the reason", async () => {
@@ -942,6 +1047,23 @@ describe("flow workspace editing", () => {
       expect(dialog()?.textContent).toContain("more than one entry point");
       expect(button("Extract", dialog()!).disabled).toBe(true);
       expect(callsTo("flow_save").length).toBe(0);
+    });
+
+    it("names the port of an unsupported exit", async () => {
+      const gated: FlowDef = {
+        ...demo,
+        nodes: [
+          { id: "a", kind: "approval" },
+          { id: "b", kind: "approval" },
+        ],
+        edges: [{ from: "a", to: "b", port: "approve" }],
+      };
+      installRoutes({ flow_load: () => loadResult({ flow: gated, content: stringifyFlow(gated) }) });
+      await mountWorkspace();
+      await selectMany(["nodes[0]"]);
+      await click(extractButton());
+      expect(dialog()?.textContent).toContain('exits through port "approve"');
+      expect(button("Extract", dialog()!).disabled).toBe(true);
     });
 
     it("cancels when validation fails", async () => {

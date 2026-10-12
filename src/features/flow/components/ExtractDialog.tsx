@@ -26,13 +26,29 @@ interface ExtractDialogProps {
   existingParts: string[];
   /** Validation errors of the last attempt; shown under `extract.failedValidation`. */
   failure?: FlowIssue[];
+  /** Code and message of a failed save of the last attempt; shown under `extract.saveFailed`. */
+  saveError?: string | null;
+  /** While true the extraction runs: confirming and cancelling are disabled. */
   busy?: boolean;
   onConfirm(name: string): void;
+  /** The name was edited (the result of the last attempt no longer applies). */
+  onNameChange?(): void;
   onClose(): void;
 }
 
 /** Previews the signature an extraction would infer and asks for the new part's name. */
-export function ExtractDialog({ def, selectedPaths, currentFile, existingParts, failure, busy, onConfirm, onClose }: ExtractDialogProps) {
+export function ExtractDialog({
+  def,
+  selectedPaths,
+  currentFile,
+  existingParts,
+  failure,
+  saveError,
+  busy,
+  onConfirm,
+  onNameChange,
+  onClose,
+}: ExtractDialogProps) {
   const { t } = useTranslation("flow");
   const [name, setName] = useState(() => defaultPartName(existingParts));
 
@@ -41,20 +57,32 @@ export function ExtractDialog({ def, selectedPaths, currentFile, existingParts, 
   const canConfirm = outcome.ok && !exists && !busy;
   const list = (items: string[]) => (items.length > 0 ? items.join(", ") : t("extract.none"));
 
+  const close = () => {
+    if (!busy) onClose();
+  };
+
   const submit = (e?: FormEvent) => {
     e?.preventDefault();
     if (canConfirm) onConfirm(name);
   };
 
   return (
-    <DialogShell overlayClassName="flow-dialog-overlay" className="flow-dialog" labelledBy="flow-extract-title" onClose={onClose}>
+    <DialogShell overlayClassName="flow-dialog-overlay" className="flow-dialog" labelledBy="flow-extract-title" onClose={close}>
       <form className="flow-dialog__section" onSubmit={submit}>
         <h2 id="flow-extract-title" className="flow-dialog__title">
           {t("extract.title")}
         </h2>
         <label className="flow-dialog__field">
           <span className="flow-dialog__label">{t("extract.name")}</span>
-          <input className="flow-dialog__input" aria-label={t("extract.name")} value={name} onChange={(e) => setName(e.target.value)} />
+          <input
+            className="flow-dialog__input"
+            aria-label={t("extract.name")}
+            value={name}
+            onChange={(e) => {
+              setName(e.target.value);
+              onNameChange?.();
+            }}
+          />
         </label>
         {exists && (
           <div className="flow-dialog__error" role="alert">
@@ -73,7 +101,7 @@ export function ExtractDialog({ def, selectedPaths, currentFile, existingParts, 
           </div>
         ) : (
           <div className="flow-dialog__error" role="alert">
-            {t(`extract.reason.${outcome.reason}`)}
+            {t(`extract.reason.${outcome.reason}`, { port: outcome.detail ?? "" })}
           </div>
         )}
         {failure && failure.length > 0 && (
@@ -84,8 +112,16 @@ export function ExtractDialog({ def, selectedPaths, currentFile, existingParts, 
             <FlowIssueList errors={failure} warnings={[]} />
           </div>
         )}
+        {saveError && (
+          <div className="flow-dialog__field">
+            <div className="flow-dialog__error" role="alert">
+              {t("extract.saveFailed")}
+            </div>
+            <div className="flow-dialog__muted">{saveError}</div>
+          </div>
+        )}
         <div className="flow-dialog__footer">
-          <button type="button" className="flow-dialog__button" onClick={onClose}>
+          <button type="button" className="flow-dialog__button" onClick={close} disabled={busy}>
             {t("editor.cancel")}
           </button>
           <button type="submit" className="flow-dialog__button flow-dialog__button--primary" disabled={!canConfirm}>
