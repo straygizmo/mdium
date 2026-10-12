@@ -24,7 +24,7 @@ import { useFlowViewStore } from "../flow-store";
 import { commentLossDue, confirmDiscard, droppedUnknownKeys, useFlowEditorStore, type Selection } from "../editor-store";
 import { commitExtraction } from "../lib/extract-commit";
 import { describeError } from "../lib/run-format";
-import { FlowCanvas, type ConnectRequest } from "./FlowCanvas";
+import { FlowCanvas, type ConnectRequest, type NodeMove } from "./FlowCanvas";
 import { FlowIssueList } from "./FlowIssueList";
 import { FlowToolbar } from "./FlowToolbar";
 import { FlowYamlPane, parseErrorMarkers } from "./FlowYamlPane";
@@ -334,16 +334,24 @@ export function FlowWorkspace() {
 
   const onSelect = useCallback((sel: Selection) => editor().select(sel), []);
   const onSelectMany = useCallback((paths: string[]) => editor().selectMany(paths), []);
-  const onMoveNode = useCallback(
-    (nodeId: string, position: { x: number; y: number }) => {
+  const onMoveNodes = useCallback(
+    (moves: NodeMove[]) => {
       // Place the node at the drop point in the current layout first: the edit re-derives the
       // canvas nodes from this layout before the async re-layout (which reads ui.positions) lands.
-      const index = editor().def?.nodes.findIndex((n) => n.id === nodeId) ?? -1;
-      if (index >= 0) {
-        const key = `nodes[${index}]`;
-        setLayout((prev) => (prev && prev[key] ? { ...prev, [key]: { ...prev[key], x: position.x, y: position.y } } : prev));
-      }
-      edit((d) => moveNode(d, nodeId, position));
+      const keys = moves.map(({ nodeId, position }) => {
+        const index = editor().def?.nodes.findIndex((n) => n.id === nodeId) ?? -1;
+        return { key: `nodes[${index}]`, index, position };
+      });
+      setLayout((prev) => {
+        if (!prev) return prev;
+        const next = { ...prev };
+        for (const { key, index, position } of keys) {
+          if (index >= 0 && next[key]) next[key] = { ...next[key], x: position.x, y: position.y };
+        }
+        return next;
+      });
+      // One edit for the whole drag: one validation and one text rewrite.
+      edit((d) => moves.reduce((acc, { nodeId, position }) => moveNode(acc, nodeId, position), d));
     },
     [edit],
   );
@@ -542,7 +550,7 @@ export function FlowWorkspace() {
                   onSelect={onSelect}
                   onSelectMany={onSelectMany}
                   onToggle={onToggle}
-                  onMoveNode={onMoveNode}
+                  onMoveNodes={onMoveNodes}
                   onConnect={onConnect}
                   onDeleteSelection={onDeleteSelection}
                   onDrill={onDrill}

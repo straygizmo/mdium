@@ -69,7 +69,7 @@ describe("editor views", () => {
     const handlers = {
       onSelect: vi.fn(),
       onToggle: vi.fn(),
-      onMoveNode: vi.fn(),
+      onMoveNodes: vi.fn(),
       onConnect: vi.fn(),
       onDeleteSelection: vi.fn(),
     };
@@ -194,11 +194,23 @@ describe("editor views", () => {
   });
 
   it("reports node moves with the dropped position", () => {
-    const onMoveNode = vi.fn();
-    const handler = handleNodeDragStop(onMoveNode);
+    const onMoveNodes = vi.fn();
+    const handler = handleNodeDragStop(onMoveNodes);
     const node = { id: "nodes[0]", data: { node: { nodeId: "collect" } }, position: { x: 3, y: 4 } };
     handler({} as never, node as never, [] as never);
-    expect(onMoveNode).toHaveBeenCalledWith("collect", { x: 3, y: 4 });
+    expect(onMoveNodes).toHaveBeenCalledWith([{ nodeId: "collect", position: { x: 3, y: 4 } }]);
+  });
+
+  it("reports every node of a multi-selection drag in one call", () => {
+    const onMoveNodes = vi.fn();
+    const a = { id: "nodes[0]", data: { node: { nodeId: "a" } }, position: { x: 3, y: 4 } };
+    const b = { id: "nodes[1]", data: { node: { nodeId: "b" } }, position: { x: 30, y: 40 } };
+    handleNodeDragStop(onMoveNodes)({} as never, a as never, [a, b] as never);
+    expect(onMoveNodes).toHaveBeenCalledTimes(1);
+    expect(onMoveNodes).toHaveBeenCalledWith([
+      { nodeId: "a", position: { x: 3, y: 4 } },
+      { nodeId: "b", position: { x: 30, y: 40 } },
+    ]);
   });
 
   it("applies live drag positions locally and ignores selection changes", () => {
@@ -224,7 +236,7 @@ describe("editor views", () => {
   it("resets the local node copy when the layout changes", async () => {
     const graph = buildFlowGraph(docDigest(), new Set());
     const ids = graph.nodes.map((n) => n.id);
-    const props = { graph, selection: null, editable: true, onSelect: vi.fn(), onToggle: vi.fn(), onMoveNode: vi.fn(), onConnect: vi.fn(), onDeleteSelection: vi.fn() };
+    const props = { graph, selection: null, editable: true, onSelect: vi.fn(), onToggle: vi.fn(), onMoveNodes: vi.fn(), onConnect: vi.fn(), onDeleteSelection: vi.fn() };
     await act(async () => root.render(<FlowCanvas {...props} layout={gridLayout(ids)} />));
     const first = () => container.querySelector<HTMLElement>(`.react-flow__node[data-id="${ids[0]}"]`)!;
     expect(first().style.transform.replace(/\s/g, "")).toContain("translate(0px,0px)");
@@ -286,7 +298,7 @@ describe("editor views", () => {
           editable
           onSelect={vi.fn()}
           onToggle={vi.fn()}
-          onMoveNode={vi.fn()}
+          onMoveNodes={vi.fn()}
           onConnect={vi.fn()}
           onDeleteSelection={vi.fn()}
           onDrill={onDrill}

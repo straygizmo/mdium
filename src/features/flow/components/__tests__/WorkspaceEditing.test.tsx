@@ -48,7 +48,7 @@ vi.mock("@monaco-editor/react", () => ({
 const canvasProps = vi.hoisted(() => ({
   current: null as {
     onConnect(req: unknown): void;
-    onMoveNode(nodeId: string, position: { x: number; y: number }): void;
+    onMoveNodes(moves: Array<{ nodeId: string; position: { x: number; y: number } }>): void;
     onSelectMany?(paths: string[]): void;
     graph: unknown;
     layout: unknown;
@@ -525,7 +525,7 @@ describe("flow workspace editing", () => {
     await mountWorkspace();
     const before = canvasProps.current!;
     // Synchronous act: renders flush, the async layout promise does not.
-    act(() => before.onMoveNode("run", { x: 300, y: 40 }));
+    act(() => before.onMoveNodes([{ nodeId: "run", position: { x: 300, y: 40 } }]));
     const after = canvasProps.current!;
     expect(after.graph).not.toBe(before.graph);
     const { nodes } = toReactFlow(after.graph as FlowGraph, after.layout as FlowLayout, null, vi.fn(), true);

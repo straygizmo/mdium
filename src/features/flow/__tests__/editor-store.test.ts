@@ -79,6 +79,38 @@ describe("editor store", () => {
     expect(s.loadError).toBeNull();
   });
 
+  it("drops a node selection that no longer matches after a text edit removed a node", async () => {
+    const three: FlowDef = {
+      ...def,
+      nodes: ["a", "b", "c"].map((id) => ({ id, ...defaultsFor("approval") }) as FlowDef["nodes"][number]),
+    };
+    routes.flow_load = () => result({ flow: three });
+    await store().open(ROOT, PATH);
+    store().selectMany(["nodes[1]", "nodes[2]"]);
+    expect(store().selectedMany).toEqual(["nodes[1]", "nodes[2]"]);
+    // The text edit removes node "a": nodes[1] and nodes[2] now name other nodes.
+    const removed = { ...three, nodes: three.nodes.slice(1) };
+    routes.flow_validate = () => result({ flow: removed });
+    store().setText("edited");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(store().selectedMany).toEqual([]);
+    expect(store().selection).toBeNull();
+  });
+
+  it("keeps the node selection when a text edit leaves the selected nodes in place", async () => {
+    const two: FlowDef = {
+      ...def,
+      nodes: ["a", "b"].map((id) => ({ id, ...defaultsFor("approval") }) as FlowDef["nodes"][number]),
+    };
+    routes.flow_load = () => result({ flow: two });
+    await store().open(ROOT, PATH);
+    store().selectMany(["nodes[0]", "nodes[1]"]);
+    routes.flow_validate = () => result({ flow: { ...two, name: "Renamed" } });
+    store().setText("edited");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(store().selectedMany).toEqual(["nodes[0]", "nodes[1]"]);
+  });
+
   it("setText debounces validation and keeps the last decoded flow while the text is unparsable", async () => {
     await store().open(ROOT, PATH);
     const parseError: FlowIssue = { code: "FLOW_PARSE_FAILED", path: "", params: { message: "x", line: 1, column: 8 } };

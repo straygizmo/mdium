@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { FlowDef, FlowFormat, FlowIssue, FlowKind, FlowLoadResult } from "@/shared/types/flow";
 import { flowApi, isFlowCommandError } from "./lib/flow-api";
+import { nodeAt } from "./lib/editor-state";
 import { hasComments, stringifyFlowAs } from "./lib/flow-yaml";
 import { showConfirm } from "@/stores/dialog-store";
 
@@ -75,6 +76,16 @@ export interface EditorState {
   syncWithDisk(): Promise<void>;
   reload(): Promise<void>;
   close(): void;
+}
+
+/** True when every selected node path still names a node with the same id in `next`. */
+function selectionStillValid(s: Pick<EditorState, "selection" | "selectedMany">, prev: FlowDef, next: FlowDef): boolean {
+  const paths = [...s.selectedMany];
+  if (s.selection?.kind === "node") paths.push(s.selection.path);
+  return paths.every((p) => {
+    const before = nodeAt(prev, p);
+    return before !== undefined && nodeAt(next, p)?.id === before.id;
+  });
 }
 
 const initial = {
@@ -252,7 +263,13 @@ export const useFlowEditorStore = create<EditorState>()((set, get) => {
       try {
         const result = await flowApi.validate(projectRoot, path, text);
         if (gen !== generation || seq !== validationSeq || get().text !== text) return;
+        const previous = get();
         set({
+          // Node paths name positions: after a text edit that moved or removed nodes they would
+          // point at other nodes, so a selection that no longer matches is dropped.
+          ...(result.flow && previous.def && !selectionStillValid(previous, previous.def, result.flow)
+            ? { selection: null, selectedMany: [] }
+            : {}),
           // Keep the previous decoded flow while the text cannot be decoded.
           def: result.flow ?? get().def,
           defCurrent: result.flow !== null,

@@ -50,7 +50,8 @@ interface FlowCanvasProps {
   /** The set of selected node paths after a canvas selection change. */
   onSelectMany?: (paths: string[]) => void;
   onToggle: (id: string) => void;
-  onMoveNode: (nodeId: string, position: { x: number; y: number }) => void;
+  /** Dropped positions of every dragged node (a multi-selection drags together). */
+  onMoveNodes: (moves: NodeMove[]) => void;
   onConnect: (req: ConnectRequest) => void;
   onDeleteSelection: () => void;
   /** Double-click on a node that calls another flow file (it has a signature). */
@@ -81,12 +82,19 @@ export function handleEdgeClick(onSelect: (selection: Selection) => void): EdgeM
   return (_event, edge) => onSelect({ kind: "edge", path: edge.id });
 }
 
-/** Builds the React Flow drag-stop handler: reports the flow node id (not the path) and its position. */
-export function handleNodeDragStop(
-  onMoveNode: (nodeId: string, position: { x: number; y: number }) => void,
-): OnNodeDrag<FlowRfNode> {
-  return (_event, node) => {
-    onMoveNode(node.data.node.nodeId, { x: node.position.x, y: node.position.y });
+export interface NodeMove {
+  nodeId: string;
+  position: { x: number; y: number };
+}
+
+/**
+ * Builds the React Flow drag-stop handler: reports the flow node id (not the path) and the
+ * position of every dragged node, so a multi-selection is committed in one go.
+ */
+export function handleNodeDragStop(onMoveNodes: (moves: NodeMove[]) => void): OnNodeDrag<FlowRfNode> {
+  return (_event, node, dragged) => {
+    const all = dragged && dragged.length > 0 ? dragged : [node];
+    onMoveNodes(all.map((n) => ({ nodeId: n.data.node.nodeId, position: { x: n.position.x, y: n.position.y } })));
   };
 }
 
@@ -183,7 +191,7 @@ export function FlowCanvas({
   onSelect,
   onSelectMany,
   onToggle,
-  onMoveNode,
+  onMoveNodes,
   onConnect,
   onDeleteSelection,
   onDrill,
@@ -204,7 +212,7 @@ export function FlowCanvas({
   const wrapperRef = useRef<HTMLDivElement>(null);
   const pointer = useRef<{ x: number; y: number } | undefined>(undefined);
   const edgeClick = useMemo(() => handleEdgeClick(onSelect), [onSelect]);
-  const dragStop = useMemo(() => handleNodeDragStop(onMoveNode), [onMoveNode]);
+  const dragStop = useMemo(() => handleNodeDragStop(onMoveNodes), [onMoveNodes]);
 
   const isValidConnection = useMemo(() => makeIsValidConnection(parentOf), [parentOf]);
 
