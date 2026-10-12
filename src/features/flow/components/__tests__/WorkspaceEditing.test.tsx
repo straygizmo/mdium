@@ -932,6 +932,7 @@ describe("flow workspace editing", () => {
       await click(button("YAML"));
       expect((container.querySelector(".test-yaml") as HTMLTextAreaElement).value).toContain("kind: subflow");
       expect(useFlowEditorStore.getState().selection).toEqual({ kind: "node", path: "nodes[0]" });
+      expect(useFlowEditorStore.getState().selectedMany).toEqual(["nodes[0]"]);
     });
 
     it("tolerates the caller's unresolved reference to the part being created", async () => {

@@ -460,7 +460,8 @@ export function FlowWorkspace() {
         return;
       }
       edit(() => outcome.updated);
-      editor().select({ kind: "node", path: outcome.newNodePath });
+      // The old multi-selection paths name other nodes now; select the new node alone.
+      editor().selectMany([outcome.newNodePath]);
       setPartsVersion((v) => v + 1);
       setExtracting(null);
     } catch (err) {
