@@ -23,7 +23,7 @@ vi.mock("@/stores/dialog-store", async (orig) => ({ ...(await orig<object>()), s
 
 import { RunPanel, sameRoot } from "../RunPanel";
 import { isLiveInstance, splitNodeKey, type RunState } from "@/shared/types/flow-run";
-import { RunStartDialog, initialParamValues, paramsFromForm } from "../RunStartDialog";
+import { RunStartDialog, initialParamValues, invalidJsonParams, paramsFromForm } from "../RunStartDialog";
 import { flowRunApi, subscribeFlowRunEvents, toFlowRunError } from "../../lib/flow-run-api";
 import { describeError, describeReason, formatUsd } from "../../lib/run-format";
 
@@ -350,6 +350,75 @@ describe("run views", () => {
     await act(async () => button(container, "Start").click());
     await waitFor(() => expect(container.textContent).toContain("Some parameters are invalid."));
     expect(container.textContent).toContain('Missing parameter "dir".');
+  });
+
+  const jsonFlow: FlowDef = {
+    schemaVersion: 1,
+    id: "j",
+    name: "J",
+    params: {
+      comments: { type: "array", default: [] },
+      opts: { type: "object", default: { pace: "slow", n: 2 } },
+      extra: { type: "array" },
+    },
+    nodes: [{ id: "ok", kind: "approval", options: ["publish", "reject"] }],
+  };
+
+  it("pre-fills array and object params as JSON and parses them back", () => {
+    const values = initialParamValues(jsonFlow);
+    expect(values).toEqual({ comments: "[]", opts: '{"pace":"slow","n":2}', extra: "" });
+    expect(paramsFromForm(jsonFlow, values)).toEqual({ comments: [], opts: { pace: "slow", n: 2 } });
+    expect(paramsFromForm(jsonFlow, { ...values, comments: '["too slow"]', opts: "" })).toEqual({ comments: ["too slow"] });
+    expect(invalidJsonParams(jsonFlow, { ...values, comments: '{"a":1}', opts: "[1]", extra: "not json" })).toEqual(["comments", "opts", "extra"]);
+    expect(invalidJsonParams(jsonFlow, values)).toEqual([]);
+  });
+
+  async function typeInto(input: HTMLInputElement, value: string) {
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      setter.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+
+  it("sends array params typed as JSON", async () => {
+    const started: unknown[] = [];
+    route({
+      flow_command_review: () => ({ ...review, confirmed: true }),
+      flow_run_start: (a) => {
+        started.push(a.params);
+        return summary("r1");
+      },
+    });
+    const onStarted = vi.fn();
+    await act(async () =>
+      root.render(<RunStartDialog projectRoot={ROOT} flowPath={PATH} flow={jsonFlow} onClose={() => {}} onStarted={onStarted} />),
+    );
+    await waitFor(() => expect(button(container, "Start").disabled).toBe(false));
+    const inputs = container.querySelectorAll<HTMLInputElement>('input[type="text"]');
+    expect(inputs[0].value).toBe("[]");
+    expect(inputs[1].value).toBe('{"pace":"slow","n":2}');
+    await typeInto(inputs[0], '["too slow"]');
+    await act(async () => button(container, "Start").click());
+    await waitFor(() => expect(onStarted).toHaveBeenCalledWith("r1"));
+    expect(started).toEqual([{ comments: ["too slow"], opts: { pace: "slow", n: 2 } }]);
+  });
+
+  it("blocks Start on invalid JSON params", async () => {
+    route({ flow_command_review: () => ({ ...review, confirmed: true }) });
+    await act(async () =>
+      root.render(<RunStartDialog projectRoot={ROOT} flowPath={PATH} flow={jsonFlow} onClose={() => {}} onStarted={() => {}} />),
+    );
+    await waitFor(() => expect(button(container, "Start").disabled).toBe(false));
+    const input = container.querySelector<HTMLInputElement>('input[type="text"]')!;
+    await typeInto(input, "not json");
+    expect(container.textContent).toContain(i18n.t("run.invalidJson", { ns: "flow", type: "array" }));
+    expect(button(container, "Start").disabled).toBe(true);
+    await act(async () => button(container, "Start").click());
+    expect(invoke).not.toHaveBeenCalledWith("flow_run_start", expect.anything());
+    await typeInto(input, '["ok"]');
+    expect(container.textContent).not.toContain(i18n.t("run.invalidJson", { ns: "flow", type: "array" }));
+    expect(button(container, "Start").disabled).toBe(false);
   });
 
   it("lists this flow's runs and drives the selected run", async () => {

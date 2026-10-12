@@ -118,6 +118,7 @@
     "setupTitle": "Setup steps of this project",
     "noCommands": "This flow runs no commands.",
     "startButton": "Start",
+    "invalidJson": "Enter valid JSON ({{type}}).",
     "close": "Close",
     "starting": "Starting…",
     "none": "No runs of this flow yet.",

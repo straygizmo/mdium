@@ -5,6 +5,7 @@ import type { FlowDef } from "@/shared/types/flow";
 import type { CommandReview, FlowRunError } from "@/shared/types/flow-run";
 import { flowRunApi, toFlowRunError } from "../lib/flow-run-api";
 import { describeError } from "../lib/run-format";
+import { parseDefault } from "./attrs/FlowAttrsForm";
 
 interface RunStartDialogProps {
   projectRoot: string;
@@ -16,11 +17,29 @@ interface RunStartDialogProps {
 
 type ParamValue = string | boolean;
 
+/** Parameter types entered as JSON text in the form. */
+function isJsonType(type: string): type is "array" | "object" {
+  return type === "array" || type === "object";
+}
+
+/** Names of array/object params whose non-empty text is not JSON of the declared shape. */
+export function invalidJsonParams(flow: FlowDef, values: Record<string, ParamValue>): string[] {
+  const invalid: string[] = [];
+  for (const [name, def] of Object.entries(flow.params ?? {})) {
+    if (!isJsonType(def.type)) continue;
+    const value = values[name];
+    if (typeof value !== "string" || value.trim() === "") continue;
+    if (parseDefault(def.type, value.trim()) === undefined) invalid.push(name);
+  }
+  return invalid;
+}
+
 /** Initial form values from the parameter defaults. */
 export function initialParamValues(flow: FlowDef): Record<string, ParamValue> {
   const values: Record<string, ParamValue> = {};
   for (const [name, def] of Object.entries(flow.params ?? {})) {
     if (def.type === "bool") values[name] = def.default === true;
+    else if (isJsonType(def.type)) values[name] = def.default === undefined || def.default === null ? "" : JSON.stringify(def.default);
     else values[name] = def.default === undefined || def.default === null ? "" : String(def.default);
   }
   return values;
@@ -34,7 +53,13 @@ export function paramsFromForm(flow: FlowDef, values: Record<string, ParamValue>
     if (def.type === "bool") {
       out[name] = value === true;
     } else if (typeof value === "string" && value.trim() !== "") {
-      out[name] = def.type === "number" ? Number(value) : value;
+      if (isJsonType(def.type)) {
+        // Invalid JSON is omitted here; the dialog blocks Start until it is fixed.
+        const parsed = parseDefault(def.type, value.trim());
+        if (parsed !== undefined) out[name] = parsed;
+      } else {
+        out[name] = def.type === "number" ? Number(value) : value;
+      }
     }
   }
   return out;
@@ -62,7 +87,8 @@ export function RunStartDialog({ projectRoot, flowPath, flow, onClose, onStarted
 
   const reviewItems = review ? review.commands.length + review.runtimes.length + review.setup.length + review.stages.length : 0;
   const needsConfirmation = !!review && !review.confirmed && reviewItems > 0;
-  const canStart = !!review && !busy && (!needsConfirmation || accepted);
+  const invalidParams = invalidJsonParams(flow, values);
+  const canStart = !!review && !busy && (!needsConfirmation || accepted) && invalidParams.length === 0;
 
   const start = async () => {
     if (!review) return;
@@ -110,6 +136,11 @@ export function RunStartDialog({ projectRoot, flowPath, flow, onClose, onStarted
                 value={String(values[name] ?? "")}
                 onChange={(e) => setValues({ ...values, [name]: e.target.value })}
               />
+            )}
+            {invalidParams.includes(name) && (
+              <span className="flow-dialog__error" role="alert">
+                {t("run.invalidJson", { type: def.type })}
+              </span>
             )}
             {def.description && <span className="flow-dialog__muted">{def.description}</span>}
           </label>

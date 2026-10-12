@@ -118,6 +118,7 @@
     "setupTitle": "このプロジェクトのセットアップ手順",
     "noCommands": "このフローはコマンドを実行しません。",
     "startButton": "開始",
+    "invalidJson": "有効な JSON ({{type}}) を入力してください。",
     "close": "閉じる",
     "starting": "開始中…",
     "none": "このフローの実行はまだありません。",
