@@ -334,6 +334,7 @@
     "saveFailed": "Could not save the flow: {{message}}",
     "validating": "Validating…",
     "discardEdits": "Discard unsaved changes?",
+    "drillDown": "Double-click to open the referenced flow",
     "fixYamlToEdit": "Fix the YAML to edit on the canvas.",
     "deletedOutside": "The file was deleted outside the editor.",
     "droppedKeys": "Unknown keys will be dropped: {{keys}}"

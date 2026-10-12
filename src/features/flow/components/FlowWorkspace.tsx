@@ -84,6 +84,7 @@ export function FlowWorkspace() {
   const { t } = useTranslation("flow");
   const folder = useTabStore((s) => s.activeFolderPath);
   const path = useFlowViewStore((s) => (folder ? s.selected[folder] : undefined));
+  const trail = useFlowViewStore((s) => (folder ? s.stack[folder] : undefined));
 
   const storePath = useFlowEditorStore((s) => s.path);
   const storeRoot = useFlowEditorStore((s) => s.projectRoot);
@@ -147,10 +148,12 @@ export function FlowWorkspace() {
         void editor().open(folder, path);
         return;
       }
-      // Declined: keep the open file selected.
-      const select = useFlowViewStore.getState().setSelected;
-      if (held.root === folder) select(folder, held.path);
-      else select(folder, null);
+      // Declined: keep the open file selected (and its breadcrumb trail, when it is on it).
+      const view = useFlowViewStore.getState();
+      const index = (view.stack[folder] ?? []).findLastIndex((entry) => entry.path === held.path);
+      if (held.root === folder && index >= 0) view.popTo(folder, index);
+      else if (held.root === folder) view.setSelected(folder, held.path);
+      else view.setSelected(folder, null);
     });
     return () => {
       cancelled = true;
@@ -381,6 +384,19 @@ export function FlowWorkspace() {
     if (index >= 0) editor().select({ kind: "node", path: `nodes[${index}]` });
   };
 
+  /** Opens the file a sub-flow / loop node calls, extending the breadcrumb trail. */
+  const onDrill = useCallback(
+    (nodePath: string) => {
+      const view = useFlowViewStore.getState();
+      const node = graph?.nodes.find((n) => n.id === nodePath);
+      if (!folder || !path || !node?.signature) return;
+      // The first drill seeds the trail with the root flow the user selected.
+      if (!view.stack[folder]?.length) view.push(folder, { path, label: editor().def?.name || path.split("/").pop() || path });
+      view.push(folder, { path: node.signature.file, label: node.label });
+    },
+    [graph, folder, path],
+  );
+
   const markers = useMemo(() => parseErrorMarkers(errors), [errors]);
 
   if (!folder || !path) {
@@ -394,7 +410,25 @@ export function FlowWorkspace() {
     <div ref={rootRef} className="flow-workspace" onKeyDown={onKeyDown}>
       <div className="flow-workspace__header">
         <div className="flow-workspace__title">
-          <span className="flow-workspace__name">{(current && def?.name) || path}</span>
+          {trail && trail.length > 1 ? (
+            <nav className="flow-workspace__crumbs">
+              {trail.map((entry, i) => (
+                <span key={i} className="flow-workspace__crumb-item">
+                  {i > 0 && <span className="flow-workspace__crumb-sep"> › </span>}
+                  <button
+                    type="button"
+                    className="flow-workspace__crumb"
+                    disabled={i === trail.length - 1}
+                    onClick={() => folder && useFlowViewStore.getState().popTo(folder, i)}
+                  >
+                    {entry.label}
+                  </button>
+                </span>
+              ))}
+            </nav>
+          ) : (
+            <span className="flow-workspace__name">{(current && def?.name) || path}</span>
+          )}
           <span className="flow-workspace__path">
             {path}
             {showEditor && format && ` · ${format.toUpperCase()}`}
@@ -473,6 +507,7 @@ export function FlowWorkspace() {
                   onMoveNode={onMoveNode}
                   onConnect={onConnect}
                   onDeleteSelection={onDeleteSelection}
+                  onDrill={onDrill}
                 />
               )}
               {/* Same origin as the canvas wrapper (it fills this box), so the drop point lines up. */}

@@ -49,6 +49,8 @@ interface FlowCanvasProps {
   onMoveNode: (nodeId: string, position: { x: number; y: number }) => void;
   onConnect: (req: ConnectRequest) => void;
   onDeleteSelection: () => void;
+  /** Double-click on a node that calls another flow file (it has a signature). */
+  onDrill?: (path: string) => void;
 }
 
 /** Rejects self-connections and connections between different loop scopes. */
@@ -165,6 +167,7 @@ export function FlowCanvas({
   onMoveNode,
   onConnect,
   onDeleteSelection,
+  onDrill,
 }: FlowCanvasProps) {
   const { nodes, edges } = useMemo(
     () => toReactFlow(graph, layout, selection, onToggle, editable),
@@ -225,6 +228,13 @@ export function FlowCanvas({
           minZoom={0.1}
           proOptions={{ hideAttribution: true }}
           onNodeClick={(_, node) => onSelect({ kind: "node", path: node.id })}
+          onNodeDoubleClick={
+            onDrill
+              ? (_, node) => {
+                  if (node.data.node.signature) onDrill(node.id);
+                }
+              : undefined
+          }
           onEdgeClick={editable ? edgeClick : undefined}
           onNodeDragStop={editable ? dragStop : undefined}
           onConnect={(c) => onConnect(toConnectRequest(c, pointer.current))}

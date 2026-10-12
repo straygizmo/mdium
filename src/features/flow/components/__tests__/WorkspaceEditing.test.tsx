@@ -233,7 +233,7 @@ describe("flow workspace editing", () => {
     listeners.length = 0;
     installRoutes();
     useTabStore.setState({ activeFolderPath: FOLDER });
-    useFlowViewStore.setState({ selected: {} });
+    useFlowViewStore.setState({ selected: {}, stack: {} });
     useFlowEditorStore.getState().close();
     container = document.createElement("div");
     document.body.appendChild(container);
@@ -769,6 +769,81 @@ describe("flow workspace editing", () => {
       expect(create.disabled).toBe(true);
       await click(create);
       expect(callsTo("flow_save")).toHaveLength(0);
+    });
+  });
+
+  describe("drill-down", () => {
+    const PART = ".mdium/flows/parts/per-doc.flow.yaml";
+    const digest: FlowDef = {
+      schemaVersion: 1,
+      id: "digest",
+      name: "Digest",
+      nodes: [
+        { id: "per_doc", name: "per-doc", kind: "subflow", flow: "parts/per-doc.flow.yaml" },
+        { id: "done", kind: "approval" },
+      ],
+      edges: [{ from: "per_doc", to: "done" }],
+    };
+    const part: FlowDef = { schemaVersion: 1, id: "per-doc", name: "Per doc", nodes: [{ id: "x", kind: "approval" }], edges: [] };
+
+    const dblclick = async (nodeId: string) => {
+      await act(async () => {
+        container
+          .querySelector<HTMLElement>(`.react-flow__node[data-id="${nodeId}"]`)!
+          .dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+      });
+    };
+    const crumbs = () => container.querySelector(".flow-workspace__crumbs");
+
+    it("double-clicking a subflow node opens the part and shows a breadcrumb", async () => {
+      installRoutes({
+        flow_load: (args) =>
+          args.path === PART
+            ? loadResult({ path: PART, flow: part, content: stringifyFlow(part) })
+            : loadResult({ flow: digest, content: stringifyFlow(digest) }),
+      });
+      await mountWorkspace();
+      expect(crumbs()).toBeNull();
+
+      await dblclick("nodes[0]");
+      await waitFor(() => expect(crumbs()?.textContent).toBe("Digest › per-doc"));
+      expect(callsTo("flow_load").some((a) => a.path === PART)).toBe(true);
+      expect(useFlowViewStore.getState().selected[FOLDER]).toBe(PART);
+
+      await click(button("Digest", crumbs() as HTMLElement));
+      await waitFor(() => expect(useFlowEditorStore.getState().path).toBe(PATH));
+      expect(crumbs()).toBeNull();
+      expect(useFlowViewStore.getState().selected[FOLDER]).toBe(PATH);
+    });
+
+    it("a missing part shows an error and keeps the breadcrumb", async () => {
+      installRoutes({
+        flow_load: (args) => {
+          if (args.path === PART) throw { code: "FLOW_FILE_NOT_FOUND", message: "gone" };
+          return loadResult({ flow: digest, content: stringifyFlow(digest) });
+        },
+      });
+      await mountWorkspace();
+      await dblclick("nodes[0]");
+      await waitFor(() => expect(container.textContent).toContain("FLOW_FILE_NOT_FOUND"));
+      expect(crumbs()?.textContent).toBe("Digest › per-doc");
+      await click(button("Digest", crumbs() as HTMLElement));
+      await waitFor(() => expect(useFlowEditorStore.getState().loadError).toBeNull());
+      expect(useFlowEditorStore.getState().path).toBe(PATH);
+    });
+
+    it("declining the discard prompt keeps the caller and its breadcrumb state", async () => {
+      installRoutes({ flow_load: () => loadResult({ flow: digest, content: stringifyFlow(digest) }) });
+      showConfirm.mockImplementation(async () => false);
+      await mountWorkspace();
+      await click(container.querySelector<HTMLElement>('.react-flow__node[data-id="nodes[1]"]')!);
+      await typeAndBlur(container.querySelector('.flow-workspace__side [aria-label="Name"]')!, "Dirty");
+      await dblclick("nodes[0]");
+      await waitFor(() => expect(showConfirm).toHaveBeenCalled());
+      await act(async () => {});
+      expect(useFlowViewStore.getState().selected[FOLDER]).toBe(PATH);
+      expect(useFlowEditorStore.getState().path).toBe(PATH);
+      expect(crumbs()).toBeNull();
     });
   });
 });

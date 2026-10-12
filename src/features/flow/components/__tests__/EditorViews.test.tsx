@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import i18n from "@/shared/i18n";
+import type { FlowDef } from "@/shared/types/flow";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -252,5 +253,45 @@ describe("editor views", () => {
       list.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     });
     expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a double-click on a node with a signature as a drill request", async () => {
+    const def = {
+      schemaVersion: 1,
+      id: "f",
+      nodes: [
+        { id: "call", kind: "subflow", flow: "parts/p.flow.yaml" },
+        { id: "plain", kind: "approval" },
+      ],
+      edges: [],
+    } as unknown as FlowDef;
+    const graph = buildFlowGraph(def, new Set(), { errors: [], warnings: [] }, {}, "main.flow.yaml");
+    const onDrill = vi.fn();
+    await act(async () => {
+      root.render(
+        <FlowCanvas
+          graph={graph}
+          layout={gridLayout(graph.nodes.map((n) => n.id))}
+          selection={null}
+          editable
+          onSelect={vi.fn()}
+          onToggle={vi.fn()}
+          onMoveNode={vi.fn()}
+          onConnect={vi.fn()}
+          onDeleteSelection={vi.fn()}
+          onDrill={onDrill}
+        />,
+      );
+    });
+    const dbl = async (id: string) =>
+      act(async () => {
+        container
+          .querySelector(`.react-flow__node[data-id="${id}"]`)!
+          .dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+      });
+    await dbl("nodes[1]");
+    expect(onDrill).not.toHaveBeenCalled();
+    await dbl("nodes[0]");
+    expect(onDrill).toHaveBeenCalledWith("nodes[0]");
   });
 });

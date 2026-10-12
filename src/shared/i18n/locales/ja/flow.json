@@ -334,6 +334,7 @@
     "saveFailed": "フローを保存できませんでした: {{message}}",
     "validating": "検証中…",
     "discardEdits": "未保存の変更を破棄しますか？",
+    "drillDown": "ダブルクリックで参照先のフローを開く",
     "fixYamlToEdit": "キャンバスで編集するには YAML を修正してください。",
     "deletedOutside": "ファイルがエディタの外で削除されました。",
     "droppedKeys": "未知のキーは削除されます: {{keys}}"

@@ -1362,3 +1362,34 @@ button.flow-issue__button:hover {
   border-radius: 8px;
   background: rgba(128, 128, 128, 0.2);
 }
+
+.flow-workspace__crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  font-weight: 600;
+}
+
+.flow-workspace__crumb-item {
+  display: inline-flex;
+  align-items: center;
+  white-space: pre;
+}
+
+.flow-workspace__crumb-sep {
+  color: var(--text-muted);
+}
+
+.flow-workspace__crumb {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.flow-workspace__crumb:disabled {
+  color: inherit;
+  cursor: default;
+}

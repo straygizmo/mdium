@@ -64,7 +64,7 @@ function Header({ node, onToggle }: FlowNodeData) {
   const { t } = useTranslation("flow");
   return (
     <div className="flow-node__header">
-      <span className="flow-node__kind">{t(`kind.${node.kind}`)}</span>
+      <span className="flow-node__kind" title={node.signature ? t("editor.drillDown") : undefined}>{t(`kind.${node.kind}`)}</span>
       <span className="flow-node__label" title={node.nodeId}>
         {node.label}
       </span>
