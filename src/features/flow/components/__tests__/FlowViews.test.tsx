@@ -211,6 +211,25 @@ describe("flow views", () => {
     await act(async () => container.querySelector<HTMLButtonElement>(".flow-issue__button")!.click());
     expect(onSelect).toHaveBeenCalledWith("nodes[1].body.nodes[0]");
   });
+
+  it("explains an empty node list instead of the generic invalid-value text", async () => {
+    await act(async () =>
+      root.render(
+        <FlowIssueList
+          errors={[
+            { code: "FLOW_INVALID_VALUE", path: "nodes", params: { reason: "empty" } },
+            { code: "FLOW_INVALID_VALUE", path: "nodes[0].body.nodes", params: { reason: "empty" } },
+            { code: "FLOW_INVALID_VALUE", path: "name", params: { reason: "empty" } },
+          ]}
+          warnings={[]}
+        />,
+      ),
+    );
+    const messages = [...container.querySelectorAll(".flow-issue__message")].map((el) => el.textContent);
+    expect(messages[0]).toBe("The flow has no nodes yet. Use \"Add node\" to place the first one.");
+    expect(messages[1]).toBe("The flow has no nodes yet. Use \"Add node\" to place the first one.");
+    expect(messages[2]).toBe("Invalid value (empty).");
+  });
 });
 
 describe("issue messages", () => {

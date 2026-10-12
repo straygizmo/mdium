@@ -81,6 +81,7 @@
     "FLOW_UNKNOWN_FIELD": "未知の属性「{{field}}」があります。",
     "FLOW_UNKNOWN_NODE_KIND": "未知のノード種別「{{kind}}」です。",
     "FLOW_INVALID_VALUE": "値が不正です（{{reason}}）。",
+    "FLOW_INVALID_VALUE_nodesEmpty": "ノードがありません。「ノードを追加」で最初のノードを置いてください。",
     "FLOW_INVALID_ID": "名前「{{name}}」の形式が不正です。",
     "FLOW_CONDITION_INVALID": "条件が不正です（{{reason}}）。",
     "FLOW_REF_NOT_FOUND": "ファイルが見つかりません:「{{ref}}」",

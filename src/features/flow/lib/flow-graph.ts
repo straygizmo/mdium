@@ -51,6 +51,20 @@ export function issueNodePath(issuePath: string): string | null {
   return match ? match[1] : null;
 }
 
+/**
+ * i18next context that picks a more specific wording for an issue, when
+ * one exists: `issue.<code>_<context>` falls back to `issue.<code>`.
+ * An empty node list (a freshly created flow, or an empty loop body) is
+ * reported by the engine as a generic invalid value; the editor tells the
+ * user to add a node instead.
+ */
+export function issueContext(issue: Pick<FlowIssue, "code" | "path" | "params">): string | undefined {
+  if (issue.code === "FLOW_INVALID_VALUE" && issue.params.reason === "empty" && /(^|\.)nodes$/.test(issue.path)) {
+    return "nodesEmpty";
+  }
+  return undefined;
+}
+
 function truncate(text: string, max = 48): string {
   const single = text.replace(/\s+/g, " ").trim();
   return single.length > max ? `${single.slice(0, max - 1)}…` : single;

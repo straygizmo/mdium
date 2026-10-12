@@ -81,6 +81,7 @@
     "FLOW_UNKNOWN_FIELD": "Unknown attribute \"{{field}}\".",
     "FLOW_UNKNOWN_NODE_KIND": "Unknown node kind \"{{kind}}\".",
     "FLOW_INVALID_VALUE": "Invalid value ({{reason}}).",
+    "FLOW_INVALID_VALUE_nodesEmpty": "The flow has no nodes yet. Use \"Add node\" to place the first one.",
     "FLOW_INVALID_ID": "Invalid name \"{{name}}\".",
     "FLOW_CONDITION_INVALID": "Invalid condition ({{reason}}).",
     "FLOW_REF_NOT_FOUND": "File not found: \"{{ref}}\".",
