@@ -477,6 +477,7 @@
     "outputs": "Outputs",
     "none": "none",
     "failedValidation": "The extracted flow did not validate; nothing was saved.",
+    "saveFailed": "The part file could not be saved; nothing was changed.",
     "exists": "A part with that name already exists.",
     "confirm": "Extract",
     "reason": {
@@ -484,6 +485,7 @@
       "mixed-scopes": "The selected nodes are in different loops; select nodes of one scope.",
       "multiple-entries": "The selection has more than one entry point.",
       "multiple-exits": "The selection has more than one exit.",
+      "unsupported-exit": "The selection exits through port \"{{port}}\"; only success or failure exits can be extracted.",
       "invalid-name": "Use lowercase letters, digits and hyphens for the name."
     }
   }

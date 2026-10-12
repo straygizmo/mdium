@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { FlowCommandNode, FlowDef, FlowLoopNode, FlowNode, FlowSubflowNode } from "@/shared/types/flow";
+import type {
+  FlowAgentNode, FlowApprovalNode, FlowCommandNode, FlowDef, FlowLoopNode, FlowNode, FlowSubflowNode,
+} from "@/shared/types/flow";
 import { collectReferences, extractSubflow } from "../extract-subflow";
 
 const MAIN = ".mdium/flows/main.flow.yaml";
@@ -55,6 +57,7 @@ describe("extractSubflow", () => {
     expect((byId(r.updated.nodes, "after") as FlowCommandNode).run).toBe("echo ${{ nodes.my_part.outputs.result }}");
     expect(r.updated.edges).toEqual([{ from: "prep", to: "my_part" }, { from: "my_part", to: "after" }]);
     expect(r.updated.ui).toEqual({ positions: { prep: { x: 0, y: 0 }, my_part: { x: 100, y: 50 } } });
+    expect(r.newNodePath).toBe("nodes[1]");
   });
 
   it("loop variables become params", () => {
@@ -82,6 +85,7 @@ describe("extractSubflow", () => {
     ]);
     expect(body.edges).toEqual([]);
     expect(body.outputs).toEqual({ o: "${{ nodes.inner.outputs.o }}" });
+    expect(r.newNodePath).toBe("nodes[0].body.nodes[0]");
   });
 
   it("refuses multiple entry points", () => {
@@ -124,17 +128,19 @@ describe("extractSubflow", () => {
   it("keeps back edges inside the selection", () => {
     const def: FlowDef = {
       schemaVersion: 1, id: "main", name: "Main",
-      nodes: [cmd("s", "s"), cmd("a", "a"), { id: "b", kind: "approval" }, cmd("t", "t")],
+      nodes: [cmd("s", "s"), cmd("a", "a"), { id: "b", kind: "approval" }, cmd("c", "c"), cmd("t", "t")],
       edges: [
         { from: "s", to: "a" }, { from: "a", to: "b" },
         { from: "b", to: "a", port: "reject", maxTraversals: 3 },
-        { from: "b", to: "t", port: "approve" },
+        { from: "b", to: "c", port: "approve" },
+        { from: "c", to: "t" },
       ],
     };
-    const r = ok(extractSubflow(def, ["nodes[1]", "nodes[2]"], "review", MAIN));
+    const r = ok(extractSubflow(def, ["nodes[1]", "nodes[2]", "nodes[3]"], "review", MAIN));
     expect(r.part.edges).toEqual([
       { from: "a", to: "b" },
       { from: "b", to: "a", port: "reject", maxTraversals: 3 },
+      { from: "b", to: "c", port: "approve" },
     ]);
     expect(r.updated.edges).toEqual([{ from: "s", to: "review" }, { from: "review", to: "t" }]);
   });
@@ -178,5 +184,104 @@ describe("extractSubflow", () => {
     expect(byId(r.part.nodes, "a")?.when).toEqual({ all: [{ ref: "params.list", op: "exists" }] });
     expect(byId(r.updated.nodes, "after")?.when).toEqual({ ref: "nodes.my_part.outputs.result", op: "==", value: "ok" });
     expect(collectReferences({ when: { not: { ref: "params.a", op: "exists" } }, run: "${{ index }}" })).toEqual(["params.a", "index"]);
+  });
+
+  it("refuses a non-success exit port", () => {
+    const def: FlowDef = {
+      schemaVersion: 1, id: "main", name: "Main",
+      nodes: [cmd("s", "s"), { id: "ok", kind: "approval" }, cmd("t", "t")],
+      edges: [{ from: "s", to: "ok" }, { from: "ok", to: "t", port: "approve" }],
+    };
+    expect(extractSubflow(def, ["nodes[1]"], "gate", MAIN)).toEqual({ ok: false, reason: "unsupported-exit", detail: "approve" });
+  });
+
+  it("keeps a single failure exit", () => {
+    const def: FlowDef = {
+      schemaVersion: 1, id: "main", name: "Main",
+      nodes: [cmd("s", "s"), cmd("a", "a"), cmd("x", "x")],
+      edges: [{ from: "s", to: "a" }, { from: "a", to: "x", port: "failure" }],
+    };
+    const r = ok(extractSubflow(def, ["nodes[1]"], "risky", MAIN));
+    expect(r.updated.edges).toEqual([{ from: "s", to: "risky" }, { from: "risky", to: "x", port: "failure" }]);
+  });
+
+  it("refuses an outside back edge into a non-entry node", () => {
+    const def: FlowDef = {
+      schemaVersion: 1, id: "main", name: "Main",
+      nodes: [cmd("s", "s"), cmd("a", "a"), cmd("b", "b"), cmd("z", "z")],
+      edges: [
+        { from: "s", to: "a" }, { from: "a", to: "b" }, { from: "b", to: "z" },
+        { from: "z", to: "b", port: "failure", maxTraversals: 2 },
+      ],
+    };
+    expect(extractSubflow(def, ["nodes[1]", "nodes[2]"], "pair", MAIN)).toEqual({ ok: false, reason: "multiple-entries", detail: "a,b" });
+    // A back edge into the entry node is fine and is re-targeted to the new node.
+    def.edges![3] = { from: "z", to: "a", port: "failure", maxTraversals: 2 };
+    const r = ok(extractSubflow(def, ["nodes[1]", "nodes[2]"], "pair", MAIN));
+    expect(r.updated.edges).toContainEqual({ from: "z", to: "pair", port: "failure", maxTraversals: 2 });
+  });
+
+  it("rewrites approval show references", () => {
+    const def = basic();
+    def.nodes[2] = { id: "b", kind: "approval", show: ["nodes.prep.outputs.list", " nodes.a.outputs.copied "] };
+    def.nodes[3] = { id: "after", kind: "approval", show: ["nodes.b.outputs.comment", "params.src"] };
+    def.edges = [{ from: "prep", to: "a" }, { from: "a", to: "b" }, { from: "b", to: "after", port: "failure" }];
+    const r = ok(extractSubflow(def, ["nodes[1]", "nodes[2]"], "my-part", MAIN));
+    expect((byId(r.part.nodes, "b") as FlowApprovalNode).show).toEqual(["params.list", " nodes.a.outputs.copied "]);
+    expect(r.signature.params).toEqual(["src", "list"]);
+    expect(r.part.outputs).toEqual({ comment: "${{ nodes.b.outputs.comment }}" });
+    expect((byId(r.updated.nodes, "after") as FlowApprovalNode).show).toEqual(["nodes.my_part.outputs.comment", "params.src"]);
+    expect(collectReferences({ kind: "approval", show: ["nodes.x.outputs.y"] })).toEqual(["nodes.x.outputs.y"]);
+  });
+
+  it("copies defaults, env and envPassthrough into the part", () => {
+    const def: FlowDef = {
+      ...basic(),
+      defaults: { timeout: "5m", workingDir: "work" },
+      env: { MODE: "fast" },
+      envPassthrough: ["HOME"],
+    };
+    const r = ok(extractSubflow(def, ["nodes[1]"], "copy", MAIN));
+    expect(r.part.defaults).toEqual({ timeout: "5m", workingDir: "work" });
+    expect(r.part.env).toEqual({ MODE: "fast" });
+    expect(r.part.envPassthrough).toEqual(["HOME"]);
+    // Absent context stays absent.
+    const plain = ok(extractSubflow(basic(), ["nodes[1]"], "copy", MAIN));
+    expect("defaults" in plain.part || "env" in plain.part || "envPassthrough" in plain.part).toBe(false);
+  });
+
+  it("rebases relative file references into lib/", () => {
+    const agent = (id: string, promptRef: string): FlowAgentNode => ({
+      id, kind: "agent", provider: "claude", promptRef, permission: "read-only", outputContract: "free",
+    });
+    const def: FlowDef = {
+      schemaVersion: 1, id: "main", name: "Main",
+      nodes: [
+        { id: "sub", kind: "subflow", flow: "lib/helper.flow.yaml" },
+        { id: "fl", kind: "loop", mode: "foreach", items: "${{ params.items }}", maxIterations: 2, body: "../shared/item.flow.yaml" },
+        agent("p1", "prompts/review.md"),
+        agent("p2", "builtin:review"),
+        agent("p3", "mdium:review"),
+        agent("p4", "/abs/review.md"),
+        {
+          id: "il", kind: "loop", mode: "foreach", items: "${{ params.items }}", maxIterations: 2,
+          body: { nodes: [{ id: "deep", kind: "subflow", flow: "other.flow.yaml" }] },
+        },
+      ],
+      edges: [
+        { from: "sub", to: "fl" }, { from: "fl", to: "p1" }, { from: "p1", to: "p2" },
+        { from: "p2", to: "p3" }, { from: "p3", to: "p4" }, { from: "p4", to: "il" },
+      ],
+    };
+    const r = ok(extractSubflow(def, def.nodes.map((_, i) => `nodes[${i}]`), "all", MAIN));
+    expect((byId(r.part.nodes, "sub") as FlowSubflowNode).flow).toBe("helper.flow.yaml");
+    expect((byId(r.part.nodes, "fl") as FlowLoopNode).body).toBe("../../shared/item.flow.yaml");
+    expect((byId(r.part.nodes, "p1") as FlowAgentNode).promptRef).toBe("../prompts/review.md");
+    expect((byId(r.part.nodes, "p2") as FlowAgentNode).promptRef).toBe("builtin:review");
+    expect((byId(r.part.nodes, "p3") as FlowAgentNode).promptRef).toBe("mdium:review");
+    expect((byId(r.part.nodes, "p4") as FlowAgentNode).promptRef).toBe("/abs/review.md");
+    const inner = (byId(r.part.nodes, "il") as FlowLoopNode).body;
+    if (typeof inner === "string") throw new Error("body must stay inline");
+    expect((inner.nodes[0] as FlowSubflowNode).flow).toBe("../other.flow.yaml");
   });
 });

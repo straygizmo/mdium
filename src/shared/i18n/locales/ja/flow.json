@@ -477,6 +477,7 @@
     "outputs": "出力",
     "none": "なし",
     "failedValidation": "抽出したフローの検証に失敗したため、何も保存しませんでした。",
+    "saveFailed": "パートファイルを保存できませんでした。何も変更していません。",
     "exists": "同じ名前のパートが既にあります。",
     "confirm": "抽出",
     "reason": {
@@ -484,6 +485,7 @@
       "mixed-scopes": "選択したノードが異なるループにあります。同じスコープのノードを選択してください。",
       "multiple-entries": "選択範囲に入口が複数あります。",
       "multiple-exits": "選択範囲に出口が複数あります。",
+      "unsupported-exit": "選択はポート「{{port}}」から出ています。抽出できる出口は success か failure だけです。",
       "invalid-name": "名前には小文字・数字・ハイフンを使用してください。"
     }
   }

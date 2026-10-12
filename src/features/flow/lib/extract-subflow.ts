@@ -1,5 +1,6 @@
 import { mapScope, nodeAt, parentList, scopeOf } from "./editor-state";
 import { collectIds } from "./flow-ports";
+import { resolvePartPath } from "./flow-graph";
 import { relativeRef } from "./part-ref";
 import type {
   FlowDef,
@@ -11,7 +12,13 @@ import type {
   FlowSubflowNode,
 } from "@/shared/types/flow";
 
-export type ExtractFailure = "empty" | "mixed-scopes" | "multiple-entries" | "multiple-exits" | "invalid-name";
+export type ExtractFailure =
+  | "empty"
+  | "mixed-scopes"
+  | "multiple-entries"
+  | "multiple-exits"
+  | "unsupported-exit"
+  | "invalid-name";
 
 export interface ExtractResult {
   /** The new part file: id = name, inferred params / outputs, the selected nodes (ids kept) and their inner edges. */
@@ -19,6 +26,8 @@ export interface ExtractResult {
   /** The caller with the selection replaced by one `subflow` node. */
   updated: FlowDef;
   signature: { params: string[]; outputs: string[] };
+  /** Graph path of the new `subflow` node in `updated`. */
+  newNodePath: string;
 }
 
 export type ExtractOutcome = ({ ok: true } & ExtractResult) | { ok: false; reason: ExtractFailure; detail?: string };
@@ -44,9 +53,23 @@ function isConditionLeaf(obj: Record<string, unknown>): boolean {
   return typeof obj.ref === "string" && typeof obj.op === "string";
 }
 
+/** An approval node: its `show` entries hold plain reference text (no `${{ }}`). */
+function isApproval(obj: Record<string, unknown>): boolean {
+  return obj.kind === "approval" && Array.isArray(obj.show);
+}
+
+/** Maps one plain reference text, keeping the original text (and its spacing) when unchanged. */
+function mapPlainRef(text: unknown, fn: RefMapper): unknown {
+  if (typeof text !== "string") return text;
+  const ref = text.trim();
+  const next = fn(ref);
+  return next === ref ? text : next;
+}
+
 /**
  * Returns a copy of `value` with every reference passed through `fn`: the references
- * of `${{ }}` templates inside strings and the `ref` of condition leaves.
+ * of `${{ }}` templates inside strings, the `ref` of condition leaves and the `show`
+ * entries of approval nodes.
  */
 function mapValueRefs(value: unknown, fn: RefMapper): unknown {
   if (typeof value === "string") {
@@ -59,12 +82,13 @@ function mapValueRefs(value: unknown, fn: RefMapper): unknown {
   if (value !== null && typeof value === "object") {
     const obj = value as Record<string, unknown>;
     const leaf = isConditionLeaf(obj);
+    const approval = isApproval(obj);
     const out: Record<string, unknown> = {};
     for (const [key, v] of Object.entries(obj)) {
       if (leaf && key === "ref") {
-        const ref = (v as string).trim();
-        const next = fn(ref);
-        out[key] = next === ref ? v : next;
+        out[key] = mapPlainRef(v, fn);
+      } else if (approval && key === "show") {
+        out[key] = (v as unknown[]).map((entry) => mapPlainRef(entry, fn));
       } else {
         out[key] = mapValueRefs(v, fn);
       }
@@ -74,7 +98,7 @@ function mapValueRefs(value: unknown, fn: RefMapper): unknown {
   return value;
 }
 
-/** Every reference text inside a JSON value (templates in strings and condition `ref` fields), unique, in order. */
+/** Every reference text inside a JSON value (templates in strings, condition `ref` fields, approval `show`), unique, in order. */
 export function collectReferences(value: unknown): string[] {
   const seen = new Set<string>();
   mapValueRefs(value, (ref) => {
@@ -114,6 +138,41 @@ function mapBodyRefs(body: FlowInlineBody, ctx: RefContext, fn: ContextMapper): 
   const out: FlowInlineBody = { ...body, nodes: body.nodes.map((n) => mapNodeRefs(n, ctx, fn)) };
   if (body.outputs) out.outputs = mapValueRefs(body.outputs, (ref) => fn(ref, ctx)) as Record<string, string>;
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// File references
+// ---------------------------------------------------------------------------
+
+/** A file reference that is relative to the flow file holding it (not `builtin:`, `mdium:`, absolute or templated). */
+function isRelativeFileRef(ref: string): boolean {
+  return (
+    ref.trim() !== "" &&
+    !ref.startsWith("builtin:") &&
+    !ref.startsWith("mdium:") &&
+    !/^([\\/]|[A-Za-z]:)/.test(ref) &&
+    !ref.includes("${{")
+  );
+}
+
+/**
+ * Re-expresses the relative file references of moved nodes (`subflow.flow`, a file
+ * `loop.body`, `agent.promptRef`, inline loop bodies included) from `fromFile`'s
+ * directory to `toFile`'s directory.
+ */
+function rebaseFileRefs(node: FlowNode, fromFile: string, toFile: string): FlowNode {
+  const rebase = (ref: string) => (isRelativeFileRef(ref) ? relativeRef(toFile, resolvePartPath(fromFile, ref)) : ref);
+  switch (node.kind) {
+    case "subflow":
+      return { ...node, flow: rebase(node.flow) };
+    case "agent":
+      return node.promptRef === undefined ? node : { ...node, promptRef: rebase(node.promptRef) };
+    case "loop":
+      if (typeof node.body === "string") return { ...node, body: rebase(node.body) };
+      return { ...node, body: { ...node.body, nodes: node.body.nodes.map((n) => rebaseFileRefs(n, fromFile, toFile)) } };
+    default:
+      return node;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -231,9 +290,14 @@ function entryPoints(ids: string[], selected: Set<string>, edges: FlowEdge[]): s
   );
 }
 
+/** Edges leaving the selection. */
+function exitEdges(selected: Set<string>, edges: FlowEdge[]): FlowEdge[] {
+  return edges.filter((e) => selected.has(e.from) && !selected.has(e.to));
+}
+
 /** Distinct `(from, port)` pairs of edges leaving the selection. */
 function exitPorts(selected: Set<string>, edges: FlowEdge[]): string[] {
-  const keys = edges.filter((e) => selected.has(e.from) && !selected.has(e.to)).map((e) => `${e.from}.${portOf(e)}`);
+  const keys = exitEdges(selected, edges).map((e) => `${e.from}.${portOf(e)}`);
   return [...new Set(keys)];
 }
 
@@ -249,7 +313,7 @@ function repointEdges(edges: FlowEdge[], selected: Set<string>, newId: string): 
     if (toIn) next = { ...edge, to: newId };
     if (fromIn) {
       const { port, ...others } = edge;
-      // The call node only has `success` and `failure`; a failure exit stays a failure exit.
+      // The call node only has `success` and `failure` (other exit ports are refused earlier).
       next = { ...others, from: newId, ...(port === "failure" ? { port } : {}) };
     }
     const key = `${next.from}>${next.to}>${portOf(next)}>${next.maxTraversals ?? ""}`;
@@ -316,6 +380,17 @@ export function extractSubflow(def: FlowDef, selectedPaths: string[], name: stri
   if (entries.length > 1) return { ok: false, reason: "multiple-entries", detail: entries.join(",") };
   const exits = exitPorts(selected, edges);
   if (exits.length > 1) return { ok: false, reason: "multiple-exits", detail: exits.join(",") };
+  // The call node only exits through `success` or `failure`; any other port would change the run.
+  const exitPort = exitEdges(selected, edges).map(portOf)[0];
+  if (exitPort !== undefined && exitPort !== "success" && exitPort !== "failure") {
+    return { ok: false, reason: "unsupported-exit", detail: exitPort };
+  }
+  const entryId = entries[0] ?? selectedIds[0];
+  // An outside back edge can only re-enter through the entry node (it is re-targeted to the call node).
+  const backInto = edges.find(
+    (e) => e.maxTraversals !== undefined && !selected.has(e.from) && selected.has(e.to) && e.to !== entryId,
+  );
+  if (backInto) return { ok: false, reason: "multiple-entries", detail: `${entryId},${backInto.to}` };
 
   // Ids inside the selection, inline loop bodies included.
   const internal = new Set<string>();
@@ -325,11 +400,12 @@ export function extractSubflow(def: FlowDef, selectedPaths: string[], name: stri
   for (const id of internal) taken.delete(id);
   const newId = uniqueName(name.replace(/-/g, "_"), taken);
 
+  const partFile = `${LIB_DIR}/${name}.flow.yaml`;
   const inbound = inferParams(selectedNodes, internal, def.params ?? {});
   const call: FlowSubflowNode = {
     id: newId,
     kind: "subflow",
-    flow: relativeRef(currentFile, `${LIB_DIR}/${name}.flow.yaml`),
+    flow: relativeRef(currentFile, partFile),
     ...(inbound.names.length > 0 ? { params: inbound.callParams } : {}),
   };
   const insertAt = list.findIndex((n) => selected.has(n.id));
@@ -339,7 +415,6 @@ export function extractSubflow(def: FlowDef, selectedPaths: string[], name: stri
   }));
   const outbound = inferOutputs(collapsed, internal, newId);
 
-  const entryId = entries[0] ?? selectedIds[0];
   const positions = positionsOf(def.ui);
   let updated = outbound.updated;
   if (positions) {
@@ -354,11 +429,16 @@ export function extractSubflow(def: FlowDef, selectedPaths: string[], name: stri
     id: name,
     name,
     ...(inbound.names.length > 0 ? { params: inbound.partParams } : {}),
-    nodes: inbound.nodes,
+    // The part runs with the caller's flow-level context.
+    ...(def.defaults !== undefined ? { defaults: structuredClone(def.defaults) } : {}),
+    ...(def.env !== undefined ? { env: { ...def.env } } : {}),
+    ...(def.envPassthrough !== undefined ? { envPassthrough: [...def.envPassthrough] } : {}),
+    nodes: inbound.nodes.map((n) => rebaseFileRefs(n, currentFile, partFile)),
     ...(innerEdges.length > 0 ? { edges: innerEdges } : {}),
     ...(outputNames.length > 0 ? { outputs: outbound.outputs } : {}),
     ...(Object.keys(movedPositions).length > 0 ? { ui: { positions: movedPositions } } : {}),
   };
 
-  return { ok: true, part, updated, signature: { params: inbound.names, outputs: outputNames } };
+  const newNodePath = `${scope === "" ? "" : `${scope}.body.`}nodes[${insertAt}]`;
+  return { ok: true, part, updated, signature: { params: inbound.names, outputs: outputNames }, newNodePath };
 }
