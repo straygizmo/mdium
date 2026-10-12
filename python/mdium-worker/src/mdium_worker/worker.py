@@ -4,10 +4,13 @@ from __future__ import annotations
 import collections
 import importlib
 import json
+import os
 import queue
+import sys
 import threading
+import time
 import traceback
-from typing import TextIO
+from typing import Iterator, TextIO
 
 from . import registry
 from .context import Context, NeedsApproval, StageFailed, Stopped
@@ -32,8 +35,65 @@ class Emitter:
             self._stdout.flush()
 
 
+def _windows_pipe_lines(stdin: TextIO) -> "Iterator[str] | None":
+    """Lines of `stdin` when it is a Windows pipe, read without a pending read.
+
+    A synchronous `ReadFile` left waiting on the pipe (what `for line in stdin`
+    does from the reader thread) blocks every other operation on that handle
+    until a line arrives - including the one OpenBLAS makes while numpy loads,
+    so a stage's first `import numpy` hung forever. Polling `PeekNamedPipe`
+    and reading only the bytes already there leaves the handle free. Returns
+    None when stdin is not a pipe (a file or the console): plain reads then.
+    """
+    try:
+        import msvcrt
+        import _winapi
+    except ImportError:  # pragma: no cover - not Windows
+        return None
+    fd = stdin.fileno()
+    handle = msvcrt.get_osfhandle(fd)
+    encoding = getattr(stdin, "encoding", None) or "utf-8"
+    errors = getattr(stdin, "errors", None) or "surrogateescape"
+    try:
+        _winapi.PeekNamedPipe(handle)
+    except OSError as err:
+        if err.winerror == 109:  # ERROR_BROKEN_PIPE: the writer is already gone
+            return iter(())
+        return None  # not a pipe
+
+    def lines() -> Iterator[str]:
+        pending = b""
+        while True:
+            try:
+                available = _winapi.PeekNamedPipe(handle)[0]
+            except OSError:  # the writer closed the pipe
+                break
+            if not available:
+                time.sleep(0.02)
+                continue
+            chunk = os.read(fd, min(available, 65536))
+            if not chunk:
+                break
+            pending += chunk
+            while b"\n" in pending:
+                line, pending = pending.split(b"\n", 1)
+                yield line.decode(encoding, errors)
+        if pending:
+            yield pending.decode(encoding, errors)
+
+    return lines()
+
+
+def _lines(stdin: TextIO) -> Iterator[str]:
+    if sys.platform == "win32":
+        pipe = _windows_pipe_lines(stdin)
+        if pipe is not None:
+            return pipe
+    return iter(stdin)
+
+
 def _reader(stdin: TextIO, inbox: "queue.Queue[dict | None]") -> None:
-    for raw in stdin:
+    for raw in _lines(stdin):
         raw = raw.strip()
         if not raw:
             continue

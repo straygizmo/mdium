@@ -192,3 +192,29 @@ def test_none_default_is_optional_and_text_round_trips_as_utf8(tmp_path):
         assert [m["value"] for m in lines if m["type"] == "output"] == [text]
     finally:
         proc.kill()
+
+
+def test_stage_may_touch_stdin_while_reader_waits(tmp_path):
+    # The reader thread must not keep a read pending on the stdin pipe while a
+    # stage runs: on Windows that blocks any other operation on the handle (a
+    # seek here; loading OpenBLAS in `import numpy` in real projects).
+    import threading
+
+    proc = start(tmp_path)
+    lines: list[dict] = []
+    done = threading.Event()
+
+    def collect() -> None:
+        for line in proc.stdout:
+            lines.append(json.loads(line))
+            if lines[-1]["type"] == "outcome":
+                done.set()
+
+    threading.Thread(target=collect, daemon=True).start()
+    try:
+        call(proc, "1", "c1", "demo.seek_stdin", {}, tmp_path)
+        assert done.wait(10.0), f"the stage hung behind the stdin reader; got {lines}"
+        assert lines[-1]["status"] == "ok"
+        assert any(m["type"] == "output" and m["value"] is True for m in lines)
+    finally:
+        proc.kill()

@@ -1,4 +1,5 @@
 """A module with a few stages, used by the worker-loop tests."""
+import os
 import sys
 import time
 
@@ -64,3 +65,14 @@ def surrogate(ctx: Context) -> None:
 @stage("demo.nan")
 def nan(ctx: Context) -> None:
     ctx.output("x", float("nan"))
+
+
+@stage("demo.seek_stdin", outputs={"ok": {"type": "bool"}})
+def seek_stdin(ctx: Context) -> None:
+    # On Windows a seek on fd 0 waits behind a synchronous read pending on the
+    # stdin pipe (as does loading OpenBLAS, so `import numpy` used to hang).
+    try:
+        os.lseek(0, 0, os.SEEK_CUR)
+    except OSError:
+        pass
+    ctx.output("ok", True)
