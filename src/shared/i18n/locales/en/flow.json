@@ -337,7 +337,8 @@
     "drillDown": "Double-click to open the referenced flow",
     "fixYamlToEdit": "Fix the YAML to edit on the canvas.",
     "deletedOutside": "The file was deleted outside the editor.",
-    "droppedKeys": "Unknown keys will be dropped: {{keys}}"
+    "droppedKeys": "Unknown keys will be dropped: {{keys}}",
+    "extract": "Extract"
   },
   "attrs": {
     "id": "ID",
@@ -464,5 +465,23 @@
     "undeclared": "not declared by the callee",
     "unset": "not set",
     "missing": "File not found in this project"
+  },
+  "extract": {
+    "title": "Extract into sub-flow",
+    "name": "Part name",
+    "preview": "Inferred signature",
+    "params": "Parameters",
+    "outputs": "Outputs",
+    "none": "none",
+    "failedValidation": "The extracted flow did not validate; nothing was saved.",
+    "exists": "A part with that name already exists.",
+    "confirm": "Extract",
+    "reason": {
+      "empty": "Select at least one node.",
+      "mixed-scopes": "The selected nodes are in different loops; select nodes of one scope.",
+      "multiple-entries": "The selection has more than one entry point.",
+      "multiple-exits": "The selection has more than one exit.",
+      "invalid-name": "Use lowercase letters, digits and hyphens for the name."
+    }
   }
 }

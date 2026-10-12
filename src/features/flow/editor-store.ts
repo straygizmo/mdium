@@ -49,6 +49,8 @@ export interface EditorState {
   /** Unknown top-level keys present in the file on disk (load / last save). */
   diskUnknownKeys: string[];
   selection: Selection;
+  /** Node paths selected on the canvas (shift / box selection); a single click holds that one path. */
+  selectedMany: string[];
   externalChange: boolean;
   /** The external change is a deletion of the file. */
   externalDeleted: boolean;
@@ -62,6 +64,8 @@ export interface EditorState {
   applyEdit(edit: (def: FlowDef) => FlowDef): void;
   validateNow(): Promise<void>;
   select(selection: Selection): void;
+  /** Records the canvas's node selection; exactly one node also becomes `selection`. */
+  selectMany(paths: string[]): void;
   save(opts: { overwrite?: boolean }): Promise<SaveOutcome>;
   markExternalChange(deleted?: boolean): void;
   /**
@@ -90,6 +94,7 @@ const initial = {
   commentWarningPending: false,
   diskUnknownKeys: [],
   selection: null,
+  selectedMany: [] as string[],
   externalChange: false,
   externalDeleted: false,
   loadError: null,
@@ -262,7 +267,14 @@ export const useFlowEditorStore = create<EditorState>()((set, get) => {
       }
     },
 
-    select: (selection) => set({ selection }),
+    select: (selection) => set({ selection, selectedMany: selection?.kind === "node" ? [selection.path] : [] }),
+
+    selectMany: (paths) =>
+      set((s) => {
+        if (paths.length === 1) return { selectedMany: paths, selection: { kind: "node", path: paths[0] } };
+        // Several nodes show no single attribute form; an edge / flow selection survives an emptied node set.
+        return { selectedMany: paths, selection: paths.length > 1 || s.selection?.kind === "node" ? null : s.selection };
+      }),
 
     save: async ({ overwrite } = {}) => {
       const s = get();

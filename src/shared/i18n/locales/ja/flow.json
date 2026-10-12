@@ -337,7 +337,8 @@
     "drillDown": "ダブルクリックで参照先のフローを開く",
     "fixYamlToEdit": "キャンバスで編集するには YAML を修正してください。",
     "deletedOutside": "ファイルがエディタの外で削除されました。",
-    "droppedKeys": "未知のキーは削除されます: {{keys}}"
+    "droppedKeys": "未知のキーは削除されます: {{keys}}",
+    "extract": "抽出"
   },
   "attrs": {
     "id": "ID",
@@ -464,5 +465,23 @@
     "undeclared": "呼び出し先に未宣言",
     "unset": "未設定",
     "missing": "このプロジェクトにファイルがありません"
+  },
+  "extract": {
+    "title": "サブフローへ抽出",
+    "name": "パート名",
+    "preview": "推論されたシグネチャ",
+    "params": "パラメータ",
+    "outputs": "出力",
+    "none": "なし",
+    "failedValidation": "抽出したフローの検証に失敗したため、何も保存しませんでした。",
+    "exists": "同じ名前のパートが既にあります。",
+    "confirm": "抽出",
+    "reason": {
+      "empty": "ノードを1つ以上選択してください。",
+      "mixed-scopes": "選択したノードが異なるループにあります。同じスコープのノードを選択してください。",
+      "multiple-entries": "選択範囲に入口が複数あります。",
+      "multiple-exits": "選択範囲に出口が複数あります。",
+      "invalid-name": "名前には小文字・数字・ハイフンを使用してください。"
+    }
   }
 }

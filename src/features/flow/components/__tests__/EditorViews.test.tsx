@@ -16,6 +16,7 @@ import type { FlowLayout } from "../../lib/flow-layout";
 import {
   FlowCanvas,
   applyGeometryChanges,
+  selectedAfter,
   handleEdgeClick,
   handleNodeDragStop,
   makeIsValidConnection,
@@ -209,6 +210,15 @@ describe("editor views", () => {
     // Selection stays controlled by the editor store.
     expect(applyGeometryChanges([{ type: "select", id: nodes[0].id, selected: true }], nodes)).toBe(nodes);
     expect(applyGeometryChanges([{ type: "remove", id: nodes[0].id }], nodes)).toBe(nodes);
+  });
+
+  it("reports the selected node set after shift / box selection changes", () => {
+    const graph = buildFlowGraph(docDigest(), new Set());
+    const { nodes } = toReactFlow(graph, gridLayout(graph.nodes.map((n) => n.id)), null, vi.fn(), true, [graph.nodes[0].id]);
+    const [a, b] = [nodes[0].id, nodes[1].id];
+    expect(selectedAfter([{ type: "select", id: b, selected: true }], nodes)).toEqual([a, b]);
+    expect(selectedAfter([{ type: "select", id: a, selected: false }], nodes)).toEqual([]);
+    expect(selectedAfter([{ type: "position", id: a, position: { x: 1, y: 2 } }], nodes)).toBeNull();
   });
 
   it("resets the local node copy when the layout changes", async () => {

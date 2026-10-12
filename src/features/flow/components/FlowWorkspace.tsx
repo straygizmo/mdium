@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useTabStore } from "@/stores/tab-store";
-import type { FlowDef, FlowEdge, FlowNode, FlowSummary, ProjectLoadResult } from "@/shared/types/flow";
+import type { FlowDef, FlowEdge, FlowIssue, FlowNode, FlowSummary, ProjectLoadResult } from "@/shared/types/flow";
 import { flowApi } from "../lib/flow-api";
 import { buildFlowGraph, type CalleeSignature } from "../lib/flow-graph";
 import { layoutFlowGraph, savedPositions, type FlowLayout } from "../lib/flow-layout";
@@ -22,6 +22,7 @@ import {
 import { portsOf } from "../lib/flow-ports";
 import { useFlowViewStore } from "../flow-store";
 import { commentLossDue, confirmDiscard, droppedUnknownKeys, useFlowEditorStore, type Selection } from "../editor-store";
+import { commitExtraction } from "../lib/extract-commit";
 import { describeError } from "../lib/run-format";
 import { FlowCanvas, type ConnectRequest } from "./FlowCanvas";
 import { FlowIssueList } from "./FlowIssueList";
@@ -30,6 +31,7 @@ import { FlowYamlPane, parseErrorMarkers } from "./FlowYamlPane";
 import { NodePalette } from "./NodePalette";
 import { PortPopover } from "./PortPopover";
 import { RunPanel } from "./RunPanel";
+import { ExtractDialog } from "./ExtractDialog";
 import { SaveWarningDialog } from "./SaveWarningDialog";
 import { ExternalChangeNotice } from "./ExternalChangeNotice";
 import { AttributePanel } from "./attrs/AttributePanel";
@@ -98,6 +100,7 @@ export function FlowWorkspace() {
   const dirty = useFlowEditorStore((s) => s.dirty);
   const validating = useFlowEditorStore((s) => s.validating);
   const selection = useFlowEditorStore((s) => s.selection);
+  const selectedMany = useFlowEditorStore((s) => s.selectedMany);
   const externalChange = useFlowEditorStore((s) => s.externalChange);
   const externalDeleted = useFlowEditorStore((s) => s.externalDeleted);
   const loadError = useFlowEditorStore((s) => s.loadError);
@@ -113,6 +116,8 @@ export function FlowWorkspace() {
   const [saving, setSaving] = useState(false);
   const [justSaved, setJustSaved] = useState(false);
   const [noticeBusy, setNoticeBusy] = useState(false);
+  const [extracting, setExtracting] = useState<{ busy: boolean; failure: FlowIssue[] } | null>(null);
+  const [partsVersion, setPartsVersion] = useState(0);
   const [parts, setParts] = useState<FlowSummary[]>([]);
   const [signatures, setSignatures] = useState<Record<string, CalleeSignature>>({});
   const [project, setProject] = useState<ProjectLoadResult | null>(null);
@@ -163,6 +168,7 @@ export function FlowWorkspace() {
   }, [folder, path]);
 
   // Parts (for the palette and the sub-flow / loop forms) and the project manifest.
+  // `partsVersion` is bumped to re-read the list after a file was created (extraction).
   useEffect(() => {
     if (!folder || !path) return;
     let cancelled = false;
@@ -188,7 +194,7 @@ export function FlowWorkspace() {
     return () => {
       cancelled = true;
     };
-  }, [folder, path]);
+  }, [folder, path, partsVersion]);
 
   // External changes: compare the hash on disk with the one the editor holds.
   useEffect(() => {
@@ -327,6 +333,7 @@ export function FlowWorkspace() {
   }, []);
 
   const onSelect = useCallback((sel: Selection) => editor().select(sel), []);
+  const onSelectMany = useCallback((paths: string[]) => editor().selectMany(paths), []);
   const onMoveNode = useCallback(
     (nodeId: string, position: { x: number; y: number }) => {
       // Place the node at the drop point in the current layout first: the edit re-derives the
@@ -382,6 +389,33 @@ export function FlowWorkspace() {
     const next = editor().def;
     const index = next ? next.nodes.findIndex((n) => n.id === node.id) : -1;
     if (index >= 0) editor().select({ kind: "node", path: `nodes[${index}]` });
+  };
+
+  /** Extracts the selected nodes into a new part; keeps the dialog open (and writes nothing) on errors. */
+  const onConfirmExtract = async (name: string) => {
+    const s = editor();
+    if (!s.def || !s.projectRoot || !s.path || !s.defCurrent) return;
+    setExtracting({ busy: true, failure: [] });
+    try {
+      const outcome = await commitExtraction({
+        projectRoot: s.projectRoot,
+        def: s.def,
+        selectedPaths: s.selectedMany,
+        name,
+        currentFile: s.path,
+      });
+      if (!outcome.ok) {
+        setExtracting({ busy: false, failure: outcome.errors });
+        return;
+      }
+      edit(() => outcome.updated);
+      if (outcome.newNodePath) editor().select({ kind: "node", path: outcome.newNodePath });
+      setPartsVersion((v) => v + 1);
+      setExtracting(null);
+    } catch (err) {
+      const code = (err as { code?: string } | null)?.code ?? "FLOW_SAVE_FAILED";
+      setExtracting({ busy: false, failure: [{ code, path: "", params: {} } as FlowIssue] });
+    }
   };
 
   /** Opens the file a sub-flow / loop node calls, extending the breadcrumb trail. */
@@ -448,6 +482,8 @@ export function FlowWorkspace() {
           yamlOpen={yamlOpen}
           validating={validating}
           saving={saving}
+          selectedCount={selectedMany.length}
+          onExtract={() => setExtracting({ busy: false, failure: [] })}
           onSave={() => void runSave()}
           onValidate={() => void editor().validateNow()}
           onToggleYaml={() => setYamlOpen((open) => !open)}
@@ -501,8 +537,10 @@ export function FlowWorkspace() {
                   graph={graph}
                   layout={layout}
                   selection={selection}
+                  selectedMany={selectedMany}
                   editable={structural}
                   onSelect={onSelect}
+                  onSelectMany={onSelectMany}
                   onToggle={onToggle}
                   onMoveNode={onMoveNode}
                   onConnect={onConnect}
@@ -562,6 +600,18 @@ export function FlowWorkspace() {
             )}
           </aside>
         </div>
+      )}
+      {extracting && def && (
+        <ExtractDialog
+          def={def}
+          selectedPaths={selectedMany}
+          currentFile={path}
+          existingParts={parts.map((p) => p.path)}
+          failure={extracting.failure}
+          busy={extracting.busy}
+          onConfirm={(name) => void onConfirmExtract(name)}
+          onClose={() => setExtracting(null)}
+        />
       )}
       {confirm && (
         <SaveWarningDialog message={confirm.message} onContinue={() => confirm.resolve(true)} onCancel={() => confirm.resolve(false)} />

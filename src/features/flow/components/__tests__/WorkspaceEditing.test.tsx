@@ -49,6 +49,7 @@ const canvasProps = vi.hoisted(() => ({
   current: null as {
     onConnect(req: unknown): void;
     onMoveNode(nodeId: string, position: { x: number; y: number }): void;
+    onSelectMany?(paths: string[]): void;
     graph: unknown;
     layout: unknown;
   } | null,
@@ -844,6 +845,66 @@ describe("flow workspace editing", () => {
       expect(useFlowViewStore.getState().selected[FOLDER]).toBe(PATH);
       expect(useFlowEditorStore.getState().path).toBe(PATH);
       expect(crumbs()).toBeNull();
+    });
+  });
+
+  describe("extract into a sub-flow", () => {
+    const PART_PATH = ".mdium/flows/lib/part-1.flow.yaml";
+    const selectMany = async (paths: string[]) => {
+      await act(async () => canvasProps.current!.onSelectMany!(paths));
+    };
+    const extractButton = () => button("Extract", container.querySelector<HTMLElement>(".flow-toolbar")!);
+
+    it("extracts a selection into a new part", async () => {
+      await mountWorkspace();
+      expect(extractButton().disabled).toBe(true);
+      await selectMany(["nodes[0]", "nodes[1]"]);
+      expect(useFlowEditorStore.getState().selectedMany).toEqual(["nodes[0]", "nodes[1]"]);
+      await click(extractButton());
+      expect(dialog()?.textContent).toContain("Inferred signature");
+      expect((dialog()!.querySelector("input") as HTMLInputElement).value).toBe("part-1");
+      invoke.mockClear();
+      await click(button("Extract", dialog()!));
+      await waitFor(() => expect(callsTo("flow_save").length).toBe(1));
+      expect(callsTo("flow_validate").length).toBe(2);
+      expect(callsTo("flow_save")[0]).toMatchObject({ path: PART_PATH, expectedSha256: null });
+      await waitFor(() => expect(dialog()).toBeNull());
+      await click(button("YAML"));
+      expect((container.querySelector(".test-yaml") as HTMLTextAreaElement).value).toContain("kind: subflow");
+      expect(useFlowEditorStore.getState().selection).toEqual({ kind: "node", path: "nodes[0]" });
+    });
+
+    it("refuses an ambiguous selection with the reason", async () => {
+      const ambiguous: FlowDef = {
+        ...demo,
+        nodes: [
+          { id: "a", kind: "approval" },
+          { id: "b", kind: "approval" },
+        ],
+        edges: [],
+      };
+      installRoutes({ flow_load: () => loadResult({ flow: ambiguous, content: stringifyFlow(ambiguous) }) });
+      await mountWorkspace();
+      await selectMany(["nodes[0]", "nodes[1]"]);
+      await click(extractButton());
+      expect(dialog()?.textContent).toContain("more than one entry point");
+      expect(button("Extract", dialog()!).disabled).toBe(true);
+      expect(callsTo("flow_save").length).toBe(0);
+    });
+
+    it("cancels when validation fails", async () => {
+      const issue: FlowIssue = { code: "FLOW_UNKNOWN_NODE_REF", path: "nodes[0]", params: {} } as FlowIssue;
+      installRoutes({
+        flow_validate: (args) => validated(args, String(args.path) === PART_PATH ? [issue] : []),
+      });
+      await mountWorkspace();
+      const before = useFlowEditorStore.getState().text;
+      await selectMany(["nodes[0]", "nodes[1]"]);
+      await click(extractButton());
+      await click(button("Extract", dialog()!));
+      await waitFor(() => expect(dialog()?.textContent).toContain("did not validate"));
+      expect(callsTo("flow_save").length).toBe(0);
+      expect(useFlowEditorStore.getState().text).toBe(before);
     });
   });
 });

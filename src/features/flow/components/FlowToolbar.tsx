@@ -9,11 +9,14 @@ interface FlowToolbarProps {
   yamlOpen: boolean;
   validating: boolean;
   saving: boolean;
+  /** Number of selected nodes; extraction needs at least one. */
+  selectedCount: number;
   /** Renders the node palette; `close` hides it again. */
   renderPalette(close: () => void): ReactNode;
   onSave(): void;
   onValidate(): void;
   onToggleYaml(): void;
+  onExtract(): void;
 }
 
 /** Editor actions above the canvas: add node (palette), save, YAML view, validate. */
@@ -23,10 +26,12 @@ export function FlowToolbar({
   yamlOpen,
   validating,
   saving,
+  selectedCount,
   renderPalette,
   onSave,
   onValidate,
   onToggleYaml,
+  onExtract,
 }: FlowToolbarProps) {
   const { t } = useTranslation("flow");
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -75,6 +80,9 @@ export function FlowToolbar({
       </button>
       <button type="button" className="flow-toolbar__button" disabled={!editable} onClick={onValidate}>
         {t("editor.validate")}
+      </button>
+      <button type="button" className="flow-toolbar__button" disabled={!addEnabled || selectedCount < 1} onClick={onExtract}>
+        {t("editor.extract")}
       </button>
       <button
         type="button"

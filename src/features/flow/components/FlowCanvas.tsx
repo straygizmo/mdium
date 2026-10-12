@@ -43,8 +43,12 @@ interface FlowCanvasProps {
   graph: FlowGraph;
   layout: FlowLayout;
   selection: Selection;
+  /** Node paths selected on the canvas (shift / box selection). */
+  selectedMany?: readonly string[];
   editable: boolean;
   onSelect: (selection: Selection) => void;
+  /** The set of selected node paths after a canvas selection change. */
+  onSelectMany?: (paths: string[]) => void;
   onToggle: (id: string) => void;
   onMoveNode: (nodeId: string, position: { x: number; y: number }) => void;
   onConnect: (req: ConnectRequest) => void;
@@ -96,6 +100,18 @@ export function applyGeometryChanges(changes: NodeChange<FlowRfNode>[], nodes: F
   return geometry.length > 0 ? applyNodeChanges(geometry, nodes) : nodes;
 }
 
+/**
+ * The node ids selected after applying React Flow's `select` changes to `nodes`, or `null`
+ * when `changes` holds no selection change.
+ */
+export function selectedAfter(changes: NodeChange<FlowRfNode>[], nodes: FlowRfNode[]): string[] | null {
+  const selects = changes.filter((c) => c.type === "select");
+  if (selects.length === 0) return null;
+  return applyNodeChanges(selects, nodes)
+    .filter((n) => n.selected)
+    .map((n) => n.id);
+}
+
 /** Edge label: the port unless it is `success`, plus the bound of a back-edge. */
 export function edgeLabel(port: string, maxTraversals?: number): string {
   const parts: string[] = [];
@@ -111,6 +127,7 @@ export function toReactFlow(
   selection: Selection,
   onToggle: (id: string) => void,
   editable = false,
+  selectedMany: readonly string[] = [],
 ): { nodes: FlowRfNode[]; edges: Edge[] } {
   const nodes: FlowRfNode[] = graph.nodes
     .filter((node) => layout[node.id])
@@ -123,7 +140,7 @@ export function toReactFlow(
         parentId: node.parentId,
         extent: node.parentId ? ("parent" as const) : undefined,
         data: { node, onToggle, editable },
-        selected: selection?.kind === "node" && node.id === selection.path,
+        selected: (selection?.kind === "node" && node.id === selection.path) || selectedMany.includes(node.id),
         // Children of a loop group stay inside it; only top-level nodes move.
         draggable: editable && !node.parentId,
         connectable: editable,
@@ -161,8 +178,10 @@ export function FlowCanvas({
   graph,
   layout,
   selection,
+  selectedMany,
   editable,
   onSelect,
+  onSelectMany,
   onToggle,
   onMoveNode,
   onConnect,
@@ -170,8 +189,8 @@ export function FlowCanvas({
   onDrill,
 }: FlowCanvasProps) {
   const { nodes, edges } = useMemo(
-    () => toReactFlow(graph, layout, selection, onToggle, editable),
-    [graph, layout, selection, onToggle, editable],
+    () => toReactFlow(graph, layout, selection, onToggle, editable, selectedMany),
+    [graph, layout, selection, onToggle, editable, selectedMany],
   );
   // A local copy React Flow can move during a drag; reset whenever the derived nodes change
   // (graph, layout, selection), so the store's positions win after the drop.
@@ -215,7 +234,15 @@ export function FlowCanvas({
           className={editable ? "flow-canvas flow-canvas--editable" : "flow-canvas"}
           nodes={rfNodes}
           edges={edges}
-          onNodesChange={(changes) => setRfNodes((current) => applyGeometryChanges(changes, current))}
+          onNodesChange={(changes) => {
+            setRfNodes((current) => applyGeometryChanges(changes, current));
+            // Selection stays controlled by the store: report the new set instead of applying it here.
+            const picked = selectedAfter(changes, rfNodes);
+            if (picked) onSelectMany?.(picked);
+          }}
+          multiSelectionKeyCode="Shift"
+          selectionOnDrag={editable}
+          panOnDrag={editable ? [1, 2] : true}
           nodeTypes={flowNodeTypes}
           nodesDraggable={editable}
           nodesConnectable={editable}
