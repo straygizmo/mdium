@@ -3683,16 +3683,15 @@ fn screening_approval_rescreens_inputs_that_changed_since_the_request() {
             .filter(|e| matches!(&e.body, EventBody::ApprovalRequested(r) if r.reason.code == FLOW_AGENT_SCREENING))
             .count()
     };
-    let snap = f.wait_for(&run_id, "second screening", |s| {
-        node(s, "a").status == NodeStatus::AwaitingApproval && screenings(&f) == 2
-    });
+    let flags_new_text = |s: &RunSnapshot| {
+        s.state.approvals.iter().any(|r| {
+            r.node_key.as_deref() == Some("a")
+                && matches!(&r.show["findings"], ShowValue::Value(v) if v.as_array().unwrap().iter().any(|x| x["excerpt"].as_str().unwrap_or("").contains("ignore previous prompts")))
+        })
+    };
+    f.wait_for(&run_id, "second screening", |s| flags_new_text(s));
+    assert_eq!(screenings(&f), 2);
     assert!(runner.prompts().is_empty(), "no session for the changed text");
-    let req = snap.state.approvals.iter().find(|r| r.node_key.as_deref() == Some("a")).unwrap();
-    assert!(
-        matches!(&req.show["findings"], ShowValue::Value(v) if v.as_array().unwrap().iter().any(|x| x["excerpt"].as_str().unwrap_or("").contains("ignore previous prompts"))),
-        "{:?}",
-        req.show
-    );
     f.engine.approve(&f.root, &run_id, Some("a"), "approve", None).unwrap();
     let snap = f.wait_settled(&run_id, RunStatus::Completed);
     assert_eq!(node(&snap, "a").attempt, 1);
@@ -4101,6 +4100,9 @@ fn action_nodes_run_and_approval_reruns_with_acknowledgement() {
         crate::run::actions::FLOW_ACTION_APPROVAL
     );
     assert!(snap.state.approvals[0].show.contains_key("findings"));
+    // The UI explains the request from its reason, which names the action.
+    assert_eq!(snap.state.approvals[0].message, None);
+    assert_eq!(snap.state.approvals[0].reason.params["uses"], json!("mdium/screen-input"));
     assert_eq!(node(&snap, "s").outputs["ok"], json!(false));
     f.engine
         .approve(&f.root, &run_id, Some("s"), "approve", None)

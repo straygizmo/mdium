@@ -17,13 +17,6 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// `NeedsApproval` message of `screen-input` (the UI explains the request
-/// from its reason code; this is for logs and notifications).
-const SCREENING_MESSAGE: &str = "The input contains suspicious instructions.";
-/// `NeedsApproval` message of `git-merge-local` before merging review paths
-/// or after the repository changed behind MDium's back.
-const REVIEW_MESSAGE: &str = "The merge needs review before it runs.";
-
 /// Key of the integrity snapshot in `git-worktree-create`'s outputs (and so
 /// in the `worktree` object handed to `git-merge-local`).
 const INTEGRITY_BASELINE: &str = "integrityBaseline";
@@ -66,7 +59,6 @@ pub(super) fn screen_input(
     }
     let findings = Value::Array(findings);
     Ok(ActionEnd::NeedsApproval {
-        message: SCREENING_MESSAGE.to_string(),
         show: BTreeMap::from([("findings".to_string(), findings.clone())]),
         outputs: BTreeMap::from([
             ("ok".to_string(), Value::Bool(false)),
@@ -206,7 +198,6 @@ pub(super) fn merge_local(
     ]);
     if !(review_ok && integrity_ok) {
         return Ok(ActionEnd::NeedsApproval {
-            message: REVIEW_MESSAGE.to_string(),
             show: lists.clone(),
             outputs: lists,
         });

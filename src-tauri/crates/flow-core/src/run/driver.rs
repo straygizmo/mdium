@@ -335,6 +335,8 @@ struct RunningAgent {
 struct RunningAction {
     key: String,
     attempt: u32,
+    /// The built-in action (`mdium/<name>`), named in its approval reason.
+    uses: String,
     dir: PathBuf,
     /// The action's one end.
     rx: Receiver<ActionEnd>,
@@ -4333,6 +4335,7 @@ impl Driver {
         self.actions.push(RunningAction {
             key: key.to_string(),
             attempt,
+            uses: action.uses.clone(),
             dir,
             rx,
             progress_rx,
@@ -4436,11 +4439,7 @@ impl Driver {
                 self.write_outputs(key, &action.dir);
                 self.settle(key, attempt, NodeStatus::Succeeded, PORT_SUCCESS, None);
             }
-            ActionFinish::End(ActionEnd::NeedsApproval {
-                message,
-                show,
-                outputs,
-            }) => {
+            ActionFinish::End(ActionEnd::NeedsApproval { show, outputs }) => {
                 self.emit_outputs(key, outputs);
                 self.write_outputs(key, &action.dir);
                 self.set_node(key, NodeStatus::AwaitingApproval, attempt, None, None);
@@ -4450,12 +4449,13 @@ impl Driver {
                         .iter()
                         .map(|s| RequestOption::plain(*s))
                         .collect(),
-                    message: Some(message),
+                    // The UI explains the request from its reason.
+                    message: None,
                     show: show
                         .into_iter()
                         .map(|(name, value)| (name, ShowValue::Value(value)))
                         .collect(),
-                    reason: Reason::new(FLOW_ACTION_APPROVAL),
+                    reason: Reason::new(FLOW_ACTION_APPROVAL).with("uses", action.uses.as_str()),
                 };
                 self.emit(Some(key), EventBody::ApprovalRequested(request));
             }

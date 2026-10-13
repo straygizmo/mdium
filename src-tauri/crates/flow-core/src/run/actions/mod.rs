@@ -61,8 +61,9 @@ pub enum ActionEnd {
         artifacts: Vec<(PathBuf, String)>,
     },
     /// Pauses the node; approval runs the action again with `acknowledged`.
+    /// The request has no message: the UI explains it from its reason
+    /// (`FLOW_ACTION_APPROVAL` with `uses`) and shows `show`.
     NeedsApproval {
-        message: String,
         show: BTreeMap<String, Value>,
         outputs: BTreeMap<String, Value>,
     },

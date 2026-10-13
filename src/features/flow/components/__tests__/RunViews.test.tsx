@@ -24,6 +24,7 @@ vi.mock("@/stores/dialog-store", async (orig) => ({ ...(await orig<object>()), s
 import { RunPanel, sameRoot } from "../RunPanel";
 import { RunNodeDetail } from "../RunNodeDetail";
 import { RunLogDialog } from "../RunLogDialog";
+import { ApprovalDialog } from "../ApprovalDialog";
 import { isLiveInstance, splitNodeKey, type RunState } from "@/shared/types/flow-run";
 import { RunStartDialog, initialParamValues, invalidJsonParams, paramsFromForm } from "../RunStartDialog";
 import { flowRunApi, subscribeFlowRunEvents, toFlowRunError } from "../../lib/flow-run-api";
@@ -285,6 +286,38 @@ describe("run views", () => {
   afterEach(async () => {
     await act(async () => root.unmount());
     container.remove();
+  });
+
+  it("explains action approvals and agent questions with localized text", async () => {
+    const actionRequest = {
+      nodeKey: "merge",
+      options: [{ name: "approve" }, { name: "reject" }],
+      show: { reviewPaths: ["CLAUDE.md"] },
+      reason: { code: "FLOW_ACTION_APPROVAL", params: { uses: "mdium/git-merge-local" } },
+    };
+    await act(async () =>
+      root.render(
+        <ApprovalDialog projectRoot="/p" runId="r1" request={actionRequest} onClose={() => {}} onChoose={async () => {}} />,
+      ),
+    );
+    expect(container.textContent).toContain(
+      i18n.t("reason.FLOW_ACTION_APPROVAL", { ns: "flow", uses: "mdium/git-merge-local" }),
+    );
+    expect(container.textContent).toContain("mdium/git-merge-local");
+    const questionRequest = {
+      nodeKey: "a",
+      options: [{ name: "answer", commentRequired: true }, { name: "reject" }],
+      message: "Which database?",
+      reason: { code: "FLOW_AGENT_QUESTION" },
+    };
+    await act(async () =>
+      root.render(
+        <ApprovalDialog projectRoot="/p" runId="r1" request={questionRequest} onClose={() => {}} onChoose={async () => {}} />,
+      ),
+    );
+    const labels = Array.from(container.querySelectorAll("button")).map((b) => b.textContent);
+    expect(labels).toContain("Answer");
+    expect(container.textContent).toContain("Which database?");
   });
 
   it("builds parameter values from defaults and the form", () => {

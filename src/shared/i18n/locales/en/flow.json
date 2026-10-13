@@ -151,6 +151,7 @@
     "loadFailed": "Could not load the run ({{code}}).",
     "option": {
       "approve": "Approve",
+      "answer": "Answer",
       "reject": "Reject",
       "stop": "Stop"
     },
@@ -253,7 +254,7 @@
     "FLOW_OUTPUT_UNRESOLVED": "Output \"{{output}}\" could not be computed.",
     "FLOW_ARTIFACT_OUTSIDE_PROJECT": "Artifact \"{{path}}\" is outside the project and was ignored.",
     "FLOW_ARTIFACT_WRITE_FAILED": "The artifact list could not be written: {{message}}",
-    "FLOW_ACTION_APPROVAL": "This action needs your confirmation before it continues.",
+    "FLOW_ACTION_APPROVAL": "The action {{uses}} needs your confirmation before it continues. Review what it found below.",
     "FLOW_ACTION_FAILED": "The action failed ({{code}}): {{message}}",
     "FLOW_ACTION_INPUT_INVALID": "Action input \"{{input}}\" is invalid ({{reason}}).",
     "FLOW_ACTION_IO_FAILED": "The action could not read or write its files.",

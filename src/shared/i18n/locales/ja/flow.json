@@ -151,6 +151,7 @@
     "loadFailed": "実行を読み込めませんでした（{{code}}）。",
     "option": {
       "approve": "承認",
+      "answer": "回答",
       "reject": "却下",
       "stop": "停止"
     },
@@ -253,7 +254,7 @@
     "FLOW_OUTPUT_UNRESOLVED": "出力「{{output}}」を求められませんでした。",
     "FLOW_ARTIFACT_OUTSIDE_PROJECT": "成果物「{{path}}」はプロジェクトの外にあるため無視しました。",
     "FLOW_ARTIFACT_WRITE_FAILED": "成果物の一覧を書き込めませんでした: {{message}}",
-    "FLOW_ACTION_APPROVAL": "このアクションは続行前に確認が必要です。",
+    "FLOW_ACTION_APPROVAL": "アクション {{uses}} は続行前に確認が必要です。以下の内容を確認してください。",
     "FLOW_ACTION_FAILED": "アクションが失敗しました（{{code}}）: {{message}}",
     "FLOW_ACTION_INPUT_INVALID": "アクションの入力「{{input}}」が不正です（{{reason}}）。",
     "FLOW_ACTION_IO_FAILED": "アクションがファイルを読み書きできませんでした。",

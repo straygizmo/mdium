@@ -70,7 +70,6 @@ pub(super) fn project_setup(
         && ctx.acknowledged.as_ref() != Some(&show)
     {
         return Ok(ActionEnd::NeedsApproval {
-            message: "The project manifest differs from the confirmed one.".to_string(),
             show,
             outputs: BTreeMap::new(),
         });
