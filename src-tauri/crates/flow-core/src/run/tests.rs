@@ -3262,3 +3262,57 @@ fn comment_required_option_refuses_an_empty_comment() {
     let snap = f.wait_settled(&run_id, RunStatus::Completed);
     assert_eq!(node(&snap, "review").outputs["comment"], "fix the title");
 }
+
+#[test]
+fn cost_references_aggregate_a_node_and_its_child_scope_only() {
+    let f = fixture();
+    let dump = f.root.join("costs.json");
+    // The child flow's command reports 0.5 + 0.25 under the sub-flow's key.
+    let mut echo = cmd(
+        "echo",
+        json!([
+            ev(json!({ "v": 1, "type": "cost", "usd": 0.5, "kind": "actual" })),
+            ev(json!({ "v": 1, "type": "cost", "usd": 0.25, "kind": "estimated" })),
+        ]),
+    );
+    echo["run"].as_array_mut().unwrap().push(json!("x"));
+    write_flow(&f.root, "child", json!({}), vec![echo], vec![]);
+    let mut report = cmd("report", json!([{ "dump_env": dump.to_string_lossy() }]));
+    report["env"]["FLOWT_A"] = json!("${{ nodes.a.costUsd }}");
+    report["env"]["FLOWT_AB"] = json!("${{ nodes.ab.costUsd }}");
+    report["env"]["FLOWT_SUB"] = json!("${{ nodes.sub.costUsd }}");
+    report["env"]["FLOWT_FREE"] = json!("${{ nodes.free.costUsd }}");
+    let rel = write_flow(
+        &f.root,
+        "costs",
+        json!({}),
+        vec![
+            cmd(
+                "a",
+                json!([ev(json!({ "v": 1, "type": "cost", "usd": 1.5, "kind": "actual" }))]),
+            ),
+            cmd(
+                "ab",
+                json!([ev(json!({ "v": 1, "type": "cost", "usd": 2.0, "kind": "actual" }))]),
+            ),
+            json!({ "id": "sub", "kind": "subflow", "flow": "./child.flow.json" }),
+            cmd("free", json!([])),
+            report,
+        ],
+        vec![
+            json!({ "from": "a", "to": "ab" }),
+            json!({ "from": "ab", "to": "sub" }),
+            json!({ "from": "sub", "to": "free" }),
+            json!({ "from": "free", "to": "report" }),
+        ],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    f.wait_settled(&run_id, RunStatus::Completed);
+    let dumped: Value = serde_json::from_slice(&std::fs::read(&dump).unwrap()).unwrap();
+    let env = &dumped["env"];
+    // `a` does not include its sibling `ab`; the sub-flow sums its children.
+    assert_eq!(env["FLOWT_A"], json!("1.5"));
+    assert_eq!(env["FLOWT_AB"], json!("2.0"));
+    assert_eq!(env["FLOWT_SUB"], json!("0.75"));
+    assert_eq!(env["FLOWT_FREE"], json!("0.0"));
+}
