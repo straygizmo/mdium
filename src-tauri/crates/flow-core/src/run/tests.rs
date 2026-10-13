@@ -1233,6 +1233,7 @@ fn crash_recovery_marks_running_runs_interrupted() {
         subflows: BTreeMap::new(),
         refs: BTreeMap::new(),
         project: None,
+        project_sha256: None,
     };
     store.create(&meta).unwrap();
     let meta = store.load_meta(&run_id).unwrap();
@@ -1414,6 +1415,7 @@ fn run_data_from_elsewhere_never_executes_without_confirmation() {
             subflows: BTreeMap::new(),
             refs: BTreeMap::new(),
             project: None,
+            project_sha256: None,
         })
         .unwrap();
     // Listing (first contact with the project) does not start it.
@@ -1629,6 +1631,7 @@ fn reconnect_rejects_a_reused_pid_and_marks_the_node_interrupted() {
             subflows: BTreeMap::new(),
             refs: BTreeMap::new(),
             project: None,
+            project_sha256: None,
         })
         .unwrap();
     // `a` "runs" under this test process's pid, but with another creation time.
@@ -4067,4 +4070,51 @@ fn action_nodes_create_and_discard_worktrees_under_the_engine_base() {
     assert_eq!(wt["baseBranch"], json!("main"));
     assert_eq!(node(&snap, "discard").outputs["ok"], json!(true));
     assert!(!path.exists());
+}
+
+#[test]
+fn flow_run_latest_and_metrics_compare_read_finished_runs() {
+    let f = fixture();
+    std::fs::create_dir_all(f.root.join(".mdium")).unwrap();
+    std::fs::write(f.root.join(".mdium/project.yaml"), "schemaVersion: 1\nid: p\nname: P\nmetrics:\n  - { ref: outputs.score, better: higher }\n  - { ref: costUsd, better: lower }\n").unwrap();
+    let main = write_flow(&f.root, "main", json!({ "outputs": { "score": "${{ nodes.a.outputs.score }}" } }),
+        vec![cmd("a", json!([ev(json!({ "v": 1, "type": "output", "key": "score", "value": 5 })), ev(json!({ "v": 1, "type": "cost", "usd": 1.0 }))]))], vec![]);
+    let first = f.confirm_and_start(&main, json!({}));
+    f.wait_settled(&first, RunStatus::Completed);
+    let outer = write_flow(&f.root, "outer", json!({}),
+        vec![json!({ "id": "base", "kind": "action", "uses": "mdium/flow-run-latest", "with": { "flow": main } }),
+             json!({ "id": "cmp", "kind": "action", "uses": "mdium/metrics-compare", "with": {
+                 "baseline": { "outputs": "${{ nodes.base.outputs.outputs }}", "costUsd": "${{ nodes.base.outputs.costUsd }}" },
+                 "candidate": { "outputs": { "score": 7 }, "costUsd": 0.5 } } })],
+        vec![json!({ "from": "base", "to": "cmp" })]);
+    let run_id = f.confirm_and_start(&outer, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(node(&snap, "base").outputs["runId"], json!(first));
+    assert_eq!(node(&snap, "base").outputs["outputs"]["score"], json!(5));
+    assert_eq!(node(&snap, "base").outputs["costUsd"], json!(1.0));
+    assert_eq!(node(&snap, "cmp").outputs["improved"], json!(true));
+    assert!(f.events(&run_id).iter().any(|e| matches!(&e.body, EventBody::NodeArtifact { label: Some(l), .. } if l == "report")));
+}
+
+#[test]
+fn project_setup_runs_the_manifest_steps_and_asks_when_the_manifest_differs() {
+    let f = fixture();
+    std::fs::create_dir_all(f.root.join(".mdium")).unwrap();
+    // The test helper binary without a script is a no-op setup command.
+    let argv = serde_json::to_string(&helper_argv()).unwrap();
+    std::fs::write(f.root.join(".mdium/project.yaml"), format!("schemaVersion: 1\nid: p\nname: P\nsetup:\n  - {{ run: {argv} }}\n")).unwrap();
+    let rel = write_flow(&f.root, "setup", json!({}), vec![json!({ "id": "s", "kind": "action", "uses": "mdium/project-setup" })], vec![]);
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(node(&snap, "s").outputs["ok"], json!(true));
+    // A worktree-like copy with a different manifest asks first.
+    let other = f.root.join("other");
+    std::fs::create_dir_all(other.join(".mdium")).unwrap();
+    std::fs::write(other.join(".mdium/project.yaml"), "schemaVersion: 1\nid: p\nname: P\nsetup: []\n").unwrap();
+    let rel2 = write_flow(&f.root, "setup2", json!({}), vec![json!({ "id": "s", "kind": "action", "uses": "mdium/project-setup", "with": { "projectRoot": other.to_string_lossy() } })], vec![]);
+    let run_id = f.confirm_and_start(&rel2, json!({}));
+    let snap = f.wait_for(&run_id, "approval", |s| s.state.status == RunStatus::AwaitingApproval);
+    assert_eq!(snap.state.approvals[0].reason.code, crate::run::actions::FLOW_ACTION_APPROVAL);
+    f.engine.approve(&f.root, &run_id, Some("s"), "approve", None).unwrap();
+    f.wait_settled(&run_id, RunStatus::Completed);
 }

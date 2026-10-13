@@ -44,6 +44,9 @@ pub struct RunMeta {
     /// The project manifest as decoded at start (`None` without a manifest).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<crate::project::ProjectDef>,
+    /// SHA-256 of the manifest bytes that were confirmed at start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_sha256: Option<String>,
 }
 
 /// A run id is 16 lowercase hex characters (never a path).
@@ -329,6 +332,7 @@ mod tests {
             subflows: BTreeMap::new(),
             refs: BTreeMap::new(),
             project: None,
+            project_sha256: None,
         }
     }
 

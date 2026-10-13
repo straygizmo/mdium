@@ -3844,8 +3844,7 @@ impl Driver {
             node_dir: dir.clone(),
             node_id: node.id.clone(),
             project: self.meta.project.clone(),
-            // Not recorded in the run meta yet (the project actions add it).
-            project_sha256: None,
+            project_sha256: self.meta.project_sha256.clone(),
             forge: self.env.forge.clone(),
             launcher: self.env.launcher.clone(),
             worktree_base: self.env.worktree_base.clone(),

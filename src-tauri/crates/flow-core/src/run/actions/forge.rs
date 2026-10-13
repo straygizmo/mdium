@@ -96,7 +96,7 @@ pub(super) fn design_doc_commit(
     ])))
 }
 
-/// `mdium/issue-entry` `{ issue, entry, body, returned? }` → `{ posted }`.
+/// `mdium/issue-entry` `{ issue, entry, body, returned?, worktree? }` → `{ posted }`.
 /// The entry's marker prevents a duplicate comment on a rerun.
 pub(super) fn issue_entry(
     with: &BTreeMap<String, Value>,
@@ -111,13 +111,24 @@ pub(super) fn issue_entry(
     };
     let markdown = required_str(with, "body")?;
     let returned = super::optional_bool(with, "returned")?;
+    // An implement entry with a worktree lists its branch and commits.
+    let worktree = match with.get("worktree") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(worktree_of(with)?),
+    };
     let entry = issue_sync::entry_id(&ctx.run_id, &ctx.node_id);
     let body = match kind {
         EntryKind::Design => issue_sync::design_body(&markdown, &entry),
         EntryKind::Review => issue_sync::review_body(&markdown, returned, &entry),
-        // The implement entry lists commits, which this action has none of:
-        // it carries the text as the summary.
-        EntryKind::Implement => issue_sync::implement_body(&markdown, "", &[], &entry),
+        EntryKind::Implement => match &worktree {
+            Some(info) => {
+                let commits = gitops::commits_since_base_in(&ctx.worktree_base, info).map_err(git_failed)?;
+                issue_sync::implement_body(&markdown, &info.branch, &commits, &entry)
+            }
+            // Without a worktree there is no branch or commit list: the text
+            // is the summary.
+            None => issue_sync::implement_body(&markdown, "", &[], &entry),
+        },
     };
     let repo = detect_repo(ctx)?;
     let outcome = issue_sync::post_entry(&*ctx.forge, &repo, number, &body, &entry)
@@ -271,6 +282,32 @@ mod tests {
         let calls = forge.calls();
         assert_eq!(calls.iter().filter(|call| matches!(call, ForgeCall::AddComment { number: 12, .. })).count(), 1);
         assert!(calls.iter().any(|call| matches!(call, ForgeCall::CloseIssue(12))));
+    }
+
+    #[test]
+    fn issue_entry_implement_lists_the_worktree_branch_and_commits() {
+        let repo = Fixture::new();
+        gitops::git(repo.root(), &["remote", "add", "origin", "https://github.com/o/r.git"]).unwrap();
+        let base = tempfile::tempdir().unwrap();
+        let forge = Arc::new(FakeForge::default());
+        let mut c = ctx(repo.root(), base.path());
+        c.forge = forge.clone();
+        let ActionEnd::Done { outputs: wt, .. } = run_action("mdium/git-worktree-create", &with(json!({ "title": "My Feature" })), &c) else { panic!() };
+        let wt = object(wt);
+        let ActionEnd::Done { .. } = run_action(
+            "mdium/design-doc-commit",
+            &with(json!({ "worktree": wt.clone(), "docPath": "docs/d.md", "title": "Subject Marker", "body": "x" })),
+            &c,
+        ) else { panic!() };
+        let input = with(json!({ "issue": "12", "entry": "implement", "body": "Done.", "worktree": wt.clone() }));
+        let ActionEnd::Done { .. } = run_action("mdium/issue-entry", &input, &c) else { panic!() };
+        let calls = forge.calls();
+        let body = calls.iter().find_map(|call| match call {
+            ForgeCall::AddComment { number: 12, body } => Some(body.clone()),
+            _ => None,
+        }).expect("a comment was posted");
+        assert!(body.contains(wt["branch"].as_str().unwrap()), "{body}");
+        assert!(body.contains("Subject Marker"), "{body}");
     }
 
     #[test]

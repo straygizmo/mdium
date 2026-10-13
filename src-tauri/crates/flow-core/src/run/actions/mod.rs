@@ -5,6 +5,7 @@
 
 mod forge;
 mod git;
+mod project;
 
 use crate::forge::ForgeCli;
 use crate::gitops::{GitError, WorktreeInfo};
@@ -26,8 +27,6 @@ pub const FLOW_ACTION_FAILED: &str = "FLOW_ACTION_FAILED";
 /// Approval request of an action that needs the user's go-ahead
 /// (`show` explains why); approving runs the action again, acknowledged.
 pub const FLOW_ACTION_APPROVAL: &str = "FLOW_ACTION_APPROVAL";
-/// `FLOW_ACTION_FAILED` code of a declared action this build cannot run yet.
-const FLOW_ACTION_NOT_IMPLEMENTED: &str = "FLOW_ACTION_NOT_IMPLEMENTED";
 
 /// Everything an action may use, owned by its thread.
 pub struct ActionContext {
@@ -107,7 +106,7 @@ pub const ACTION_SPECS: [ActionSpec; 10] = [
     },
     ActionSpec {
         uses: "mdium/issue-entry",
-        inputs: &[("issue", true), ("entry", true), ("body", true), ("returned", false)],
+        inputs: &[("issue", true), ("entry", true), ("body", true), ("returned", false), ("worktree", false)],
         outputs: &["posted"],
     },
     ActionSpec {
@@ -157,11 +156,9 @@ pub fn run_action(uses: &str, with: &BTreeMap<String, Value>, ctx: &ActionContex
         "mdium/design-doc-commit" => forge::design_doc_commit(with, ctx),
         "mdium/issue-entry" => forge::issue_entry(with, ctx),
         "mdium/issue-close" => forge::issue_close(with, ctx),
-        "mdium/project-setup"
-        | "mdium/flow-run-latest"
-        | "mdium/metrics-compare" => Err(Reason::new(FLOW_ACTION_FAILED)
-            .with("code", FLOW_ACTION_NOT_IMPLEMENTED)
-            .with("uses", uses)),
+        "mdium/project-setup" => project::project_setup(with, ctx),
+        "mdium/flow-run-latest" => project::flow_run_latest(with, ctx),
+        "mdium/metrics-compare" => project::metrics_compare(with, ctx),
         _ => Err(Reason::new(FLOW_ACTION_UNKNOWN).with("uses", uses)),
     };
     result.unwrap_or_else(ActionEnd::Failed)
@@ -185,7 +182,6 @@ fn required_str(with: &BTreeMap<String, Value>, key: &str) -> Result<String, Rea
 }
 
 /// A required object input.
-#[allow(dead_code)] // used by the forge and project actions
 fn required_obj<'a>(
     with: &'a BTreeMap<String, Value>,
     key: &str,

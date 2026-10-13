@@ -817,6 +817,7 @@ impl FlowEngine {
             subflows: others.into_iter().map(|(p, (_, f))| (p, f)).collect(),
             refs,
             project: project_def,
+            project_sha256: bundle.project.as_ref().map(|p| p.sha.clone()),
         };
         let store = RunStore::new(root);
         store.create(&meta)?;
