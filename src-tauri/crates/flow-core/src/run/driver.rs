@@ -1471,7 +1471,8 @@ impl Driver {
         let mut out = BTreeMap::new();
         let mut missing = Vec::new();
         for (name, text) in templates {
-            match self.with_ctx(prefix, None, None, None, |ctx| ctx.render_value(&text)) {
+            // A skipped or not-yet-run node leaves the output out (with a warning).
+            match self.with_ctx(prefix, None, None, None, |ctx| ctx.render_value_strict(&text)) {
                 Ok(value) => {
                     out.insert(name, value);
                 }

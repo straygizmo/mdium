@@ -290,26 +290,44 @@ pub struct TemplateContext<'a> {
 }
 
 impl TemplateContext<'_> {
+    /// The value of a reference, `None` when it is not there. A skipped or
+    /// not-yet-run node has no outputs or artifacts here, so conditions see
+    /// it as missing (spec 2026-10-06, 2.6), as do flow `outputs` and `show`.
     pub fn resolve(&self, reference: &Reference) -> Option<Value> {
+        self.resolve_as(reference, false)
+    }
+
+    /// Like [`Self::resolve`], but for rendering (spec 2026-10-10, 8.2): a
+    /// skipped or not-yet-run node reads as `""` / `{}` / `[]`; a node that
+    /// ran without the key stays unresolved.
+    pub fn resolve_for_render(&self, reference: &Reference) -> Option<Value> {
+        self.resolve_as(reference, true)
+    }
+
+    fn resolve_as(&self, reference: &Reference, render: bool) -> Option<Value> {
         let path = |p: &Path| Value::String(p.to_string_lossy().into_owned());
+        let not_run = |empty: Value| render.then_some(empty);
         match reference {
             Reference::Param(name) => self.params.get(name).cloned(),
-            // A skipped or not-yet-run node reads as empty; a node that ran
-            // without the key stays unresolved.
             Reference::NodeOutput { node, key } => match (self.outputs)(node)? {
                 NodeOutputs::Ran(map) => map.get(key).cloned(),
-                NodeOutputs::NotRun => Some(Value::String(String::new())),
+                NodeOutputs::NotRun => not_run(Value::String(String::new())),
             },
             Reference::NodeOutputs { node } => match (self.outputs)(node)? {
                 NodeOutputs::Ran(map) => Some(Value::Object(map.into_iter().collect())),
-                NodeOutputs::NotRun => Some(Value::Object(Default::default())),
+                NodeOutputs::NotRun => not_run(Value::Object(Default::default())),
             },
-            Reference::NodeArtifacts { node } => (self.artifacts)(node)
-                .map(|a| serde_json::to_value(a.artifacts).unwrap_or(Value::Null)),
+            Reference::NodeArtifacts { node } => {
+                let seen = (self.artifacts)(node)?;
+                if !seen.ran {
+                    return not_run(Value::Array(Vec::new()));
+                }
+                Some(serde_json::to_value(seen.artifacts).unwrap_or(Value::Null))
+            }
             Reference::NodeArtifact { node, label } => {
                 let seen = (self.artifacts)(node)?;
                 if !seen.ran {
-                    return Some(Value::String(String::new()));
+                    return not_run(Value::String(String::new()));
                 }
                 seen.artifacts
                     .into_iter()
@@ -335,7 +353,17 @@ impl TemplateContext<'_> {
 
     /// Renders a template to a value (a single reference keeps its type).
     pub fn render_value(&self, text: &str) -> Result<Value, Reason> {
-        template::render(text, &|r| self.resolve(r)).map_err(|err| match err {
+        self.render_value_as(text, true)
+    }
+
+    /// Renders a template where a skipped or not-yet-run node's reference is
+    /// unresolved, as [`Self::resolve`] sees it (flow `outputs`).
+    pub fn render_value_strict(&self, text: &str) -> Result<Value, Reason> {
+        self.render_value_as(text, false)
+    }
+
+    fn render_value_as(&self, text: &str, render: bool) -> Result<Value, Reason> {
+        template::render(text, &|r| self.resolve_as(r, render)).map_err(|err| match err {
             template::RenderError::Unresolved(reference) => {
                 Reason::new("FLOW_TEMPLATE_UNRESOLVED").with("ref", reference.to_string())
             }
@@ -616,6 +644,9 @@ nodes:
         // A skipped / not-yet-run node reads as empty.
         assert_eq!(ctx.render_value("${{ nodes.s.outputs.k }}").unwrap(), serde_json::json!(""));
         assert_eq!(ctx.render_value("${{ nodes.s.outputs }}").unwrap(), serde_json::json!({}));
+        // Outside rendering (conditions, flow outputs, `show`) it is missing.
+        assert_eq!(ctx.resolve(&crate::template::parse_reference("nodes.s.outputs.k").unwrap()), None);
+        assert!(ctx.render_value_strict("${{ nodes.s.outputs.k }}").is_err());
         assert_eq!(
             ctx.render_value("${{ nodes.a.costUsd }}").unwrap(),
             serde_json::json!(1.5)

@@ -4363,3 +4363,59 @@ fn the_dev_workflow_template_runs_without_the_plan_approval() {
     assert_eq!(node(&snap, "dev/approve_plan").status, NodeStatus::Skipped);
     assert!(node(&snap, "dev").outputs["worktreePath"].as_str().is_some());
 }
+
+#[test]
+fn conditions_and_flow_outputs_see_a_skipped_node_as_missing() {
+    let f = fixture();
+    let rel = write_flow(
+        &f.root,
+        "skipcond",
+        json!({
+            "params": { "on": { "type": "bool", "default": false } },
+            "outputs": { "score": "${{ nodes.b.outputs.score }}", "kept": "${{ nodes.a.outputs.v }}" }
+        }),
+        vec![
+            cmd("a", json!([ev(json!({ "v": 1, "type": "output", "key": "v", "value": 1 }))])),
+            json!({ "id": "b", "kind": "command", "run": helper_argv(), "when": { "ref": "params.on", "op": "==", "value": true } }),
+            json!({ "id": "c", "kind": "command", "run": helper_argv(), "when": { "ref": "nodes.b.outputs.x", "op": "exists" } }),
+            json!({ "id": "d", "kind": "command", "run": helper_argv(), "when": { "ref": "nodes.b.outputs.score", "op": ">=", "value": 7 } }),
+        ],
+        vec![
+            json!({ "from": "a", "to": "b" }),
+            json!({ "from": "b", "to": "c" }),
+            json!({ "from": "c", "to": "d" }),
+        ],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(node(&snap, "b").status, NodeStatus::Skipped);
+    assert_eq!(node(&snap, "c").status, NodeStatus::Skipped);
+    assert_eq!(node(&snap, "d").status, NodeStatus::Skipped);
+    // Flow outputs leave the skipped node's key out and warn.
+    let outputs = &snap.state.scopes[""].outputs;
+    assert_eq!(outputs.get("kept"), Some(&json!(1)));
+    assert!(!outputs.contains_key("score"), "{outputs:?}");
+    assert!(f.events(&run_id).iter().any(|e| matches!(&e.body, EventBody::Warning(r)
+        if r.code == FLOW_OUTPUT_UNRESOLVED && r.params["output"] == json!("score"))));
+}
+
+#[test]
+fn approval_show_of_a_node_that_has_not_run_is_null() {
+    let f = fixture();
+    let rel = write_flow(
+        &f.root,
+        "shownull",
+        json!({ "params": { "on": { "type": "bool", "default": false } } }),
+        vec![
+            json!({ "id": "b", "kind": "command", "run": helper_argv(), "when": { "ref": "params.on", "op": "==", "value": true } }),
+            json!({ "id": "ok", "kind": "approval", "show": ["nodes.b.outputs.x", "nodes.b.artifacts"] }),
+        ],
+        vec![json!({ "from": "b", "to": "ok" })],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_for(&run_id, "approval", |s| s.state.status == RunStatus::AwaitingApproval);
+    let show = serde_json::to_value(&snap.state.approvals[0].show).unwrap();
+    assert_eq!(show, json!({ "nodes.b.outputs.x": null, "nodes.b.artifacts": null }));
+    f.engine.approve(&f.root, &run_id, Some("ok"), "approve", None).unwrap();
+    f.wait_settled(&run_id, RunStatus::Completed);
+}
