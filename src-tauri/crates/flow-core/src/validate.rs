@@ -7,6 +7,7 @@
 use crate::condition::Condition;
 use crate::issues::*;
 use crate::model::*;
+use crate::provider::ProviderRef;
 use crate::template::{self, is_ident, Reference, RESERVED_ROOTS};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
@@ -349,7 +350,7 @@ impl Validator {
             NodeKind::Loop(lp) => self.loop_node(lp, path, ctx),
             NodeKind::Branch(branch) => self.branch(branch, path, ctx),
             NodeKind::Subflow(sub) => {
-                self.static_ref(&sub.flow, &join(path, "flow"));
+                self.flow_ref_text(&sub.flow, &join(path, "flow"));
                 for (key, value) in &sub.params {
                     let p = format!("{path}.params.{key}");
                     if !is_ident(key) {
@@ -404,7 +405,30 @@ impl Validator {
         }
     }
 
+    /// A flow reference: a file path (see [`Self::static_ref`]) or a built-in
+    /// template `mdium:<name>`, of which only the name form is checked here
+    /// ([`crate::load`] resolves it).
+    fn flow_ref_text(&mut self, text: &str, path: &str) {
+        if crate::templates::is_template_ref(text) {
+            if !crate::templates::is_valid_ref(text) {
+                self.issues.error(invalid(path, "bad-template-name"));
+            }
+        } else {
+            self.static_ref(text, path);
+        }
+    }
+
     fn agent(&mut self, agent: &AgentNode, path: &str, ctx: &Ctx) {
+        if let ProviderRef::Template(text) = &agent.provider {
+            let provider_path = join(path, "provider");
+            if template::has_template(text) {
+                self.template(text, &provider_path, ctx);
+            } else {
+                // Neither a known provider nor a template.
+                self.issues
+                    .error(invalid(&provider_path, "unknown-provider"));
+            }
+        }
         match (&agent.prompt, &agent.prompt_ref) {
             (None, None) => self
                 .issues
@@ -636,7 +660,7 @@ impl Validator {
         body_ctx.loop_vars.push(var);
         match &lp.body {
             LoopBody::File(file) => {
-                self.static_ref(file, &join(path, "body"));
+                self.flow_ref_text(file, &join(path, "body"));
                 for (key, value) in &lp.params {
                     let p = format!("{path}.params.{key}");
                     if !is_ident(key) {

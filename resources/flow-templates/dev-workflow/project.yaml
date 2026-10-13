@@ -1,0 +1,6 @@
+schemaVersion: 1
+id: dev-workflow
+name: Standard development workflow
+description: Design, plan, implement and review a change on a git worktree of this project, then merge or discard it locally.
+flows:
+  main: flows/dev-workflow.flow.yaml

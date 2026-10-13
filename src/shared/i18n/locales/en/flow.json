@@ -176,7 +176,8 @@
       "awaiting": "{{n}} awaiting approval"
     },
     "expand": "Expand",
-    "collapse": "Collapse"
+    "collapse": "Collapse",
+    "reviewTemplates": "Built-in templates"
   },
   "runStatus": {
     "pending": "Pending",
@@ -490,6 +491,19 @@
       "multiple-exits": "The selection has more than one exit.",
       "unsupported-exit": "The selection exits through port \"{{port}}\"; only success or failure exits can be extracted.",
       "invalid-name": "Use lowercase letters, digits and hyphens for the name."
+    }
+  },
+  "newFlow": {
+    "source": "Start from",
+    "sourceBlank": "Blank flow",
+    "sourceTemplate": "Built-in template",
+    "template": "Template",
+    "noTemplates": "No built-in templates are available."
+  },
+  "template": {
+    "dev-workflow": {
+      "title": "Standard development workflow",
+      "description": "Design, plan, implement and review a change on a git worktree of this project, then merge or discard it locally."
     }
   }
 }

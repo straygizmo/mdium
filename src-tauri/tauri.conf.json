@@ -38,6 +38,7 @@
       "../resources/lottie-presets/**/*",
       "../resources/claude-sidecar/**/*",
       "../resources/agent-runner/**/*",
+      "../resources/flow-templates/**/*",
       "../packages/open-motion/core/**/*",
       "../packages/open-motion/components/**/*",
       "../packages/open-motion/renderer/**/*",

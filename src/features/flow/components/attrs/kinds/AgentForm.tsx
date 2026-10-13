@@ -24,6 +24,8 @@ export function AgentForm({ node, path, onChange }: KindFormProps<FlowAgentNode>
               {p}
             </option>
           ))}
+          {/* A templated provider (`${{ params.provider }}`) stays selectable as written. */}
+          {!(PROVIDERS as string[]).includes(node.provider) && <option value={node.provider}>{node.provider}</option>}
         </select>
       </label>
       <TextField label={t("attrs.model")} value={node.model} onCommit={(model) => write({ model })} />

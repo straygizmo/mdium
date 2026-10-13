@@ -15,6 +15,7 @@ use crate::run::engine::{
 };
 use crate::run::model::Reason;
 use crate::setup::{run_setup, SetupProgress, SetupResult};
+use crate::templates::{self, TemplateInfo};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
@@ -578,6 +579,35 @@ impl FlowService {
         })
     }
 
+    /// The built-in flow templates (`mdium:<name>`). `projectRoot` is
+    /// validated like every command's, though the list does not depend on it.
+    pub fn template_list(
+        &self,
+        project_root_arg: &str,
+    ) -> Result<Vec<TemplateInfo>, FlowCommandError> {
+        project_root(project_root_arg)?;
+        Ok(templates::list())
+    }
+
+    /// Copies a template's flow files into the project's flows folder as
+    /// `<fileName>.flow.yaml` (and its parts); returns the written paths.
+    pub fn template_copy(
+        &self,
+        project_root_arg: &str,
+        template: &str,
+        file_name: &str,
+    ) -> Result<Vec<String>, FlowCommandError> {
+        let root = project_root(project_root_arg)?;
+        templates::copy_into(&root, template, file_name).map_err(|issue| {
+            let mut err = FlowCommandError::new(&issue.code, format!("{template} -> {file_name}"));
+            err.details = vec![Reason {
+                code: issue.code,
+                params: issue.params,
+            }];
+            err
+        })
+    }
+
     /// Waits for active drivers to record `interrupted` (app exit).
     pub fn shutdown(&self, wait: Duration) {
         self.engine.shutdown(wait);
@@ -586,7 +616,7 @@ impl FlowService {
 
 /// Every command the service dispatches by name (the Tauri command names;
 /// the HTTP server uses the same names, spec 2026-10-10, 10.2).
-pub const COMMAND_NAMES: [&str; 22] = [
+pub const COMMAND_NAMES: [&str; 24] = [
     "flow_list",
     "flow_load",
     "flow_validate",
@@ -609,6 +639,8 @@ pub const COMMAND_NAMES: [&str; 22] = [
     "flow_run_log",
     "flow_artifact_path",
     "flow_gitignore_status",
+    "flow_template_list",
+    "flow_template_copy",
 ];
 
 // `call` is deliberately stricter than Tauri's `invoke`: unknown keys are rejected with
@@ -721,6 +753,14 @@ struct ArtifactArgs {
     node_key: String,
     attempt: u32,
     index: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TemplateCopyArgs {
+    project_root: String,
+    template: String,
+    file_name: String,
 }
 
 fn args<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, FlowCommandError> {
@@ -848,6 +888,14 @@ impl FlowService {
             "flow_gitignore_status" => {
                 let a: RootArgs = args(value)?;
                 reply(self.gitignore_status(&a.project_root)?)
+            }
+            "flow_template_list" => {
+                let a: RootArgs = args(value)?;
+                reply(self.template_list(&a.project_root)?)
+            }
+            "flow_template_copy" => {
+                let a: TemplateCopyArgs = args(value)?;
+                reply(self.template_copy(&a.project_root, &a.template, &a.file_name)?)
             }
             other => Err(FlowCommandError::new(FLOW_UNKNOWN_COMMAND, other)),
         }
@@ -1363,6 +1411,38 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(no_sha.code, FLOW_BAD_ARGS);
+    }
+
+    #[test]
+    fn templates_are_listed_and_copied_through_call() {
+        crate::templates::test_templates();
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = service(tmp.path());
+        let root = tmp.path().to_str().unwrap();
+        let list = svc
+            .call("flow_template_list", serde_json::json!({ "projectRoot": root }))
+            .unwrap();
+        assert!(list
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "dev-workflow" && t["main"] == "flows/dev-workflow.flow.yaml"));
+        let copy = serde_json::json!({ "projectRoot": root, "template": "dev-workflow", "fileName": "develop" });
+        let written = svc.call("flow_template_copy", copy.clone()).unwrap();
+        assert_eq!(written, serde_json::json!([".mdium/flows/develop.flow.yaml"]));
+        // The copy is a valid entry flow of the project.
+        let loaded = svc.load_flow(root, ".mdium/flows/develop.flow.yaml").unwrap();
+        assert!(loaded.report.errors.is_empty(), "{:?}", loaded.report.errors);
+        let again = svc.call("flow_template_copy", copy).unwrap_err();
+        assert_eq!(again.code, crate::issues::FLOW_INVALID_VALUE);
+        assert_eq!(again.details[0].params["reason"], serde_json::json!("exists"));
+        let bad = svc
+            .call(
+                "flow_template_copy",
+                serde_json::json!({ "projectRoot": root, "template": "dev-workflow", "fileName": "Bad Name" }),
+            )
+            .unwrap_err();
+        assert_eq!(bad.code, crate::issues::FLOW_INVALID_ID);
     }
 
     #[test]

@@ -91,6 +91,20 @@ export function FlowPanel() {
     else editor.close();
   };
 
+  /** Copies a built-in template into the flows folder, then selects the copy. */
+  const createFromTemplate = async (template: string, fileName: string) => {
+    if (!folder) return;
+    setNewOpen(false);
+    setCreateError(null);
+    try {
+      const written = await flowApi.copyTemplate(folder, template, fileName);
+      await refresh();
+      if (written[0]) setSelected(folder, written[0]);
+    } catch (err) {
+      setCreateError(isFlowCommandError(err) ? err.code : "FLOW_COMMAND_FAILED");
+    }
+  };
+
   if (!folder) return null;
 
   const flows = state.status === "ready" ? state.flows : [];
@@ -147,8 +161,10 @@ export function FlowPanel() {
       </div>
       {newOpen && (
         <NewFlowDialog
+          projectRoot={folder}
           existing={state.status === "ready" ? state.flows : []}
           onCreate={(path, def) => void createFlow(path, def)}
+          onCreateFromTemplate={(template, fileName) => void createFromTemplate(template, fileName)}
           onClose={() => setNewOpen(false)}
         />
       )}

@@ -128,6 +128,17 @@ pub struct CommandReview {
     pub stages: Vec<StageSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project_path: Option<String>,
+    /// Built-in templates (`mdium:<name>`) the flow uses, hashed into `sha256`.
+    pub templates: Vec<TemplateSummary>,
+}
+
+/// A built-in template used by a flow, as shown for confirmation.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TemplateSummary {
+    pub name: String,
+    /// Hash of the template's main flow file.
+    pub sha256: String,
 }
 
 /// Where a recorded artifact lives on disk.
@@ -230,6 +241,17 @@ fn read_flow(root: &Path, rel: &str) -> Result<(PathBuf, String, Vec<u8>)> {
     Ok((file, display, bytes))
 }
 
+/// The bytes of a flow file outside the project (a built-in template's file).
+fn read_flow_abs(file: &Path) -> Result<Vec<u8>> {
+    let display = file.to_string_lossy().into_owned();
+    let meta =
+        std::fs::metadata(file).map_err(|e| EngineError::new(FLOW_FILE_NOT_FOUND, e.to_string()))?;
+    if meta.len() > MAX_FLOW_FILE_BYTES {
+        return Err(EngineError::new(FLOW_FILE_INVALID, format!("{display}: file too large")));
+    }
+    std::fs::read(file).map_err(|e| EngineError::new(FLOW_FILE_NOT_FOUND, e.to_string()))
+}
+
 /// Adds the provider of every `agent` node of `nodes` (inline loop bodies
 /// included) to `out`.
 fn collect_providers(
@@ -239,7 +261,8 @@ fn collect_providers(
     for node in nodes {
         match &node.kind {
             NodeKind::Agent(agent) => {
-                out.insert(agent.provider);
+                // A templated provider is rendered (and checked) when the node starts.
+                out.extend(agent.provider.fixed());
             }
             NodeKind::Loop(lp) => {
                 if let crate::model::LoopBody::Inline(body) = &lp.body {
@@ -261,6 +284,8 @@ struct Bundle {
     others: BTreeMap<String, (String, crate::model::FlowDef)>,
     refs: BTreeMap<String, String>,
     project: Option<ProjectInBundle>,
+    /// Built-in templates referenced (name, sha256 of the main flow file).
+    templates: Vec<(String, String)>,
 }
 
 /// The manifest as read when the bundle was loaded.
@@ -390,16 +415,38 @@ fn load_bundle(root: &Path, rel: &str) -> Result<Bundle> {
         .ok_or_else(|| EngineError::new(FLOW_FILE_INVALID, "flow could not be decoded"))?;
     let mut others = BTreeMap::new();
     let mut refs = BTreeMap::new();
-    let mut queue = vec![(file, display.clone(), flow.clone())];
-    while let Some((abs, owner, def)) = queue.pop() {
+    let mut templates_used = Vec::new();
+    // (file, display, flow, the template it belongs to: (directory, name))
+    let mut queue: Vec<(PathBuf, String, crate::model::FlowDef, Option<(PathBuf, String)>)> =
+        vec![(file, display.clone(), flow.clone(), None)];
+    while let Some((abs, owner, def, template)) = queue.pop() {
         let mut found = Vec::new();
         flow_refs(&def.nodes, &mut found);
         let base = abs.parent().unwrap_or(root).to_path_buf();
         for reference in found {
-            let child = resolve_in_project(root, &base, &reference).map_err(|_| {
-                EngineError::new(FLOW_FILE_INVALID, format!("cannot resolve {reference}"))
-            })?;
-            let child_display = load::relative_display(root, &child);
+            let cannot_resolve =
+                || EngineError::new(FLOW_FILE_INVALID, format!("cannot resolve {reference}"));
+            // `mdium:<name>`: a built-in template, shown as `mdium:<name>`.
+            let (child, child_display, child_template) =
+                if crate::templates::is_template_ref(&reference) {
+                    let t = crate::templates::resolve(&reference).map_err(|_| cannot_resolve())?;
+                    (t.main, t.display, Some((t.root, t.name)))
+                } else if let Some((t_root, t_name)) = &template {
+                    // A part of a template resolves inside the template directory.
+                    let child =
+                        resolve_in_project(t_root, &base, &reference).map_err(|_| cannot_resolve())?;
+                    let shown = format!(
+                        "{}{t_name}/{}",
+                        crate::templates::TEMPLATE_PREFIX,
+                        load::relative_display(t_root, &child)
+                    );
+                    (child, shown, template.clone())
+                } else {
+                    let child =
+                        resolve_in_project(root, &base, &reference).map_err(|_| cannot_resolve())?;
+                    let shown = load::relative_display(root, &child);
+                    (child, shown, None)
+                };
             refs.insert(
                 crate::run::scope::ref_key(&owner, &reference),
                 child_display.clone(),
@@ -407,7 +454,16 @@ fn load_bundle(root: &Path, rel: &str) -> Result<Bundle> {
             if child_display == display || others.contains_key(&child_display) {
                 continue;
             }
-            let (_, _, child_bytes) = read_flow(root, &child_display)?;
+            let child_bytes = if child_template.is_some() {
+                read_flow_abs(&child)?
+            } else {
+                read_flow(root, &child_display)?.2
+            };
+            if crate::templates::is_template_ref(&reference) {
+                if let Some((_, name)) = &child_template {
+                    templates_used.push((name.clone(), sha256_hex(&child_bytes)));
+                }
+            }
             let format = child
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -422,9 +478,10 @@ fn load_bundle(root: &Path, rel: &str) -> Result<Bundle> {
                 child_display.clone(),
                 (sha256_hex(&child_bytes), child_flow.clone()),
             );
-            queue.push((child, child_display, child_flow));
+            queue.push((child, child_display, child_flow, child_template));
         }
     }
+    templates_used.sort();
     let project = {
         match crate::project::load_project_bytes(root) {
             None => None,
@@ -443,6 +500,7 @@ fn load_bundle(root: &Path, rel: &str) -> Result<Bundle> {
         others,
         refs,
         project,
+        templates: templates_used,
     })
 }
 
@@ -640,6 +698,14 @@ impl FlowEngine {
             setup: bundle.setup_summaries(),
             stages: stage_summaries(&bundle.files()),
             project_path: bundle.project.as_ref().map(|p| p.display.clone()),
+            templates: bundle
+                .templates
+                .iter()
+                .map(|(name, sha256)| TemplateSummary {
+                    name: name.clone(),
+                    sha256: sha256.clone(),
+                })
+                .collect(),
         })
     }
 

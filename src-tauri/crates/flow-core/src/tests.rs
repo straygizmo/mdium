@@ -1341,3 +1341,83 @@ fn action_inputs_are_checked_against_the_spec() {
     let optional = flow("nodes:\n  - { id: a, kind: action, uses: mdium/project-setup }\n");
     assert!(errors_of(&optional).is_empty());
 }
+
+// ------------------------------------------------------------- templates
+
+fn parse_flow(text: &str) -> FlowDef {
+    let (flow, issues) = check_text(text, FlowFormat::Yaml);
+    assert!(issues.errors.is_empty(), "{:?}", issues.errors);
+    flow.unwrap()
+}
+
+#[test]
+fn the_dev_workflow_template_is_valid_and_callable() {
+    use crate::templates;
+    templates::test_templates();
+    let report = check_file(
+        templates::dir().unwrap().join("dev-workflow").as_path(),
+        &templates::resolve("mdium:dev-workflow").unwrap().main,
+    );
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    let tmp = tempfile::tempdir().unwrap();
+    let text = "schemaVersion: 1\nid: outer\nname: O\nparams: { goal: { type: string, default: g } }\nnodes:\n  - { id: dev, kind: subflow, flow: 'mdium:dev-workflow', params: { title: '${{ params.goal }}', requirement: '${{ params.goal }}', mergeGate: false } }\n  - { id: after, kind: command, run: [echo, '${{ nodes.dev.outputs.worktreePath }}'] }\nedges: [{ from: dev, to: after }]\n";
+    let report = check_content(tmp.path(), &tmp.path().join(".mdium/flows/outer.flow.yaml"), text);
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    // The template's declared outputs are checked like a file sub-flow's.
+    let bad = text.replace("outputs.worktreePath", "outputs.nope");
+    let report = check_content(tmp.path(), &tmp.path().join(".mdium/flows/outer.flow.yaml"), &bad);
+    assert_eq!(codes(&report.errors), vec![FLOW_OUTPUT_UNKNOWN]);
+    // Its required params too.
+    let missing = text.replace("requirement: '${{ params.goal }}', ", "");
+    let report = check_content(tmp.path(), &tmp.path().join(".mdium/flows/outer.flow.yaml"), &missing);
+    assert_eq!(codes(&report.errors), vec![FLOW_PARAM_MISMATCH]);
+}
+
+#[test]
+fn unknown_and_invalid_templates_are_validation_errors() {
+    use crate::templates;
+    use serde_json::json;
+    templates::test_templates();
+    let tmp = tempfile::tempdir().unwrap();
+    let report = check_content(
+        tmp.path(),
+        &tmp.path().join(".mdium/flows/o.flow.yaml"),
+        "schemaVersion: 1\nid: o\nname: O\nnodes:\n  - { id: d, kind: subflow, flow: 'mdium:nope' }\n",
+    );
+    assert_eq!(report.errors[0].code, FLOW_TEMPLATE_UNKNOWN);
+    assert_eq!(report.errors[0].path, "nodes[0].flow");
+    // A malformed name is reported once, by the validator.
+    let report = check_content(
+        tmp.path(),
+        &tmp.path().join(".mdium/flows/o.flow.yaml"),
+        "schemaVersion: 1\nid: o\nname: O\nnodes:\n  - { id: d, kind: subflow, flow: 'mdium:Bad Name' }\n",
+    );
+    assert_eq!(codes(&report.errors), vec![FLOW_INVALID_VALUE]);
+    assert_eq!(report.errors[0].params["reason"], json!("bad-template-name"));
+    // A template flow with a command node is refused (fixture template under a temp templates dir is
+    // not possible with the process-wide dir, so exercise the checker directly):
+    let issues = templates::check_template_flow(&parse_flow(
+        "schemaVersion: 1\nid: t\nname: T\nnodes:\n  - { id: c, kind: command, run: [echo] }\n",
+    ));
+    assert_eq!(issues[0].code, FLOW_SUBFLOW_INVALID);
+    assert_eq!(issues[0].params["reason"], json!("template-command"));
+}
+
+#[test]
+fn agent_providers_may_be_templates() {
+    let agent = |provider: &str| {
+        flow(&format!(
+            "params: {{ p: {{ type: string, default: codex }} }}\nnodes:\n  - {{ id: a, kind: agent, provider: '{provider}', permission: read-only, prompt: x }}\n"
+        ))
+    };
+    assert!(errors_of(&agent("${{ params.p }}")).is_empty());
+    assert_eq!(errors_of(&agent("${{ params.nope }}")), vec![FLOW_TEMPLATE_INVALID]);
+    assert_eq!(
+        reasons_of(&agent("gpt"))[0],
+        (
+            FLOW_INVALID_VALUE.to_string(),
+            "nodes[0].provider".to_string(),
+            "unknown-provider".to_string()
+        )
+    );
+}

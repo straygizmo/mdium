@@ -24,6 +24,8 @@ import {
   toReactFlow,
 } from "../FlowCanvas";
 import { PortPopover } from "../PortPopover";
+import { NewFlowDialog } from "../NewFlowDialog";
+import { flowApi } from "../../lib/flow-api";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -334,5 +336,38 @@ describe("editor views", () => {
     expect(handlers.onSelect).not.toHaveBeenCalled();
     await clickNode("nodes[1]");
     expect(handlers.onSelect).toHaveBeenCalledWith({ kind: "node", path: "nodes[1]" });
+  });
+  it("new flow from a template calls copyTemplate with the chosen name", async () => {
+    const list = vi.spyOn(flowApi, "listTemplates").mockResolvedValue([
+      { name: "dev-workflow", title: "Raw title", description: "Raw description", main: "flows/dev-workflow.flow.yaml" },
+    ]);
+    const onCreate = vi.fn();
+    const onCreateFromTemplate = vi.fn();
+    await act(async () => {
+      root.render(
+        <NewFlowDialog projectRoot="C:/proj" existing={[]} onCreate={onCreate} onCreateFromTemplate={onCreateFromTemplate} onClose={() => {}} />,
+      );
+    });
+    expect(list).not.toHaveBeenCalled();
+    const radios = [...document.querySelectorAll<HTMLInputElement>('input[name="flow-new-source"]')];
+    await act(async () => radios[1].click());
+    expect(list).toHaveBeenCalledWith("C:/proj");
+    const select = document.querySelector<HTMLSelectElement>('select[aria-label="Template"]')!;
+    expect(select.value).toBe("dev-workflow");
+    // The localized title wins over the template's own.
+    expect(select.textContent).toBe("Standard development workflow");
+    const input = document.querySelector<HTMLInputElement>('input[aria-label="File name"]')!;
+    expect(input.value).toBe("dev-workflow");
+    expect(document.body.textContent).toContain(".mdium/flows/dev-workflow.flow.yaml");
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      setter.call(input, "develop");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const create = [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Create")!;
+    await act(async () => create.click());
+    expect(onCreateFromTemplate).toHaveBeenCalledWith("dev-workflow", "develop");
+    expect(onCreate).not.toHaveBeenCalled();
+    list.mockRestore();
   });
 });

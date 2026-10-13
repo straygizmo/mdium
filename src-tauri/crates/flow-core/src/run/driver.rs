@@ -13,7 +13,7 @@ use crate::forge::ForgeCli;
 use crate::fsutil;
 use crate::gitops;
 use crate::integrity::{self, IntegritySnapshot};
-use crate::issues::FLOW_RUNTIME_UNKNOWN;
+use crate::issues::{FLOW_PROVIDER_UNAVAILABLE, FLOW_RUNTIME_UNKNOWN};
 use crate::load;
 use crate::model::{
     parse_duration, ActionNode, AgentNode, AgentPermission, CommandNode, CommandProtocol, CommandRun, FlowDef, FlowNode,
@@ -47,6 +47,7 @@ use crate::run::worker::{
     WorkerLauncher, WorkerMessage, FLOW_PYTHON_ENTRY_UNKNOWN, FLOW_PYTHON_INPUT_INVALID,
     FLOW_PYTHON_PROTOCOL, FLOW_PYTHON_WORKER_EXITED, FLOW_RUNTIME_START_FAILED,
 };
+use crate::provider::ProviderRef;
 use crate::template::{self, Reference};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -325,6 +326,8 @@ enum ActionFinish {
 /// Inputs and prompt of an agent attempt, written to its node dir.
 struct PreparedAgent {
     dir: PathBuf,
+    /// The node's provider (a templated one rendered in the node's scope).
+    provider: crate::provider::Provider,
     prompt: String,
     working_dir: PathBuf,
     /// The untrusted text screened before a `full-access` turn: the rendered
@@ -3330,8 +3333,17 @@ impl Driver {
             .and_then(|init| root.join(&init.graph.file).parent().map(Path::to_path_buf))
             .unwrap_or_else(|| root.clone());
         let default_dir = self.file_flow(prefix).defaults.working_dir.clone();
-        let (inputs, instructions, builtin, working_dir) =
+        let (provider, inputs, instructions, builtin, working_dir) =
             self.with_ctx(prefix, None, Some(&dir), None, |ctx| {
+                let provider = match &agent.provider {
+                    ProviderRef::Fixed(provider) => *provider,
+                    ProviderRef::Template(text) => {
+                        let name = ctx.render_string(text)?;
+                        crate::provider::Provider::from_name(name.trim()).ok_or_else(|| {
+                            Reason::new(FLOW_PROVIDER_UNAVAILABLE).with("provider", name)
+                        })?
+                    }
+                };
                 let inputs = match ctx
                     .render_json(&Value::Object(agent.with_args.clone().into_iter().collect()))?
                 {
@@ -3381,7 +3393,7 @@ impl Driver {
                     &root,
                     agent.working_dir.as_deref().or(default_dir.as_deref()),
                 )?;
-                Ok((inputs, instructions, builtin, working_dir))
+                Ok((provider, inputs, instructions, builtin, working_dir))
             })?;
         std::fs::write(
             dir.join("inputs.json"),
@@ -3394,6 +3406,7 @@ impl Driver {
         let screening = screening_text(&inputs, (!builtin).then_some(instructions.as_str()));
         Ok(PreparedAgent {
             dir,
+            provider,
             prompt,
             working_dir,
             screening,
@@ -3417,7 +3430,7 @@ impl Driver {
         };
         let request = AgentTurnRequest {
             session_id: format!("flow-{}-{}-{attempt}", self.run_id, node_dir_name(key)),
-            provider: agent.provider,
+            provider: prepared.provider,
             model: agent.model.clone(),
             permission: agent.permission,
             working_dir: prepared.working_dir,

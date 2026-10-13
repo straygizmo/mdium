@@ -59,6 +59,7 @@ const review: CommandReview = {
   runtimes: [],
   setup: [],
   stages: [],
+  templates: [],
 };
 
 function summary(runId: string, extra: Partial<RunSummary> = {}): RunSummary {
@@ -290,6 +291,22 @@ describe("run views", () => {
     await act(async () => button(container, "Start").click());
     await waitFor(() => expect(onStarted).toHaveBeenCalledWith("r1"));
     expect(calls).toEqual(["confirm abc", 'start {"dir":"data","n":3,"flag":true} abc']);
+  });
+
+  it("lists the built-in templates the flow uses with their short hash", async () => {
+    route({
+      flow_command_review: () => ({
+        ...review,
+        commands: [],
+        confirmed: true,
+        templates: [{ name: "dev-workflow", sha256: "0123456789abcdef0123" }],
+      }),
+    });
+    await act(async () =>
+      root.render(<RunStartDialog projectRoot={ROOT} flowPath={PATH} flow={flow} onClose={() => {}} onStarted={() => {}} />),
+    );
+    await waitFor(() => expect(container.textContent).toContain(i18n.t("run.reviewTemplates", { ns: "flow" })));
+    expect(container.textContent).toContain("dev-workflow (0123456789ab)");
   });
 
   it("requires confirmation for manifest runtimes even without commands", async () => {

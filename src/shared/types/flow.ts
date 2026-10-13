@@ -73,7 +73,8 @@ export interface FlowNodeCommon {
 
 export interface FlowAgentNode extends FlowNodeCommon {
   kind: "agent";
-  provider: FlowAgentProvider;
+  /** A provider, or a template (`${{ params.provider }}`) rendered when the node starts. */
+  provider: FlowAgentProvider | (string & {});
   model?: string;
   prompt?: string;
   /** File-relative path, or `builtin:<name>`. */
@@ -259,6 +260,15 @@ export interface FlowLoadResult {
 }
 
 export type FlowKind = "entry" | "part";
+
+/** A built-in flow template (`mdium:<name>`), from `flow_template_list`. */
+export interface FlowTemplateInfo {
+  name: string;
+  title: string;
+  description: string;
+  /** The main flow file, relative to the template directory. */
+  main: string;
+}
 
 /** One entry of `flow_list`. */
 export interface FlowSummary {

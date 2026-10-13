@@ -215,6 +215,18 @@ export function RunStartDialog({ projectRoot, flowPath, flow, onClose, onStarted
           </ul>
         </section>
       )}
+      {review && (review.templates ?? []).length > 0 && (
+        <section className="flow-dialog__section">
+          <h3 className="flow-dialog__heading">{t("run.reviewTemplates")}</h3>
+          <ul className="flow-dialog__commands">
+            {review.templates.map((tpl) => (
+              <li key={tpl.name} className="flow-dialog__command">
+                <code className="flow-dialog__code">{`${tpl.name} (${tpl.sha256.slice(0, 12)})`}</code>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       {review && review.setup.length > 0 && (
         <section className="flow-dialog__section">
           <h3 className="flow-dialog__heading">{t("run.setupTitle")}</h3>

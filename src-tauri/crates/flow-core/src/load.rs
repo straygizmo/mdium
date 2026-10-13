@@ -6,6 +6,7 @@
 use crate::issues::*;
 use crate::model::*;
 use crate::parse::{decode, parse_text, FlowFormat};
+use crate::templates;
 use crate::validate::{validate, validate_with_outputs};
 use serde::Serialize;
 use serde_json::Value;
@@ -307,11 +308,32 @@ impl RefChecker<'_> {
         if reference.trim().is_empty() || crate::template::has_template(reference) {
             return; // already reported by the validator
         }
-        let file = match resolve_in_project(self.project_root, self.base, reference) {
-            Ok(file) => file,
-            Err(problem) => {
-                self.issues.error(path_issue(problem, path, reference));
-                return;
+        let is_template = templates::is_template_ref(reference);
+        // A template's parts resolve inside the template directory.
+        let (file, child_root) = if is_template {
+            if !templates::is_valid_ref(reference) {
+                return; // already reported by the validator
+            }
+            match templates::resolve(reference) {
+                Ok(t) => (t.main, t.root),
+                Err(issue) => {
+                    self.issues.error(
+                        FlowIssue {
+                            path: path.to_string(),
+                            ..issue
+                        }
+                        .with("ref", reference),
+                    );
+                    return;
+                }
+            }
+        } else {
+            match resolve_in_project(self.project_root, self.base, reference) {
+                Ok(file) => (file, self.project_root.to_path_buf()),
+                Err(problem) => {
+                    self.issues.error(path_issue(problem, path, reference));
+                    return;
+                }
             }
         };
         let Some(format) = file
@@ -354,7 +376,7 @@ impl RefChecker<'_> {
             }
         };
         self.stack.push(key);
-        let child = check_content_at(self.project_root, &file, &text, format, self.stack);
+        let child = check_content_at(&child_root, &file, &text, format, self.stack);
         self.stack.pop();
         if child
             .errors
@@ -377,6 +399,23 @@ impl RefChecker<'_> {
             return;
         }
         let Some(child) = child.flow else { return };
+        // A template and the parts inside a template directory obey the template rules.
+        let in_template = is_template
+            || templates::dir().is_some_and(|dir| child_root.starts_with(dir));
+        if in_template {
+            let refused = templates::check_template_flow(&child);
+            if !refused.is_empty() {
+                for issue in refused {
+                    self.issues.error(
+                        FlowIssue::new(FLOW_SUBFLOW_INVALID, path)
+                            .with("ref", reference)
+                            .with("reason", issue.params["reason"].clone())
+                            .with("node", issue.params["node"].clone()),
+                    );
+                }
+                return;
+            }
+        }
         for (key, value) in args {
             let Some(def) = child.params.get(key) else {
                 self.issues.error(

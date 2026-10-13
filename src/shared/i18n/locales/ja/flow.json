@@ -176,7 +176,8 @@
       "awaiting": "承認待ち {{n}}"
     },
     "expand": "展開",
-    "collapse": "折りたたむ"
+    "collapse": "折りたたむ",
+    "reviewTemplates": "組込みテンプレート"
   },
   "runStatus": {
     "pending": "準備中",
@@ -490,6 +491,19 @@
       "multiple-exits": "選択範囲に出口が複数あります。",
       "unsupported-exit": "選択はポート「{{port}}」から出ています。抽出できる出口は success か failure だけです。",
       "invalid-name": "名前には小文字・数字・ハイフンを使用してください。"
+    }
+  },
+  "newFlow": {
+    "source": "作成方法",
+    "sourceBlank": "空のフロー",
+    "sourceTemplate": "組込みテンプレートから",
+    "template": "テンプレート",
+    "noTemplates": "利用できる組込みテンプレートがありません。"
+  },
+  "template": {
+    "dev-workflow": {
+      "title": "標準開発ワークフロー",
+      "description": "このプロジェクトの git worktree 上で設計・計画・実装・レビューを行い、ローカルでマージまたは破棄します。"
     }
   }
 }

@@ -4,6 +4,7 @@ import type {
   FlowCommandError,
   FlowLoadResult,
   FlowSummary,
+  FlowTemplateInfo,
   Manifest,
   ProjectLoadResult,
 } from "@/shared/types/flow";
@@ -69,6 +70,14 @@ export const flowApi = {
   /** Runs project code: `sha256` is the manifest hash (`projectLoad`) whose runtimes the user was shown. */
   runtimeDescribe: (projectRoot: string, runtime: string, sha256: string) =>
     call<Manifest>("flow_runtime_describe", { projectRoot, runtime, sha256 }),
+  /** The built-in flow templates (`mdium:<name>`). */
+  listTemplates: (projectRoot: string) => call<FlowTemplateInfo[]>("flow_template_list", { projectRoot }),
+  /**
+   * Copies a template's flow files into `.mdium/flows/` (the main flow as
+   * `<fileName>.flow.yaml`); resolves to the written project-relative paths.
+   */
+  copyTemplate: (projectRoot: string, template: string, fileName: string) =>
+    call<string[]>("flow_template_copy", { projectRoot, template, fileName }),
 };
 
 /** Subscribes to setup progress; resolves to the unsubscribe function. */

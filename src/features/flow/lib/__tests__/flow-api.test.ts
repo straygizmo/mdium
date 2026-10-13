@@ -37,6 +37,13 @@ describe("flowApi", () => {
     ["projectLoad", () => flowApi.projectLoad(ROOT), "flow_project_load", { projectRoot: ROOT }],
     ["projectSetup", () => flowApi.projectSetup(ROOT, "abc"), "flow_project_setup", { projectRoot: ROOT, sha256: "abc" }],
     ["runtimeDescribe", () => flowApi.runtimeDescribe(ROOT, "r", "abc"), "flow_runtime_describe", { projectRoot: ROOT, runtime: "r", sha256: "abc" }],
+    ["listTemplates", () => flowApi.listTemplates(ROOT), "flow_template_list", { projectRoot: ROOT }],
+    [
+      "copyTemplate",
+      () => flowApi.copyTemplate(ROOT, "dev-workflow", "develop"),
+      "flow_template_copy",
+      { projectRoot: ROOT, template: "dev-workflow", fileName: "develop" },
+    ],
   ] as const)("%s invokes %s", async (_name, call, command, args) => {
     invoke.mockResolvedValueOnce("ok");
     await expect(call()).resolves.toBe("ok");

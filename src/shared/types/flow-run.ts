@@ -222,6 +222,15 @@ export interface CommandReview {
   setup: SetupSummary[];
   stages: StageSummary[];
   projectPath?: string;
+  /** Built-in templates (`mdium:<name>`) the flow uses, hashed into `sha256`. */
+  templates: TemplateSummary[];
+}
+
+/** A built-in template used by a flow, as shown for confirmation. */
+export interface TemplateSummary {
+  name: string;
+  /** Hash of the template's main flow file. */
+  sha256: string;
 }
 
 /** Command failures of run operations (plus `details`). */

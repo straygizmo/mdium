@@ -4172,3 +4172,88 @@ fn flow_run_latest_picks_the_newest_completed_run_of_the_flow() {
     assert_eq!(reason.code, "FLOW_ACTION_FAILED");
     assert_eq!(reason.params["code"], json!("FLOW_RUN_NOT_FOUND"));
 }
+
+// ------------------------------------------------------------ templates
+
+#[test]
+fn template_subflows_run_and_appear_in_the_review() {
+    use crate::gitops::test_support::Fixture as GitFixture;
+    crate::templates::test_templates();
+    let repo = GitFixture::new();
+    repo.write(".gitignore", ".mdium/\n");
+    repo.run(&["add", "."]);
+    repo.run(&["commit", "-qm", "ignore run data"]);
+    let runner = Arc::new(FakeAgentRunner::new(vec![
+        FakeTurn::Respond("---\noutcome: completed\n---\n# Design".into()), // design
+        FakeTurn::Respond("---\noutcome: completed\n---\n# Plan".into()),   // plan
+        FakeTurn::Respond("---\noutcome: completed\n---\n# Done".into()),   // implement
+        FakeTurn::Respond("---\noutcome: completed\n---\nLGTM".into()),     // review
+    ]));
+    let f = fixture_at_with_agent(repo.root(), runner.clone());
+    let rel = write_flow(
+        &f.root,
+        "outer",
+        json!({}),
+        vec![json!({ "id": "dev", "kind": "subflow", "flow": "mdium:dev-workflow", "params": { "title": "T", "requirement": "Add a README line", "mergeGate": false } })],
+        vec![],
+    );
+    let review = f.engine.review_commands(&f.root, &rel).unwrap();
+    assert_eq!(review.templates.len(), 1);
+    assert_eq!(review.templates[0].name, "dev-workflow");
+    f.engine
+        .confirm_commands(&f.root, &rel, &review.sha256)
+        .unwrap();
+    let run_id = f
+        .engine
+        .start(&f.root, &rel, &BTreeMap::new(), &review.sha256)
+        .unwrap()
+        .run_id;
+    let snap = f.wait_for(&run_id, "plan approval", |s| {
+        s.state.status == RunStatus::AwaitingApproval
+    });
+    assert_eq!(
+        snap.state.approvals[0].node_key.as_deref(),
+        Some("dev/approve_plan")
+    );
+    f.engine
+        .approve(&f.root, &run_id, Some("dev/approve_plan"), "approve", None)
+        .unwrap();
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(runner.prompts().len(), 4);
+    assert!(
+        runner
+            .working_dirs()
+            .iter()
+            .all(|d| d.starts_with(&f.worktree_base)),
+        "{:?}",
+        runner.working_dirs()
+    );
+    let outputs = node(&snap, "dev").outputs;
+    assert!(
+        outputs["worktreePath"]
+            .as_str()
+            .is_some_and(|p| Path::new(p).starts_with(&f.worktree_base)),
+        "{outputs:?}"
+    );
+    assert_eq!(outputs["reviewOutcome"], json!(""));
+    // The snapshot carries the template under its reference.
+    assert!(snap.meta.subflows.contains_key("mdium:dev-workflow"));
+}
+
+#[test]
+fn a_templated_provider_that_names_no_provider_fails_the_node() {
+    let (f, runner) = fixture_with_agent(vec![]);
+    let rel = write_flow(
+        &f.root,
+        "prov",
+        json!({ "params": { "p": { "type": "string", "default": "gpt" } } }),
+        vec![agent("a", json!({ "provider": "${{ params.p }}" }))],
+        vec![],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Failed);
+    let reason = node(&snap, "a").reason.unwrap();
+    assert_eq!(reason.code, crate::issues::FLOW_PROVIDER_UNAVAILABLE);
+    assert_eq!(reason.params["provider"], json!("gpt"));
+    assert!(runner.prompts().is_empty());
+}

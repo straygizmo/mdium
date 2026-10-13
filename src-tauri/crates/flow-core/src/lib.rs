@@ -25,6 +25,7 @@ pub mod screening;
 pub mod service;
 pub mod setup;
 pub mod template;
+pub mod templates;
 pub mod validate;
 
 mod errors;

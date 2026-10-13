@@ -98,6 +98,10 @@ pub fn run() {
             // The one workflow orchestrator of this process.
             let workflow_state = commands::workflow::create_state(app.handle());
             app.manage::<commands::workflow::WorkflowState>(workflow_state);
+            // Built-in `mdium:` flow templates, before any flow is checked or run.
+            if let Some(dir) = commands::flow_run::templates_dir(app.handle()) {
+                flow_core::templates::set_dir(dir);
+            }
             let (flow_service, flow_agent_host) = commands::flow_run::create_state(app.handle());
             if let Some(host) = flow_agent_host {
                 app.manage(commands::flow_run::FlowAgentHost(host));
@@ -419,6 +423,8 @@ pub fn run() {
             commands::flow_run::flow_run_log,
             commands::flow_run::flow_artifact_path,
             commands::flow_run::flow_gitignore_status,
+            commands::flow_run::flow_template_list,
+            commands::flow_run::flow_template_copy,
         ])
         .on_window_event(|window, event| {
             // Intake windows do not outlive the main window: closing it

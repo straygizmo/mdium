@@ -20,10 +20,11 @@ use flow_core::run::process::{AttachedLauncher, Launcher};
 use flow_core::run::supervise::DetachedLauncher;
 use flow_core::run::worker::PipedWorkerLauncher;
 use flow_core::service::{FlowService, GitignoreStatus};
+use flow_core::templates::TemplateInfo;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
@@ -432,6 +433,51 @@ pub async fn flow_gitignore_status(
     project_root: String,
 ) -> Result<GitignoreStatus, FlowCommandError> {
     with_service(state, move |s| s.gitignore_status(&project_root)).await
+}
+
+#[tauri::command]
+pub async fn flow_template_list(
+    state: tauri::State<'_, FlowServiceState>,
+    project_root: String,
+) -> Result<Vec<TemplateInfo>, FlowCommandError> {
+    with_service(state, move |s| s.template_list(&project_root)).await
+}
+
+#[tauri::command]
+pub async fn flow_template_copy(
+    state: tauri::State<'_, FlowServiceState>,
+    project_root: String,
+    template: String,
+    file_name: String,
+) -> Result<Vec<String>, FlowCommandError> {
+    with_service(state, move |s| {
+        s.template_copy(&project_root, &template, &file_name)
+    })
+    .await
+}
+
+/// Locates `resources/flow-templates` (the built-in `mdium:` flow templates)
+/// in the production bundle or the dev tree, with the same candidates as
+/// `node_sidecar::resolve_script`.
+pub fn templates_dir(app: &AppHandle) -> Option<PathBuf> {
+    let resource_dir = app.path().resource_dir().ok()?;
+    let candidates = [
+        // Production bundle (Tauri copies ../resources/... into _up_/resources/...)
+        resource_dir.join("_up_").join("resources").join("flow-templates"),
+        resource_dir.join("flow-templates"),
+        // Dev fallback: repo-root resources dir relative to src-tauri.
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("resources")
+            .join("flow-templates"),
+    ];
+    candidates.into_iter().find(|c| c.is_dir()).map(|c| {
+        let text = c.to_string_lossy().into_owned();
+        match text.strip_prefix("\\?\\") {
+            Some(plain) => PathBuf::from(plain),
+            None => c,
+        }
+    })
 }
 
 #[cfg(test)]

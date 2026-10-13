@@ -7,7 +7,7 @@
 //! (ids, ports, cycles, references).
 
 use crate::condition::Condition;
-use crate::provider::Provider;
+use crate::provider::ProviderRef;
 use crate::run::actions::ACTION_SPECS;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -239,7 +239,8 @@ pub enum OutputContract {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentNode {
-    pub provider: Provider,
+    /// A provider name, or a template rendered when the node starts.
+    pub provider: ProviderRef,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
