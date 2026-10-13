@@ -4365,6 +4365,44 @@ fn the_dev_workflow_template_runs_without_the_plan_approval() {
 }
 
 #[test]
+fn the_dev_workflow_review_loop_reopens_the_design_without_an_issue() {
+    use crate::gitops::test_support::Fixture as GitFixture;
+    crate::templates::test_templates();
+    let repo = GitFixture::new();
+    repo.write(".gitignore", ".mdium/\n");
+    repo.run(&["add", "."]);
+    repo.run(&["commit", "-qm", "ignore run data"]);
+    let runner = Arc::new(FakeAgentRunner::new(vec![
+        FakeTurn::Respond("---\noutcome: completed\n---\n# Design".into()), // design
+        FakeTurn::Respond("---\noutcome: completed\n---\n# Done".into()),   // implement
+        FakeTurn::Respond("---\noutcome: attention\nreason: tests missing\n---\nAdd tests".into()), // review
+        FakeTurn::Respond("---\noutcome: completed\n---\n# Design 2".into()), // design@2
+        FakeTurn::Respond("---\noutcome: completed\n---\n# Done 2".into()),   // implement@2
+        FakeTurn::Respond("---\noutcome: completed\n---\nLGTM".into()),       // review@2
+    ]));
+    let f = fixture_at_with_agent(repo.root(), runner.clone());
+    let rel = write_flow(
+        &f.root,
+        "outer",
+        json!({}),
+        vec![json!({ "id": "dev", "kind": "subflow", "flow": "mdium:dev-workflow", "params": { "title": "T", "requirement": "Add a README line", "issue": "", "mergeGate": true, "requiresApproval": false } })],
+        vec![],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_for(&run_id, "merge gate", |s| s.state.status == RunStatus::AwaitingApproval);
+    assert_eq!(snap.state.approvals[0].node_key.as_deref(), Some("dev/merge_gate"));
+    let prompts = runner.prompts();
+    assert_eq!(prompts.len(), 6, "{prompts:?}");
+    assert_eq!(node(&snap, "dev/design@2").status, NodeStatus::Succeeded);
+    // The second design pass sees the review's findings.
+    assert!(prompts[3].contains("Add tests"), "{}", prompts[3]);
+    // Without an issue the return entry posts nothing.
+    assert_eq!(node(&snap, "dev/issue_review_return").outputs["posted"], json!(false));
+    f.engine.approve(&f.root, &run_id, Some("dev/merge_gate"), "discard", None).unwrap();
+    f.wait_settled(&run_id, RunStatus::Completed);
+}
+
+#[test]
 fn conditions_and_flow_outputs_see_a_skipped_node_as_missing() {
     let f = fixture();
     let rel = write_flow(

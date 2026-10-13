@@ -77,10 +77,12 @@ nodes:
     uses: mdium/issue-entry
     when: { ref: params.issue, op: "!=", value: "" }
     with: { issue: "${{ params.issue }}", entry: review, body: "${{ nodes.review.outputs.body }}" }
+  # The return entry carries the review -> design back-edge, so it has no
+  # `when`: a `when`-skipped node never follows back-edges. With an empty
+  # `issue` the action posts nothing (`posted: false`) and the loop still runs.
   - id: issue_review_return
     kind: action
     uses: mdium/issue-entry
-    when: { ref: params.issue, op: "!=", value: "" }
     with: { issue: "${{ params.issue }}", entry: review, body: "${{ nodes.review.outputs.body }}", returned: true }
   - id: gate_switch
     kind: branch

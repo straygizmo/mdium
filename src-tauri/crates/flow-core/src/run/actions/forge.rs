@@ -37,6 +37,11 @@ fn detect_repo(ctx: &ActionContext) -> Result<ForgeRepo, Reason> {
         })
 }
 
+/// Whether the `issue` input is an empty or blank string.
+fn is_blank_issue(with: &BTreeMap<String, Value>) -> bool {
+    matches!(with.get("issue"), Some(Value::String(text)) if text.trim().is_empty())
+}
+
 /// The `issue` input: an Issue number given as a string or a number.
 fn issue_number(with: &BTreeMap<String, Value>) -> Result<u64, Reason> {
     const KEY: &str = "issue";
@@ -97,11 +102,19 @@ pub(super) fn design_doc_commit(
 }
 
 /// `mdium/issue-entry` `{ issue, entry, body, returned?, worktree? }` → `{ posted }`.
-/// The entry's marker prevents a duplicate comment on a rerun.
+/// The entry's marker prevents a duplicate comment on a rerun. An empty
+/// `issue` (the template's default: no issue tracking) posts nothing and
+/// never touches the forge, so the node can sit on a cycle unconditionally.
 pub(super) fn issue_entry(
     with: &BTreeMap<String, Value>,
     ctx: &ActionContext,
 ) -> Result<ActionEnd, Reason> {
+    if is_blank_issue(with) {
+        return Ok(ActionEnd::done(BTreeMap::from([(
+            "posted".to_string(),
+            Value::Bool(false),
+        )])));
+    }
     let number = issue_number(with)?;
     let kind = match required_str(with, "entry")?.as_str() {
         "design" => EntryKind::Design,
@@ -282,6 +295,24 @@ mod tests {
         let calls = forge.calls();
         assert_eq!(calls.iter().filter(|call| matches!(call, ForgeCall::AddComment { number: 12, .. })).count(), 1);
         assert!(calls.iter().any(|call| matches!(call, ForgeCall::CloseIssue(12))));
+    }
+
+    #[test]
+    fn issue_entry_with_an_empty_issue_posts_nothing_and_skips_the_forge() {
+        // No forge remote: any forge call would fail the action.
+        let repo = Fixture::new();
+        let forge = Arc::new(FakeForge::default());
+        let mut c = ctx(repo.root(), repo.root());
+        c.forge = forge.clone();
+        for issue in ["", "  "] {
+            let input = with(json!({ "issue": issue, "entry": "review", "body": "x", "returned": true }));
+            let ActionEnd::Done { outputs, .. } = run_action("mdium/issue-entry", &input, &c) else { panic!() };
+            assert_eq!(outputs["posted"], json!(false));
+        }
+        assert!(forge.calls().is_empty());
+        // A missing issue is still an input error.
+        let ActionEnd::Failed(r) = run_action("mdium/issue-entry", &with(json!({ "entry": "review", "body": "x" })), &c) else { panic!() };
+        assert_eq!(r.code, FLOW_ACTION_INPUT_INVALID);
     }
 
     #[test]

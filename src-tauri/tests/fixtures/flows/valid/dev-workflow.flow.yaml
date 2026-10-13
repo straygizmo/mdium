@@ -26,7 +26,8 @@ nodes:
   - { id: issue_impl, kind: action, uses: mdium/issue-entry, with: { issue: "${{ params.issue }}", entry: implement, body: "${{ nodes.implement.outputs.body }}" }, when: { ref: params.issue, op: "!=", value: "" } }
   - { id: review, kind: agent, provider: codex, permission: read-only, promptRef: builtin:review, outputContract: outcome, workingDir: "${{ nodes.worktree.outputs.path }}" }
   - { id: issue_review, kind: action, uses: mdium/issue-entry, with: { issue: "${{ params.issue }}", entry: review, body: "${{ nodes.review.outputs.body }}" }, when: { ref: params.issue, op: "!=", value: "" } }
-  - { id: issue_review_return, kind: action, uses: mdium/issue-entry, with: { issue: "${{ params.issue }}", entry: review, body: "${{ nodes.review.outputs.body }}", returned: true }, when: { ref: params.issue, op: "!=", value: "" } }
+  # No `when`: this node carries the back-edge to design; with an empty issue it posts nothing.
+  - { id: issue_review_return, kind: action, uses: mdium/issue-entry, with: { issue: "${{ params.issue }}", entry: review, body: "${{ nodes.review.outputs.body }}", returned: true } }
   - { id: merge_gate, kind: approval, options: [merge, discard] }
   - { id: merge, kind: action, uses: mdium/git-merge-local, with: { worktree: "${{ nodes.worktree.outputs }}" } }
   - { id: close_issue, kind: action, uses: mdium/issue-close, with: { issue: "${{ params.issue }}" }, when: { ref: params.issue, op: "!=", value: "" } }
