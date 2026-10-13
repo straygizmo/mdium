@@ -1083,7 +1083,8 @@ impl FlowEngine {
         Ok(())
     }
 
-    /// Tail of a node attempt's `stdout.log` / `stderr.log`.
+    /// Tail of a node attempt's `stdout.log` / `stderr.log`, or of an agent
+    /// attempt's `prompt.md` / `response.md`.
     pub fn log(
         &self,
         root: &Path,
@@ -1096,6 +1097,8 @@ impl FlowEngine {
         let file = match stream {
             "stdout" => "stdout.log",
             "stderr" => "stderr.log",
+            "prompt" => "prompt.md",
+            "response" => "response.md",
             _ => return Err(EngineError::new(FLOW_LOG_INVALID, stream)),
         };
         let store = RunStore::new(root);

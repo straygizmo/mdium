@@ -529,3 +529,117 @@ fn flow_test_worker_entry() {
         }
     }
 }
+
+// ------------------------------------------------------------ fake agent runner
+
+use super::agent::{AgentRunner, AgentTurnEvent, AgentTurnHandle, AgentTurnRequest};
+use crate::provider::Provider;
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
+
+/// What one fake agent turn does.
+#[derive(Debug, Clone)]
+pub enum FakeTurn {
+    /// Completes with this final response.
+    Respond(String),
+    Fail { code: String, message: String },
+    /// Reports a guard violation, then fails like a blocked turn.
+    Guard { rule: String, summary: String },
+    /// Never ends until cancelled.
+    Hang,
+}
+
+/// An agent runner that plays scripted turns and records what it got.
+pub struct FakeAgentRunner {
+    turns: Mutex<VecDeque<FakeTurn>>,
+    prompts: Mutex<Vec<String>>,
+    dirs: Mutex<Vec<PathBuf>>,
+    cancelled: Arc<AtomicUsize>,
+}
+
+impl FakeAgentRunner {
+    pub fn new(turns: Vec<FakeTurn>) -> Self {
+        Self {
+            turns: Mutex::new(turns.into()),
+            prompts: Mutex::new(Vec::new()),
+            dirs: Mutex::new(Vec::new()),
+            cancelled: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    /// Every prompt received, in order.
+    pub fn prompts(&self) -> Vec<String> {
+        self.prompts.lock().unwrap().clone()
+    }
+
+    /// The working directory of every turn, in order.
+    pub fn working_dirs(&self) -> Vec<PathBuf> {
+        self.dirs.lock().unwrap().clone()
+    }
+
+    /// Hanging turns ended by a cancel.
+    pub fn cancelled(&self) -> usize {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+}
+
+impl AgentRunner for FakeAgentRunner {
+    fn start(&self, req: AgentTurnRequest) -> Result<Box<dyn AgentTurnHandle>, String> {
+        self.prompts.lock().unwrap().push(req.prompt);
+        self.dirs.lock().unwrap().push(req.working_dir);
+        let turn = self
+            .turns
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or_else(|| FakeTurn::Respond("---\noutcome: completed\n---\n".into()));
+        let (events, hang) = match turn {
+            FakeTurn::Respond(final_response) => {
+                (vec![AgentTurnEvent::Completed { final_response }], false)
+            }
+            FakeTurn::Fail { code, message } => (vec![AgentTurnEvent::Failed { code, message }], false),
+            FakeTurn::Guard { rule, summary } => (
+                vec![
+                    AgentTurnEvent::GuardViolation { rule, summary },
+                    AgentTurnEvent::Failed {
+                        code: "RUNNER_TURN_FAILED".into(),
+                        message: "GUARD_BLOCKED".into(),
+                    },
+                ],
+                false,
+            ),
+            FakeTurn::Hang => (Vec::new(), true),
+        };
+        Ok(Box::new(FakeTurnHandle {
+            events: events.into(),
+            hang,
+            cancelled: self.cancelled.clone(),
+        }))
+    }
+
+    fn probe(&self, _provider: Provider) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+struct FakeTurnHandle {
+    events: VecDeque<AgentTurnEvent>,
+    /// Still hanging (no end event queued yet).
+    hang: bool,
+    cancelled: Arc<AtomicUsize>,
+}
+
+impl AgentTurnHandle for FakeTurnHandle {
+    fn try_recv(&mut self) -> Option<AgentTurnEvent> {
+        self.events.pop_front()
+    }
+
+    fn cancel(&mut self) {
+        if self.hang {
+            self.hang = false;
+            self.cancelled.fetch_add(1, Ordering::SeqCst);
+            self.events.push_back(AgentTurnEvent::Cancelled);
+        }
+    }
+}

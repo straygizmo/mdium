@@ -11,12 +11,16 @@
 use crate::condition::Condition;
 use crate::fsutil;
 use crate::issues::FLOW_RUNTIME_UNKNOWN;
+use crate::load;
 use crate::model::{
-    parse_duration, CommandNode, CommandProtocol, CommandRun, FlowDef, FlowNode, LoopBody,
-    LoopMode, LoopNode, NodeKind, OnItemFailure, PythonNode, RetryOn, RetryPolicy, PORT_FAILURE,
-    PORT_SUCCESS,
+    parse_duration, AgentNode, CommandNode, CommandProtocol, CommandRun, FlowDef, FlowNode,
+    LoopBody, LoopMode, LoopNode, NodeKind, OnItemFailure, OutputContract, PythonNode, RetryOn,
+    RetryPolicy, PORT_ATTENTION, PORT_FAILURE, PORT_SUCCESS,
 };
+use crate::outcome::{parse_outcome, StageOutcomeKind};
 use crate::project::RuntimeDef;
+use crate::prompts;
+use crate::run::agent::{AgentRunner, AgentTurnEvent, AgentTurnHandle, AgentTurnRequest};
 use crate::run::artifacts;
 use crate::run::model::*;
 use crate::run::prepare::{prepare_params, ArtifactsOf, LoopVar, TemplateContext};
@@ -27,7 +31,7 @@ use crate::run::process::{
 use crate::run::scope::{
     self, iteration_prefix, ref_key, split_key, subflow_prefix, Graph, GraphLoc,
 };
-use crate::run::store::{EventLog, RunMeta, RunStore, CHECKPOINT_EVERY};
+use crate::run::store::{node_dir_name, EventLog, RunMeta, RunStore, CHECKPOINT_EVERY};
 use crate::run::supervise::DetachedProcess;
 use crate::run::worker::{
     bad_manifest_message, bound_over_long_line, truncate_text, MAX_OVER_LONG_TEXT, call_request, cancel_request, describe_request,
@@ -84,6 +88,21 @@ pub const FLOW_PASS_RESET: &str = "FLOW_PASS_RESET";
 pub const FLOW_RUN_STUCK: &str = "FLOW_RUN_STUCK";
 /// A scope output could not be rendered (warning; the output is left out).
 pub const FLOW_OUTPUT_UNRESOLVED: &str = "FLOW_OUTPUT_UNRESOLVED";
+/// An `outcome` agent's response does not satisfy the output contract
+/// (`detail` = the `OUTCOME_*` code).
+pub const FLOW_AGENT_OUTPUT_INVALID: &str = "FLOW_AGENT_OUTPUT_INVALID";
+/// An agent reported `attention` (no `attention` edge) or `awaiting_user`.
+pub const FLOW_AGENT_ATTENTION: &str = "FLOW_AGENT_ATTENTION";
+/// The agent's turn failed (`code` / `message` from the runner).
+pub const FLOW_AGENT_TURN_FAILED: &str = "FLOW_AGENT_TURN_FAILED";
+/// The runner's guard blocked the turn (`rule` / `summary`).
+pub const FLOW_AGENT_GUARD_BLOCKED: &str = "FLOW_AGENT_GUARD_BLOCKED";
+/// The agent runner process went away during the turn.
+pub const FLOW_AGENT_RUNNER_EXITED: &str = "FLOW_AGENT_RUNNER_EXITED";
+/// The turn could not be started (`message`).
+pub const FLOW_AGENT_START_FAILED: &str = "FLOW_AGENT_START_FAILED";
+/// The agent's instructions could not be loaded or rendered.
+pub const FLOW_AGENT_PROMPT_INVALID: &str = "FLOW_AGENT_PROMPT_INVALID";
 
 /// Options of a budget approval.
 pub const BUDGET_OPTIONS: [&str; 2] = ["approve", "stop"];
@@ -140,6 +159,8 @@ pub struct DriverEnv {
     pub poll: Duration,
     /// Starts the resident Python workers of `python` nodes.
     pub worker_launcher: Arc<dyn WorkerLauncher>,
+    /// Runs the turns of `agent` nodes.
+    pub agent_runner: Arc<dyn AgentRunner>,
 }
 
 /// Minimum interval between persisted progress events of one node.
@@ -226,6 +247,41 @@ struct RunningCall {
     declared_outputs: BTreeSet<String>,
 }
 
+/// An agent turn in flight.
+struct RunningAgent {
+    key: String,
+    attempt: u32,
+    dir: PathBuf,
+    handle: Box<dyn AgentTurnHandle>,
+    contract: OutputContract,
+    /// `stdout.log`, open for appending.
+    log: Option<std::fs::File>,
+    items: ItemState,
+    started: Instant,
+    timeout: Option<Duration>,
+    grace_deadline: Option<Instant>,
+    cancel_sent: bool,
+    /// The timeout's cancel was sent: any ending counts as a timeout.
+    timed_out: bool,
+    /// The first guard violation of the turn (`rule`, `summary`).
+    violation: Option<(String, String)>,
+    estimate_usd: Option<f64>,
+}
+
+/// Inputs and prompt of an agent attempt, written to its node dir.
+struct PreparedAgent {
+    dir: PathBuf,
+    prompt: String,
+    working_dir: PathBuf,
+}
+
+/// How an agent turn's monitoring ended.
+enum AgentFinish {
+    Turn(AgentTurnEvent),
+    /// The stop grace passed before the turn ended.
+    GraceKilled,
+}
+
 /// How a command's (or call's) monitoring ended.
 enum Finish {
     Exited(i32),
@@ -259,6 +315,7 @@ pub struct Driver {
     retry_at: BTreeMap<String, Instant>,
     workers: BTreeMap<String, LiveWorker>,
     calls: Vec<RunningCall>,
+    agents: Vec<RunningAgent>,
     /// Ids handed to started workers.
     worker_seq: u64,
 }
@@ -290,6 +347,7 @@ impl Driver {
             retry_at: BTreeMap::new(),
             workers: BTreeMap::new(),
             calls: Vec::new(),
+            agents: Vec::new(),
             worker_seq: 0,
         })
     }
@@ -924,6 +982,10 @@ impl Driver {
                     let call = self.calls.remove(pos);
                     self.drop_worker(&call.runtime, call.worker);
                 }
+                if let Some(pos) = self.agents.iter().position(|a| a.key == key) {
+                    let mut agent = self.agents.remove(pos);
+                    agent.handle.cancel();
+                }
                 self.close_children(key);
                 self.set_node(key, NodeStatus::Cancelled, node.attempt, reason, None);
             }
@@ -955,6 +1017,7 @@ impl Driver {
                 .iter()
                 .map(|r| &r.key)
                 .chain(self.calls.iter().map(|c| &c.key))
+                .chain(self.agents.iter().map(|a| &a.key))
                 .filter(|k| k.starts_with(&prefix))
                 .cloned()
                 .collect();
@@ -1074,6 +1137,7 @@ impl Driver {
             }
             self.poll_running();
             self.poll_calls();
+            self.poll_agents();
             self.retry_due();
             if !self.state.status.is_active() {
                 if !self.in_flight() {
@@ -1128,9 +1192,9 @@ impl Driver {
         self.state.status
     }
 
-    /// Commands or python calls are running.
+    /// Commands, python calls or agent turns are running.
     fn in_flight(&self) -> bool {
-        !self.running.is_empty() || !self.calls.is_empty()
+        !self.running.is_empty() || !self.calls.is_empty() || !self.agents.is_empty()
     }
 
     /// Settles pending nodes, advances loops / sub-flows and finishes
@@ -1316,8 +1380,11 @@ impl Driver {
                 let Some(node) = self.graph_of(&prefix).and_then(|g| g.node(&id)).cloned() else {
                     continue;
                 };
-                if matches!(node.kind, NodeKind::Command(_) | NodeKind::Python(_))
-                    && self.running.len() + self.calls.len() >= MAX_RUNNING_COMMANDS
+                if matches!(
+                    node.kind,
+                    NodeKind::Command(_) | NodeKind::Python(_) | NodeKind::Agent(_)
+                ) && self.running.len() + self.calls.len() + self.agents.len()
+                    >= MAX_RUNNING_COMMANDS
                 {
                     continue;
                 }
@@ -1381,6 +1448,7 @@ impl Driver {
             }
             NodeKind::Command(command) => self.launch_command(prefix, key, node, command, attempt),
             NodeKind::Python(py) => self.launch_call(prefix, key, node, py, attempt),
+            NodeKind::Agent(agent) => self.launch_agent(prefix, key, node, agent, attempt),
             NodeKind::Loop(lp) => {
                 if lp.mode == LoopMode::Foreach {
                     let items = self.with_ctx(prefix, None, None, None, |ctx| match &lp.items {
@@ -2978,6 +3046,427 @@ impl Driver {
         }
     }
 
+    // ------------------------------------------------------- agent nodes
+
+    /// Starts one turn of an `agent` node.
+    fn launch_agent(
+        &mut self,
+        prefix: &str,
+        key: &str,
+        node: &FlowNode,
+        agent: &AgentNode,
+        attempt: u32,
+    ) {
+        let prepared = match self.prepare_agent(prefix, key, agent, attempt) {
+            Ok(prepared) => prepared,
+            Err(reason) => return self.fail_node(key, attempt, reason),
+        };
+        self.start_agent_turn(prefix, key, node, agent, attempt, prepared);
+    }
+
+    /// Renders the inputs and the prompt of an attempt and writes
+    /// `inputs.json` and `prompt.md` to its node dir.
+    fn prepare_agent(
+        &self,
+        prefix: &str,
+        key: &str,
+        agent: &AgentNode,
+        attempt: u32,
+    ) -> Result<PreparedAgent, Reason> {
+        let io_failed =
+            |message: String| Reason::new(FLOW_AGENT_START_FAILED).with("message", message);
+        let dir = self
+            .store
+            .node_attempt_dir(&self.run_id, key, attempt)
+            .map_err(|e| io_failed(e.to_string()))?;
+        std::fs::create_dir_all(&dir).map_err(|e| io_failed(e.to_string()))?;
+        let root = self.store.project_root().to_path_buf();
+        // The owner flow file's directory is the base of a relative `promptRef`.
+        let base_dir = self
+            .scope_init(prefix)
+            .and_then(|init| root.join(&init.graph.file).parent().map(Path::to_path_buf))
+            .unwrap_or_else(|| root.clone());
+        let (inputs, instructions, working_dir) =
+            self.with_ctx(prefix, None, Some(&dir), None, |ctx| {
+                let inputs = match ctx
+                    .render_json(&Value::Object(agent.with_args.clone().into_iter().collect()))?
+                {
+                    Value::Object(map) => map.into_iter().collect::<BTreeMap<String, Value>>(),
+                    _ => BTreeMap::new(),
+                };
+                let instructions = match (&agent.prompt, &agent.prompt_ref) {
+                    (Some(text), _) => ctx.render_string(text)?,
+                    (None, Some(reference)) => match reference.strip_prefix("builtin:") {
+                        Some(name) => prompts::builtin(name)
+                            .ok_or_else(|| {
+                                Reason::new(FLOW_AGENT_PROMPT_INVALID)
+                                    .with("ref", reference.clone())
+                                    .with("detail", "unknown-builtin")
+                            })?
+                            .to_string(),
+                        None => {
+                            let invalid = |detail: String| {
+                                Reason::new(FLOW_AGENT_PROMPT_INVALID)
+                                    .with("ref", reference.clone())
+                                    .with("detail", detail)
+                            };
+                            let path = load::resolve_in_project(&root, &base_dir, reference)
+                                .map_err(|problem| {
+                                    invalid(match problem {
+                                        load::PathProblem::Outside(why) => why.to_string(),
+                                        load::PathProblem::NotFound => "not-found".to_string(),
+                                    })
+                                })?;
+                            let text = std::fs::read_to_string(&path)
+                                .map_err(|e| invalid(e.to_string()))?;
+                            ctx.render_string(&text).map_err(|r| invalid(r.code))?
+                        }
+                    },
+                    (None, None) => {
+                        return Err(Reason::new(FLOW_AGENT_PROMPT_INVALID)
+                            .with("detail", "missing"))
+                    }
+                };
+                let working_dir = match agent.working_dir.as_deref() {
+                    Some(dir) => {
+                        let rendered = PathBuf::from(ctx.render_string(dir)?);
+                        if rendered.is_absolute() {
+                            rendered
+                        } else {
+                            root.join(rendered)
+                        }
+                    }
+                    None => root.clone(),
+                };
+                Ok((inputs, instructions, working_dir))
+            })?;
+        std::fs::write(
+            dir.join("inputs.json"),
+            serde_json::to_vec_pretty(&inputs).unwrap_or_default(),
+        )
+        .map_err(|e| io_failed(e.to_string()))?;
+        // Task 3b passes the previous question and its answer here.
+        let prompt = prompts::compose(&instructions, &inputs, agent.output_contract, None);
+        std::fs::write(dir.join("prompt.md"), &prompt).map_err(|e| io_failed(e.to_string()))?;
+        Ok(PreparedAgent {
+            dir,
+            prompt,
+            working_dir,
+        })
+    }
+
+    /// Starts the turn of a prepared attempt and tracks it.
+    fn start_agent_turn(
+        &mut self,
+        prefix: &str,
+        key: &str,
+        node: &FlowNode,
+        agent: &AgentNode,
+        attempt: u32,
+        prepared: PreparedAgent,
+    ) {
+        let timeout = self.node_timeout(prefix, node);
+        let request = AgentTurnRequest {
+            session_id: format!("flow-{}-{}-{attempt}", self.run_id, node_dir_name(key)),
+            provider: agent.provider,
+            model: agent.model.clone(),
+            permission: agent.permission,
+            working_dir: prepared.working_dir,
+            prompt: prepared.prompt,
+            timeout,
+        };
+        let handle = match self.env.agent_runner.start(request) {
+            Ok(handle) => handle,
+            Err(message) => {
+                return self.fail_node(
+                    key,
+                    attempt,
+                    Reason::new(FLOW_AGENT_START_FAILED).with("message", message),
+                )
+            }
+        };
+        let log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(prepared.dir.join("stdout.log"))
+            .ok();
+        self.agents.push(RunningAgent {
+            key: key.to_string(),
+            attempt,
+            dir: prepared.dir,
+            handle,
+            contract: agent.output_contract,
+            log,
+            items: ItemState::default(),
+            started: Instant::now(),
+            timeout,
+            grace_deadline: None,
+            cancel_sent: false,
+            timed_out: false,
+            violation: None,
+            estimate_usd: node.cost.as_ref().and_then(|c| c.estimate_usd),
+        });
+        self.emit(
+            Some(key),
+            EventBody::NodeProgress {
+                text: "agent turn".into(),
+                fraction: None,
+            },
+        );
+    }
+
+    /// Drains every turn's events and settles the turns that ended.
+    fn poll_agents(&mut self) {
+        let mut agents = std::mem::take(&mut self.agents);
+        let mut finished = Vec::new();
+        let mut i = 0;
+        while i < agents.len() {
+            match self.poll_agent(&mut agents[i]) {
+                Some(finish) => finished.push((agents.remove(i), finish)),
+                None => i += 1,
+            }
+        }
+        self.agents = agents;
+        for (agent, finish) in finished {
+            self.finish_agent(agent, finish);
+        }
+    }
+
+    fn poll_agent(&mut self, agent: &mut RunningAgent) -> Option<AgentFinish> {
+        while let Some(event) = agent.handle.try_recv() {
+            match event {
+                AgentTurnEvent::Log(line) => {
+                    if let Some(file) = agent.log.as_mut() {
+                        let _ = writeln!(file, "{line}");
+                    }
+                }
+                AgentTurnEvent::Progress(text) => {
+                    let key = agent.key.clone();
+                    self.apply_item(
+                        &key,
+                        ProtocolItem::Progress {
+                            text,
+                            fraction: None,
+                        },
+                        &mut agent.items,
+                        &agent.dir,
+                    );
+                }
+                AgentTurnEvent::GuardViolation { rule, summary } => {
+                    if agent.violation.is_none() {
+                        agent.violation = Some((rule, summary));
+                    }
+                }
+                end => return Some(AgentFinish::Turn(end)),
+            }
+        }
+        if agent.grace_deadline.is_some_and(|d| Instant::now() >= d) {
+            // The turn did not end in time; its thread closes the session.
+            agent.handle.cancel();
+            return Some(if agent.timed_out {
+                AgentFinish::Turn(AgentTurnEvent::Cancelled)
+            } else {
+                AgentFinish::GraceKilled
+            });
+        }
+        if !agent.cancel_sent && agent.timeout.is_some_and(|t| agent.started.elapsed() >= t) {
+            agent.handle.cancel();
+            agent.cancel_sent = true;
+            agent.timed_out = true;
+            let deadline =
+                Instant::now() + self.stop_grace().unwrap_or(DEFAULT_CANCEL_GRACE);
+            agent.grace_deadline = Some(agent.grace_deadline.map_or(deadline, |d| d.min(deadline)));
+        }
+        None
+    }
+
+    /// Settles an agent node from how its turn ended.
+    fn finish_agent(&mut self, mut agent: RunningAgent, finish: AgentFinish) {
+        let key = agent.key.clone();
+        let attempt = agent.attempt;
+        self.flush_progress(&key, &mut agent.items);
+        agent.log = None;
+        if let AgentFinish::Turn(AgentTurnEvent::Completed { final_response }) = &finish {
+            if let Err(err) = std::fs::write(agent.dir.join("response.md"), final_response) {
+                append_line(
+                    &agent.dir.join("stdout.log"),
+                    &format!("[mdium] response.md: {err}"),
+                );
+            }
+        }
+        if let Some(usd) = agent.estimate_usd {
+            self.emit(
+                Some(&key),
+                EventBody::Cost {
+                    usd,
+                    kind: CostKind::Estimated,
+                    provider: None,
+                    model: None,
+                    units: None,
+                },
+            );
+        }
+        let end = match finish {
+            AgentFinish::GraceKilled => {
+                self.set_node(
+                    &key,
+                    NodeStatus::Ready,
+                    attempt,
+                    Some(Reason::new(FLOW_STOP_GRACE_EXCEEDED)),
+                    None,
+                );
+                return;
+            }
+            AgentFinish::Turn(end) => end,
+        };
+        if agent.timed_out {
+            return self.after_failure(&key, attempt, Reason::new(FLOW_NODE_TIMEOUT), true);
+        }
+        match end {
+            AgentTurnEvent::Completed { final_response } => {
+                self.agent_completed(&agent, final_response)
+            }
+            AgentTurnEvent::Failed { code, message } => match agent.violation.take() {
+                Some((rule, summary)) => self.fail_node(
+                    &key,
+                    attempt,
+                    Reason::new(FLOW_AGENT_GUARD_BLOCKED)
+                        .with("rule", rule)
+                        .with("summary", summary),
+                ),
+                None => self.after_failure(
+                    &key,
+                    attempt,
+                    Reason::new(FLOW_AGENT_TURN_FAILED)
+                        .with("code", code)
+                        .with("message", message),
+                    false,
+                ),
+            },
+            AgentTurnEvent::Cancelled if self.cancel_requested => {
+                self.set_node(
+                    &key,
+                    NodeStatus::Cancelled,
+                    attempt,
+                    Some(Reason::new(FLOW_RUN_CANCELLED)),
+                    None,
+                );
+            }
+            // Stopped: the node runs again on resume.
+            AgentTurnEvent::Cancelled if self.stop_requested => {
+                self.set_node(
+                    &key,
+                    NodeStatus::Ready,
+                    attempt,
+                    Some(Reason::new(FLOW_NODE_STOPPED)),
+                    None,
+                );
+            }
+            // Nobody asked for this cancel: the turn did not do its work.
+            AgentTurnEvent::Cancelled => self.after_failure(
+                &key,
+                attempt,
+                Reason::new(FLOW_AGENT_TURN_FAILED).with("code", "RUNNER_TURN_CANCELLED"),
+                false,
+            ),
+            AgentTurnEvent::Exited => {
+                self.after_failure(&key, attempt, Reason::new(FLOW_AGENT_RUNNER_EXITED), false)
+            }
+            // Not end events; `poll_agent` never finishes on them.
+            AgentTurnEvent::Log(_)
+            | AgentTurnEvent::Progress(_)
+            | AgentTurnEvent::GuardViolation { .. } => {}
+        }
+    }
+
+    /// Maps a completed turn's response to outputs, artifacts and a port.
+    fn agent_completed(&mut self, agent: &RunningAgent, response: String) {
+        let key = agent.key.as_str();
+        let attempt = agent.attempt;
+        if agent.contract == OutputContract::Free {
+            self.emit(
+                Some(key),
+                EventBody::NodeOutput {
+                    key: "response".into(),
+                    value: Value::String(response),
+                },
+            );
+            self.write_outputs(key, &agent.dir);
+            return self.settle(key, attempt, NodeStatus::Succeeded, PORT_SUCCESS, None);
+        }
+        let outcome = match parse_outcome(&response) {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                return self.fail_node(
+                    key,
+                    attempt,
+                    Reason::new(FLOW_AGENT_OUTPUT_INVALID)
+                        .with("detail", err.code())
+                        .with("message", err.to_string()),
+                )
+            }
+        };
+        let reason = outcome.reason.clone().unwrap_or_default();
+        // `body` and `reason` are the node's own outputs; declared ones never replace them.
+        for (name, value) in outcome.outputs {
+            if name != "body" && name != "reason" {
+                self.emit(Some(key), EventBody::NodeOutput { key: name, value });
+            }
+        }
+        self.emit(
+            Some(key),
+            EventBody::NodeOutput {
+                key: "body".into(),
+                value: Value::String(outcome.body),
+            },
+        );
+        self.emit(
+            Some(key),
+            EventBody::NodeOutput {
+                key: "reason".into(),
+                value: Value::String(reason.clone()),
+            },
+        );
+        for path in outcome.artifacts {
+            self.record_artifact(key, &agent.dir, path, None, None);
+        }
+        self.write_outputs(key, &agent.dir);
+        match outcome.kind {
+            StageOutcomeKind::Completed => {
+                self.settle(key, attempt, NodeStatus::Succeeded, PORT_SUCCESS, None)
+            }
+            StageOutcomeKind::Attention => {
+                let (prefix, id, _) = split_key(key);
+                let routed = self
+                    .graph_of(prefix)
+                    .is_some_and(|g| g.has_edge_from(id, PORT_ATTENTION));
+                if routed {
+                    self.settle(key, attempt, NodeStatus::Succeeded, PORT_ATTENTION, None)
+                } else {
+                    self.fail_node(
+                        key,
+                        attempt,
+                        Reason::new(FLOW_AGENT_ATTENTION).with("reason", reason),
+                    )
+                }
+            }
+            // The question loop is Task 3b; until then the question fails the node.
+            StageOutcomeKind::AwaitingUser => self.fail_node(
+                key,
+                attempt,
+                Reason::new(FLOW_AGENT_ATTENTION).with("reason", reason),
+            ),
+        }
+    }
+
+    /// Writes the node's current outputs to the attempt's `outputs.json`.
+    fn write_outputs(&self, key: &str, dir: &Path) {
+        let _ = std::fs::write(
+            dir.join("outputs.json"),
+            serde_json::to_vec_pretty(&self.node(key).outputs).unwrap_or_default(),
+        );
+    }
+
     // --------------------------------------------- stop / cancel / exit
 
     fn stop_grace(&self) -> Option<Duration> {
@@ -3011,6 +3500,16 @@ impl Driver {
         for call in &mut self.calls {
             if call.grace_deadline.is_none() {
                 call.grace_deadline = deadline();
+            }
+        }
+        // Agents cannot see the STOP file: their turn is cancelled.
+        for agent in &mut self.agents {
+            if agent.grace_deadline.is_none() {
+                agent.grace_deadline = deadline();
+            }
+            if !agent.cancel_sent {
+                agent.handle.cancel();
+                agent.cancel_sent = true;
             }
         }
     }
@@ -3071,6 +3570,17 @@ impl Driver {
                 None,
             );
         }
+        // The turn threads cancel and close their sessions on their own.
+        for mut agent in std::mem::take(&mut self.agents) {
+            agent.handle.cancel();
+            self.set_node(
+                &agent.key,
+                NodeStatus::Cancelled,
+                agent.attempt,
+                Some(Reason::new(FLOW_RUN_CANCELLED)),
+                None,
+            );
+        }
         self.set_run(RunStatus::Cancelled, Some(Reason::new(FLOW_RUN_CANCELLED)));
     }
 
@@ -3105,6 +3615,18 @@ impl Driver {
             );
             interrupted = true;
         }
+        // Agent turns never survive the app either.
+        for mut agent in std::mem::take(&mut self.agents) {
+            agent.handle.cancel();
+            self.set_node(
+                &agent.key,
+                NodeStatus::Interrupted,
+                agent.attempt,
+                Some(Reason::new(FLOW_APP_EXITED)),
+                None,
+            );
+            interrupted = true;
+        }
         if interrupted {
             self.set_run(RunStatus::Interrupted, Some(Reason::new(FLOW_APP_EXITED)));
         }
@@ -3121,6 +3643,7 @@ impl Driver {
                 n.status == NodeStatus::Running
                     && !self.running.iter().any(|r| &r.key == *k)
                     && !self.calls.iter().any(|c| &c.key == *k)
+                    && !self.agents.iter().any(|a| &a.key == *k)
             })
             .map(|(k, n)| (k.clone(), n.clone()))
             .collect();
@@ -3130,8 +3653,8 @@ impl Driver {
             };
             let command = match &node.kind {
                 NodeKind::Command(command) => command,
-                // Workers never survive a restart: the call is lost.
-                NodeKind::Python(_) => {
+                // Workers and agent turns never survive a restart: the work is lost.
+                NodeKind::Python(_) | NodeKind::Agent(_) => {
                     self.set_node(
                         &key,
                         NodeStatus::Interrupted,

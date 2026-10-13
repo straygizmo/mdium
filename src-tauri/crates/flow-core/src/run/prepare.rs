@@ -77,7 +77,8 @@ pub fn check_runnable(bundle: &[(&str, &FlowDef)]) -> Vec<Reason> {
                         }
                     }
                 },
-                NodeKind::Python(_)
+                NodeKind::Agent(_)
+                | NodeKind::Python(_)
                 | NodeKind::Approval(_)
                 | NodeKind::Loop(_)
                 | NodeKind::Branch(_)
@@ -389,7 +390,7 @@ mod tests {
     #[test]
     fn rejects_what_this_version_cannot_run_anywhere_in_the_bundle() {
         let def = flow(
-            "params: { p: { type: string } }\nnodes:\n  - { id: a, kind: agent, provider: claude, permission: read-only, prompt: x }\n  - { id: b, kind: command, run: ['${{ params.p }}'] }\n  - { id: c, kind: command, run: 'echo ${{ params.p }}', shell: true }\n  - { id: d, kind: command, run: [x, '${{ params.p }}'], concurrencyKey: k }\n  - id: l\n    kind: loop\n    mode: foreach\n    items: [1]\n    maxIterations: 1\n    body:\n      nodes:\n        - { id: inner, kind: command, run: ['${{ item }}'] }\nedges:\n  - { from: a, to: b }\n  - { from: b, to: c }\n  - { from: c, to: d }\n  - { from: d, to: l }\n",
+            "params: { p: { type: string } }\nnodes:\n  - { id: a, kind: action, uses: mdium/issue-close }\n  - { id: b, kind: command, run: ['${{ params.p }}'] }\n  - { id: c, kind: command, run: 'echo ${{ params.p }}', shell: true }\n  - { id: d, kind: command, run: [x, '${{ params.p }}'], concurrencyKey: k }\n  - id: l\n    kind: loop\n    mode: foreach\n    items: [1]\n    maxIterations: 1\n    body:\n      nodes:\n        - { id: inner, kind: command, run: ['${{ item }}'] }\nedges:\n  - { from: a, to: b }\n  - { from: b, to: c }\n  - { from: c, to: d }\n  - { from: d, to: l }\n",
         );
         let sub = flow("nodes:\n  - { id: s, kind: action, uses: mdium/issue-close }\n");
         assert_eq!(
@@ -418,6 +419,8 @@ mod tests {
         assert!(check_runnable(&[("r", &ok)]).is_empty());
         let py = flow("nodes:\n  - { id: p, kind: python, runtime: r, entry: a.b }\n");
         assert!(check_runnable(&[("r", &py)]).is_empty());
+        let agent = flow("nodes:\n  - { id: a, kind: agent, provider: claude, permission: read-only, prompt: x }\n");
+        assert!(check_runnable(&[("r", &agent)]).is_empty());
     }
 
     #[test]

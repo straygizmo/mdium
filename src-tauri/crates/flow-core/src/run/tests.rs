@@ -8,6 +8,7 @@ use crate::run::process::{AttachedLauncher, MAX_LINES, MAX_LINE_BYTES};
 use crate::run::store::{RunMeta, RunStore, RUN_SCHEMA_VERSION};
 use crate::run::test_helper::{
     detached_launcher, fake_worker_launcher, helper_argv, helper_env, process_alive,
+    FakeAgentRunner, FakeTurn,
 };
 use crate::run::worker::{
     PipedWorkerLauncher, WorkerLauncher, FLOW_PYTHON_ENTRY_UNKNOWN, FLOW_PYTHON_INPUT_INVALID,
@@ -66,7 +67,12 @@ struct Fixture {
 }
 
 fn make_engine(config: &Path, sink: Arc<Sink>, notifier: Arc<Notifier>) -> FlowEngine {
-    make_engine_with_worker(config, sink, notifier, default_worker())
+    make_engine_with_worker(config, sink, notifier, default_worker(), no_agents())
+}
+
+/// An agent runner without scripted turns (most tests run no agent node).
+fn no_agents() -> Arc<FakeAgentRunner> {
+    Arc::new(FakeAgentRunner::new(vec![]))
 }
 
 /// A fake worker without stages (existing tests never start a python node).
@@ -79,6 +85,7 @@ fn make_engine_with_worker(
     sink: Arc<Sink>,
     notifier: Arc<Notifier>,
     worker_launcher: Arc<dyn WorkerLauncher>,
+    agent_runner: Arc<FakeAgentRunner>,
 ) -> FlowEngine {
     let env = DriverEnv {
         launcher: Arc::new(AttachedLauncher),
@@ -89,6 +96,7 @@ fn make_engine_with_worker(
         process_env: Arc::new(std::env::vars().collect()),
         poll: Duration::from_millis(20),
         worker_launcher,
+        agent_runner,
     };
     FlowEngine::new(env, config.join("confirmations.json"))
 }
@@ -110,6 +118,7 @@ fn fixture_with_worker(script: Value) -> Fixture {
         sink.clone(),
         notifier.clone(),
         fake_worker_launcher(script),
+        no_agents(),
     );
     Fixture {
         _tmp: Arc::new(tmp),
@@ -128,7 +137,8 @@ fn fixture_at(root: &Path, launcher: Arc<dyn WorkerLauncher>) -> Fixture {
     let config = tmp.path().join("config");
     let sink = Arc::new(Sink::default());
     let notifier = Arc::new(Notifier::default());
-    let engine = make_engine_with_worker(&config, sink.clone(), notifier.clone(), launcher);
+    let engine =
+        make_engine_with_worker(&config, sink.clone(), notifier.clone(), launcher, no_agents());
     Fixture {
         _tmp: Arc::new(tmp),
         root: root.to_path_buf(),
@@ -137,6 +147,33 @@ fn fixture_at(root: &Path, launcher: Arc<dyn WorkerLauncher>) -> Fixture {
         sink,
         notifier,
     }
+}
+
+/// A fixture whose agent nodes run the scripted `turns` of a fake runner.
+fn fixture_with_agent(turns: Vec<FakeTurn>) -> (Fixture, Arc<FakeAgentRunner>) {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("project");
+    let config = tmp.path().join("config");
+    std::fs::create_dir_all(&root).unwrap();
+    let sink = Arc::new(Sink::default());
+    let notifier = Arc::new(Notifier::default());
+    let runner = Arc::new(FakeAgentRunner::new(turns));
+    let engine = make_engine_with_worker(
+        &config,
+        sink.clone(),
+        notifier.clone(),
+        default_worker(),
+        runner.clone(),
+    );
+    let f = Fixture {
+        _tmp: Arc::new(tmp),
+        root,
+        config,
+        engine,
+        sink,
+        notifier,
+    };
+    (f, runner)
 }
 
 /// Recursively copies the directory `src` to `dst`.
@@ -297,6 +334,7 @@ impl Fixture {
             self.sink.clone(),
             self.notifier.clone(),
             fake_worker_launcher(script),
+            no_agents(),
         );
         Fixture {
             _tmp: self._tmp.clone(),
@@ -568,18 +606,17 @@ fn start_rejects_invalid_unsupported_or_unsafe_flows() {
             .start(&f.root, rel, &serde_json::from_value(params).unwrap(), &sha)
             .unwrap_err()
     };
-    let agent = write_flow(
+    // Agent nodes run now; `concurrencyKey` is still unsupported.
+    let limited = write_flow(
         &f.root,
-        "agent",
+        "limited",
         json!({}),
-        vec![
-            json!({ "id": "a", "kind": "agent", "provider": "claude", "permission": "read-only", "prompt": "x" }),
-        ],
+        vec![json!({ "id": "a", "kind": "command", "run": ["x"], "concurrencyKey": "k" })],
         vec![],
     );
-    let err = start(&agent, json!({}));
+    let err = start(&limited, json!({}));
     assert_eq!(err.code, FLOW_RUN_NOT_RUNNABLE);
-    assert_eq!(err.details[0].params["feature"], "agent");
+    assert_eq!(err.details[0].params["feature"], "concurrencyKey");
     let unsafe_flow = write_flow(
         &f.root,
         "unsafe",
@@ -3315,4 +3352,175 @@ fn cost_references_aggregate_a_node_and_its_child_scope_only() {
     assert_eq!(env["FLOWT_AB"], json!("2.0"));
     assert_eq!(env["FLOWT_SUB"], json!("0.75"));
     assert_eq!(env["FLOWT_FREE"], json!("0.0"));
+}
+
+// ------------------------------------------------------------ agent nodes
+
+/// An agent node; its default prompt references no param, so flows without
+/// params validate.
+fn agent(id: &str, extra: Value) -> Value {
+    let mut n = json!({ "id": id, "kind": "agent", "provider": "claude", "permission": "read-only", "prompt": "Summarize the inputs." });
+    for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+        n[k] = v;
+    }
+    n
+}
+
+#[test]
+fn agent_outcome_completed_sets_outputs_body_and_artifacts() {
+    let (f, runner) = fixture_with_agent(vec![FakeTurn::Respond(
+        "---\noutcome: completed\noutputs:\n  score: 8\nartifacts:\n  - out/report.md\n---\n\n# Report\nfine".into(),
+    )]);
+    std::fs::create_dir_all(f.root.join("out")).unwrap();
+    std::fs::write(f.root.join("out/report.md"), "r").unwrap();
+    let rel = write_flow(
+        &f.root,
+        "ag",
+        json!({ "params": { "topic": { "type": "string", "default": "cats" } } }),
+        vec![
+            agent(
+                "a",
+                json!({ "prompt": "Summarize ${{ params.topic }}", "with": { "topic": "${{ params.topic }}" } }),
+            ),
+            cmd("b", json!([])),
+        ],
+        vec![json!({ "from": "a", "to": "b" })],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    let a = node(&snap, "a");
+    assert_eq!(a.status, NodeStatus::Succeeded);
+    assert_eq!(a.outputs["score"], json!(8));
+    assert_eq!(a.outputs["body"], json!("# Report\nfine"));
+    assert_eq!(a.outputs["reason"], json!(""));
+    let prompts = runner.prompts();
+    assert_eq!(prompts.len(), 1);
+    assert_eq!(runner.working_dirs(), vec![f.root.clone()]);
+    assert!(prompts[0].starts_with("Summarize cats"));
+    assert!(
+        prompts[0].contains("### topic\n\n<<<\ncats\n>>>")
+            && prompts[0].contains("## Output contract")
+    );
+    let dir = f
+        .root
+        .join(".mdium/flow-runs")
+        .join(&run_id)
+        .join("nodes/a/1");
+    assert!(dir.join("prompt.md").exists() && dir.join("response.md").exists());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&std::fs::read(dir.join("inputs.json")).unwrap()).unwrap(),
+        json!({ "topic": "cats" })
+    );
+    assert!(f.events(&run_id).iter().any(|e| matches!(
+        &e.body,
+        EventBody::NodeArtifact { label, .. } if label.as_deref() == Some("report.md") || label.is_none()
+    )));
+}
+
+#[test]
+fn agent_without_frontmatter_fails_with_output_invalid() {
+    let (f, _) = fixture_with_agent(vec![FakeTurn::Respond("just text".into())]);
+    let rel = write_flow(&f.root, "bad", json!({}), vec![agent("a", json!({}))], vec![]);
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Failed);
+    let a = node(&snap, "a");
+    assert_eq!(a.status, NodeStatus::Failed);
+    assert_eq!(a.reason.as_ref().unwrap().code, FLOW_AGENT_OUTPUT_INVALID);
+    assert_eq!(
+        a.reason.as_ref().unwrap().params["detail"],
+        json!("OUTCOME_MISSING_FRONTMATTER")
+    );
+}
+
+#[test]
+fn agent_attention_routes_to_its_port_or_fails() {
+    let turn = || FakeTurn::Respond("---\noutcome: attention\nreason: contradictory\n---\nwhy".into());
+    let (f, _) = fixture_with_agent(vec![turn()]);
+    let rel = write_flow(
+        &f.root,
+        "att",
+        json!({}),
+        vec![agent("a", json!({})), cmd("fix", json!([]))],
+        vec![json!({ "from": "a", "to": "fix", "port": "attention" })],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(node(&snap, "a").port.as_deref(), Some("attention"));
+    assert_eq!(node(&snap, "a").outputs["reason"], json!("contradictory"));
+    assert_eq!(node(&snap, "fix").status, NodeStatus::Succeeded);
+    let (f, _) = fixture_with_agent(vec![turn()]);
+    let rel = write_flow(&f.root, "att2", json!({}), vec![agent("a", json!({}))], vec![]);
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Failed);
+    assert_eq!(
+        node(&snap, "a").reason.as_ref().unwrap().code,
+        FLOW_AGENT_ATTENTION
+    );
+}
+
+#[test]
+fn free_contract_builtin_prompt_estimate_and_timeout() {
+    let (f, runner) = fixture_with_agent(vec![
+        FakeTurn::Respond("plain answer".into()),
+        FakeTurn::Hang,
+    ]);
+    let rel = write_flow(
+        &f.root,
+        "fr",
+        json!({}),
+        vec![
+            agent(
+                "a",
+                json!({ "outputContract": "free", "prompt": null, "promptRef": "builtin:design", "cost": { "estimateUsd": 0.5 } }),
+            ),
+            agent("slow", json!({ "timeout": "1s" })),
+        ],
+        vec![json!({ "from": "a", "to": "slow" })],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Failed);
+    assert_eq!(node(&snap, "a").outputs["response"], json!("plain answer"));
+    assert!(
+        runner.prompts()[0].contains("You are the design stage")
+            && !runner.prompts()[0].contains("## Output contract")
+    );
+    assert_eq!(node(&snap, "a").cost.estimated, 0.5);
+    assert_eq!(
+        node(&snap, "slow").reason.as_ref().unwrap().code,
+        FLOW_NODE_TIMEOUT
+    );
+}
+
+#[test]
+fn agent_turn_failure_guard_and_runner_exit_fail_the_node_and_cancel_kills_the_turn() {
+    for (turn, code) in [
+        (
+            FakeTurn::Fail {
+                code: "RUNNER_TURN_FAILED".into(),
+                message: "boom".into(),
+            },
+            FLOW_AGENT_TURN_FAILED,
+        ),
+        (
+            FakeTurn::Guard {
+                rule: "git-push".into(),
+                summary: "git push origin".into(),
+            },
+            FLOW_AGENT_GUARD_BLOCKED,
+        ),
+    ] {
+        let (f, _) = fixture_with_agent(vec![turn]);
+        let rel = write_flow(&f.root, "x", json!({}), vec![agent("a", json!({}))], vec![]);
+        let run_id = f.confirm_and_start(&rel, json!({}));
+        let snap = f.wait_settled(&run_id, RunStatus::Failed);
+        assert_eq!(node(&snap, "a").reason.as_ref().unwrap().code, code);
+    }
+    let (f, runner) = fixture_with_agent(vec![FakeTurn::Hang]);
+    let rel = write_flow(&f.root, "c", json!({}), vec![agent("a", json!({}))], vec![]);
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    f.wait_for(&run_id, "running", |s| node(s, "a").status == NodeStatus::Running);
+    f.engine.cancel(&f.root, &run_id).unwrap();
+    let snap = f.wait_settled(&run_id, RunStatus::Cancelled);
+    assert_eq!(node(&snap, "a").status, NodeStatus::Cancelled);
+    assert_eq!(runner.cancelled(), 1);
 }

@@ -6,6 +6,7 @@
 //! backend's per-machine command confirmation (spec 7.2).
 
 use super::flow::{with_service, FlowCommandError, FlowServiceState};
+use flow_core::run::agent::NoAgentRunner;
 use flow_core::run::driver::{ApprovalNotifier, DriverEnv, EventSink};
 use flow_core::run::engine::{ArtifactLocation, CommandReview, FlowEngine, RunSnapshot, RunSummary};
 use flow_core::run::model::{
@@ -189,6 +190,8 @@ pub fn create_state(app: &AppHandle) -> FlowServiceState {
         process_env: Arc::new(std::env::vars().collect()),
         poll: Duration::from_millis(200),
         worker_launcher: Arc::new(PipedWorkerLauncher),
+        // Task 3c wires the desktop agent runner.
+        agent_runner: Arc::new(NoAgentRunner),
     };
     let engine = Arc::new(FlowEngine::new(
         env,

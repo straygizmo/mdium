@@ -978,6 +978,7 @@ mod tests {
             process_env: Arc::new(process_env),
             poll: Duration::from_millis(10),
             worker_launcher: Arc::new(crate::run::worker::PipedWorkerLauncher),
+            agent_runner: Arc::new(crate::run::agent::NoAgentRunner),
         };
         FlowService::new(Arc::new(FlowEngine::new(
             env,
