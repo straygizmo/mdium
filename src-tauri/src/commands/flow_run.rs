@@ -6,7 +6,9 @@
 //! backend's per-machine command confirmation (spec 7.2).
 
 use super::flow::{with_service, FlowCommandError, FlowServiceState};
-use flow_core::run::agent::NoAgentRunner;
+use super::node_sidecar;
+use crate::workflow::runner_host::{RunnerApi, RunnerHost, SidecarSpawner};
+use flow_core::run::agent::{AgentRunner, NoAgentRunner, RunnerApiAgentRunner};
 use flow_core::run::driver::{ApprovalNotifier, DriverEnv, EventSink};
 use flow_core::run::engine::{ArtifactLocation, CommandReview, FlowEngine, RunSnapshot, RunSummary};
 use flow_core::run::model::{
@@ -168,8 +170,41 @@ impl ApprovalNotifier for InAppNotifier {
     }
 }
 
-/// Creates the engine and its service (called once in `setup`).
-pub fn create_state(app: &AppHandle) -> FlowServiceState {
+/// The runner host dedicated to flow agent nodes (independent of the
+/// workflow orchestrator's); shut down on app exit.
+pub struct FlowAgentHost(pub Arc<RunnerHost>);
+
+/// Builds the flow-dedicated runner host, `None` when the sidecar script is
+/// missing.
+fn create_agent_host(app: &AppHandle) -> Option<Arc<RunnerHost>> {
+    match node_sidecar::resolve_script(app, "agent-runner", "agent-runner.mjs") {
+        Ok(script_path) => {
+            let data_dir = dirs::data_local_dir()
+                .unwrap_or_else(std::env::temp_dir)
+                .join("mdium");
+            Some(Arc::new(RunnerHost::new(Box::new(SidecarSpawner {
+                script_path,
+                data_dir,
+            }))))
+        }
+        Err(err) => {
+            eprintln!("[flow] agent runner unavailable: {err}");
+            None
+        }
+    }
+}
+
+/// Creates the engine and its service (called once in `setup`). The agent
+/// runner host is returned too so the caller can manage and shut it down.
+pub fn create_state(app: &AppHandle) -> (FlowServiceState, Option<Arc<RunnerHost>>) {
+    let host = create_agent_host(app);
+    let agent_runner: Arc<dyn AgentRunner> = match &host {
+        Some(host) => Arc::new(RunnerApiAgentRunner {
+            api: host.clone() as Arc<dyn RunnerApi>,
+            probe_timeout: Duration::from_secs(15),
+        }),
+        None => Arc::new(NoAgentRunner),
+    };
     let base = dirs::data_local_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join("mdium");
@@ -190,14 +225,13 @@ pub fn create_state(app: &AppHandle) -> FlowServiceState {
         process_env: Arc::new(std::env::vars().collect()),
         poll: Duration::from_millis(200),
         worker_launcher: Arc::new(PipedWorkerLauncher),
-        // Task 3c wires the desktop agent runner.
-        agent_runner: Arc::new(NoAgentRunner),
+        agent_runner,
     };
     let engine = Arc::new(FlowEngine::new(
         env,
         base.join("flow-command-confirmations.json"),
     ));
-    Arc::new(FlowService::new(engine))
+    (Arc::new(FlowService::new(engine)), host)
 }
 
 #[tauri::command]

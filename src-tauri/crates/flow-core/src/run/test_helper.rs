@@ -560,6 +560,8 @@ pub struct FakeAgentRunner {
     cancelled: Arc<AtomicUsize>,
     /// The event queues of every turn handed out, in start order.
     handles: Mutex<Vec<Arc<Mutex<TurnQueue>>>>,
+    /// Providers whose probe fails.
+    unavailable: Mutex<Vec<Provider>>,
 }
 
 impl FakeAgentRunner {
@@ -570,7 +572,21 @@ impl FakeAgentRunner {
             dirs: Mutex::new(Vec::new()),
             cancelled: Arc::new(AtomicUsize::new(0)),
             handles: Mutex::new(Vec::new()),
+            unavailable: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Makes `probe(provider)` fail from now on.
+    pub fn set_unavailable(&self, provider: Provider) {
+        let mut list = self.unavailable.lock().unwrap();
+        if !list.contains(&provider) {
+            list.push(provider);
+        }
+    }
+
+    /// Makes `probe(provider)` succeed again.
+    pub fn set_available(&self, provider: Provider) {
+        self.unavailable.lock().unwrap().retain(|p| *p != provider);
     }
 
     /// Ends the first still hanging turn with `Completed { response }`
@@ -660,8 +676,12 @@ impl AgentRunner for FakeAgentRunner {
         }))
     }
 
-    fn probe(&self, _provider: Provider) -> Result<(), String> {
-        Ok(())
+    fn probe(&self, provider: Provider) -> Result<(), String> {
+        if self.unavailable.lock().unwrap().contains(&provider) {
+            Err("provider unavailable".into())
+        } else {
+            Ok(())
+        }
     }
 }
 

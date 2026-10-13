@@ -98,7 +98,10 @@ pub fn run() {
             // The one workflow orchestrator of this process.
             let workflow_state = commands::workflow::create_state(app.handle());
             app.manage::<commands::workflow::WorkflowState>(workflow_state);
-            let flow_service = commands::flow_run::create_state(app.handle());
+            let (flow_service, flow_agent_host) = commands::flow_run::create_state(app.handle());
+            if let Some(host) = flow_agent_host {
+                app.manage(commands::flow_run::FlowAgentHost(host));
+            }
             app.manage::<commands::flow::FlowServiceState>(flow_service);
             // Start local HTTP bridge for MCP server callback
             let handle = app.handle().clone();
@@ -439,6 +442,11 @@ pub fn run() {
                 // Flow runs: kill running commands and record `interrupted`.
                 if let Some(flow_service) = app.try_state::<commands::flow::FlowServiceState>() {
                     flow_service.shutdown(commands::flow_run::SHUTDOWN_WAIT);
+                }
+                // The flow agent runner goes down after the runs that use it.
+                if let Some(host) = app.try_state::<commands::flow_run::FlowAgentHost>() {
+                    use workflow::runner_host::RunnerApi;
+                    host.0.shutdown();
                 }
             }
         });

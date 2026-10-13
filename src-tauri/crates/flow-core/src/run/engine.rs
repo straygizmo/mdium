@@ -193,7 +193,12 @@ struct Slot {
 struct Inner {
     slots: HashMap<(PathBuf, String), Slot>,
     attached: HashSet<PathBuf>,
+    /// Providers whose probe succeeded recently.
+    probed: BTreeMap<crate::provider::Provider, Instant>,
 }
+
+/// How long a successful provider probe stays valid.
+const PROBE_TTL: Duration = Duration::from_secs(600);
 
 pub struct FlowEngine {
     env: DriverEnv,
@@ -223,6 +228,27 @@ fn read_flow(root: &Path, rel: &str) -> Result<(PathBuf, String, Vec<u8>)> {
         std::fs::read(&file).map_err(|e| EngineError::new(FLOW_FILE_NOT_FOUND, e.to_string()))?;
     let display = load::relative_display(root, &file);
     Ok((file, display, bytes))
+}
+
+/// Adds the provider of every `agent` node of `nodes` (inline loop bodies
+/// included) to `out`.
+fn collect_providers(
+    nodes: &[crate::model::FlowNode],
+    out: &mut std::collections::BTreeSet<crate::provider::Provider>,
+) {
+    for node in nodes {
+        match &node.kind {
+            NodeKind::Agent(agent) => {
+                out.insert(agent.provider);
+            }
+            NodeKind::Loop(lp) => {
+                if let crate::model::LoopBody::Inline(body) = &lp.body {
+                    collect_providers(&body.nodes, out);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// A flow file with every flow file it references (sub-flows, file loop
@@ -650,6 +676,53 @@ impl FlowEngine {
 
     // ------------------------------------------------------- runs
 
+    /// Probes every provider an `agent` node of the bundle uses (successes are
+    /// cached for ten minutes); fails with one detail per unavailable provider.
+    fn check_providers(&self, bundle: &Bundle) -> Result<()> {
+        let mut providers = std::collections::BTreeSet::new();
+        for (_, flow) in bundle.files() {
+            collect_providers(&flow.nodes, &mut providers);
+        }
+        let now = Instant::now();
+        let mut failures = Vec::new();
+        for provider in providers {
+            let fresh = {
+                let inner = self.lock();
+                inner
+                    .probed
+                    .get(&provider)
+                    .is_some_and(|at| now.duration_since(*at) < PROBE_TTL)
+            };
+            if fresh {
+                continue;
+            }
+            match self.env.agent_runner.probe(provider) {
+                Ok(()) => {
+                    self.lock().probed.insert(provider, Instant::now());
+                }
+                Err(message) => {
+                    let name = serde_json::to_value(provider)
+                        .ok()
+                        .and_then(|v| v.as_str().map(str::to_string))
+                        .unwrap_or_default();
+                    failures.push(
+                        Reason::new(crate::issues::FLOW_PROVIDER_UNAVAILABLE)
+                            .with("provider", name)
+                            .with("message", message),
+                    );
+                }
+            }
+        }
+        if failures.is_empty() {
+            return Ok(());
+        }
+        Err(EngineError::new(
+            crate::issues::FLOW_PROVIDER_UNAVAILABLE,
+            "an agent provider used by the flow is not available",
+        )
+        .with_details(failures))
+    }
+
     /// Starts a run of the flow file whose reviewed content hash is `sha256`.
     pub fn start(
         &self,
@@ -701,6 +774,7 @@ impl FlowEngine {
             )
             .with_details(problems));
         }
+        self.check_providers(&bundle)?;
         let display = bundle.display.clone();
         if bundle.needs_confirmation() && !self.is_confirmed(root, &display, &actual) {
             return Err(EngineError::new(

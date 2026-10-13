@@ -3942,3 +3942,30 @@ fn integrity_changes_after_a_failed_full_access_turn_are_a_warning() {
     });
     assert!(warned);
 }
+
+#[test]
+fn start_refuses_flows_whose_agent_provider_is_unavailable() {
+    let (f, runner) = fixture_with_agent(vec![]);
+    runner.set_unavailable(crate::provider::Provider::Codex);
+    let rel = write_flow(
+        &f.root,
+        "prov",
+        json!({}),
+        vec![agent("a", json!({ "provider": "codex" }))],
+        vec![],
+    );
+    let review = f.engine.review_commands(&f.root, &rel).unwrap();
+    f.engine
+        .confirm_commands(&f.root, &rel, &review.sha256)
+        .unwrap();
+    let err = f
+        .engine
+        .start(&f.root, &rel, &BTreeMap::new(), &review.sha256)
+        .unwrap_err();
+    assert_eq!(err.code, crate::issues::FLOW_PROVIDER_UNAVAILABLE);
+    assert_eq!(err.details[0].params["provider"], json!("codex"));
+    runner.set_available(crate::provider::Provider::Codex);
+    f.engine
+        .start(&f.root, &rel, &BTreeMap::new(), &review.sha256)
+        .unwrap();
+}
