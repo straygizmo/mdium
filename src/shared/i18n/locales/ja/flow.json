@@ -253,7 +253,7 @@
     "FLOW_OUTPUT_UNRESOLVED": "出力「{{output}}」を求められませんでした。",
     "FLOW_ARTIFACT_OUTSIDE_PROJECT": "成果物「{{path}}」はプロジェクトの外にあるため無視しました。",
     "FLOW_ARTIFACT_WRITE_FAILED": "成果物の一覧を書き込めませんでした: {{message}}",
-    "FLOW_ACTION_APPROVAL": "アクション「{{uses}}」は実行前に確認が必要です。",
+    "FLOW_ACTION_APPROVAL": "このアクションは続行前に確認が必要です。",
     "FLOW_ACTION_FAILED": "アクションが失敗しました（{{code}}）: {{message}}",
     "FLOW_ACTION_INPUT_INVALID": "アクションの入力「{{input}}」が不正です（{{reason}}）。",
     "FLOW_ACTION_IO_FAILED": "アクションがファイルを読み書きできませんでした。",
@@ -269,7 +269,8 @@
     "FLOW_AGENT_RUNNER_EXITED": "エージェントのランナーが完了前に終了しました。",
     "FLOW_AGENT_SCREENING": "エージェントの作業は、指摘事項の確認のため保留されています。",
     "FLOW_AGENT_START_FAILED": "エージェントを開始できませんでした。",
-    "FLOW_AGENT_TURN_FAILED": "エージェントのターンが失敗しました（{{code}}）: {{message}}"
+    "FLOW_AGENT_TURN_FAILED": "エージェントのターンが失敗しました（{{code}}）: {{message}}",
+    "FLOW_SETUP_FAILED": "セットアップの手順 {{step}} が失敗しました（終了コード {{exitCode}}）。"
   },
   "runError": {
     "FLOW_PROJECT_INVALID": "プロジェクトフォルダまたは .mdium/project.yaml を使用できません。",

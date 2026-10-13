@@ -253,7 +253,7 @@
     "FLOW_OUTPUT_UNRESOLVED": "Output \"{{output}}\" could not be computed.",
     "FLOW_ARTIFACT_OUTSIDE_PROJECT": "Artifact \"{{path}}\" is outside the project and was ignored.",
     "FLOW_ARTIFACT_WRITE_FAILED": "The artifact list could not be written: {{message}}",
-    "FLOW_ACTION_APPROVAL": "The action \"{{uses}}\" asks for your confirmation before it runs.",
+    "FLOW_ACTION_APPROVAL": "This action needs your confirmation before it continues.",
     "FLOW_ACTION_FAILED": "The action failed ({{code}}): {{message}}",
     "FLOW_ACTION_INPUT_INVALID": "Action input \"{{input}}\" is invalid ({{reason}}).",
     "FLOW_ACTION_IO_FAILED": "The action could not read or write its files.",
@@ -269,7 +269,8 @@
     "FLOW_AGENT_RUNNER_EXITED": "The agent runner exited before finishing.",
     "FLOW_AGENT_SCREENING": "The agent's work was held for your review of the findings.",
     "FLOW_AGENT_START_FAILED": "The agent could not be started.",
-    "FLOW_AGENT_TURN_FAILED": "The agent's turn failed ({{code}}): {{message}}"
+    "FLOW_AGENT_TURN_FAILED": "The agent's turn failed ({{code}}): {{message}}",
+    "FLOW_SETUP_FAILED": "Setup step {{step}} failed (exit code {{exitCode}})."
   },
   "runError": {
     "FLOW_PROJECT_INVALID": "The project folder or its .mdium/project.yaml cannot be used.",

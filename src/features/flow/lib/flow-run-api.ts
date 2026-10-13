@@ -44,10 +44,10 @@ async function call<T>(command: string, args: Record<string, unknown>): Promise<
   }
 }
 
-/** Run commands of the flow engine. Paths are project-relative. */
 /** Log kinds: prompt and response exist for agent nodes only. */
 export type LogStream = "stdout" | "stderr" | "prompt" | "response";
 
+/** Run commands of the flow engine. Paths are project-relative. */
 export const flowRunApi = {
   reviewCommands: (projectRoot: string, path: string) =>
     call<CommandReview>("flow_command_review", { projectRoot, path }),

@@ -112,7 +112,7 @@ export function RunNodeDetail({
             {t("run.log")}
           </button>
         )}
-        {isAgent && node.attempt > 0 && (
+        {isAgent && node.attempt > 0 && (node.process || node.startedAt) && (
           <>
             <button type="button" onClick={() => onLog(nodeKey, node.attempt, "prompt")}>
               {t("run.logPrompt")}
