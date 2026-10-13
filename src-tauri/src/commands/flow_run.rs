@@ -8,6 +8,8 @@
 use super::flow::{with_service, FlowCommandError, FlowServiceState};
 use super::node_sidecar;
 use crate::workflow::runner_host::{RunnerApi, RunnerHost, SidecarSpawner};
+use flow_core::forge::CliForge;
+use flow_core::gitops;
 use flow_core::run::agent::{AgentRunner, NoAgentRunner, RunnerApiAgentRunner};
 use flow_core::run::driver::{ApprovalNotifier, DriverEnv, EventSink};
 use flow_core::run::engine::{ArtifactLocation, CommandReview, FlowEngine, RunSnapshot, RunSummary};
@@ -226,6 +228,8 @@ pub fn create_state(app: &AppHandle) -> (FlowServiceState, Option<Arc<RunnerHost
         poll: Duration::from_millis(200),
         worker_launcher: Arc::new(PipedWorkerLauncher),
         agent_runner,
+        forge: Arc::new(CliForge),
+        worktree_base: gitops::default_worktree_base(),
     };
     let engine = Arc::new(FlowEngine::new(
         env,

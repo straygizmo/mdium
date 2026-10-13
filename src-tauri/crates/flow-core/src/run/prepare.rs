@@ -82,13 +82,8 @@ pub fn check_runnable(bundle: &[(&str, &FlowDef)]) -> Vec<Reason> {
                 | NodeKind::Approval(_)
                 | NodeKind::Loop(_)
                 | NodeKind::Branch(_)
-                | NodeKind::Subflow(_) => {}
-                other => push(
-                    FLOW_RUN_UNSUPPORTED,
-                    path.to_string(),
-                    "feature",
-                    other.name(),
-                ),
+                | NodeKind::Subflow(_)
+                | NodeKind::Action(_) => {}
             }
             if node.concurrency_key.is_some() {
                 push(
@@ -390,16 +385,15 @@ mod tests {
     #[test]
     fn rejects_what_this_version_cannot_run_anywhere_in_the_bundle() {
         let def = flow(
-            "params: { p: { type: string } }\nnodes:\n  - { id: a, kind: action, uses: mdium/issue-close }\n  - { id: b, kind: command, run: ['${{ params.p }}'] }\n  - { id: c, kind: command, run: 'echo ${{ params.p }}', shell: true }\n  - { id: d, kind: command, run: [x, '${{ params.p }}'], concurrencyKey: k }\n  - id: l\n    kind: loop\n    mode: foreach\n    items: [1]\n    maxIterations: 1\n    body:\n      nodes:\n        - { id: inner, kind: command, run: ['${{ item }}'] }\nedges:\n  - { from: a, to: b }\n  - { from: b, to: c }\n  - { from: c, to: d }\n  - { from: d, to: l }\n",
+            "params: { p: { type: string } }\nnodes:\n  - { id: a, kind: action, uses: mdium/issue-close, with: { issue: x } }\n  - { id: b, kind: command, run: ['${{ params.p }}'] }\n  - { id: c, kind: command, run: 'echo ${{ params.p }}', shell: true }\n  - { id: d, kind: command, run: [x, '${{ params.p }}'], concurrencyKey: k }\n  - id: l\n    kind: loop\n    mode: foreach\n    items: [1]\n    maxIterations: 1\n    body:\n      nodes:\n        - { id: inner, kind: command, run: ['${{ item }}'] }\nedges:\n  - { from: a, to: b }\n  - { from: b, to: c }\n  - { from: c, to: d }\n  - { from: d, to: l }\n",
         );
-        let sub = flow("nodes:\n  - { id: s, kind: action, uses: mdium/issue-close }\n");
+        let sub = flow("nodes:\n  - { id: s, kind: action, uses: mdium/issue-close, with: { issue: x } }\n");
         assert_eq!(
             codes(&check_runnable(&[
                 ("root.flow.yaml", &def),
                 ("sub.flow.yaml", &sub)
             ])),
             vec![
-                (FLOW_RUN_UNSUPPORTED.into(), "nodes[0]".into()),
                 (FLOW_RUN_UNSAFE_TEMPLATE.into(), "nodes[1].run[0]".into()),
                 (FLOW_RUN_UNSAFE_TEMPLATE.into(), "nodes[2].run".into()),
                 (
@@ -410,7 +404,6 @@ mod tests {
                     FLOW_RUN_UNSAFE_TEMPLATE.into(),
                     "nodes[4].body.nodes[0].run[0]".into()
                 ),
-                (FLOW_RUN_UNSUPPORTED.into(), "nodes[0]".into()),
             ]
         );
         let ok = flow(
@@ -421,6 +414,8 @@ mod tests {
         assert!(check_runnable(&[("r", &py)]).is_empty());
         let agent = flow("nodes:\n  - { id: a, kind: agent, provider: claude, permission: read-only, prompt: x }\n");
         assert!(check_runnable(&[("r", &agent)]).is_empty());
+        let action = flow("nodes:\n  - { id: a, kind: action, uses: mdium/screen-input, with: { text: x } }\n");
+        assert!(check_runnable(&[("r", &action)]).is_empty());
     }
 
     #[test]

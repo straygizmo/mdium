@@ -979,6 +979,8 @@ mod tests {
             poll: Duration::from_millis(10),
             worker_launcher: Arc::new(crate::run::worker::PipedWorkerLauncher),
             agent_runner: Arc::new(crate::run::agent::NoAgentRunner),
+            forge: Arc::new(crate::forge::FakeForge::new()),
+            worktree_base: dir.join("worktrees"),
         };
         FlowService::new(Arc::new(FlowEngine::new(
             env,

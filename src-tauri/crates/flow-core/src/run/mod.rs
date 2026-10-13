@@ -1,8 +1,9 @@
 //! Flow execution (spec 3–5): run model and event log, the serial driver,
 //! command processes and the `mdium-v1` protocol, and the engine that
-//! owns the drivers, and the agent turns of `agent` nodes. Action nodes and
-//! concurrency limits come later.
+//! owns the drivers, the agent turns of `agent` nodes and the built-in actions
+//! of `action` nodes. Concurrency limits come later.
 
+pub mod actions;
 pub mod agent;
 pub mod artifacts;
 pub mod driver;

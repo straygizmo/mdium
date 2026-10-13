@@ -1307,3 +1307,37 @@ fn agent_with_and_subflow_project_root_parse_and_validate() {
         "{issues:?}"
     );
 }
+
+#[test]
+fn action_inputs_are_checked_against_the_spec() {
+    let ok = flow(
+        "nodes:\n  - { id: a, kind: action, uses: mdium/git-merge-local, with: { worktree: '${{ params.w }}', acknowledgeReviewPaths: true } }\n",
+    );
+    let ok = ok.replace("nodes:", "params: { w: { type: string } }\nnodes:");
+    assert!(errors_of(&ok).is_empty(), "{:?}", errors_of(&ok));
+    let bad = flow(
+        "nodes:\n  - { id: a, kind: action, uses: mdium/screen-input, with: { txt: hi } }\n",
+    );
+    let report = check_text(&bad, FlowFormat::Yaml).1;
+    let found: Vec<(String, String, String)> = report
+        .errors
+        .iter()
+        .map(|e| {
+            (
+                e.code.clone(),
+                e.path.clone(),
+                e.params["reason"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        found,
+        vec![
+            (FLOW_INVALID_VALUE.into(), "nodes[0].with.txt".into(), "unknown-input".into()),
+            (FLOW_INVALID_VALUE.into(), "nodes[0].with.text".into(), "input-missing".into()),
+        ]
+    );
+    // Optional inputs may be left out.
+    let optional = flow("nodes:\n  - { id: a, kind: action, uses: mdium/project-setup }\n");
+    assert!(errors_of(&optional).is_empty());
+}

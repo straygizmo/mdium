@@ -8,6 +8,7 @@
 
 use crate::condition::Condition;
 use crate::provider::Provider;
+use crate::run::actions::ACTION_SPECS;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -28,16 +29,17 @@ pub const DEFAULT_APPROVAL_OPTIONS: [&str; 2] = ["approve", "reject"];
 /// Default name of a loop's iteration variable.
 pub const DEFAULT_LOOP_VAR: &str = "item";
 
-/// Built-in actions an `action` node may use (`uses: mdium/<name>`).
-pub const KNOWN_ACTIONS: [&str; 7] = [
-    "mdium/screen-input",
-    "mdium/git-worktree-create",
-    "mdium/design-doc-commit",
-    "mdium/issue-entry",
-    "mdium/git-merge-local",
-    "mdium/issue-close",
-    "mdium/git-worktree-discard",
-];
+/// Built-in actions an `action` node may use (`uses: mdium/<name>`), in the
+/// order of [`crate::run::actions::ACTION_SPECS`] (derived, so they cannot drift).
+pub const KNOWN_ACTIONS: [&str; ACTION_SPECS.len()] = {
+    let mut names = [""; ACTION_SPECS.len()];
+    let mut i = 0;
+    while i < names.len() {
+        names[i] = ACTION_SPECS[i].uses;
+        i += 1;
+    }
+    names
+};
 
 /// One flow definition file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

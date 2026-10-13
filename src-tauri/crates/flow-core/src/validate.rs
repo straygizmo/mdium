@@ -363,11 +363,30 @@ impl Validator {
                 }
             }
             NodeKind::Action(action) => {
-                if !KNOWN_ACTIONS.contains(&action.uses.as_str()) {
-                    self.issues.error(
+                match crate::run::actions::spec_of(&action.uses) {
+                    None => self.issues.error(
                         FlowIssue::new(FLOW_ACTION_UNKNOWN, join(path, "uses"))
                             .with("uses", action.uses.clone()),
-                    );
+                    ),
+                    Some(spec) => {
+                        for key in action.with_args.keys() {
+                            if !spec.inputs.iter().any(|(name, _)| name == key) {
+                                self.issues.error(invalid(
+                                    join(path, &format!("with.{key}")),
+                                    "unknown-input",
+                                ));
+                            }
+                        }
+                        // Templates may supply a value, but never a missing key.
+                        for (name, required) in spec.inputs {
+                            if *required && !action.with_args.contains_key(*name) {
+                                self.issues.error(invalid(
+                                    join(path, &format!("with.{name}")),
+                                    "input-missing",
+                                ));
+                            }
+                        }
+                    }
                 }
                 for (key, value) in &action.with_args {
                     self.value_templates(value, &format!("{path}.with.{key}"), ctx);

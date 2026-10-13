@@ -9,19 +9,23 @@
 //! one at a time; concurrency limits are PR 4b.
 
 use crate::condition::Condition;
+use crate::forge::ForgeCli;
 use crate::fsutil;
 use crate::gitops;
 use crate::integrity::{self, IntegritySnapshot};
 use crate::issues::FLOW_RUNTIME_UNKNOWN;
 use crate::load;
 use crate::model::{
-    parse_duration, AgentNode, AgentPermission, CommandNode, CommandProtocol, CommandRun, FlowDef, FlowNode,
+    parse_duration, ActionNode, AgentNode, AgentPermission, CommandNode, CommandProtocol, CommandRun, FlowDef, FlowNode,
     LoopBody, LoopMode, LoopNode, NodeKind, OnItemFailure, OutputContract, PythonNode, RetryOn,
     RetryPolicy, PORT_ATTENTION, PORT_FAILURE, PORT_SUCCESS,
 };
 use crate::outcome::{parse_outcome, StageOutcomeKind};
 use crate::project::RuntimeDef;
 use crate::prompts::{self, PreviousTurn};
+use crate::run::actions::{
+    run_action, ActionContext, ActionEnd, FLOW_ACTION_APPROVAL, FLOW_ACTION_FAILED,
+};
 use crate::run::agent::{AgentRunner, AgentTurnEvent, AgentTurnHandle, AgentTurnRequest};
 use crate::run::artifacts;
 use crate::run::model::*;
@@ -48,7 +52,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, TryRecvError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -118,6 +122,11 @@ pub const FLOW_AGENT_INTEGRITY_CHANGED: &str = "FLOW_AGENT_INTEGRITY_CHANGED";
 /// turn runs without the integrity check.
 pub const FLOW_AGENT_INTEGRITY_SKIPPED: &str = "FLOW_AGENT_INTEGRITY_SKIPPED";
 
+/// `FLOW_ACTION_FAILED` code: the action's node dir or thread could not be set up.
+pub const FLOW_ACTION_IO_FAILED: &str = "FLOW_ACTION_IO_FAILED";
+/// `FLOW_ACTION_FAILED` code: the action's thread ended without a result (a panic).
+pub const FLOW_ACTION_PANICKED: &str = "FLOW_ACTION_PANICKED";
+
 /// Options of a budget approval.
 pub const BUDGET_OPTIONS: [&str; 2] = ["approve", "stop"];
 /// Options of a command that reported `needs_approval`.
@@ -175,6 +184,10 @@ pub struct DriverEnv {
     pub worker_launcher: Arc<dyn WorkerLauncher>,
     /// Runs the turns of `agent` nodes.
     pub agent_runner: Arc<dyn AgentRunner>,
+    /// The forge CLI (`gh` / `glab`) of the issue actions.
+    pub forge: Arc<dyn ForgeCli>,
+    /// Base directory of the worktrees made by `mdium/git-worktree-create`.
+    pub worktree_base: PathBuf,
 }
 
 /// Minimum interval between persisted progress events of one node.
@@ -287,6 +300,28 @@ struct RunningAgent {
     baseline: Option<IntegritySnapshot>,
 }
 
+/// A built-in action running on its own thread.
+struct RunningAction {
+    key: String,
+    attempt: u32,
+    dir: PathBuf,
+    /// The action's one end.
+    rx: Receiver<ActionEnd>,
+    /// Progress lines reported by the action.
+    progress_rx: Receiver<String>,
+    started: Instant,
+    timeout: Option<Duration>,
+}
+
+/// How an action's monitoring ended.
+enum ActionFinish {
+    End(ActionEnd),
+    /// The thread ended without an end (it panicked).
+    Lost,
+    /// The node's timeout passed (the thread cannot be killed; it is left behind).
+    Timeout,
+}
+
 /// Inputs and prompt of an agent attempt, written to its node dir.
 struct PreparedAgent {
     dir: PathBuf,
@@ -338,6 +373,9 @@ pub struct Driver {
     workers: BTreeMap<String, LiveWorker>,
     calls: Vec<RunningCall>,
     agents: Vec<RunningAgent>,
+    actions: Vec<RunningAction>,
+    /// Action nodes whose `NeedsApproval` the user approved: their rerun is acknowledged.
+    action_ack: BTreeSet<String>,
     /// Ids handed to started workers.
     worker_seq: u64,
     /// Screening text the user approved, per agent node key.
@@ -377,6 +415,8 @@ impl Driver {
             workers: BTreeMap::new(),
             calls: Vec::new(),
             agents: Vec::new(),
+            actions: Vec::new(),
+            action_ack: BTreeSet::new(),
             worker_seq: 0,
             screening_ack: BTreeMap::new(),
             agent_questions: BTreeMap::new(),
@@ -864,6 +904,10 @@ impl Driver {
                     self.agent_question_answered(key, attempt, &request, choice, node_comment);
                     return true;
                 }
+                if request.reason.code == FLOW_ACTION_APPROVAL {
+                    self.action_approval_decided(key, attempt, choice);
+                    return true;
+                }
                 let is_approval_node = matches!(
                     self.def_of(key).map(|(_, n)| n.kind),
                     Some(NodeKind::Approval(_))
@@ -1026,6 +1070,10 @@ impl Driver {
                     let mut agent = self.agents.remove(pos);
                     agent.handle.cancel();
                 }
+                // An action thread cannot be stopped: its end is dropped.
+                if let Some(pos) = self.actions.iter().position(|a| a.key == key) {
+                    self.actions.remove(pos);
+                }
                 self.close_children(key);
                 self.set_node(key, NodeStatus::Cancelled, node.attempt, reason, None);
             }
@@ -1058,6 +1106,7 @@ impl Driver {
                 .map(|r| &r.key)
                 .chain(self.calls.iter().map(|c| &c.key))
                 .chain(self.agents.iter().map(|a| &a.key))
+                .chain(self.actions.iter().map(|a| &a.key))
                 .filter(|k| k.starts_with(&prefix))
                 .cloned()
                 .collect();
@@ -1178,6 +1227,7 @@ impl Driver {
             self.poll_running();
             self.poll_calls();
             self.poll_agents();
+            self.poll_actions();
             self.retry_due();
             if !self.state.status.is_active() {
                 if !self.in_flight() {
@@ -1232,9 +1282,12 @@ impl Driver {
         self.state.status
     }
 
-    /// Commands, python calls or agent turns are running.
+    /// Commands, python calls, agent turns or actions are running.
     fn in_flight(&self) -> bool {
-        !self.running.is_empty() || !self.calls.is_empty() || !self.agents.is_empty()
+        !self.running.is_empty()
+            || !self.calls.is_empty()
+            || !self.agents.is_empty()
+            || !self.actions.is_empty()
     }
 
     /// Settles pending nodes, advances loops / sub-flows and finishes
@@ -1422,8 +1475,11 @@ impl Driver {
                 };
                 if matches!(
                     node.kind,
-                    NodeKind::Command(_) | NodeKind::Python(_) | NodeKind::Agent(_)
-                ) && self.running.len() + self.calls.len() + self.agents.len()
+                    NodeKind::Command(_)
+                        | NodeKind::Python(_)
+                        | NodeKind::Agent(_)
+                        | NodeKind::Action(_)
+                ) && self.running.len() + self.calls.len() + self.agents.len() + self.actions.len()
                     >= MAX_RUNNING_COMMANDS
                 {
                     continue;
@@ -1489,6 +1545,7 @@ impl Driver {
             NodeKind::Command(command) => self.launch_command(prefix, key, node, command, attempt),
             NodeKind::Python(py) => self.launch_call(prefix, key, node, py, attempt),
             NodeKind::Agent(agent) => self.launch_agent(prefix, key, node, agent, attempt),
+            NodeKind::Action(action) => self.launch_action(prefix, key, node, action, attempt),
             NodeKind::Loop(lp) => {
                 if lp.mode == LoopMode::Foreach {
                     let items = self.with_ctx(prefix, None, None, None, |ctx| match &lp.items {
@@ -1542,13 +1599,6 @@ impl Driver {
                     Ok(_) => {}
                     Err(reason) => self.fail_node(key, attempt, reason),
                 }
-            }
-            other => {
-                self.fail_node(
-                    key,
-                    attempt,
-                    Reason::new("FLOW_RUN_UNSUPPORTED").with("feature", other.name()),
-                );
             }
         }
     }
@@ -3742,6 +3792,211 @@ impl Driver {
         );
     }
 
+    // ------------------------------------------------------ action nodes
+
+    /// Starts an `action` node's built-in action on its own thread.
+    fn launch_action(
+        &mut self,
+        prefix: &str,
+        key: &str,
+        node: &FlowNode,
+        action: &ActionNode,
+        attempt: u32,
+    ) {
+        // Consumed by this launch whatever happens, so a later attempt is never
+        // acknowledged by an earlier approval.
+        let acknowledged = self.action_ack.remove(key);
+        let io_failed = |message: String| {
+            Reason::new(FLOW_ACTION_FAILED)
+                .with("code", FLOW_ACTION_IO_FAILED)
+                .with("message", message)
+        };
+        let dir = match self
+            .store
+            .node_attempt_dir(&self.run_id, key, attempt)
+            .map_err(|e| e.to_string())
+            .and_then(|dir| std::fs::create_dir_all(&dir).map(|_| dir).map_err(|e| e.to_string()))
+        {
+            Ok(dir) => dir,
+            Err(message) => return self.fail_node(key, attempt, io_failed(message)),
+        };
+        let rendered = self.with_ctx(prefix, None, Some(&dir), None, |ctx| {
+            ctx.render_json(&Value::Object(action.with_args.clone().into_iter().collect()))
+        });
+        let with: BTreeMap<String, Value> = match rendered {
+            Ok(Value::Object(map)) => map.into_iter().collect(),
+            Ok(_) => BTreeMap::new(),
+            Err(reason) => return self.fail_node(key, attempt, reason),
+        };
+        if let Err(err) = std::fs::write(
+            dir.join("inputs.json"),
+            serde_json::to_vec_pretty(&with).unwrap_or_default(),
+        ) {
+            return self.fail_node(key, attempt, io_failed(err.to_string()));
+        }
+        let (tx, rx) = mpsc::channel();
+        let (progress_tx, progress_rx) = mpsc::channel::<String>();
+        let ctx = ActionContext {
+            project_root: self.store.project_root().to_path_buf(),
+            run_id: self.run_id.clone(),
+            run_dir: self.run_dir(),
+            node_dir: dir.clone(),
+            node_id: node.id.clone(),
+            project: self.meta.project.clone(),
+            // Not recorded in the run meta yet (the project actions add it).
+            project_sha256: None,
+            forge: self.env.forge.clone(),
+            launcher: self.env.launcher.clone(),
+            worktree_base: self.env.worktree_base.clone(),
+            poll: self.env.poll,
+            acknowledged,
+            progress: Box::new(move |line| {
+                let _ = progress_tx.send(line);
+            }),
+        };
+        let uses = action.uses.clone();
+        let spawned = std::thread::Builder::new()
+            .name(format!("flow-action-{key}"))
+            .spawn(move || {
+                let end = run_action(&uses, &with, &ctx);
+                // The driver may have dropped the receiver (timeout, cancel).
+                let _ = tx.send(end);
+            });
+        if let Err(err) = spawned {
+            return self.fail_node(key, attempt, io_failed(err.to_string()));
+        }
+        self.actions.push(RunningAction {
+            key: key.to_string(),
+            attempt,
+            dir,
+            rx,
+            progress_rx,
+            started: Instant::now(),
+            timeout: self.node_timeout(prefix, node),
+        });
+    }
+
+    /// The user decided on an action's approval request: `approve` runs the
+    /// action again in the same attempt, acknowledged; anything else fails
+    /// the node.
+    fn action_approval_decided(&mut self, key: &str, attempt: u32, choice: &str) {
+        if choice != "approve" {
+            return self.fail_node(key, attempt, Reason::new(FLOW_APPROVAL_REJECTED));
+        }
+        let Some((prefix, node)) = self.def_of(key) else {
+            return;
+        };
+        let NodeKind::Action(action) = &node.kind else {
+            return;
+        };
+        if self.offline {
+            // No loop runs actions here: resuming starts (and asks) a new attempt.
+            self.set_node(key, NodeStatus::Ready, attempt, None, None);
+            return;
+        }
+        self.action_ack.insert(key.to_string());
+        self.set_node(key, NodeStatus::Running, attempt, None, None);
+        self.launch_action(&prefix, key, &node, action, attempt);
+    }
+
+    fn poll_actions(&mut self) {
+        let mut actions = std::mem::take(&mut self.actions);
+        let mut finished = Vec::new();
+        let mut i = 0;
+        while i < actions.len() {
+            self.action_progress(&actions[i]);
+            let action = &actions[i];
+            let finish = match action.rx.try_recv() {
+                Ok(end) => Some(ActionFinish::End(end)),
+                Err(TryRecvError::Disconnected) => Some(ActionFinish::Lost),
+                Err(TryRecvError::Empty) => action
+                    .timeout
+                    .filter(|t| action.started.elapsed() >= *t)
+                    .map(|_| ActionFinish::Timeout),
+            };
+            match finish {
+                Some(finish) => finished.push((actions.remove(i), finish)),
+                None => i += 1,
+            }
+        }
+        self.actions = actions;
+        for (action, finish) in finished {
+            self.finish_action(action, finish);
+        }
+    }
+
+    /// Emits the progress lines an action reported since the last poll.
+    fn action_progress(&mut self, action: &RunningAction) {
+        while let Ok(text) = action.progress_rx.try_recv() {
+            self.emit(
+                Some(&action.key),
+                EventBody::NodeProgress {
+                    text,
+                    fraction: None,
+                },
+            );
+        }
+    }
+
+    /// Settles an action node from how its action ended.
+    fn finish_action(&mut self, action: RunningAction, finish: ActionFinish) {
+        self.action_progress(&action);
+        let key = action.key.as_str();
+        let attempt = action.attempt;
+        match finish {
+            ActionFinish::End(ActionEnd::Done { outputs, artifacts }) => {
+                self.emit_outputs(key, outputs);
+                for (path, label) in artifacts {
+                    let raw = path.to_string_lossy().into_owned();
+                    self.record_artifact(key, &action.dir, raw, Some(label), None);
+                }
+                self.write_outputs(key, &action.dir);
+                self.settle(key, attempt, NodeStatus::Succeeded, PORT_SUCCESS, None);
+            }
+            ActionFinish::End(ActionEnd::NeedsApproval {
+                message,
+                show,
+                outputs,
+            }) => {
+                self.emit_outputs(key, outputs);
+                self.write_outputs(key, &action.dir);
+                self.set_node(key, NodeStatus::AwaitingApproval, attempt, None, None);
+                let request = ApprovalRequest {
+                    node_key: Some(key.to_string()),
+                    options: COMMAND_APPROVAL_OPTIONS
+                        .iter()
+                        .map(|s| RequestOption::plain(*s))
+                        .collect(),
+                    message: Some(message),
+                    show: show
+                        .into_iter()
+                        .map(|(name, value)| (name, ShowValue::Value(value)))
+                        .collect(),
+                    reason: Reason::new(FLOW_ACTION_APPROVAL),
+                };
+                self.emit(Some(key), EventBody::ApprovalRequested(request));
+            }
+            ActionFinish::End(ActionEnd::Failed(reason)) => {
+                self.after_failure(key, attempt, reason, false)
+            }
+            ActionFinish::Lost => self.after_failure(
+                key,
+                attempt,
+                Reason::new(FLOW_ACTION_FAILED).with("code", FLOW_ACTION_PANICKED),
+                false,
+            ),
+            // The thread is left to finish; retrying could run the same
+            // operation twice at once, so a timeout is final.
+            ActionFinish::Timeout => self.fail_node(key, attempt, Reason::new(FLOW_NODE_TIMEOUT)),
+        }
+    }
+
+    fn emit_outputs(&mut self, key: &str, outputs: BTreeMap<String, Value>) {
+        for (name, value) in outputs {
+            self.emit(Some(key), EventBody::NodeOutput { key: name, value });
+        }
+    }
+
     // --------------------------------------------- stop / cancel / exit
 
     fn stop_grace(&self) -> Option<Duration> {
@@ -3777,6 +4032,7 @@ impl Driver {
                 call.grace_deadline = deadline();
             }
         }
+        // Actions are short and cannot be interrupted: they finish on their own.
         // Agents cannot see the STOP file: their turn is cancelled.
         for agent in &mut self.agents {
             if agent.grace_deadline.is_none() {
@@ -3856,6 +4112,16 @@ impl Driver {
                 None,
             );
         }
+        // Action threads cannot be stopped: their ends are dropped.
+        for action in std::mem::take(&mut self.actions) {
+            self.set_node(
+                &action.key,
+                NodeStatus::Cancelled,
+                action.attempt,
+                Some(Reason::new(FLOW_RUN_CANCELLED)),
+                None,
+            );
+        }
         self.set_run(RunStatus::Cancelled, Some(Reason::new(FLOW_RUN_CANCELLED)));
     }
 
@@ -3902,6 +4168,17 @@ impl Driver {
             );
             interrupted = true;
         }
+        // Nor do actions (their threads end with the process).
+        for action in std::mem::take(&mut self.actions) {
+            self.set_node(
+                &action.key,
+                NodeStatus::Interrupted,
+                action.attempt,
+                Some(Reason::new(FLOW_APP_EXITED)),
+                None,
+            );
+            interrupted = true;
+        }
         if interrupted {
             self.set_run(RunStatus::Interrupted, Some(Reason::new(FLOW_APP_EXITED)));
         }
@@ -3919,6 +4196,7 @@ impl Driver {
                     && !self.running.iter().any(|r| &r.key == *k)
                     && !self.calls.iter().any(|c| &c.key == *k)
                     && !self.agents.iter().any(|a| &a.key == *k)
+                    && !self.actions.iter().any(|a| &a.key == *k)
             })
             .map(|(k, n)| (k.clone(), n.clone()))
             .collect();
@@ -3928,8 +4206,9 @@ impl Driver {
             };
             let command = match &node.kind {
                 NodeKind::Command(command) => command,
-                // Workers and agent turns never survive a restart: the work is lost.
-                NodeKind::Python(_) | NodeKind::Agent(_) => {
+                // Workers, agent turns and actions never survive a restart:
+                // the work is lost.
+                NodeKind::Python(_) | NodeKind::Agent(_) | NodeKind::Action(_) => {
                     self.set_node(
                         &key,
                         NodeStatus::Interrupted,
