@@ -44,8 +44,10 @@ pub struct ActionContext {
     /// Base directory of the managed worktrees (`<base>/mdium/worktrees`).
     pub worktree_base: PathBuf,
     pub poll: Duration,
-    /// True when the user approved this node's previous `NeedsApproval`.
-    pub acknowledged: bool,
+    /// The `show` of this node's previous `NeedsApproval` when the user
+    /// approved it (`None`: not acknowledged). Actions whose question depends
+    /// on changing state compare it with what they find now.
+    pub acknowledged: Option<BTreeMap<String, Value>>,
     /// Reports a progress line to the driver.
     pub progress: Box<dyn Fn(String) + Send>,
 }
@@ -95,7 +97,7 @@ pub const ACTION_SPECS: [ActionSpec; 10] = [
     ActionSpec {
         uses: "mdium/git-worktree-create",
         inputs: &[("title", true)],
-        outputs: &["path", "branch", "baseBranch", "baseCommit"],
+        outputs: &["path", "branch", "baseBranch", "baseCommit", "integrityBaseline"],
     },
     ActionSpec {
         uses: "mdium/design-doc-commit",
@@ -110,7 +112,7 @@ pub const ACTION_SPECS: [ActionSpec; 10] = [
     ActionSpec {
         uses: "mdium/git-merge-local",
         inputs: &[("worktree", true), ("acknowledgeReviewPaths", false)],
-        outputs: &["mergeCommit", "reviewPaths"],
+        outputs: &["mergeCommit", "reviewPaths", "integrityChanges"],
     },
     ActionSpec {
         uses: "mdium/issue-close",
@@ -239,7 +241,7 @@ mod tests {
     fn known_actions_are_the_specs_in_order() {
         let uses: Vec<&str> = ACTION_SPECS.iter().map(|s| s.uses).collect();
         assert_eq!(KNOWN_ACTIONS.to_vec(), uses);
-        assert_eq!(spec_of("mdium/git-merge-local").unwrap().outputs, ["mergeCommit", "reviewPaths"]);
+        assert_eq!(spec_of("mdium/git-merge-local").unwrap().outputs, ["mergeCommit", "reviewPaths", "integrityChanges"]);
         assert!(spec_of("mdium/launch-rockets").is_none());
     }
 }

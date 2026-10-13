@@ -374,8 +374,9 @@ pub struct Driver {
     calls: Vec<RunningCall>,
     agents: Vec<RunningAgent>,
     actions: Vec<RunningAction>,
-    /// Action nodes whose `NeedsApproval` the user approved: their rerun is acknowledged.
-    action_ack: BTreeSet<String>,
+    /// Action nodes whose `NeedsApproval` the user approved, with the `show`
+    /// of that request: their rerun is acknowledged with it.
+    action_ack: BTreeMap<String, BTreeMap<String, Value>>,
     /// Ids handed to started workers.
     worker_seq: u64,
     /// Screening text the user approved, per agent node key.
@@ -416,7 +417,7 @@ impl Driver {
             calls: Vec::new(),
             agents: Vec::new(),
             actions: Vec::new(),
-            action_ack: BTreeSet::new(),
+            action_ack: BTreeMap::new(),
             worker_seq: 0,
             screening_ack: BTreeMap::new(),
             agent_questions: BTreeMap::new(),
@@ -905,7 +906,7 @@ impl Driver {
                     return true;
                 }
                 if request.reason.code == FLOW_ACTION_APPROVAL {
-                    self.action_approval_decided(key, attempt, choice);
+                    self.action_approval_decided(key, attempt, &request, choice);
                     return true;
                 }
                 let is_approval_node = matches!(
@@ -3877,9 +3878,15 @@ impl Driver {
     }
 
     /// The user decided on an action's approval request: `approve` runs the
-    /// action again in the same attempt, acknowledged; anything else fails
-    /// the node.
-    fn action_approval_decided(&mut self, key: &str, attempt: u32, choice: &str) {
+    /// action again in the same attempt, acknowledged with the request's
+    /// `show`; anything else fails the node.
+    fn action_approval_decided(
+        &mut self,
+        key: &str,
+        attempt: u32,
+        request: &ApprovalRequest,
+        choice: &str,
+    ) {
         if choice != "approve" {
             return self.fail_node(key, attempt, Reason::new(FLOW_APPROVAL_REJECTED));
         }
@@ -3894,7 +3901,19 @@ impl Driver {
             self.set_node(key, NodeStatus::Ready, attempt, None, None);
             return;
         }
-        self.action_ack.insert(key.to_string());
+        // The action compares what it finds on the rerun with what was approved.
+        let show = request
+            .show
+            .iter()
+            .map(|(name, value)| {
+                let value = match value {
+                    ShowValue::Value(value) => value.clone(),
+                    other => serde_json::to_value(other).unwrap_or(Value::Null),
+                };
+                (name.clone(), value)
+            })
+            .collect();
+        self.action_ack.insert(key.to_string(), show);
         self.set_node(key, NodeStatus::Running, attempt, None, None);
         self.launch_action(&prefix, key, &node, action, attempt);
     }

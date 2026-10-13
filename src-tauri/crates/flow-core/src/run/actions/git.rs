@@ -6,21 +6,37 @@
 //! runs anywhere: the object comes from templates and could be tampered with.
 
 use super::{
-    git_failed, into_outputs, optional_bool, required_str, worktree_of, ActionContext, ActionEnd,
+    git_failed, input_invalid, into_outputs, optional_bool, required_str, worktree_of,
+    ActionContext, ActionEnd, FLOW_ACTION_FAILED,
 };
-use crate::gitops::{self, GitError};
-use crate::integrity::{self, MERGE_REVIEW_PATTERNS};
+use crate::gitops::{self, GitError, WorktreeInfo};
+use crate::integrity::{self, IntegrityChange, IntegrityError, IntegritySnapshot, MERGE_REVIEW_PATTERNS};
 use crate::run::model::Reason;
 use crate::screening;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// `NeedsApproval` message of `screen-input` (the UI explains the request
 /// from its reason code; this is for logs and notifications).
 const SCREENING_MESSAGE: &str = "The input contains suspicious instructions.";
-/// `NeedsApproval` message of `git-merge-local` before merging review paths.
-const REVIEW_MESSAGE: &str = "The branch changes files that need review before merging.";
+/// `NeedsApproval` message of `git-merge-local` before merging review paths
+/// or after the repository changed behind MDium's back.
+const REVIEW_MESSAGE: &str = "The merge needs review before it runs.";
+
+/// Key of the integrity snapshot in `git-worktree-create`'s outputs (and so
+/// in the `worktree` object handed to `git-merge-local`).
+const INTEGRITY_BASELINE: &str = "integrityBaseline";
+/// Integrity change reported when the `worktree` object has no baseline:
+/// what changed since the worktree was created is unknown.
+const INTEGRITY_BASELINE_MISSING: &str = "INTEGRITY_BASELINE_MISSING";
+/// Integrity changes that need the user's acknowledgement before a merge
+/// (branch or HEAD movement is expected and not reported).
+const MERGE_RELEVANT_CHANGES: &[&str] = &[
+    "INTEGRITY_GIT_CONFIG_CHANGED",
+    "INTEGRITY_HOOKS_CHANGED",
+    "INTEGRITY_HOOKS_PATH_CHANGED",
+];
 
 /// `mdium/screen-input` `{ text }` → `{ ok, findings }`. Suspicious text
 /// asks the user first; the approved rerun passes with the findings.
@@ -33,7 +49,9 @@ pub(super) fn screen_input(
         .iter()
         .map(|f| json!({ "code": f.kind.code(), "line": f.line, "excerpt": f.excerpt }))
         .collect();
-    if findings.is_empty() || ctx.acknowledged {
+    // The text of an attempt does not change between the question and the
+    // rerun, so any acknowledgement covers it.
+    if findings.is_empty() || ctx.acknowledged.is_some() {
         return Ok(ActionEnd::done(BTreeMap::from([
             ("ok".to_string(), Value::Bool(true)),
             ("findings".to_string(), Value::Array(findings)),
@@ -61,9 +79,26 @@ fn project_repo(ctx: &ActionContext) -> Result<PathBuf, Reason> {
     gitops::repo_root(&ctx.project_root).map_err(git_failed)
 }
 
+/// `FLOW_ACTION_FAILED` carrying an integrity failure (its `GIT_*` or
+/// `INTEGRITY_IO_FAILED` code).
+fn integrity_failed(err: IntegrityError) -> Reason {
+    Reason::new(FLOW_ACTION_FAILED)
+        .with("code", err.code())
+        .with("message", err.to_string())
+}
+
+/// Integrity snapshot of the user's repository covering the worktree's
+/// admin state, as the merge confirmation compares it.
+fn repo_snapshot(root: &Path, info: &WorktreeInfo) -> Result<IntegritySnapshot, Reason> {
+    integrity::snapshot_with_worktree(root, Some(&info.base_branch), Some(info))
+        .map_err(integrity_failed)
+}
+
 /// `mdium/git-worktree-create` `{ title }` → `{ path, branch, baseBranch,
-/// baseCommit }`. The worktree id is the run id; a worktree this run
-/// created before and never worked in (a rerun) is reused.
+/// baseCommit, integrityBaseline }`. The worktree id is the run id; a
+/// worktree this run created before and never worked in (a rerun) is
+/// reused. `integrityBaseline` is the repository's integrity snapshot taken
+/// right after, which `git-merge-local` compares before merging.
 pub(super) fn worktree_create(
     with: &BTreeMap<String, Value>,
     ctx: &ActionContext,
@@ -80,8 +115,13 @@ pub(super) fn worktree_create(
         }
         Err(err) => return Err(git_failed(err)),
     };
-    let value = serde_json::to_value(&info).unwrap_or(Value::Null);
-    Ok(ActionEnd::done(into_outputs(value)))
+    let baseline = repo_snapshot(&root, &info)?;
+    let mut outputs = into_outputs(serde_json::to_value(&info).unwrap_or(Value::Null));
+    outputs.insert(
+        INTEGRITY_BASELINE.to_string(),
+        serde_json::to_value(&baseline).unwrap_or(Value::Null),
+    );
+    Ok(ActionEnd::done(outputs))
 }
 
 /// `mdium/git-worktree-discard` `{ worktree }` → `{ ok: true }`: removes
@@ -102,38 +142,72 @@ pub(super) fn worktree_discard(
     )])))
 }
 
+/// The `worktree` object's integrity baseline (`None` when it has none).
+fn baseline_of(with: &BTreeMap<String, Value>) -> Result<Option<IntegritySnapshot>, Reason> {
+    match with.get("worktree").and_then(|w| w.get(INTEGRITY_BASELINE)) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => serde_json::from_value(value.clone()).map(Some).map_err(|err| {
+            input_invalid("worktree", "bad-integrity-baseline").with("message", err.to_string())
+        }),
+    }
+}
+
 /// `mdium/git-merge-local` `{ worktree, acknowledgeReviewPaths? }` →
-/// `{ mergeCommit, reviewPaths }`: merges the worktree branch into the
-/// user's checkout (`--no-ff`). A branch changing CI, agent config, hooks
-/// and the like asks first unless acknowledged; a dirty checkout or one on
-/// another branch is refused by gitops.
+/// `{ mergeCommit, reviewPaths, integrityChanges }`: merges the worktree
+/// branch into the user's checkout (`--no-ff`). It asks first when the
+/// branch changes CI, agent config, hooks and the like (`reviewPaths`,
+/// unless `acknowledgeReviewPaths`), or when the repository's git config or
+/// hooks changed since the worktree was created (`integrityChanges`). An
+/// approved rerun merges only if both lists are still exactly what the user
+/// approved; otherwise it asks again. A dirty checkout or one on another
+/// branch is refused by gitops.
 pub(super) fn merge_local(
     with: &BTreeMap<String, Value>,
     ctx: &ActionContext,
 ) -> Result<ActionEnd, Reason> {
     let info = worktree_of(with)?;
-    let acknowledge = optional_bool(with, "acknowledgeReviewPaths")?;
+    let baseline = baseline_of(with)?;
+    let acknowledge_paths = optional_bool(with, "acknowledgeReviewPaths")?;
     gitops::validate_worktree(&ctx.worktree_base, &info).map_err(git_failed)?;
+    let root = project_repo(ctx)?;
+    // The repository is checked before any git runs in the worktree.
+    let now = repo_snapshot(&root, &info)?;
+    let changes: Vec<IntegrityChange> = match &baseline {
+        Some(before) => integrity::compare(before, &now)
+            .into_iter()
+            .filter(|change| MERGE_RELEVANT_CHANGES.contains(&change.code.as_str()))
+            .collect(),
+        None => vec![IntegrityChange {
+            code: INTEGRITY_BASELINE_MISSING.to_string(),
+            detail: String::new(),
+        }],
+    };
+    let integrity_changes = serde_json::to_value(&changes).unwrap_or(Value::Array(Vec::new()));
     let review = integrity::changed_paths_matching_in(&ctx.worktree_base, &info, MERGE_REVIEW_PATTERNS)
-        .map_err(|err| {
-            Reason::new(super::FLOW_ACTION_FAILED)
-                .with("code", err.code())
-                .with("message", err.to_string())
-        })?;
+        .map_err(integrity_failed)?;
     let review_paths = Value::Array(review.iter().cloned().map(Value::String).collect());
-    if !review.is_empty() && !acknowledge && !ctx.acknowledged {
+    let approved = |key: &str, current: &Value| {
+        ctx.acknowledged
+            .as_ref()
+            .is_some_and(|show| show.get(key) == Some(current))
+    };
+    let review_ok = review.is_empty() || acknowledge_paths || approved("reviewPaths", &review_paths);
+    let integrity_ok = changes.is_empty() || approved("integrityChanges", &integrity_changes);
+    let lists = BTreeMap::from([
+        ("reviewPaths".to_string(), review_paths),
+        ("integrityChanges".to_string(), integrity_changes),
+    ]);
+    if !(review_ok && integrity_ok) {
         return Ok(ActionEnd::NeedsApproval {
             message: REVIEW_MESSAGE.to_string(),
-            show: BTreeMap::from([("reviewPaths".to_string(), review_paths.clone())]),
-            outputs: BTreeMap::from([("reviewPaths".to_string(), review_paths)]),
+            show: lists.clone(),
+            outputs: lists,
         });
     }
-    let root = project_repo(ctx)?;
     let commit = gitops::merge_into_base_in(&ctx.worktree_base, &root, &info).map_err(git_failed)?;
-    Ok(ActionEnd::done(BTreeMap::from([
-        ("mergeCommit".to_string(), Value::String(commit)),
-        ("reviewPaths".to_string(), review_paths),
-    ])))
+    let mut outputs = lists;
+    outputs.insert("mergeCommit".to_string(), Value::String(commit));
+    Ok(ActionEnd::done(outputs))
 }
 
 #[cfg(test)]
@@ -162,7 +236,7 @@ mod tests {
             launcher: Arc::new(AttachedLauncher),
             worktree_base: base.to_path_buf(),
             poll: Duration::from_millis(20),
-            acknowledged: false,
+            acknowledged: None,
             progress: Box::new(|_| {}),
         }
     }
@@ -173,6 +247,20 @@ mod tests {
 
     fn object(map: BTreeMap<String, Value>) -> Value {
         Value::Object(map.into_iter().collect())
+    }
+
+    /// A copy of `c` acknowledging the approval request that showed `show`.
+    fn acked(c: &ActionContext, show: &BTreeMap<String, Value>) -> ActionContext {
+        let mut acked = ctx(&c.project_root, &c.worktree_base);
+        acked.acknowledged = Some(show.clone());
+        acked
+    }
+
+    /// Commits a new file `rel` in the worktree at `path`.
+    fn commit_in(path: &Path, rel: &str) {
+        write_file(path, rel, "x");
+        gitops::git(path, &["add", "."]).unwrap();
+        gitops::git(path, &["commit", "-qm", rel]).unwrap();
     }
 
     #[test]
@@ -195,7 +283,7 @@ mod tests {
             other => panic!("{other:?}"),
         }
         let mut acked = ctx(tmp.path(), tmp.path());
-        acked.acknowledged = true;
+        acked.acknowledged = Some(BTreeMap::new());
         match run_action("mdium/screen-input", &bad, &acked) {
             ActionEnd::Done { outputs, .. } => assert_eq!(outputs["ok"], json!(true)),
             other => panic!("{other:?}"),
@@ -294,32 +382,103 @@ mod tests {
             panic!()
         };
         let path = PathBuf::from(wt["path"].as_str().unwrap());
-        write_file(&path, ".github/workflows/ci.yml", "on: push");
-        gitops::git(&path, &["add", "."]).unwrap();
-        gitops::git(&path, &["commit", "-qm", "ci"]).unwrap();
+        commit_in(&path, ".github/workflows/ci.yml");
         let worktree = object(wt);
         let before = gitops::git(repo.root(), &["rev-parse", "HEAD"]).unwrap();
-        let ActionEnd::NeedsApproval { show, outputs, .. } =
-            run_action("mdium/git-merge-local", &with(json!({ "worktree": worktree.clone() })), &c)
+        let merge = with(json!({ "worktree": worktree }));
+        let ActionEnd::NeedsApproval { show: first, outputs, .. } = run_action("mdium/git-merge-local", &merge, &c) else {
+            panic!()
+        };
+        assert_eq!(first["reviewPaths"], json!([".github/workflows/ci.yml"]));
+        assert_eq!(first["integrityChanges"], json!([]));
+        assert_eq!(outputs["reviewPaths"], json!([".github/workflows/ci.yml"]));
+        assert_eq!(gitops::git(repo.root(), &["rev-parse", "HEAD"]).unwrap(), before, "nothing merged");
+        // The branch changes more config files after the approval: the approved
+        // rerun asks again with the new list.
+        commit_in(&path, "CLAUDE.md");
+        let ActionEnd::NeedsApproval { show: second, .. } = run_action("mdium/git-merge-local", &merge, &acked(&c, &first)) else {
+            panic!()
+        };
+        assert_eq!(second["reviewPaths"], json!([".github/workflows/ci.yml", "CLAUDE.md"]));
+        assert_eq!(gitops::git(repo.root(), &["rev-parse", "HEAD"]).unwrap(), before, "nothing merged");
+        // Approving exactly what is there merges.
+        let ActionEnd::Done { outputs, .. } = run_action("mdium/git-merge-local", &merge, &acked(&c, &second)) else {
+            panic!()
+        };
+        assert_eq!(outputs["reviewPaths"], json!([".github/workflows/ci.yml", "CLAUDE.md"]));
+        assert_ne!(gitops::git(repo.root(), &["rev-parse", "HEAD"]).unwrap(), before);
+    }
+
+    #[test]
+    fn acknowledge_review_paths_input_skips_the_review_question() {
+        let repo = Fixture::new();
+        let base = tempfile::tempdir().unwrap();
+        let c = ctx(repo.root(), base.path());
+        let ActionEnd::Done { outputs: wt, .. } =
+            run_action("mdium/git-worktree-create", &with(json!({ "title": "t" })), &c)
         else {
             panic!()
         };
-        assert_eq!(show["reviewPaths"], json!([".github/workflows/ci.yml"]));
-        assert_eq!(outputs["reviewPaths"], json!([".github/workflows/ci.yml"]));
-        assert_eq!(gitops::git(repo.root(), &["rev-parse", "HEAD"]).unwrap(), before, "nothing merged");
-        let ActionEnd::Done { outputs, .. } = run_action(
-            "mdium/git-merge-local",
-            &with(json!({ "worktree": worktree.clone(), "acknowledgeReviewPaths": true })),
-            &c,
-        ) else {
+        commit_in(Path::new(wt["path"].as_str().unwrap()), ".github/workflows/ci.yml");
+        let merge = with(json!({ "worktree": object(wt), "acknowledgeReviewPaths": true }));
+        let ActionEnd::Done { outputs, .. } = run_action("mdium/git-merge-local", &merge, &c) else {
             panic!()
         };
         assert_eq!(outputs["reviewPaths"], json!([".github/workflows/ci.yml"]));
-        // The approval rerun (`acknowledged`) does not ask either.
-        let mut acked = ctx(repo.root(), base.path());
-        acked.acknowledged = true;
+    }
+
+    #[test]
+    fn merge_local_asks_when_the_repository_integrity_changed() {
+        let repo = Fixture::new();
+        let base = tempfile::tempdir().unwrap();
+        let c = ctx(repo.root(), base.path());
+        let ActionEnd::Done { outputs: wt, .. } =
+            run_action("mdium/git-worktree-create", &with(json!({ "title": "t" })), &c)
+        else {
+            panic!()
+        };
+        assert!(wt["integrityBaseline"]["hooksHash"].is_string(), "{wt:?}");
+        commit_in(Path::new(wt["path"].as_str().unwrap()), "src/x.txt");
+        // A hook appears in the user's repository behind MDium's back.
+        write_file(repo.root(), ".git/hooks/pre-commit", "#!/bin/sh
+exit 0
+");
+        let before = gitops::git(repo.root(), &["rev-parse", "HEAD"]).unwrap();
+        // `acknowledgeReviewPaths` covers review paths only.
+        let merge = with(json!({ "worktree": object(wt), "acknowledgeReviewPaths": true }));
+        let ActionEnd::NeedsApproval { show, .. } = run_action("mdium/git-merge-local", &merge, &c) else {
+            panic!()
+        };
+        assert_eq!(show["integrityChanges"][0]["code"], json!("INTEGRITY_HOOKS_CHANGED"));
+        assert_eq!(show["integrityChanges"].as_array().unwrap().len(), 1);
+        assert_eq!(show["reviewPaths"], json!([]));
+        assert_eq!(gitops::git(repo.root(), &["rev-parse", "HEAD"]).unwrap(), before, "nothing merged");
+        let ActionEnd::Done { outputs, .. } = run_action("mdium/git-merge-local", &merge, &acked(&c, &show)) else {
+            panic!()
+        };
+        assert_eq!(outputs["integrityChanges"], show["integrityChanges"]);
+        assert!(gitops::git(repo.root(), &["log", "--oneline"]).unwrap().contains("src/x.txt"));
+    }
+
+    #[test]
+    fn merge_local_without_a_baseline_asks_once() {
+        let repo = Fixture::new();
+        let base = tempfile::tempdir().unwrap();
+        let c = ctx(repo.root(), base.path());
+        let ActionEnd::Done { outputs: mut wt, .. } =
+            run_action("mdium/git-worktree-create", &with(json!({ "title": "t" })), &c)
+        else {
+            panic!()
+        };
+        commit_in(Path::new(wt["path"].as_str().unwrap()), "src/x.txt");
+        wt.remove("integrityBaseline");
+        let merge = with(json!({ "worktree": object(wt) }));
+        let ActionEnd::NeedsApproval { show, .. } = run_action("mdium/git-merge-local", &merge, &c) else {
+            panic!()
+        };
+        assert_eq!(show["integrityChanges"][0]["code"], json!("INTEGRITY_BASELINE_MISSING"));
         assert!(matches!(
-            run_action("mdium/git-merge-local", &with(json!({ "worktree": worktree })), &acked),
+            run_action("mdium/git-merge-local", &merge, &acked(&c, &show)),
             ActionEnd::Done { .. }
         ));
     }
