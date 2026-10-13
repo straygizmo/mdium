@@ -3854,3 +3854,91 @@ fn integrity_change_during_a_full_access_turn_fails_the_node() {
         .join("nodes/a/1");
     assert!(dir.join("response.md").exists());
 }
+
+#[test]
+fn an_answer_waiting_for_the_slot_survives_a_stop() {
+    let (f, runner) = fixture_with_agent(vec![
+        FakeTurn::Respond(
+            "---\noutcome: awaiting_user\nreason: need a choice\nquestion: A or B?\n---\ncontext"
+                .into(),
+        ),
+        FakeTurn::Respond("---\noutcome: completed\n---\nchose B".into()),
+    ]);
+    let rel = write_flow(
+        &f.root,
+        "slot",
+        json!({}),
+        vec![
+            agent("a", json!({})),
+            // Holds the single running slot once the agent waits for its answer.
+            cmd(
+                "slow",
+                json!([{ "succeed_from_attempt": 2 }, { "wait_stop_ms": 20000 }, { "exit": 9 }]),
+            ),
+        ],
+        vec![],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    f.wait_for(&run_id, "question while slow runs", |s| {
+        node(s, "a").status == NodeStatus::AwaitingApproval
+            && node(s, "slow").status == NodeStatus::Running
+    });
+    f.engine
+        .approve(&f.root, &run_id, Some("a"), "answer", Some("B".into()))
+        .unwrap();
+    f.wait_for(&run_id, "answered", |s| node(s, "a").status == NodeStatus::Ready);
+    f.engine.stop(&f.root, &run_id).unwrap();
+    let snap = f.wait_settled(&run_id, RunStatus::Paused);
+    assert_eq!(node(&snap, "a").attempt, 1, "the answered attempt never started");
+    assert_eq!(runner.prompts().len(), 1);
+    f.engine.resume(&f.root, &run_id).unwrap();
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(node(&snap, "a").outputs["body"], json!("chose B"));
+    let second = &runner.prompts()[1];
+    assert!(
+        second.contains("## Previous attempt\n\nQuestion: A or B?")
+            && second.contains("<<<\ncontext\n>>>")
+            && second.contains("## Answer from the user\n\n<<<\nB\n>>>"),
+        "{second}"
+    );
+}
+
+#[test]
+fn integrity_changes_after_a_failed_full_access_turn_are_a_warning() {
+    use crate::gitops::test_support::Fixture as GitFixture;
+    use crate::run::agent::AgentTurnEvent;
+    let git = GitFixture::new();
+    let hook_root = git.root().to_path_buf();
+    let runner = Arc::new(FakeAgentRunner::new(vec![FakeTurn::Hang]));
+    let f = fixture_at_with_agent(&hook_root, runner.clone());
+    let rel = write_flow(
+        &hook_root,
+        "integ2",
+        json!({}),
+        vec![agent("a", json!({ "permission": "full-access" }))],
+        vec![],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while runner.prompts().is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(runner.prompts().len(), 1);
+    std::fs::write(hook_root.join(".git/hooks/pre-commit"), "#!/bin/sh\n").unwrap();
+    runner.end_hanging(AgentTurnEvent::Failed {
+        code: "RUNNER_TURN_FAILED".into(),
+        message: "boom".into(),
+    });
+    let snap = f.wait_settled(&run_id, RunStatus::Failed);
+    // The node keeps its own failure reason.
+    assert_eq!(
+        node(&snap, "a").reason.as_ref().unwrap().code,
+        FLOW_AGENT_TURN_FAILED
+    );
+    let warned = f.events(&run_id).into_iter().any(|e| {
+        matches!(&e.body, EventBody::Warning(r)
+            if r.code == FLOW_AGENT_INTEGRITY_CHANGED
+                && r.params["changes"].as_array().unwrap().iter().any(|c| c == "INTEGRITY_HOOKS_CHANGED"))
+    });
+    assert!(warned);
+}

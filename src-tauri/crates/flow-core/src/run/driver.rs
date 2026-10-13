@@ -344,10 +344,8 @@ pub struct Driver {
     screening_ack: BTreeMap<String, String>,
     /// Pending `awaiting_user` questions: node key -> (question, response body).
     agent_questions: BTreeMap<String, (String, String)>,
-    /// Answered questions: node key -> (the attempt they feed, previous turn).
-    agent_answers: BTreeMap<String, (u32, PreviousTurn)>,
-    /// Opened by an `Editor`: no loop runs turns, so approvals that would
-    /// start one leave the node `Ready` for the next resume instead.
+    /// Opened by an `Editor`: no loop runs turns, so a screening approval
+    /// leaves the node `Ready` for the next resume instead.
     offline: bool,
 }
 
@@ -382,7 +380,6 @@ impl Driver {
             worker_seq: 0,
             screening_ack: BTreeMap::new(),
             agent_questions: BTreeMap::new(),
-            agent_answers: BTreeMap::new(),
             offline: false,
         })
     }
@@ -3162,27 +3159,21 @@ impl Driver {
         self.start_agent_turn(&prefix, key, &node, agent, attempt, prepared);
     }
 
-    /// The question and answer that feed `attempt`: the in-memory answer, or
-    /// (after an offline answer) the previous attempt's `answer.json`.
+    /// The question and answer that feed `attempt`: the most recent
+    /// `answer.json` of an earlier attempt that no started turn consumed yet.
+    /// A started turn leaves `stdout.log` in its attempt dir (attempts that
+    /// were only prepared, screened or never started have none).
     fn previous_turn(&self, key: &str, attempt: u32) -> Option<PreviousTurn> {
-        if let Some((for_attempt, turn)) = self.agent_answers.get(key) {
-            if *for_attempt == attempt {
-                return Some(PreviousTurn {
-                    question: turn.question.clone(),
-                    body: turn.body.clone(),
-                    answer: turn.answer.clone(),
-                });
+        for earlier in (1..attempt).rev() {
+            let dir = self.store.node_attempt_dir(&self.run_id, key, earlier).ok()?;
+            if let Some(turn) = read_answer(&dir) {
+                return Some(turn);
+            }
+            if dir.join("stdout.log").exists() {
+                return None;
             }
         }
-        let before = attempt.checked_sub(1).filter(|a| *a > 0)?;
-        let dir = self.store.node_attempt_dir(&self.run_id, key, before).ok()?;
-        let saved: Value = serde_json::from_slice(&std::fs::read(dir.join("answer.json")).ok()?).ok()?;
-        let field = |name: &str| saved.get(name).and_then(Value::as_str).map(str::to_string);
-        Some(PreviousTurn {
-            question: field("question")?,
-            body: field("body")?,
-            answer: field("answer")?,
-        })
+        None
     }
 
     /// An agent answered `awaiting_user`: ask the user its question.
@@ -3234,27 +3225,32 @@ impl Driver {
                 .unwrap_or(response);
             (request.message.clone().unwrap_or_default(), body)
         });
-        let turn = PreviousTurn {
-            question,
-            body,
-            answer,
-        };
-        if self.offline {
-            // No loop keeps the answer in memory until the resume.
-            if let Ok(dir) = self.store.node_attempt_dir(&self.run_id, key, attempt) {
-                let saved = serde_json::json!({
-                    "question": turn.question,
-                    "body": turn.body,
-                    "answer": turn.answer,
-                });
-                let _ = std::fs::write(
+        // Saved in the asking attempt's dir: the next started attempt reads
+        // it, even after a stop, a restart or an offline answer.
+        let saved = serde_json::json!({
+            "attempt": attempt,
+            "question": question,
+            "body": body,
+            "answer": answer,
+        });
+        let written = self
+            .store
+            .node_attempt_dir(&self.run_id, key, attempt)
+            .map_err(|e| e.to_string())
+            .and_then(|dir| {
+                std::fs::write(
                     dir.join("answer.json"),
                     serde_json::to_vec_pretty(&saved).unwrap_or_default(),
-                );
-            }
+                )
+                .map_err(|e| e.to_string())
+            });
+        if let Err(message) = written {
+            return self.fail_node(
+                key,
+                attempt,
+                Reason::new(FLOW_AGENT_START_FAILED).with("message", message),
+            );
         }
-        self.agent_answers
-            .insert(key.to_string(), (attempt + 1, turn));
         // The node starts its next attempt like any ready node.
         self.set_node(key, NodeStatus::Ready, attempt, None, None);
     }
@@ -3448,17 +3444,16 @@ impl Driver {
         }
     }
 
-    /// Compares the repo with the turn's baseline; on any change (or a
-    /// failed snapshot) fails the node and returns `false`.
-    fn check_integrity(&mut self, agent: &RunningAgent) -> bool {
-        let Some(before) = &agent.baseline else {
-            return true;
-        };
-        let reason = match integrity::snapshot(self.store.project_root(), None) {
+    /// Compares the repo with the turn's baseline: the
+    /// `FLOW_AGENT_INTEGRITY_CHANGED` reason on any change (or a failed
+    /// snapshot), `None` when nothing changed or nothing was snapshotted.
+    fn integrity_violation(&self, agent: &RunningAgent) -> Option<Reason> {
+        let before = agent.baseline.as_ref()?;
+        Some(match integrity::snapshot(self.store.project_root(), None) {
             Ok(after) => {
                 let changes = integrity::compare(before, &after);
                 if changes.is_empty() {
-                    return true;
+                    return None;
                 }
                 let detail = changes
                     .iter()
@@ -3472,9 +3467,7 @@ impl Driver {
                     .with("detail", detail)
             }
             Err(err) => integrity_snapshot_failed(&err),
-        };
-        self.fail_node(&agent.key, agent.attempt, reason);
-        false
+        })
     }
 
     /// Drains every turn's events and settles the turns that ended.
@@ -3568,6 +3561,20 @@ impl Driver {
                 },
             );
         }
+        // The post-turn check runs after every end of a `full-access` turn.
+        // Only a completed turn fails for it; any other end keeps its own
+        // reason and reports the changes as a warning.
+        if let Some(violation) = self.integrity_violation(&agent) {
+            let completed = !agent.timed_out
+                && matches!(
+                    finish,
+                    AgentFinish::Turn(AgentTurnEvent::Completed { .. })
+                );
+            if completed {
+                return self.fail_node(&key, attempt, violation);
+            }
+            self.emit(Some(&key), EventBody::Warning(violation));
+        }
         let end = match finish {
             AgentFinish::GraceKilled => {
                 self.set_node(
@@ -3586,9 +3593,7 @@ impl Driver {
         }
         match end {
             AgentTurnEvent::Completed { final_response } => {
-                if self.check_integrity(&agent) {
-                    self.agent_completed(&agent, final_response)
-                }
+                self.agent_completed(&agent, final_response)
             }
             AgentTurnEvent::Failed { code, message } => match agent.violation.take() {
                 Some((rule, summary)) => self.fail_node(
@@ -4060,7 +4065,6 @@ fn call_failure_reason(error_code: Option<&str>, detail: Option<String>, entry: 
     reason
 }
 
-/// Appends one line to a log file (best effort).
 /// Resolves a node's (or the flow default's) `workingDir` against the
 /// project root; without one the node runs in the project root.
 fn resolve_working_dir(
@@ -4110,6 +4114,18 @@ fn integrity_snapshot_failed(err: &integrity::IntegrityError) -> Reason {
         .with("detail", err.to_string())
 }
 
+/// The question and answer saved in an attempt dir's `answer.json`.
+fn read_answer(dir: &Path) -> Option<PreviousTurn> {
+    let saved: Value = serde_json::from_slice(&std::fs::read(dir.join("answer.json")).ok()?).ok()?;
+    let field = |name: &str| saved.get(name).and_then(Value::as_str).map(str::to_string);
+    Some(PreviousTurn {
+        question: field("question")?,
+        body: field("body")?,
+        answer: field("answer")?,
+    })
+}
+
+/// Appends one line to a log file (best effort).
 fn append_line(path: &Path, line: &str) {
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)

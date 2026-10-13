@@ -576,6 +576,13 @@ impl FakeAgentRunner {
     /// Ends the first still hanging turn with `Completed { response }`
     /// (waiting up to 5 s for the driver to start one).
     pub fn complete_hanging(&self, response: &str) {
+        self.end_hanging(AgentTurnEvent::Completed {
+            final_response: response.to_string(),
+        });
+    }
+
+    /// Ends the first still hanging turn with `end` (waiting up to 5 s).
+    pub fn end_hanging(&self, end: AgentTurnEvent) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let queue = loop {
             let found = self
@@ -595,9 +602,7 @@ impl FakeAgentRunner {
         };
         let mut queue = queue.lock().unwrap();
         queue.hang = false;
-        queue.events.push_back(AgentTurnEvent::Completed {
-            final_response: response.to_string(),
-        });
+        queue.events.push_back(end);
     }
 
     /// Every prompt received, in order.
