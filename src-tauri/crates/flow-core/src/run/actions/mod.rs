@@ -3,6 +3,7 @@
 //! owned [`ActionContext`] and gets one [`ActionEnd`] back, so an action
 //! never touches driver state.
 
+mod forge;
 mod git;
 
 use crate::forge::ForgeCli;
@@ -153,10 +154,10 @@ pub fn run_action(uses: &str, with: &BTreeMap<String, Value>, ctx: &ActionContex
         "mdium/git-worktree-create" => git::worktree_create(with, ctx),
         "mdium/git-worktree-discard" => git::worktree_discard(with, ctx),
         "mdium/git-merge-local" => git::merge_local(with, ctx),
-        "mdium/design-doc-commit"
-        | "mdium/issue-entry"
-        | "mdium/issue-close"
-        | "mdium/project-setup"
+        "mdium/design-doc-commit" => forge::design_doc_commit(with, ctx),
+        "mdium/issue-entry" => forge::issue_entry(with, ctx),
+        "mdium/issue-close" => forge::issue_close(with, ctx),
+        "mdium/project-setup"
         | "mdium/flow-run-latest"
         | "mdium/metrics-compare" => Err(Reason::new(FLOW_ACTION_FAILED)
             .with("code", FLOW_ACTION_NOT_IMPLEMENTED)

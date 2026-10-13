@@ -2,8 +2,7 @@
 //! to agents, the text that is screened before a session starts, diff and
 //! project-instruction capping, and design-doc path rendering.
 
-use crate::workflow::gitops;
-use crate::workflow::model::{is_invalid_design_doc_path, AttemptMode, Role, Stage};
+use crate::workflow::model::{AttemptMode, Role, Stage};
 use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::Path;
@@ -223,25 +222,7 @@ fn read_instructions(path: &Path, name: &str) -> Option<String> {
     Some(out)
 }
 
-/// Renders a design-doc path template. `{date}` is the `YYYY-MM-DD` of
-/// `run_started_at` (RFC3339, in its own offset) or `undated` when it does
-/// not parse; `{slug}` follows the branch-name slug rules on the title,
-/// falling back to the first 8 chars of the root task id. Returns `None`
-/// when the rendered path fails the workflow's design-doc path check.
-pub fn render_design_doc_path(
-    template: &str,
-    run_started_at: &str,
-    root_title: &str,
-    root_task_id: &str,
-) -> Option<String> {
-    let date = chrono::DateTime::parse_from_rfc3339(run_started_at)
-        .map(|at| at.format("%Y-%m-%d").to_string())
-        .unwrap_or_else(|_| "undated".to_string());
-    let slug =
-        gitops::title_slug(root_title).unwrap_or_else(|| root_task_id.chars().take(8).collect());
-    let path = template.replace("{date}", &date).replace("{slug}", &slug);
-    (!is_invalid_design_doc_path(&path)).then_some(path)
-}
+pub use flow_core::prompts::render_design_doc_path;
 
 /// The body of the "Previous attempt" section: per part a heading, one
 /// guiding sentence and a data block. `None` when every part is empty.

@@ -230,6 +230,57 @@ pub fn compose(
     out
 }
 
+/// True if `path` is not a safe repo-relative `designDocPath`: absolute,
+/// containing a `..` segment, or rooted under `.git`/`.mdium`.
+pub fn is_invalid_design_doc_path(path: &str) -> bool {
+    if std::path::Path::new(path).is_absolute() {
+        return true;
+    }
+    // `Path::is_absolute` only recognizes a Windows drive/UNC prefix or,
+    // on Unix, a leading `/`. A workflow file can be authored on any OS, so
+    // also reject a leading separator here directly: on Windows a bare
+    // "/etc/passwd" is "rooted" but not "absolute" per std, yet it is still
+    // not a safe repo-relative path.
+    if path.starts_with('/') || path.starts_with('\\') {
+        return true;
+    }
+
+    let mut first_segment: Option<&str> = None;
+    for segment in path.split(['/', '\\']).filter(|s| !s.is_empty()) {
+        if first_segment.is_none() {
+            first_segment = Some(segment);
+        }
+        if segment == ".." {
+            return true;
+        }
+    }
+
+    // Compare case-insensitively: Windows/macOS filesystems are typically
+    // case-insensitive, so ".Git"/".GIT" resolve to the same directory as
+    // ".git" and must be rejected too.
+    matches!(first_segment, Some(seg) if seg.eq_ignore_ascii_case(".git") || seg.eq_ignore_ascii_case(".mdium"))
+}
+
+/// Renders a design-doc path template. `{date}` is the `YYYY-MM-DD` of
+/// `run_started_at` (RFC3339, in its own offset) or `undated` when it does
+/// not parse; `{slug}` follows the branch-name slug rules on the title,
+/// falling back to the first 8 chars of the root task id. Returns `None`
+/// when the rendered path fails the workflow's design-doc path check.
+pub fn render_design_doc_path(
+    template: &str,
+    run_started_at: &str,
+    root_title: &str,
+    root_task_id: &str,
+) -> Option<String> {
+    let date = chrono::DateTime::parse_from_rfc3339(run_started_at)
+        .map(|at| at.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|_| "undated".to_string());
+    let slug =
+        crate::gitops::title_slug(root_title).unwrap_or_else(|| root_task_id.chars().take(8).collect());
+    let path = template.replace("{date}", &date).replace("{slug}", &slug);
+    (!is_invalid_design_doc_path(&path)).then_some(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
