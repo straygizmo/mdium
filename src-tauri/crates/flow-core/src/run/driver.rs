@@ -29,7 +29,7 @@ use crate::run::actions::{
 use crate::run::agent::{AgentRunner, AgentTurnEvent, AgentTurnHandle, AgentTurnRequest};
 use crate::run::artifacts;
 use crate::run::model::*;
-use crate::run::prepare::{prepare_params, ArtifactsOf, LoopVar, TemplateContext};
+use crate::run::prepare::{prepare_params, ArtifactsOf, LoopVar, NodeOutputs, TemplateContext};
 use crate::run::process::{
     decide, CommandResult, LaunchSpec, Launcher, ProcessHandle, ProtocolItem, ProtocolOutcome,
     ProtocolReader, MAX_LINES,
@@ -656,13 +656,36 @@ impl Driver {
         vars
     }
 
+    /// The instance of node `id` of scope `prefix` that templates read: the
+    /// current pass's instance once it ran, else the latest earlier pass that
+    /// ran (a forward reference inside a cycle). `None` when the node was
+    /// skipped or has not run in any pass (spec 2026-10-10, 8.2).
+    fn template_instance(&self, prefix: &str, id: &str) -> Option<String> {
+        for pass in (1..=self.state.pass(prefix, id)).rev() {
+            let key = scope::instance_key(prefix, id, pass);
+            match self.state.nodes.get(&key).map(|n| n.status) {
+                Some(NodeStatus::Skipped) => return None,
+                None | Some(NodeStatus::Pending) | Some(NodeStatus::Ready) => continue,
+                Some(_) => return Some(key),
+            }
+        }
+        None
+    }
+
     /// Outputs of node `id` as seen from a scope (inline bodies see outward).
-    fn outputs_seen(&self, prefix: &str, id: &str) -> Option<BTreeMap<String, Value>> {
+    fn outputs_seen(&self, prefix: &str, id: &str) -> Option<NodeOutputs> {
         let mut current = prefix.to_string();
         loop {
             if self.graph_of(&current)?.node(id).is_some() {
-                let key = self.state.current_key(&current, id);
-                return self.state.nodes.get(&key).map(|n| n.outputs.clone());
+                return Some(
+                    match self
+                        .template_instance(&current, id)
+                        .and_then(|key| self.state.nodes.get(&key))
+                    {
+                        Some(n) => NodeOutputs::Ran(n.outputs.clone()),
+                        None => NodeOutputs::NotRun,
+                    },
+                );
             }
             let init = self.scope_init(&current)?;
             match (init.inherits, init.parent) {
@@ -698,11 +721,19 @@ impl Driver {
         let mut current = prefix.to_string();
         loop {
             if self.graph_of(&current)?.node(id).is_some() {
-                let key = self.state.current_key(&current, id);
+                let Some(key) = self.template_instance(&current, id) else {
+                    return Some(ArtifactsOf {
+                        node_key: self.state.current_key(&current, id),
+                        attempt: 0,
+                        artifacts: Vec::new(),
+                        ran: false,
+                    });
+                };
                 return self.state.nodes.get(&key).map(|n| ArtifactsOf {
                     node_key: key.clone(),
                     attempt: n.attempt,
                     artifacts: n.artifacts.clone(),
+                    ran: true,
                 });
             }
             let init = self.scope_init(&current)?;
@@ -4330,7 +4361,7 @@ impl ProtocolCursor {
 /// Resolves one `show` entry; artifact references keep their typed form.
 fn show_value(ctx: &TemplateContext, name: &str) -> ShowValue {
     let artifacts = |node: &str, label: Option<&str>| {
-        let Some(seen) = (ctx.artifacts)(node) else {
+        let Some(seen) = (ctx.artifacts)(node).filter(|seen| seen.ran) else {
             return ShowValue::Value(Value::Null);
         };
         let mut artifacts = seen.artifacts;

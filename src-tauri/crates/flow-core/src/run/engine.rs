@@ -1334,3 +1334,30 @@ impl FlowEngine {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_bundle_hash_covers_template_files() {
+        crate::templates::test_templates();
+        let tmp = tempfile::tempdir().unwrap();
+        let rel = ".mdium/flows/outer.flow.yaml";
+        std::fs::create_dir_all(tmp.path().join(".mdium/flows")).unwrap();
+        std::fs::write(
+            tmp.path().join(rel),
+            "schemaVersion: 1\nid: outer\nname: O\nnodes:\n  - { id: dev, kind: subflow, flow: 'mdium:dev-workflow', params: { title: t, requirement: r } }\n",
+        )
+        .unwrap();
+        let mut bundle = load_bundle(tmp.path(), rel).unwrap();
+        let main = crate::templates::resolve("mdium:dev-workflow").unwrap().main;
+        let sha = sha256_hex(&std::fs::read(main).unwrap());
+        assert_eq!(bundle.others["mdium:dev-workflow"].0, sha);
+        assert_eq!(bundle.templates, vec![("dev-workflow".to_string(), sha)]);
+        // Other template bytes give another confirmed hash.
+        let before = bundle.hash();
+        bundle.others.get_mut("mdium:dev-workflow").unwrap().0 = "0".repeat(64);
+        assert_ne!(bundle.hash(), before);
+    }
+}

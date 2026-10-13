@@ -4257,3 +4257,109 @@ fn a_templated_provider_that_names_no_provider_fails_the_node() {
     assert_eq!(reason.params["provider"], json!("gpt"));
     assert!(runner.prompts().is_empty());
 }
+
+// ------------------------------------------------- unrun / skipped references
+
+#[test]
+fn skipped_node_references_render_empty_and_missing_keys_stay_unresolved() {
+    let (f, runner) = fixture_with_agent(vec![FakeTurn::Respond(
+        "---\noutcome: completed\n---\nok".into(),
+    )]);
+    let rel = write_flow(
+        &f.root,
+        "skipref",
+        json!({ "params": { "on": { "type": "bool", "default": false } } }),
+        vec![
+            json!({ "id": "b", "kind": "command", "run": helper_argv(), "when": { "ref": "params.on", "op": "==", "value": true } }),
+            agent("c", json!({ "with": {
+                "got": "[${{ nodes.b.outputs.x }}][${{ nodes.b.artifacts.pic }}]",
+                "whole": "${{ nodes.b.outputs }}",
+                "all": "${{ nodes.b.artifacts }}"
+            } })),
+        ],
+        vec![json!({ "from": "b", "to": "c" })],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(node(&snap, "b").status, NodeStatus::Skipped);
+    let inputs: Value = serde_json::from_slice(
+        &fs::read(f.root.join(".mdium/flow-runs").join(&run_id).join("nodes/c/1/inputs.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(inputs, json!({ "got": "[][]", "whole": {}, "all": [] }));
+    assert_eq!(runner.prompts().len(), 1);
+
+    // A node that ran but has no such key is still unresolved.
+    let mut b = cmd("b2", json!([]));
+    b["run"].as_array_mut().unwrap().push(json!("${{ nodes.a.outputs.nope }}"));
+    let rel = write_flow(&f.root, "missingkey", json!({}), vec![cmd("a", json!([])), b], vec![json!({ "from": "a", "to": "b2" })]);
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Failed);
+    let reason = node(&snap, "b2").reason.unwrap();
+    assert_eq!(reason.code, "FLOW_TEMPLATE_UNRESOLVED");
+    assert_eq!(reason.params["ref"], json!("nodes.a.outputs.nope"));
+}
+
+#[test]
+fn forward_references_in_a_cycle_are_empty_first_then_the_earlier_pass() {
+    let (f, runner) = fixture_with_agent(vec![
+        FakeTurn::Respond("---\noutcome: completed\n---\none".into()),
+        FakeTurn::Respond("---\noutcome: completed\n---\ntwo".into()),
+    ]);
+    let rel = write_flow(
+        &f.root,
+        "fwd",
+        json!({}),
+        vec![
+            agent("c", json!({ "with": { "seen": "<${{ nodes.d.outputs.v }}>" } })),
+            cmd("d", json!([ev(json!({ "v": 1, "type": "output", "key": "v", "value": "seven" }))])),
+            json!({ "id": "ok", "kind": "approval", "options": ["again", "done"] }),
+        ],
+        vec![
+            json!({ "from": "c", "to": "d" }),
+            json!({ "from": "d", "to": "ok" }),
+            json!({ "from": "ok", "to": "c", "port": "again", "maxTraversals": 2 }),
+        ],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    f.wait_for(&run_id, "first approval", |s| s.state.status == RunStatus::AwaitingApproval);
+    f.engine.approve(&f.root, &run_id, Some("ok"), "again", None).unwrap();
+    f.wait_for(&run_id, "second approval", |s| {
+        s.state.status == RunStatus::AwaitingApproval && s.state.approvals[0].node_key.as_deref() == Some("ok@2")
+    });
+    f.engine.approve(&f.root, &run_id, Some("ok@2"), "done", None).unwrap();
+    f.wait_settled(&run_id, RunStatus::Completed);
+    let prompts = runner.prompts();
+    assert_eq!(prompts.len(), 2);
+    assert!(prompts[0].contains("<>") && !prompts[0].contains("seven"), "{}", prompts[0]);
+    assert!(prompts[1].contains("<seven>"), "{}", prompts[1]);
+}
+
+#[test]
+fn the_dev_workflow_template_runs_without_the_plan_approval() {
+    use crate::gitops::test_support::Fixture as GitFixture;
+    crate::templates::test_templates();
+    let repo = GitFixture::new();
+    repo.write(".gitignore", ".mdium/\n");
+    repo.run(&["add", "."]);
+    repo.run(&["commit", "-qm", "ignore run data"]);
+    let runner = Arc::new(FakeAgentRunner::new(vec![
+        FakeTurn::Respond("---\noutcome: completed\n---\n# Design".into()), // design
+        FakeTurn::Respond("---\noutcome: completed\n---\n# Done".into()),   // implement
+        FakeTurn::Respond("---\noutcome: completed\n---\nLGTM".into()),     // review
+    ]));
+    let f = fixture_at_with_agent(repo.root(), runner.clone());
+    let rel = write_flow(
+        &f.root,
+        "outer",
+        json!({}),
+        vec![json!({ "id": "dev", "kind": "subflow", "flow": "mdium:dev-workflow", "params": { "title": "T", "requirement": "Add a README line", "mergeGate": false, "requiresApproval": false } })],
+        vec![],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(runner.prompts().len(), 3);
+    assert_eq!(node(&snap, "dev/plan").status, NodeStatus::Skipped);
+    assert_eq!(node(&snap, "dev/approve_plan").status, NodeStatus::Skipped);
+    assert!(node(&snap, "dev").outputs["worktreePath"].as_str().is_some());
+}

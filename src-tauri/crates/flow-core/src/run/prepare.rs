@@ -242,8 +242,17 @@ pub struct LoopVar {
     pub index: usize,
 }
 
-/// Outputs of a node visible from a place in the run.
-pub type OutputsLookup<'a> = &'a dyn Fn(&str) -> Option<BTreeMap<String, Value>>;
+/// What a node left for templates (spec 2026-10-10, 8.2).
+#[derive(Debug, Clone, PartialEq)]
+pub enum NodeOutputs {
+    /// The node ran (in the current pass, or else in an earlier one): its outputs.
+    Ran(BTreeMap<String, Value>),
+    /// The node was skipped or has not run yet: every output key renders as `""`.
+    NotRun,
+}
+
+/// Outputs of a node visible from a place in the run (`None`: no such node).
+pub type OutputsLookup<'a> = &'a dyn Fn(&str) -> Option<NodeOutputs>;
 
 /// Artifacts of a node visible from a place in the run (with the instance they belong to).
 #[derive(Debug, Clone, PartialEq)]
@@ -251,6 +260,9 @@ pub struct ArtifactsOf {
     pub node_key: String,
     pub attempt: u32,
     pub artifacts: Vec<Artifact>,
+    /// False when the node was skipped or has not run yet (`artifacts` is empty
+    /// and a labelled reference renders as `""`).
+    pub ran: bool,
 }
 
 /// Artifact lookup by node id (scope rules applied by the caller).
@@ -282,17 +294,28 @@ impl TemplateContext<'_> {
         let path = |p: &Path| Value::String(p.to_string_lossy().into_owned());
         match reference {
             Reference::Param(name) => self.params.get(name).cloned(),
-            Reference::NodeOutput { node, key } => (self.outputs)(node)?.get(key).cloned(),
-            Reference::NodeOutputs { node } => {
-                (self.outputs)(node).map(|map| Value::Object(map.into_iter().collect()))
-            }
+            // A skipped or not-yet-run node reads as empty; a node that ran
+            // without the key stays unresolved.
+            Reference::NodeOutput { node, key } => match (self.outputs)(node)? {
+                NodeOutputs::Ran(map) => map.get(key).cloned(),
+                NodeOutputs::NotRun => Some(Value::String(String::new())),
+            },
+            Reference::NodeOutputs { node } => match (self.outputs)(node)? {
+                NodeOutputs::Ran(map) => Some(Value::Object(map.into_iter().collect())),
+                NodeOutputs::NotRun => Some(Value::Object(Default::default())),
+            },
             Reference::NodeArtifacts { node } => (self.artifacts)(node)
                 .map(|a| serde_json::to_value(a.artifacts).unwrap_or(Value::Null)),
-            Reference::NodeArtifact { node, label } => (self.artifacts)(node)?
-                .artifacts
-                .into_iter()
-                .find(|a| a.label.as_deref() == Some(label.as_str()))
-                .map(|a| Value::String(a.path)),
+            Reference::NodeArtifact { node, label } => {
+                let seen = (self.artifacts)(node)?;
+                if !seen.ran {
+                    return Some(Value::String(String::new()));
+                }
+                seen.artifacts
+                    .into_iter()
+                    .find(|a| a.label.as_deref() == Some(label.as_str()))
+                    .map(|a| Value::String(a.path))
+            }
             Reference::NodeCost { node } => Some(Value::from((self.costs)(node).unwrap_or(0.0))),
             Reference::RunId => Some(Value::String(self.run_id.to_string())),
             Reference::RunDir => Some(path(self.run_dir)),
@@ -502,8 +525,9 @@ nodes:
     fn context_resolves_references() {
         let params = BTreeMap::from([("p".to_string(), json!("v"))]);
         let env = BTreeMap::from([("HOME_X".to_string(), "h".to_string())]);
-        let outputs =
-            |id: &str| (id == "a").then(|| BTreeMap::from([("k".to_string(), json!([1]))]));
+        let outputs = |id: &str| {
+            (id == "a").then(|| NodeOutputs::Ran(BTreeMap::from([("k".to_string(), json!([1]))])))
+        };
         let vars = vec![
             LoopVar {
                 name: "outer".into(),
@@ -564,8 +588,11 @@ nodes:
         use std::collections::BTreeMap;
         let params = BTreeMap::new();
         let env = BTreeMap::new();
-        let outputs =
-            |node: &str| (node == "a").then(|| BTreeMap::from([("k".to_string(), Value::from(1))]));
+        let outputs = |node: &str| match node {
+            "a" => Some(NodeOutputs::Ran(BTreeMap::from([("k".to_string(), Value::from(1))]))),
+            "s" => Some(NodeOutputs::NotRun),
+            _ => None,
+        };
         let ctx = TemplateContext {
             params: &params,
             outputs: &outputs,
@@ -584,6 +611,11 @@ nodes:
             serde_json::json!({ "k": 1 })
         );
         assert!(ctx.render_value("${{ nodes.b.outputs }}").is_err());
+        // A node that ran without the key stays unresolved.
+        assert!(ctx.render_value("${{ nodes.a.outputs.nope }}").is_err());
+        // A skipped / not-yet-run node reads as empty.
+        assert_eq!(ctx.render_value("${{ nodes.s.outputs.k }}").unwrap(), serde_json::json!(""));
+        assert_eq!(ctx.render_value("${{ nodes.s.outputs }}").unwrap(), serde_json::json!({}));
         assert_eq!(
             ctx.render_value("${{ nodes.a.costUsd }}").unwrap(),
             serde_json::json!(1.5)

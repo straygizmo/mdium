@@ -21,7 +21,7 @@ nodes:
     promptRef: builtin:design
     outputContract: outcome
     workingDir: "${{ nodes.worktree.outputs.path }}"
-    with: { title: "${{ params.title }}", requirement: "${{ params.requirement }}" }
+    with: { title: "${{ params.title }}", requirement: "${{ params.requirement }}", reviewFindings: "${{ nodes.review.outputs.body }}" }
     timeout: 60m
   - id: design_doc
     kind: action
@@ -41,7 +41,7 @@ nodes:
     outputContract: outcome
     workingDir: "${{ nodes.worktree.outputs.path }}"
     when: { ref: params.requiresApproval, op: "==", value: true }
-    with: { title: "${{ params.title }}", requirement: "${{ params.requirement }}", design: "${{ nodes.design.outputs.body }}" }
+    with: { title: "${{ params.title }}", requirement: "${{ params.requirement }}", design: "${{ nodes.design.outputs.body }}", revision: "${{ nodes.approve_plan.outputs.comment }}" }
     timeout: 60m
   - id: approve_plan
     kind: approval

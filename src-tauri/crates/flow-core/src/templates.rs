@@ -221,10 +221,14 @@ pub fn copy_into(project_root: &Path, name: &str, file_name: &str) -> Result<Vec
         targets.push(target);
     }
     let mut written = Vec::new();
-    for ((source, rel), target) in plan.iter().zip(&targets) {
-        let bytes = std::fs::read(source).map_err(|e| {
+    for (i, ((source, rel), target)) in plan.iter().zip(&targets).enumerate() {
+        let mut bytes = std::fs::read(source).map_err(|e| {
             FlowIssue::new(FLOW_REF_NOT_FOUND, "").with("message", e.to_string())
         })?;
+        if i == 0 {
+            // The copy's id follows its file name, so two copies never share an id.
+            bytes = with_flow_id(&bytes, file_name);
+        }
         crate::fsutil::atomic_write(target, &bytes).map_err(|e| {
             FlowIssue::new(FLOW_INVALID_VALUE, "")
                 .with("reason", "write-failed")
@@ -233,6 +237,37 @@ pub fn copy_into(project_root: &Path, name: &str, file_name: &str) -> Result<Vec
         written.push(rel.clone());
     }
     Ok(written)
+}
+
+/// Rewrites the top-level `id` of a flow file's text to `id`: the `id:` line
+/// of YAML (the rest is kept as written), or the `id` key of JSON.
+fn with_flow_id(bytes: &[u8], id: &str) -> Vec<u8> {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return bytes.to_vec();
+    };
+    if text.trim_start().starts_with('{') {
+        return match serde_json::from_str::<serde_json::Value>(text) {
+            Ok(mut value) => {
+                value["id"] = serde_json::Value::String(id.to_string());
+                serde_json::to_vec_pretty(&value).unwrap_or_else(|_| bytes.to_vec())
+            }
+            Err(_) => bytes.to_vec(),
+        };
+    }
+    let mut done = false;
+    let lines: Vec<String> = text
+        .split('\n')
+        .map(|line| {
+            if !done && line.starts_with("id:") {
+                done = true;
+                let cr = if line.ends_with('\r') { "\r" } else { "" };
+                format!("id: {id}{cr}")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect();
+    lines.join("\n").into_bytes()
 }
 
 /// What a template flow may not contain: `command` / `python` nodes (they
@@ -307,6 +342,13 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let written = copy_into(tmp.path(), "dev-workflow", "develop").unwrap();
         assert_eq!(written, vec![".mdium/flows/develop.flow.yaml".to_string()]);
+        // The copy's id follows the file name; the rest of the file is kept.
+        let copied = std::fs::read_to_string(tmp.path().join(".mdium/flows/develop.flow.yaml")).unwrap();
+        let report = crate::load::check_content(tmp.path(), &tmp.path().join(".mdium/flows/develop.flow.yaml"), &copied);
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        assert_eq!(report.flow.unwrap().id, "develop");
+        let original = std::fs::read_to_string(&t.main).unwrap();
+        assert_eq!(copied.replace("id: develop", "id: dev-workflow"), original);
         assert_eq!(copy_into(tmp.path(), "dev-workflow", "develop").unwrap_err().code, FLOW_INVALID_VALUE);
     }
 

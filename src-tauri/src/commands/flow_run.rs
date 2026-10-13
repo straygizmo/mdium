@@ -473,7 +473,7 @@ pub fn templates_dir(app: &AppHandle) -> Option<PathBuf> {
     ];
     candidates.into_iter().find(|c| c.is_dir()).map(|c| {
         let text = c.to_string_lossy().into_owned();
-        match text.strip_prefix("\\?\\") {
+        match text.strip_prefix(r"\\?\") {
             Some(plain) => PathBuf::from(plain),
             None => c,
         }
