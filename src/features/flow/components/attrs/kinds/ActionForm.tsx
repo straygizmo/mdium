@@ -1,10 +1,19 @@
 import { useTranslation } from "react-i18next";
 import type { FlowActionNode } from "@/shared/types/flow";
-import { KNOWN_ACTIONS } from "../../../lib/known-actions";
+import { ACTION_INPUTS, KNOWN_ACTIONS } from "../../../lib/known-actions";
 import { KeyValueEditor } from "../KeyValueEditor";
 import { TextField } from "../fields";
 import { formatValue, parseValue } from "./ValueRows";
 import { recordOrUndefined, type KindFormProps } from "./types";
+
+/** The required inputs of an action as empty strings, keeping values already set under the same name. */
+function seedInputs(uses: string, current: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  const seeded: Record<string, unknown> = {};
+  for (const input of ACTION_INPUTS[uses] ?? []) {
+    if (input.required) seeded[input.name] = current?.[input.name] ?? "";
+  }
+  return recordOrUndefined(seeded);
+}
 
 export function ActionForm({ node, path, onChange }: KindFormProps<FlowActionNode>) {
   const { t } = useTranslation("flow");
@@ -14,7 +23,7 @@ export function ActionForm({ node, path, onChange }: KindFormProps<FlowActionNod
     <div className="flow-attrs">
       <label className="flow-attrs__field">
         <span>{t("attrs.uses")}</span>
-        <select aria-label={t("attrs.uses")} value={node.uses} onChange={(e) => write({ uses: e.target.value })}>
+        <select aria-label={t("attrs.uses")} value={node.uses} onChange={(e) => write({ uses: e.target.value, with: seedInputs(e.target.value, node.with) })}>
           {options.map((name) => (
             <option key={name} value={name}>
               {name}

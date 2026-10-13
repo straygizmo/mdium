@@ -177,7 +177,9 @@
     },
     "expand": "Expand",
     "collapse": "Collapse",
-    "reviewTemplates": "Built-in templates"
+    "reviewTemplates": "Built-in templates",
+    "logPrompt": "Prompt",
+    "logResponse": "Response"
   },
   "runStatus": {
     "pending": "Pending",
@@ -250,7 +252,24 @@
     "FLOW_RUN_STUCK": "No node could continue.",
     "FLOW_OUTPUT_UNRESOLVED": "Output \"{{output}}\" could not be computed.",
     "FLOW_ARTIFACT_OUTSIDE_PROJECT": "Artifact \"{{path}}\" is outside the project and was ignored.",
-    "FLOW_ARTIFACT_WRITE_FAILED": "The artifact list could not be written: {{message}}"
+    "FLOW_ARTIFACT_WRITE_FAILED": "The artifact list could not be written: {{message}}",
+    "FLOW_ACTION_APPROVAL": "The action \"{{uses}}\" asks for your confirmation before it runs.",
+    "FLOW_ACTION_FAILED": "The action failed ({{code}}): {{message}}",
+    "FLOW_ACTION_INPUT_INVALID": "Action input \"{{input}}\" is invalid ({{reason}}).",
+    "FLOW_ACTION_IO_FAILED": "The action could not read or write its files.",
+    "FLOW_ACTION_PANICKED": "The action stopped unexpectedly.",
+    "FLOW_AGENT_ATTENTION": "The agent needs attention: {{reason}}",
+    "FLOW_AGENT_GUARD_BLOCKED": "A guard blocked the agent ({{rule}}): {{summary}}",
+    "FLOW_AGENT_INTEGRITY_CHANGED": "The agent changed protected files: {{changes}}",
+    "FLOW_AGENT_INTEGRITY_SKIPPED": "The check for changes to protected files was skipped.",
+    "FLOW_AGENT_OUTPUT_INVALID": "The agent's output does not match the expected format.",
+    "FLOW_AGENT_OUTPUT_INVALID_detail": "The agent's output does not match the expected format: {{detail}}",
+    "FLOW_AGENT_PROMPT_INVALID": "The agent's prompt could not be prepared.",
+    "FLOW_AGENT_QUESTION": "The agent asks a question and waits for your answer.",
+    "FLOW_AGENT_RUNNER_EXITED": "The agent runner exited before finishing.",
+    "FLOW_AGENT_SCREENING": "The agent's work was held for your review of the findings.",
+    "FLOW_AGENT_START_FAILED": "The agent could not be started.",
+    "FLOW_AGENT_TURN_FAILED": "The agent's turn failed ({{code}}): {{message}}"
   },
   "runError": {
     "FLOW_PROJECT_INVALID": "The project folder or its .mdium/project.yaml cannot be used.",
@@ -455,6 +474,7 @@
     "loadingStages": "Loading stages…",
     "uses": "Action",
     "with": "With",
+    "providerTemplate": "Template",
     "condition": {
       "kind": "Condition type",
       "comparison": "Comparison",

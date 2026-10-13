@@ -59,8 +59,10 @@ export function ApprovalDialog({ projectRoot, runId, request, onClose, onChoose 
             ))
           ) : value === null || value === undefined ? (
             <span className="flow-run__muted">{t("run.noValue")}</span>
+          ) : typeof value === "string" ? (
+            <code>{value}</code>
           ) : (
-            <code>{typeof value === "string" ? value : JSON.stringify(value)}</code>
+            <pre className="flow-dialog__log">{JSON.stringify(value, null, 2)}</pre>
           )}
         </div>
       ))}

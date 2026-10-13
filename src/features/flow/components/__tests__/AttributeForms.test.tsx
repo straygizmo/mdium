@@ -603,17 +603,35 @@ describe("PythonForm", () => {
     expect(patches.at(-1)).toEqual({ with: { a: 1, b: 2 } });
   });
 });
+describe("AgentForm V7", () => {
+  it("edits with rows and keeps a templated provider in a text field", async () => {
+    const node = { id: "a", kind: "agent", provider: "${{ params.p }}", permission: "read-only", outputContract: "outcome", promptRef: "builtin:design", with: { requirement: "r" } } as FlowAgentNode;
+    const patches = await mountKind(AgentForm, node);
+    expect(container.querySelector<HTMLInputElement>('input[value="r"]')).not.toBeNull();
+    expect(one("Template")).toHaveProperty("value", "${{ params.p }}");
+    await typeAndBlur(all("Value")[0], "q");
+    expect(patches.at(-1)).toEqual({ with: { requirement: "q" } });
+  });
+});
+
 describe("ActionForm", () => {
+  it("seeds the required inputs of the chosen action", async () => {
+    const node: FlowActionNode = { id: "s", kind: "action", uses: "mdium/screen-input" };
+    const patches = await mountKind(ActionForm, node);
+    await choose(one("Action"), "mdium/git-merge-local");
+    expect(patches.at(-1)).toEqual({ uses: "mdium/git-merge-local", with: { worktree: "" } });
+  });
+
   it("chooses a built-in action and edits with rows", async () => {
     const node: FlowActionNode = { id: "act", kind: "action", uses: "mdium/screen-input" };
     const patches = await mountKind(ActionForm, node);
 
     await choose(one("Action"), "mdium/issue-close");
-    expect(patches.at(-1)).toEqual({ uses: "mdium/issue-close" });
+    expect(patches.at(-1)).toEqual({ uses: "mdium/issue-close", with: { issue: "" } });
 
     await typeAndBlur(all("New key")[0], "base");
     await act(async () => button("Add").click());
-    expect(patches.at(-1)).toEqual({ with: { base: "" } });
+    expect(patches.at(-1)).toEqual({ with: { issue: "", base: "" } });
   });
 });
 

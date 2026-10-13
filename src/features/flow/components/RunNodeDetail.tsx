@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { NodeState } from "@/shared/types/flow-run";
-import { flowRunApi } from "../lib/flow-run-api";
+import { flowRunApi, type LogStream } from "../lib/flow-run-api";
 import { describeReason } from "../lib/run-format";
 import { ArtifactPreview } from "./ArtifactPreview";
 
@@ -15,7 +15,10 @@ interface RunNodeDetailProps {
   canMarkSucceeded: boolean;
   isApproval: boolean;
   onAct(op: () => Promise<void>): Promise<void>;
-  onLog(nodeKey: string, attempt: number): void;
+  /** Opens the log; `stream` picks the first tab (agent nodes: prompt / response). */
+  onLog(nodeKey: string, attempt: number, stream?: LogStream): void;
+  /** The node is an agent node (adds prompt and response logs). */
+  isAgent?: boolean;
 }
 
 type DetailTab = "overview" | "artifacts";
@@ -34,6 +37,7 @@ export function RunNodeDetail({
   isApproval,
   onAct,
   onLog,
+  isAgent = false,
 }: RunNodeDetailProps) {
   const { t } = useTranslation("flow");
   const [tab, setTab] = useState<DetailTab>("overview");
@@ -103,9 +107,20 @@ export function RunNodeDetail({
         ))}
       <div className="flow-run__node-actions">
         {!isApproval && node.attempt > 0 && (node.process || node.startedAt) && (
-          <button type="button" onClick={() => onLog(nodeKey, node.attempt)}>
+          // Agent nodes pass a stream so the dialog also offers the prompt and response tabs.
+          <button type="button" onClick={() => (isAgent ? onLog(nodeKey, node.attempt, "stdout") : onLog(nodeKey, node.attempt))}>
             {t("run.log")}
           </button>
+        )}
+        {isAgent && node.attempt > 0 && (
+          <>
+            <button type="button" onClick={() => onLog(nodeKey, node.attempt, "prompt")}>
+              {t("run.logPrompt")}
+            </button>
+            <button type="button" onClick={() => onLog(nodeKey, node.attempt, "response")}>
+              {t("run.logResponse")}
+            </button>
+          </>
         )}
         {canRerun && (
           <button type="button" onClick={() => void onAct(() => flowRunApi.rerunNode(projectRoot, runId, nodeKey))}>

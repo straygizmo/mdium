@@ -177,7 +177,9 @@
     },
     "expand": "展開",
     "collapse": "折りたたむ",
-    "reviewTemplates": "組込みテンプレート"
+    "reviewTemplates": "組込みテンプレート",
+    "logPrompt": "プロンプト",
+    "logResponse": "応答"
   },
   "runStatus": {
     "pending": "準備中",
@@ -250,7 +252,24 @@
     "FLOW_RUN_STUCK": "続行できるノードがありません。",
     "FLOW_OUTPUT_UNRESOLVED": "出力「{{output}}」を求められませんでした。",
     "FLOW_ARTIFACT_OUTSIDE_PROJECT": "成果物「{{path}}」はプロジェクトの外にあるため無視しました。",
-    "FLOW_ARTIFACT_WRITE_FAILED": "成果物の一覧を書き込めませんでした: {{message}}"
+    "FLOW_ARTIFACT_WRITE_FAILED": "成果物の一覧を書き込めませんでした: {{message}}",
+    "FLOW_ACTION_APPROVAL": "アクション「{{uses}}」は実行前に確認が必要です。",
+    "FLOW_ACTION_FAILED": "アクションが失敗しました（{{code}}）: {{message}}",
+    "FLOW_ACTION_INPUT_INVALID": "アクションの入力「{{input}}」が不正です（{{reason}}）。",
+    "FLOW_ACTION_IO_FAILED": "アクションがファイルを読み書きできませんでした。",
+    "FLOW_ACTION_PANICKED": "アクションが予期せず停止しました。",
+    "FLOW_AGENT_ATTENTION": "エージェントの確認が必要です: {{reason}}",
+    "FLOW_AGENT_GUARD_BLOCKED": "ガードがエージェントをブロックしました（{{rule}}）: {{summary}}",
+    "FLOW_AGENT_INTEGRITY_CHANGED": "エージェントが保護対象のファイルを変更しました: {{changes}}",
+    "FLOW_AGENT_INTEGRITY_SKIPPED": "保護対象ファイルの変更チェックをスキップしました。",
+    "FLOW_AGENT_OUTPUT_INVALID": "エージェントの出力が期待する形式ではありません。",
+    "FLOW_AGENT_OUTPUT_INVALID_detail": "エージェントの出力が期待する形式ではありません: {{detail}}",
+    "FLOW_AGENT_PROMPT_INVALID": "エージェントのプロンプトを準備できませんでした。",
+    "FLOW_AGENT_QUESTION": "エージェントが質問しています。回答を待っています。",
+    "FLOW_AGENT_RUNNER_EXITED": "エージェントのランナーが完了前に終了しました。",
+    "FLOW_AGENT_SCREENING": "エージェントの作業は、指摘事項の確認のため保留されています。",
+    "FLOW_AGENT_START_FAILED": "エージェントを開始できませんでした。",
+    "FLOW_AGENT_TURN_FAILED": "エージェントのターンが失敗しました（{{code}}）: {{message}}"
   },
   "runError": {
     "FLOW_PROJECT_INVALID": "プロジェクトフォルダまたは .mdium/project.yaml を使用できません。",
@@ -455,6 +474,7 @@
     "loadingStages": "ステージを読み込み中…",
     "uses": "アクション",
     "with": "引数",
+    "providerTemplate": "テンプレート",
     "condition": {
       "kind": "条件の種類",
       "comparison": "比較",

@@ -10,7 +10,7 @@ import {
   type RunSnapshot,
   type RunSummary,
 } from "@/shared/types/flow-run";
-import { flowRunApi, subscribeFlowRunEvents, toFlowRunError } from "../lib/flow-run-api";
+import { flowRunApi, subscribeFlowRunEvents, toFlowRunError, type LogStream } from "../lib/flow-run-api";
 import { describeError, describeReason, formatUsd } from "../lib/run-format";
 import { RunStartDialog } from "./RunStartDialog";
 import { RunLogDialog } from "./RunLogDialog";
@@ -43,7 +43,7 @@ export function RunPanel({ projectRoot, flowPath, flow }: RunPanelProps) {
   const [snapshot, setSnapshot] = useState<RunSnapshot | null>(null);
   const [error, setError] = useState<FlowRunError | null>(null);
   const [starting, setStarting] = useState(false);
-  const [logTarget, setLogTarget] = useState<{ nodeKey: string; attempt: number } | null>(null);
+  const [logTarget, setLogTarget] = useState<{ nodeKey: string; attempt: number; stream?: LogStream } | null>(null);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [approvalNotice, setApprovalNotice] = useState(false);
   const [gitignoreHint, setGitignoreHint] = useState(false);
@@ -190,7 +190,7 @@ export function RunPanel({ projectRoot, flowPath, flow }: RunPanelProps) {
           projectRoot={projectRoot}
           selectedNode={selectedNode}
           onSelectNode={setSelectedNode}
-          onLog={(nodeKey, attempt) => setLogTarget({ nodeKey, attempt })}
+          onLog={(nodeKey, attempt, stream) => setLogTarget({ nodeKey, attempt, stream })}
         />
       )}
       {starting && flow && (
@@ -212,6 +212,8 @@ export function RunPanel({ projectRoot, flowPath, flow }: RunPanelProps) {
           runId={selected}
           nodeKey={logTarget.nodeKey}
           attempt={logTarget.attempt}
+          initialStream={logTarget.stream}
+          agent={logTarget.stream !== undefined}
           onClose={() => setLogTarget(null)}
         />
       )}
@@ -227,7 +229,7 @@ interface RunDetailProps {
   onAct(op: () => Promise<void>): Promise<void>;
   /** Reloads the run list and the selected run. */
   onRefresh(): Promise<void>;
-  onLog(nodeKey: string, attempt: number): void;
+  onLog(nodeKey: string, attempt: number, stream?: LogStream): void;
 }
 
 function RunDetail({ projectRoot, snapshot, selectedNode, onSelectNode, onAct, onRefresh, onLog }: RunDetailProps) {
@@ -349,6 +351,7 @@ function RunDetail({ projectRoot, snapshot, selectedNode, onSelectNode, onAct, o
           canRerun={needsAction(selectedNode, state.nodes[selectedNode])}
           canMarkSucceeded={needsAction(selectedNode, state.nodes[selectedNode]) && state.nodes[selectedNode].status === "failed"}
           isApproval={isApproval(selectedNode)}
+          isAgent={rootDef(selectedNode)?.kind === "agent"}
           onAct={onAct}
           onLog={onLog}
         />

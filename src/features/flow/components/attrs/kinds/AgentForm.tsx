@@ -1,33 +1,43 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { FlowAgentNode, FlowAgentProvider } from "@/shared/types/flow";
+import { KeyValueEditor } from "../KeyValueEditor";
 import { TextField } from "../fields";
-import type { KindFormProps } from "./types";
+import { formatValue, parseValue } from "./ValueRows";
+import { recordOrUndefined, type KindFormProps } from "./types";
 
 const PROVIDERS: FlowAgentProvider[] = ["claude", "codex", "copilot", "opencode"];
 const PERMISSIONS: FlowAgentNode["permission"][] = ["read-only", "full-access"];
 const CONTRACTS: FlowAgentNode["outputContract"][] = ["outcome", "free"];
+
+/** Select value standing for "a template string in the provider field". */
+const TEMPLATE = "__template__";
 
 type PromptMode = "inline" | "file";
 
 export function AgentForm({ node, path, onChange }: KindFormProps<FlowAgentNode>) {
   const { t } = useTranslation("flow");
   const [mode, setMode] = useState<PromptMode>(node.promptRef !== undefined ? "file" : "inline");
+  const templated = !(PROVIDERS as string[]).includes(node.provider);
   const write = (patch: Partial<FlowAgentNode>) => onChange(path, patch);
   return (
     <div className="flow-attrs">
       <label className="flow-attrs__field">
         <span>{t("attrs.provider")}</span>
-        <select aria-label={t("attrs.provider")} value={node.provider} onChange={(e) => write({ provider: e.target.value as FlowAgentProvider })}>
+        <select
+          aria-label={t("attrs.provider")}
+          value={templated ? TEMPLATE : node.provider}
+          onChange={(e) => write({ provider: e.target.value === TEMPLATE ? "${{ params.provider }}" : (e.target.value as FlowAgentProvider) })}
+        >
           {PROVIDERS.map((p) => (
             <option key={p} value={p}>
               {p}
             </option>
           ))}
-          {/* A templated provider (`${{ params.provider }}`) stays selectable as written. */}
-          {!(PROVIDERS as string[]).includes(node.provider) && <option value={node.provider}>{node.provider}</option>}
+          <option value={TEMPLATE}>{t("attrs.providerTemplate")}</option>
         </select>
       </label>
+      {templated && <TextField label={t("attrs.providerTemplate")} value={node.provider} onCommit={(provider) => write({ provider: provider ?? "" })} />}
       <TextField label={t("attrs.model")} value={node.model} onCommit={(model) => write({ model })} />
       <fieldset className="flow-attrs__field">
         <legend>{t("attrs.promptSource")}</legend>
@@ -72,6 +82,24 @@ export function AgentForm({ node, path, onChange }: KindFormProps<FlowAgentNode>
         </select>
       </label>
       <TextField label={t("attrs.workingDir")} value={node.workingDir} onCommit={(workingDir) => write({ workingDir })} />
+      <div className="flow-attrs__field">
+        <span>{t("attrs.with")}</span>
+        <KeyValueEditor<unknown>
+          entries={node.with ?? {}}
+          addLabel={t("attrs.addRow")}
+          makeEntry={() => ""}
+          columns={[
+            {
+              id: "value",
+              label: t("attrs.envValue"),
+              render: (value, set) => (
+                <TextField label={t("attrs.envValue")} value={formatValue(value)} onCommit={(text) => set(parseValue(text, undefined, value))} />
+              ),
+            },
+          ]}
+          onChange={(next) => write({ with: recordOrUndefined(next) })}
+        />
+      </div>
     </div>
   );
 }

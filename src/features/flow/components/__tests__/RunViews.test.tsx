@@ -22,6 +22,8 @@ const showConfirm = vi.hoisted(() => vi.fn(async () => true));
 vi.mock("@/stores/dialog-store", async (orig) => ({ ...(await orig<object>()), showConfirm }));
 
 import { RunPanel, sameRoot } from "../RunPanel";
+import { RunNodeDetail } from "../RunNodeDetail";
+import { RunLogDialog } from "../RunLogDialog";
 import { isLiveInstance, splitNodeKey, type RunState } from "@/shared/types/flow-run";
 import { RunStartDialog, initialParamValues, invalidJsonParams, paramsFromForm } from "../RunStartDialog";
 import { flowRunApi, subscribeFlowRunEvents, toFlowRunError } from "../../lib/flow-run-api";
@@ -125,6 +127,43 @@ function button(container: HTMLElement, text: string): HTMLButtonElement {
   if (!found) throw new Error(`no button "${text}" in: ${container.textContent}`);
   return found as HTMLButtonElement;
 }
+
+describe("agent node logs", () => {
+  beforeEach(async () => {
+    invoke.mockReset();
+    await i18n.changeLanguage("en");
+  });
+
+  it("agent node detail offers prompt and response logs", async () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const onLog = vi.fn();
+    const node = { status: "succeeded", attempt: 2, startedAt: "2026-01-01T00:00:00Z" } as NodeState;
+    const props = { projectRoot: ROOT, runId: "r", nodeKey: "a", node, name: "A", canRerun: false, canMarkSucceeded: false, isApproval: false, onAct: vi.fn(), onLog };
+    await act(async () => root.render(<RunNodeDetail {...props} isAgent />));
+    await act(async () => button(container, "Prompt").click());
+    expect(onLog).toHaveBeenLastCalledWith("a", 2, "prompt");
+    await act(async () => button(container, "Response").click());
+    expect(onLog).toHaveBeenLastCalledWith("a", 2, "response");
+    await act(async () => root.render(<RunNodeDetail {...props} />));
+    expect([...container.querySelectorAll("button")].some((b) => b.textContent === "Prompt")).toBe(false);
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("the log dialog loads the prompt log through flow_run_log", async () => {
+    route({ flow_run_log: (args) => `log:${String(args.stream)}` });
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => root.render(<RunLogDialog projectRoot={ROOT} runId="r" nodeKey="a" attempt={1} agent initialStream="prompt" onClose={vi.fn()} />));
+    await waitFor(() => expect(document.body.textContent).toContain("log:prompt"));
+    expect(invoke).toHaveBeenCalledWith("flow_run_log", expect.objectContaining({ nodeKey: "a", attempt: 1, stream: "prompt" }));
+    act(() => root.unmount());
+    container.remove();
+  });
+});
 
 describe("flow run api", () => {
   beforeEach(() => invoke.mockReset());

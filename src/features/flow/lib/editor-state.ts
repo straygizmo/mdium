@@ -186,7 +186,7 @@ export function defaultsFor(kind: FlowNodeKind): NodeDefaults {
     case "subflow":
       return { kind, flow: "" };
     case "agent":
-      return { kind, provider: "claude", permission: "read-only", outputContract: "outcome", prompt: "" };
+      return { kind, provider: "claude", permission: "read-only", outputContract: "outcome", promptRef: "builtin:review" };
     case "python":
       return { kind, runtime: "", entry: "" };
     case "action":

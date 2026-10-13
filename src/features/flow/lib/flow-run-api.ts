@@ -45,6 +45,9 @@ async function call<T>(command: string, args: Record<string, unknown>): Promise<
 }
 
 /** Run commands of the flow engine. Paths are project-relative. */
+/** Log kinds: prompt and response exist for agent nodes only. */
+export type LogStream = "stdout" | "stderr" | "prompt" | "response";
+
 export const flowRunApi = {
   reviewCommands: (projectRoot: string, path: string) =>
     call<CommandReview>("flow_command_review", { projectRoot, path }),
@@ -64,7 +67,7 @@ export const flowRunApi = {
   markSucceeded: (projectRoot: string, runId: string, nodeKey: string) =>
     call<void>("flow_run_mark_succeeded", { projectRoot, runId, nodeKey }),
   delete: (projectRoot: string, runId: string) => call<void>("flow_run_delete", { projectRoot, runId }),
-  log: (projectRoot: string, runId: string, nodeKey: string, attempt: number, stream: "stdout" | "stderr", maxBytes: number) =>
+  log: (projectRoot: string, runId: string, nodeKey: string, attempt: number, stream: LogStream, maxBytes: number) =>
     call<string>("flow_run_log", { projectRoot, runId, nodeKey, attempt, stream, maxBytes }),
   gitignoreStatus: (projectRoot: string) => call<{ ignored: boolean }>("flow_gitignore_status", { projectRoot }),
   /** A webview-loadable URL for a recorded artifact (not a plain command). */
