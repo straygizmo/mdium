@@ -82,6 +82,17 @@ crate::errors::impl_error!(OutcomeError);
 /// `reason` / `question` (stringified). The body is everything after the
 /// closing `---` (minus one optional blank line), verbatim.
 pub fn parse_outcome(text: &str) -> Result<StageOutcome, OutcomeError> {
+    parse_outcome_as(text, true)
+}
+
+/// Like [`parse_outcome`], but a malformed `outputs` / `artifacts` is
+/// ignored (left empty) instead of [`OutcomeError::InvalidOutputs`]: the
+/// `workflow` engine never used those keys and keeps accepting such responses.
+pub fn parse_outcome_lenient(text: &str) -> Result<StageOutcome, OutcomeError> {
+    parse_outcome_as(text, false)
+}
+
+fn parse_outcome_as(text: &str, strict_outputs: bool) -> Result<StageOutcome, OutcomeError> {
     let text = strip_bom(text).trim_start();
     let text = strip_wrapping_fence(text).trim_start();
     let (yaml, body) = split_frontmatter(text, DelimiterMatch::TrimEnd)
@@ -105,8 +116,11 @@ pub fn parse_outcome(text: &str) -> Result<StageOutcome, OutcomeError> {
         return Err(OutcomeError::MissingReason);
     }
 
-    let outputs = decode_outputs(raw.outputs)?;
-    let artifacts = decode_artifacts(raw.artifacts)?;
+    let (outputs, artifacts) = match (decode_outputs(raw.outputs), decode_artifacts(raw.artifacts)) {
+        (Ok(outputs), Ok(artifacts)) => (outputs, artifacts),
+        (Err(err), _) | (_, Err(err)) if strict_outputs => return Err(err),
+        (outputs, artifacts) => (outputs.unwrap_or_default(), artifacts.unwrap_or_default()),
+    };
 
     Ok(StageOutcome {
         kind,
@@ -421,6 +435,20 @@ artifacts: [1]
             assert_eq!(err, OutcomeError::MissingFrontmatter, "text {text:?}");
             assert_eq!(err.code(), "OUTCOME_MISSING_FRONTMATTER");
         }
+    }
+
+    #[test]
+    fn the_lenient_parser_ignores_malformed_outputs_only() {
+        let text = "---\noutcome: completed\noutputs: [1]\nartifacts: [a.md]\n---\nb";
+        assert_eq!(parse_outcome(text).unwrap_err().code(), "OUTCOME_INVALID_OUTPUTS");
+        let out = parse_outcome_lenient(text).unwrap();
+        assert!(out.outputs.is_empty());
+        assert_eq!(out.artifacts, vec!["a.md".to_string()]);
+        // Everything else is as strict as before.
+        assert_eq!(
+            parse_outcome_lenient("---\noutcome: attention\n---\nb").unwrap_err(),
+            OutcomeError::MissingReason
+        );
     }
 
     #[test]

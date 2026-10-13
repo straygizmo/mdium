@@ -113,9 +113,10 @@ This attempt is a planning session. It overrides the stage instructions and comp
 
 Produce an implementation plan only. Do not modify files. Do not create commits, and do not run tests or other commands that write files. You may read files and run read-only commands to inform the plan. End with outcome: completed when the plan is ready for approval. The user reviews the plan before any file is changed.";
 
-/// The stage outcome contract, matching what `outcome::parse_outcome`
-/// accepts.
-pub const OUTPUT_CONTRACT: &str = "## Output contract
+/// First part of the stage outcome contract (before the V7 outputs note).
+macro_rules! contract_head {
+    () => {
+        "## Output contract
 
 Your final response must start with a YAML frontmatter block, followed by a Markdown body:
 
@@ -129,9 +130,14 @@ Choose the outcome as follows:
 
 - `completed`: the completion criteria are met. The body is your result and is passed on to the next stage.
 - `attention`: you cannot finish because of a problem a person has to look at (for example contradictory requirements, a failure you cannot resolve, or a missing prerequisite). Explain the problem in `reason` and the details in the body.
-- `awaiting_user`: you need an answer from the user before you can continue. State why in `reason` and ask in `question`; put any context in the body.
+- `awaiting_user`: you need an answer from the user before you can continue. State why in `reason` and ask in `question`; put any context in the body."
+    };
+}
 
-The frontmatter may also hold an optional `outputs:` mapping (string keys, scalar or JSON values) and an optional `artifacts:` list of file paths (relative to your working directory). They become the node's outputs and artifacts.
+/// Last part of the stage outcome contract.
+macro_rules! contract_tail {
+    () => {
+        "
 
 Do not wrap the whole response in a code fence. Examples:
 
@@ -153,7 +159,24 @@ question: Should the feature store data in SQLite or in JSON files?
 ---
 
 The options considered and their trade-offs.
-```";
+```"
+    };
+}
+
+/// The stage outcome contract as the `workflow` engine states it, matching
+/// what `outcome::parse_outcome` accepts. That engine has no node outputs,
+/// so its agents are not told about `outputs:` / `artifacts:`.
+pub const OUTPUT_CONTRACT_BASE: &str = concat!(contract_head!(), contract_tail!());
+
+/// The stage outcome contract of flow `agent` nodes: the base contract plus
+/// the optional `outputs:` / `artifacts:` that become the node's outputs.
+pub const OUTPUT_CONTRACT: &str = concat!(
+    contract_head!(),
+    "
+
+The frontmatter may also hold an optional `outputs:` mapping (string keys, scalar or JSON values) and an optional `artifacts:` list of file paths (relative to your working directory). They become the node's outputs and artifacts.",
+    contract_tail!()
+);
 
 /// A question the previous attempt asked and the user's answer.
 pub struct PreviousTurn {
