@@ -314,6 +314,7 @@ impl FlowService {
             &crate::run::process::AttachedLauncher,
             Duration::from_millis(200),
             progress,
+            None,
         );
         Ok(result)
     }

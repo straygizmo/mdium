@@ -74,12 +74,22 @@ pub(super) fn project_setup(
             outputs: BTreeMap::new(),
         });
     }
-    let result = setup::run_setup(&root, &project, &*ctx.launcher, ctx.poll, &|progress| {
-        (ctx.progress)(format!(
-            "setup {}/{}: {:?}",
-            progress.step, progress.total, progress.status
-        ))
-    });
+    let result = setup::run_setup(
+        &root,
+        &project,
+        &*ctx.launcher,
+        ctx.poll,
+        &|progress| {
+            (ctx.progress)(format!(
+                "setup {}/{}: {:?}",
+                progress.step, progress.total, progress.status
+            ))
+        },
+        Some(&ctx.cancel),
+    );
+    if result.cancelled {
+        return Ok(ActionEnd::Cancelled);
+    }
     if result.ok {
         return Ok(ActionEnd::done(BTreeMap::from([(
             "ok".to_string(),

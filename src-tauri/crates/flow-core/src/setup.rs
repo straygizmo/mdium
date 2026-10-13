@@ -7,6 +7,7 @@ use crate::project::ProjectDef;
 use crate::run::process::{tail_file, LaunchSpec, Launcher};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 const TAIL_BYTES: u64 = 4096;
@@ -57,16 +58,25 @@ pub struct SetupResult {
     /// Project-relative log directory.
     pub log_dir: String,
     pub steps: Vec<SetupStepResult>,
+    /// `cancel` was set: the running step's process tree was killed and no
+    /// further step ran.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub cancelled: bool,
 }
 
-/// Runs every setup step of `project` in order.
+/// Runs every setup step of `project` in order. `cancel`, when given, is
+/// checked before each step and while a step runs: once it is set the
+/// step's process tree is killed and the result is `cancelled`.
 pub fn run_setup(
     project_root: &Path,
     project: &ProjectDef,
     launcher: &dyn Launcher,
     poll: Duration,
     progress: &dyn Fn(&SetupProgress),
+    cancel: Option<&AtomicBool>,
 ) -> SetupResult {
+    let is_cancelled = || cancel.is_some_and(|flag| flag.load(Ordering::SeqCst));
+    let mut cancelled = false;
     let setup_id = fsutil::new_id();
     let log_rel = format!(".mdium/setup-runs/{setup_id}");
     let log_dir: PathBuf = project_root.join(&log_rel);
@@ -74,6 +84,11 @@ pub fn run_setup(
     let mut steps = Vec::new();
     let mut ok = true;
     for (i, step) in project.setup.iter().enumerate() {
+        if is_cancelled() {
+            cancelled = true;
+            ok = false;
+            break;
+        }
         let index = i + 1;
         let report = |status: SetupStatus, exit_code: Option<i32>| {
             progress(&SetupProgress {
@@ -111,6 +126,13 @@ pub fn run_setup(
             };
             let mut handle = launcher.launch(&spec)?;
             loop {
+                if is_cancelled() {
+                    handle.kill_tree();
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Interrupted,
+                        "setup cancelled",
+                    ));
+                }
                 match handle.try_wait() {
                     Ok(Some(code)) => return Ok(code),
                     Ok(None) => {}
@@ -131,6 +153,9 @@ pub fn run_setup(
                 code != 0
             }
             Err(err) => {
+                if err.kind() == std::io::ErrorKind::Interrupted && is_cancelled() {
+                    cancelled = true;
+                }
                 result.error = Some(err.to_string());
                 true
             }
@@ -162,6 +187,7 @@ pub fn run_setup(
         ok,
         log_dir: log_rel,
         steps,
+        cancelled,
     }
 }
 
@@ -204,6 +230,7 @@ mod tests {
             &|p| {
                 seen.lock().unwrap().push((p.step, p.status, p.exit_code));
             },
+            None,
         );
         assert!(!result.ok);
         assert_eq!(result.steps.len(), 2, "third step never ran");
@@ -242,6 +269,7 @@ mod tests {
             &AttachedLauncher,
             Duration::from_millis(20),
             &|_| {},
+            None,
         );
         assert!(!result.ok);
         assert_eq!(result.steps.len(), 1);
@@ -262,6 +290,7 @@ mod tests {
             &AttachedLauncher,
             Duration::from_millis(20),
             &|_| {},
+            None,
         );
         assert!(result.ok);
         assert_eq!(result.steps.len(), 2);

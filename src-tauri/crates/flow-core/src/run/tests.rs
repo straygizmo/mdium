@@ -4211,6 +4211,74 @@ fn project_setup_runs_the_manifest_steps_and_asks_when_the_manifest_differs() {
     f.wait_settled(&run_id, RunStatus::Completed);
 }
 
+/// A setup step that writes its pid to `pid_file`, then hangs for minutes.
+fn hanging_setup_step(pid_file: &Path) -> Value {
+    let path = pid_file.to_string_lossy().replace('\'', "''");
+    if cfg!(windows) {
+        json!(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+            format!("Set-Content -LiteralPath '{path}' -Value $PID; Start-Sleep -Seconds 300")])
+    } else {
+        json!(["sh", "-c", format!("echo $$ > '{path}'; exec sleep 300")])
+    }
+}
+
+/// Waits for the pid a hanging setup step wrote.
+fn wait_pid(pid_file: &Path) -> u32 {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if let Some(pid) = fs::read_to_string(pid_file).ok().and_then(|t| t.trim().parse().ok()) {
+            return pid;
+        }
+        assert!(Instant::now() < deadline, "the setup step never started");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Waits (bounded) until `pid` is gone.
+fn wait_gone(pid: u32) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while process_alive(pid) {
+        if Instant::now() > deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    true
+}
+
+#[test]
+fn a_hanging_project_setup_can_be_stopped_and_cancelled() {
+    let f = fixture();
+    std::fs::create_dir_all(f.root.join(".mdium")).unwrap();
+    let pid_file = f.root.join("setup.pid");
+    let step = serde_json::to_string(&hanging_setup_step(&pid_file)).unwrap();
+    std::fs::write(f.root.join(".mdium/project.yaml"), format!("schemaVersion: 1\nid: p\nname: P\nsetup:\n  - {{ run: {step} }}\n")).unwrap();
+    let rel = write_flow(&f.root, "setup", json!({ "limits": { "stopGrace": "20s" } }),
+        vec![json!({ "id": "s", "kind": "action", "uses": "mdium/project-setup" })], vec![]);
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let pid = wait_pid(&pid_file);
+    assert!(process_alive(pid));
+    // Stop: the action kills its step and the node waits for the resume.
+    let started = Instant::now();
+    f.engine.stop(&f.root, &run_id).unwrap();
+    let snap = f.wait_settled(&run_id, RunStatus::Paused);
+    assert!(started.elapsed() < Duration::from_secs(15), "stop waited for the step");
+    let s = node(&snap, "s");
+    assert_eq!(s.status, NodeStatus::Ready);
+    assert_eq!(s.reason.as_ref().unwrap().code, FLOW_NODE_STOPPED);
+    assert!(wait_gone(pid), "setup step {pid} survived the stop");
+    // Cancel: the resumed setup hangs again; cancelling kills it.
+    fs::remove_file(&pid_file).unwrap();
+    f.engine.resume(&f.root, &run_id).unwrap();
+    let pid = wait_pid(&pid_file);
+    let started = Instant::now();
+    f.engine.cancel(&f.root, &run_id).unwrap();
+    let snap = f.wait_settled(&run_id, RunStatus::Cancelled);
+    assert!(started.elapsed() < Duration::from_secs(15), "cancel waited for the step");
+    assert_eq!(node(&snap, "s").status, NodeStatus::Cancelled);
+    assert!(wait_gone(pid), "setup step {pid} survived the cancel");
+}
+
 #[test]
 fn project_setup_reports_the_failing_step() {
     let f = fixture();

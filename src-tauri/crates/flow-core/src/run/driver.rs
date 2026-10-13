@@ -61,6 +61,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, TryRecvError};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -140,6 +141,8 @@ pub const FLOW_AGENT_INTEGRITY_SKIPPED: &str = "FLOW_AGENT_INTEGRITY_SKIPPED";
 pub const FLOW_ACTION_IO_FAILED: &str = "FLOW_ACTION_IO_FAILED";
 /// `FLOW_ACTION_FAILED` code: the action's thread ended without a result (a panic).
 pub const FLOW_ACTION_PANICKED: &str = "FLOW_ACTION_PANICKED";
+/// `FLOW_ACTION_FAILED` code: the action ended on a cancel nobody asked for.
+pub const FLOW_ACTION_CANCELLED: &str = "FLOW_ACTION_CANCELLED";
 
 /// Options of a budget approval.
 pub const BUDGET_OPTIONS: [&str; 2] = ["approve", "stop"];
@@ -337,6 +340,10 @@ struct RunningAction {
     attempt: u32,
     /// The built-in action (`mdium/<name>`), named in its approval reason.
     uses: String,
+    /// Asks the action thread to end early (stop, cancel, exit, new pass).
+    cancel: Arc<AtomicBool>,
+    /// Stop requested: the action must end by then.
+    grace_deadline: Option<Instant>,
     dir: PathBuf,
     /// The action's one end.
     rx: Receiver<ActionEnd>,
@@ -351,8 +358,10 @@ enum ActionFinish {
     End(ActionEnd),
     /// The thread ended without an end (it panicked).
     Lost,
-    /// The node's timeout passed (the thread cannot be killed; it is left behind).
+    /// The node's timeout passed (the thread is asked to end and left behind).
     Timeout,
+    /// A stop's grace period passed before the action ended.
+    GraceKilled,
 }
 
 /// Inputs and prompt of an agent attempt, written to its node dir.
@@ -1151,9 +1160,10 @@ impl Driver {
                     let mut agent = self.agents.remove(pos);
                     agent.handle.cancel();
                 }
-                // An action thread cannot be stopped: its end is dropped.
+                // The action thread is asked to end; its end is dropped.
                 if let Some(pos) = self.actions.iter().position(|a| a.key == key) {
-                    self.actions.remove(pos);
+                    let action = self.actions.remove(pos);
+                    action.cancel.store(true, Ordering::SeqCst);
                 }
                 self.close_children(key);
                 self.set_node(key, NodeStatus::Cancelled, node.attempt, reason, None);
@@ -4304,7 +4314,9 @@ impl Driver {
         }
         let (tx, rx) = mpsc::channel();
         let (progress_tx, progress_rx) = mpsc::channel::<String>();
+        let cancel = Arc::new(AtomicBool::new(false));
         let ctx = ActionContext {
+            cancel: cancel.clone(),
             project_root: self.scope_root(prefix),
             run_id: self.run_id.clone(),
             run_dir: self.run_dir(),
@@ -4336,6 +4348,8 @@ impl Driver {
             key: key.to_string(),
             attempt,
             uses: action.uses.clone(),
+            cancel,
+            grace_deadline: None,
             dir,
             rx,
             progress_rx,
@@ -4395,6 +4409,11 @@ impl Driver {
             let finish = match action.rx.try_recv() {
                 Ok(end) => Some(ActionFinish::End(end)),
                 Err(TryRecvError::Disconnected) => Some(ActionFinish::Lost),
+                Err(TryRecvError::Empty)
+                    if action.grace_deadline.is_some_and(|d| Instant::now() >= d) =>
+                {
+                    Some(ActionFinish::GraceKilled)
+                }
                 Err(TryRecvError::Empty) => action
                     .timeout
                     .filter(|t| action.started.elapsed() >= *t)
@@ -4427,6 +4446,8 @@ impl Driver {
     /// Settles an action node from how its action ended.
     fn finish_action(&mut self, action: RunningAction, finish: ActionFinish) {
         self.action_progress(&action);
+        // Whatever ends the monitoring, a thread left behind must stop too.
+        action.cancel.store(true, Ordering::SeqCst);
         let key = action.key.as_str();
         let attempt = action.attempt;
         match finish {
@@ -4468,10 +4489,62 @@ impl Driver {
                 Reason::new(FLOW_ACTION_FAILED).with("code", FLOW_ACTION_PANICKED),
                 false,
             ),
-            // The thread is left to finish; retrying could run the same
-            // operation twice at once, so a timeout is final.
+            // The thread is asked to end and left behind; retrying could run
+            // the same operation twice at once, so a timeout is final.
             ActionFinish::Timeout => self.fail_node(key, attempt, Reason::new(FLOW_NODE_TIMEOUT)),
+            ActionFinish::GraceKilled => {
+                self.set_node(
+                    key,
+                    NodeStatus::Ready,
+                    attempt,
+                    Some(Reason::new(FLOW_STOP_GRACE_EXCEEDED)),
+                    None,
+                );
+            }
+            ActionFinish::End(ActionEnd::Cancelled) if self.cancel_requested => {
+                self.set_node(
+                    key,
+                    NodeStatus::Cancelled,
+                    attempt,
+                    Some(Reason::new(FLOW_RUN_CANCELLED)),
+                    None,
+                );
+            }
+            // Stopped: the node runs again on resume.
+            ActionFinish::End(ActionEnd::Cancelled) if self.stop_requested => {
+                self.set_node(
+                    key,
+                    NodeStatus::Ready,
+                    attempt,
+                    Some(Reason::new(FLOW_NODE_STOPPED)),
+                    None,
+                );
+            }
+            // Nobody asked for this cancel: the action did not do its work.
+            ActionFinish::End(ActionEnd::Cancelled) => self.after_failure(
+                key,
+                attempt,
+                Reason::new(FLOW_ACTION_FAILED).with("code", FLOW_ACTION_CANCELLED),
+                false,
+            ),
         }
+    }
+
+    /// Asks every running action to end, then waits (bounded by
+    /// `limits.stopGrace`, else [`DEFAULT_CANCEL_GRACE`]) until their threads
+    /// have ended, so the processes they started are gone.
+    fn end_actions(&mut self) -> Vec<RunningAction> {
+        let actions = std::mem::take(&mut self.actions);
+        for action in &actions {
+            action.cancel.store(true, Ordering::SeqCst);
+        }
+        let deadline = Instant::now() + self.stop_grace().unwrap_or(DEFAULT_CANCEL_GRACE);
+        for action in &actions {
+            let left = deadline.saturating_duration_since(Instant::now());
+            // Any end, a lost thread or the deadline: the action is over for us.
+            let _ = action.rx.recv_timeout(left);
+        }
+        actions
     }
 
     fn emit_outputs(&mut self, key: &str, outputs: BTreeMap<String, Value>) {
@@ -4515,7 +4588,13 @@ impl Driver {
                 call.grace_deadline = deadline();
             }
         }
-        // Actions are short and cannot be interrupted: they finish on their own.
+        // Actions are asked to end; a finished action settles as it ended.
+        for action in &mut self.actions {
+            if action.grace_deadline.is_none() {
+                action.grace_deadline = deadline();
+            }
+            action.cancel.store(true, Ordering::SeqCst);
+        }
         // Agents cannot see the STOP file: their turn is cancelled.
         for agent in &mut self.agents {
             if agent.grace_deadline.is_none() {
@@ -4595,8 +4674,8 @@ impl Driver {
                 None,
             );
         }
-        // Action threads cannot be stopped: their ends are dropped.
-        for action in std::mem::take(&mut self.actions) {
+        // Action threads are asked to end (killing what they started).
+        for action in self.end_actions() {
             self.set_node(
                 &action.key,
                 NodeStatus::Cancelled,
@@ -4651,8 +4730,8 @@ impl Driver {
             );
             interrupted = true;
         }
-        // Nor do actions (their threads end with the process).
-        for action in std::mem::take(&mut self.actions) {
+        // Nor do actions: they are asked to end so their processes go too.
+        for action in self.end_actions() {
             self.set_node(
                 &action.key,
                 NodeStatus::Interrupted,

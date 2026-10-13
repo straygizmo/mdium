@@ -16,6 +16,7 @@ use crate::run::process::Launcher;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -50,6 +51,17 @@ pub struct ActionContext {
     pub acknowledged: Option<BTreeMap<String, Value>>,
     /// Reports a progress line to the driver.
     pub progress: Box<dyn Fn(String) + Send>,
+    /// Set by the driver on stop, cancel, app exit or a new pass: a long
+    /// action ends as soon as it can with [`ActionEnd::Cancelled`], killing
+    /// the processes it started.
+    pub cancel: Arc<AtomicBool>,
+}
+
+impl ActionContext {
+    /// Whether the driver asked the action to end.
+    pub fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::SeqCst)
+    }
 }
 
 /// How an action ended.
@@ -68,6 +80,9 @@ pub enum ActionEnd {
         outputs: BTreeMap<String, Value>,
     },
     Failed(Reason),
+    /// The action ended early because `cancel` was set; the driver decides
+    /// the node's status (stopped, cancelled, interrupted).
+    Cancelled,
 }
 
 impl ActionEnd {
@@ -149,6 +164,9 @@ pub fn spec_of(uses: &str) -> Option<&'static ActionSpec> {
 
 /// Runs one built-in action to its end (blocking).
 pub fn run_action(uses: &str, with: &BTreeMap<String, Value>, ctx: &ActionContext) -> ActionEnd {
+    if ctx.cancelled() {
+        return ActionEnd::Cancelled;
+    }
     let result = match uses {
         "mdium/screen-input" => git::screen_input(with, ctx),
         "mdium/git-worktree-create" => git::worktree_create(with, ctx),

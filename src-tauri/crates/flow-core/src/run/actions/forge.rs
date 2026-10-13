@@ -241,6 +241,7 @@ mod tests {
             poll: Duration::from_millis(20),
             acknowledged: None,
             progress: Box::new(|_| {}),
+            cancel: Default::default(),
         }
     }
 
