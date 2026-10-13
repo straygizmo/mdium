@@ -6,7 +6,7 @@
 //! Constraints). Ids used to build paths are validated before use so a
 //! malformed id can never escape `.mdium/` (no path traversal).
 
-pub use flow_core::fsutil::{atomic_write, new_id, now};
+pub use flow_core::fsutil::{atomic_write, is_valid_id, new_id, now};
 
 use std::path::{Path, PathBuf};
 
@@ -31,11 +31,6 @@ impl std::fmt::Display for InvalidId {
 }
 
 crate::workflow::errors::impl_workflow_error!(InvalidId);
-
-/// True if `id` is exactly 16 lowercase hex characters.
-pub(crate) fn is_valid_id(id: &str) -> bool {
-    id.len() == 16 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
-}
 
 pub(crate) fn validate_id(id: &str) -> Result<(), InvalidId> {
     if is_valid_id(id) {

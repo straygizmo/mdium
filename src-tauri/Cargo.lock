@@ -1072,8 +1072,11 @@ name = "flow-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "dirs 5.0.1",
  "junction",
+ "percent-encoding",
  "rand 0.8.5",
+ "regex",
  "serde",
  "serde_json",
  "serde_yaml_ng",

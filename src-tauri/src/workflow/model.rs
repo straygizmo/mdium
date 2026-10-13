@@ -219,15 +219,7 @@ pub struct Task {
     pub body: String,
 }
 
-/// Location and branch info for a run's dedicated worktree.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WorktreeInfo {
-    pub path: String,
-    pub branch: String,
-    pub base_branch: String,
-    pub base_commit: String,
-}
+pub use flow_core::gitops::WorktreeInfo;
 
 /// Lifecycle status of a workflow run. Serializes as snake_case on disk,
 /// matching `TaskStatus`.

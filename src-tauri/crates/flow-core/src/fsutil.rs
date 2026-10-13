@@ -538,3 +538,8 @@ mod tests {
         assert_eq!(strip_verbatim(volume.clone()), volume);
     }
 }
+
+/// True if `id` is exactly 16 lowercase hex characters.
+pub fn is_valid_id(id: &str) -> bool {
+    id.len() == 16 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
