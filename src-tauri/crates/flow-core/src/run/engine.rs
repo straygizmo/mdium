@@ -294,7 +294,7 @@ pub(crate) struct ProjectInBundle {
     sha: String,
     pub(crate) project: Option<crate::project::ProjectDef>,
     /// The manifest's validation errors (a run refuses to start while any).
-    issues: Vec<crate::issues::FlowIssue>,
+    pub(crate) issues: Vec<crate::issues::FlowIssue>,
 }
 
 impl Bundle {

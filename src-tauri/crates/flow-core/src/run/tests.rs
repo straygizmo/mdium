@@ -4423,9 +4423,79 @@ fn approval_show_of_a_node_that_has_not_run_is_null() {
 // ------------------------------------------------- sub-flow projectRoot
 
 /// `lib/child`: one command reporting `seen` = `command`, as a flow output.
+/// It also dumps its cwd and `FLOWT_ROOT` = `${{ project.root }}` to
+/// [`child_dump`] (an absolute path, the same from any worktree).
 fn child_flow(root: &Path, command: &str) -> String {
+    let dump = child_dump(root).to_string_lossy().into_owned();
+    let mut c = cmd("c", json!([ev(json!({ "v": 1, "type": "output", "key": "seen", "value": command })), { "dump_env": dump }]));
+    c["env"]["FLOWT_ROOT"] = json!("${{ project.root }}");
     write_flow(root, "lib/child", json!({ "id": "child", "name": "child", "outputs": { "seen": "${{ nodes.c.outputs.seen }}" } }),
-        vec![cmd("c", json!([ev(json!({ "v": 1, "type": "output", "key": "seen", "value": command }))]))], vec![])
+        vec![c], vec![])
+}
+
+fn child_dump(root: &Path) -> PathBuf {
+    root.join("child-env.json")
+}
+
+/// A repo whose `lib/child` flow is committed.
+fn repo_with_child() -> (crate::gitops::test_support::Fixture, String) {
+    let repo = crate::gitops::test_support::Fixture::new();
+    let child = child_flow(repo.root(), "x");
+    repo.run(&["add", "."]);
+    repo.run(&["commit", "-qm", "child"]);
+    (repo, child)
+}
+
+/// An outer flow whose only node runs `lib/child` in `root`.
+fn outer_in(root_of_project: &Path, name: &str, project_root: &Path) -> String {
+    write_flow(root_of_project, name, json!({}),
+        vec![json!({ "id": "s", "kind": "subflow", "flow": "lib/child.flow.json", "projectRoot": project_root.to_string_lossy() })], vec![])
+}
+
+#[test]
+fn project_root_rejects_the_main_checkout_and_subdirectory_projects() {
+    // A project that is a linked worktree: the main checkout is not a scope root.
+    let (repo, _) = repo_with_child();
+    let base = tempfile::tempdir().unwrap();
+    let info = crate::gitops::create_worktree_in(base.path(), repo.root(), "0123456789abcdef", "t").unwrap();
+    let f = fixture_at_with_agent(Path::new(&info.path), no_agents());
+    let rel = outer_in(&f.root, "outer", repo.root());
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Failed);
+    let reason = node(&snap, "s").reason.unwrap();
+    assert_eq!(reason.code, crate::issues::FLOW_SUBFLOW_ROOT_INVALID);
+    assert_eq!(reason.params["reason"], json!("main-checkout"));
+    // A project in a subdirectory of its repository cannot use projectRoot.
+    let repo = crate::gitops::test_support::Fixture::new();
+    let project = repo.root().join("proj");
+    fs::create_dir_all(&project).unwrap();
+    let f = fixture_at_with_agent(&project, no_agents());
+    child_flow(&f.root, "x");
+    let rel = outer_in(&f.root, "outer", repo.root());
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Failed);
+    let reason = node(&snap, "s").reason.unwrap();
+    assert_eq!(reason.code, crate::issues::FLOW_SUBFLOW_ROOT_INVALID);
+    assert_eq!(reason.params["reason"], json!("project-not-repo-root"));
+}
+
+#[test]
+fn a_broken_manifest_in_the_worktree_fails_the_subflow() {
+    let (repo, child) = repo_with_child();
+    let f = fixture_at_with_agent(repo.root(), no_agents());
+    let info = crate::gitops::create_worktree_in(&f.worktree_base, &f.root, "0123456789abcdef", "t").unwrap();
+    let wt = PathBuf::from(&info.path);
+    assert!(wt.join(&child).is_file());
+    fs::create_dir_all(wt.join(".mdium")).unwrap();
+    fs::write(wt.join(".mdium/project.yaml"), "schemaVersion: 1\nruntimes: 3\n").unwrap();
+    let rel = outer_in(&f.root, "outer", &wt);
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Failed);
+    let reason = node(&snap, "s").reason.unwrap();
+    assert_eq!(reason.code, crate::issues::FLOW_SUBFLOW_INVALID);
+    assert!(!reason.params["details"].as_array().unwrap().is_empty(), "{reason:?}");
+    assert!(snap.state.approvals.is_empty());
+    assert!(!snap.state.scopes.contains_key("s/"));
 }
 
 #[test]
@@ -4464,7 +4534,13 @@ fn identical_child_runs_in_the_worktree_and_a_changed_child_waits_for_approval()
     let wt = PathBuf::from(node(&snap, "wt").outputs["path"].as_str().unwrap());
     let scope = &snap.state.scopes["s/"];
     let recorded = scope.init.project_root.as_deref().expect("scope root recorded");
-    assert_eq!(crate::fsutil::project_key(Path::new(recorded)), crate::fsutil::project_key(&wt));
+    let key = crate::fsutil::project_key;
+    assert_eq!(key(Path::new(recorded)), key(&wt));
+    // The child's command ran in the worktree and saw it as `project.root`.
+    let dump: Value = serde_json::from_str(&fs::read_to_string(child_dump(&f.root)).unwrap()).unwrap();
+    assert_eq!(key(Path::new(dump["cwd"].as_str().unwrap())), key(&wt));
+    assert_eq!(key(Path::new(dump["env"]["FLOWT_ROOT"].as_str().unwrap())), key(&wt));
+    assert_ne!(key(&wt), key(&f.root));
     // The child definitions are recorded in run.json under the worktree root.
     let meta = f.engine_store().load_meta(&run_id).unwrap();
     assert_eq!(scope.init.graph.file, format!("{recorded}::{child}"));

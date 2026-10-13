@@ -1740,10 +1740,16 @@ impl Driver {
 
     /// A rendered `projectRoot` as a working root: an existing directory
     /// (relative values resolve against the project root), registered as a
-    /// worktree of the project, and not the project root itself. Checked
-    /// before anything there is read.
+    /// linked worktree of the project's repository, and neither the project
+    /// root nor the main checkout. The project must be its repository's
+    /// top level (a subdirectory project cannot map into a worktree).
+    /// Checked before anything there is read; `reason` says which rule failed.
     fn resolve_scope_root(&self, raw: &str) -> Result<PathBuf, Reason> {
-        let invalid = || Reason::new(FLOW_SUBFLOW_ROOT_INVALID).with("root", raw);
+        let invalid = |why: &str| {
+            Reason::new(FLOW_SUBFLOW_ROOT_INVALID)
+                .with("root", raw)
+                .with("reason", why)
+        };
         let project = self.store.project_root();
         let given = Path::new(raw);
         let joined = if given.is_absolute() {
@@ -1751,18 +1757,27 @@ impl Driver {
         } else {
             project.join(given)
         };
-        let canonical = std::fs::canonicalize(&joined).map_err(|_| invalid())?;
+        let canonical = std::fs::canonicalize(&joined).map_err(|_| invalid("not-found"))?;
         if !canonical.is_dir() {
-            return Err(invalid());
+            return Err(invalid("not-a-directory"));
+        }
+        let project_key = fsutil::project_key(project);
+        let top = gitops::repo_root(project).map_err(|_| invalid("project-not-a-repo"))?;
+        if fsutil::project_key(&top) != project_key {
+            return Err(invalid("project-not-repo-root"));
         }
         let root = fsutil::normalize_root(&canonical);
         let key = fsutil::project_key(&root);
-        if key == fsutil::project_key(project) {
-            return Err(invalid());
+        if key == project_key {
+            return Err(invalid("project-root"));
         }
-        let worktrees = gitops::list_worktrees(project).map_err(|_| invalid())?;
-        if !worktrees.iter().any(|w| fsutil::project_key(w) == key) {
-            return Err(invalid());
+        let worktrees = gitops::list_worktrees(project).map_err(|_| invalid("project-not-a-repo"))?;
+        // The first entry is the main working tree: never a scope root.
+        if worktrees.first().is_some_and(|main| fsutil::project_key(main) == key) {
+            return Err(invalid("main-checkout"));
+        }
+        if !worktrees.iter().skip(1).any(|w| fsutil::project_key(w) == key) {
+            return Err(invalid("not-a-worktree"));
         }
         Ok(root)
     }
@@ -1786,6 +1801,24 @@ impl Driver {
                 )
         };
         let bundle = load_bundle_at(root, display).map_err(|e| invalid(e.message, e.details))?;
+        // A broken manifest in the worktree is an error, not empty runtimes to approve.
+        if let Some(project) = bundle.project.as_ref().filter(|p| !p.issues.is_empty()) {
+            let details = project
+                .issues
+                .iter()
+                .map(|i| {
+                    Reason {
+                        code: i.code.clone(),
+                        params: i.params.clone(),
+                    }
+                    .with("path", i.path.clone())
+                })
+                .collect();
+            return Err(invalid(
+                format!("{} has validation errors", crate::project::PROJECT_FILE),
+                details,
+            ));
+        }
         let problems = check_runnable(&bundle.files());
         if !problems.is_empty() {
             return Err(invalid(
@@ -4738,8 +4771,6 @@ fn call_failure_reason(error_code: Option<&str>, detail: Option<String>, entry: 
     reason
 }
 
-/// Resolves a node's (or the flow default's) `workingDir` against the
-/// project root; without one the node runs in the project root.
 /// The manifest's `runtimes` and `setup` as compared for a sub-flow opened
 /// in a worktree (no manifest: both empty).
 fn runtimes_and_setup(project: Option<&crate::project::ProjectDef>) -> Value {
@@ -4752,6 +4783,8 @@ fn runtimes_and_setup(project: Option<&crate::project::ProjectDef>) -> Value {
     serde_json::json!({ "runtimes": runtimes, "setup": setup })
 }
 
+/// Resolves a node's (or the flow default's) `workingDir` against the
+/// project root; without one the node runs in the project root.
 fn resolve_working_dir(
     ctx: &TemplateContext,
     root: &Path,
