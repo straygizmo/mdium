@@ -131,7 +131,7 @@ Choose the outcome as follows:
 - `attention`: you cannot finish because of a problem a person has to look at (for example contradictory requirements, a failure you cannot resolve, or a missing prerequisite). Explain the problem in `reason` and the details in the body.
 - `awaiting_user`: you need an answer from the user before you can continue. State why in `reason` and ask in `question`; put any context in the body.
 
-The frontmatter may also hold an optional `outputs:` mapping (string keys, scalar or JSON values) and an optional `artifacts:` list of file paths (relative to the project). They become the node's outputs and artifacts.
+The frontmatter may also hold an optional `outputs:` mapping (string keys, scalar or JSON values) and an optional `artifacts:` list of file paths (relative to your working directory). They become the node's outputs and artifacts.
 
 Do not wrap the whole response in a code fence. Examples:
 

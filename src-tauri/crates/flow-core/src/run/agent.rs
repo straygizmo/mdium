@@ -554,7 +554,12 @@ mod tests {
     fn cancel_asks_the_runner_once_and_ends_cancelled() {
         let api = ScriptedApi::new(vec![], true);
         let mut handle = runner(&api).start(request()).unwrap();
-        std::thread::sleep(Duration::from_millis(50));
+        // Cancel only once the prompt was sent, so the runner is asked to cancel.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !api.calls().iter().any(|c| c.starts_with("send ")) {
+            assert!(Instant::now() < deadline, "prompt never sent");
+            std::thread::sleep(Duration::from_millis(5));
+        }
         handle.cancel();
         assert_eq!(
             collect(&mut handle).last(),

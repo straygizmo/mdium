@@ -3411,10 +3411,23 @@ fn agent_outcome_completed_sets_outputs_body_and_artifacts() {
         serde_json::from_slice::<Value>(&std::fs::read(dir.join("inputs.json")).unwrap()).unwrap(),
         json!({ "topic": "cats" })
     );
-    assert!(f.events(&run_id).iter().any(|e| matches!(
-        &e.body,
-        EventBody::NodeArtifact { label, .. } if label.as_deref() == Some("report.md") || label.is_none()
-    )));
+    let recorded: Vec<(String, Option<u64>)> = f
+        .events(&run_id)
+        .into_iter()
+        .filter_map(|e| match e.body {
+            EventBody::NodeArtifact { path, bytes, .. } => Some((path, bytes)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(recorded.len(), 1, "{recorded:?}");
+    let (path, bytes) = &recorded[0];
+    // The agent's relative path resolves against its working directory (the project root).
+    assert!(Path::new(path).ends_with("out/report.md"), "{path}");
+    assert_eq!(
+        fs::canonicalize(path).unwrap(),
+        fs::canonicalize(f.root.join("out/report.md")).unwrap()
+    );
+    assert_eq!(*bytes, Some(1));
 }
 
 #[test]

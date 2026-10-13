@@ -266,6 +266,8 @@ struct RunningAgent {
     /// The first guard violation of the turn (`rule`, `summary`).
     violation: Option<(String, String)>,
     estimate_usd: Option<f64>,
+    /// The turn's working directory: the base of relative artifact paths.
+    working_dir: PathBuf,
 }
 
 /// Inputs and prompt of an agent attempt, written to its node dir.
@@ -3166,6 +3168,7 @@ impl Driver {
         prepared: PreparedAgent,
     ) {
         let timeout = self.node_timeout(prefix, node);
+        let working_dir = prepared.working_dir.clone();
         let request = AgentTurnRequest {
             session_id: format!("flow-{}-{}-{attempt}", self.run_id, node_dir_name(key)),
             provider: agent.provider,
@@ -3205,6 +3208,7 @@ impl Driver {
             timed_out: false,
             violation: None,
             estimate_usd: node.cost.as_ref().and_then(|c| c.estimate_usd),
+            working_dir,
         });
         self.emit(
             Some(key),
@@ -3428,6 +3432,13 @@ impl Driver {
             },
         );
         for path in outcome.artifacts {
+            // The agent writes files in its working directory, so relative
+            // paths resolve there (not in the attempt dir, as for commands).
+            let path = if Path::new(&path).is_relative() && !path.trim().is_empty() {
+                agent.working_dir.join(&path).to_string_lossy().into_owned()
+            } else {
+                path
+            };
             self.record_artifact(key, &agent.dir, path, None, None);
         }
         self.write_outputs(key, &agent.dir);
