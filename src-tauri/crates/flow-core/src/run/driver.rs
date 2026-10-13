@@ -10,16 +10,18 @@
 
 use crate::condition::Condition;
 use crate::fsutil;
+use crate::gitops;
+use crate::integrity::{self, IntegritySnapshot};
 use crate::issues::FLOW_RUNTIME_UNKNOWN;
 use crate::load;
 use crate::model::{
-    parse_duration, AgentNode, CommandNode, CommandProtocol, CommandRun, FlowDef, FlowNode,
+    parse_duration, AgentNode, AgentPermission, CommandNode, CommandProtocol, CommandRun, FlowDef, FlowNode,
     LoopBody, LoopMode, LoopNode, NodeKind, OnItemFailure, OutputContract, PythonNode, RetryOn,
     RetryPolicy, PORT_ATTENTION, PORT_FAILURE, PORT_SUCCESS,
 };
 use crate::outcome::{parse_outcome, StageOutcomeKind};
 use crate::project::RuntimeDef;
-use crate::prompts;
+use crate::prompts::{self, PreviousTurn};
 use crate::run::agent::{AgentRunner, AgentTurnEvent, AgentTurnHandle, AgentTurnRequest};
 use crate::run::artifacts;
 use crate::run::model::*;
@@ -31,6 +33,7 @@ use crate::run::process::{
 use crate::run::scope::{
     self, iteration_prefix, ref_key, split_key, subflow_prefix, Graph, GraphLoc,
 };
+use crate::screening;
 use crate::run::store::{node_dir_name, EventLog, RunMeta, RunStore, CHECKPOINT_EVERY};
 use crate::run::supervise::DetachedProcess;
 use crate::run::worker::{
@@ -91,7 +94,7 @@ pub const FLOW_OUTPUT_UNRESOLVED: &str = "FLOW_OUTPUT_UNRESOLVED";
 /// An `outcome` agent's response does not satisfy the output contract
 /// (`detail` = the `OUTCOME_*` code).
 pub const FLOW_AGENT_OUTPUT_INVALID: &str = "FLOW_AGENT_OUTPUT_INVALID";
-/// An agent reported `attention` (no `attention` edge) or `awaiting_user`.
+/// An agent reported `attention` and the node has no `attention` edge.
 pub const FLOW_AGENT_ATTENTION: &str = "FLOW_AGENT_ATTENTION";
 /// The agent's turn failed (`code` / `message` from the runner).
 pub const FLOW_AGENT_TURN_FAILED: &str = "FLOW_AGENT_TURN_FAILED";
@@ -103,6 +106,17 @@ pub const FLOW_AGENT_RUNNER_EXITED: &str = "FLOW_AGENT_RUNNER_EXITED";
 pub const FLOW_AGENT_START_FAILED: &str = "FLOW_AGENT_START_FAILED";
 /// The agent's instructions could not be loaded or rendered.
 pub const FLOW_AGENT_PROMPT_INVALID: &str = "FLOW_AGENT_PROMPT_INVALID";
+/// Approval request before a `full-access` turn whose inputs or instructions
+/// look like a prompt injection (`show.findings` = `{ code, line, excerpt }`).
+pub const FLOW_AGENT_SCREENING: &str = "FLOW_AGENT_SCREENING";
+/// Approval request carrying an agent's `awaiting_user` question (`message`).
+pub const FLOW_AGENT_QUESTION: &str = "FLOW_AGENT_QUESTION";
+/// The project repository changed behind MDium's back during a `full-access`
+/// turn (`changes` = the `INTEGRITY_*` codes).
+pub const FLOW_AGENT_INTEGRITY_CHANGED: &str = "FLOW_AGENT_INTEGRITY_CHANGED";
+/// Warning: the project root is not a git repository, so a `full-access`
+/// turn runs without the integrity check.
+pub const FLOW_AGENT_INTEGRITY_SKIPPED: &str = "FLOW_AGENT_INTEGRITY_SKIPPED";
 
 /// Options of a budget approval.
 pub const BUDGET_OPTIONS: [&str; 2] = ["approve", "stop"];
@@ -268,6 +282,9 @@ struct RunningAgent {
     estimate_usd: Option<f64>,
     /// The turn's working directory: the base of relative artifact paths.
     working_dir: PathBuf,
+    /// Integrity snapshot of the project repo taken right before a
+    /// `full-access` turn (`None`: read-only, or not a git repo).
+    baseline: Option<IntegritySnapshot>,
 }
 
 /// Inputs and prompt of an agent attempt, written to its node dir.
@@ -275,6 +292,9 @@ struct PreparedAgent {
     dir: PathBuf,
     prompt: String,
     working_dir: PathBuf,
+    /// The untrusted text screened before a `full-access` turn: the rendered
+    /// `with` strings plus non-built-in instructions.
+    screening: String,
 }
 
 /// How an agent turn's monitoring ended.
@@ -320,6 +340,15 @@ pub struct Driver {
     agents: Vec<RunningAgent>,
     /// Ids handed to started workers.
     worker_seq: u64,
+    /// Screening text the user approved, per agent node key.
+    screening_ack: BTreeMap<String, String>,
+    /// Pending `awaiting_user` questions: node key -> (question, response body).
+    agent_questions: BTreeMap<String, (String, String)>,
+    /// Answered questions: node key -> (the attempt they feed, previous turn).
+    agent_answers: BTreeMap<String, (u32, PreviousTurn)>,
+    /// Opened by an `Editor`: no loop runs turns, so approvals that would
+    /// start one leave the node `Ready` for the next resume instead.
+    offline: bool,
 }
 
 impl Driver {
@@ -351,6 +380,10 @@ impl Driver {
             calls: Vec::new(),
             agents: Vec::new(),
             worker_seq: 0,
+            screening_ack: BTreeMap::new(),
+            agent_questions: BTreeMap::new(),
+            agent_answers: BTreeMap::new(),
+            offline: false,
         })
     }
 
@@ -826,6 +859,14 @@ impl Driver {
             }
             Some(key) => {
                 let attempt = self.node(key).attempt;
+                if request.reason.code == FLOW_AGENT_SCREENING {
+                    self.agent_screening_decided(key, attempt, choice);
+                    return true;
+                }
+                if request.reason.code == FLOW_AGENT_QUESTION {
+                    self.agent_question_answered(key, attempt, &request, choice, node_comment);
+                    return true;
+                }
                 let is_approval_node = matches!(
                     self.def_of(key).map(|(_, n)| n.kind),
                     Some(NodeKind::Approval(_))
@@ -2120,21 +2161,14 @@ impl Driver {
                     .collect::<Result<Vec<_>, _>>()?,
                 CommandRun::Shell(text) => vec![text.clone()],
             };
-            let working_dir = match command
-                .working_dir
-                .as_deref()
-                .or(flow.defaults.working_dir.as_deref())
-            {
-                Some(dir) => {
-                    let rendered = PathBuf::from(ctx.render_string(dir)?);
-                    if rendered.is_absolute() {
-                        rendered
-                    } else {
-                        root.join(rendered)
-                    }
-                }
-                None => root.clone(),
-            };
+            let working_dir = resolve_working_dir(
+                ctx,
+                &root,
+                command
+                    .working_dir
+                    .as_deref()
+                    .or(flow.defaults.working_dir.as_deref()),
+            )?;
             let mut env: Vec<(String, String)> = Vec::new();
             for (name, value) in flow.env.iter().chain(command.env.iter()) {
                 env.push((name.clone(), ctx.render_string(value)?));
@@ -3059,11 +3093,170 @@ impl Driver {
         agent: &AgentNode,
         attempt: u32,
     ) {
-        let prepared = match self.prepare_agent(prefix, key, agent, attempt) {
+        let previous = self.previous_turn(key, attempt);
+        let prepared = match self.prepare_agent(prefix, key, agent, attempt, previous.as_ref()) {
             Ok(prepared) => prepared,
             Err(reason) => return self.fail_node(key, attempt, reason),
         };
+        if agent.permission == AgentPermission::FullAccess
+            && self.screening_ack.get(key) != Some(&prepared.screening)
+        {
+            let findings = screening::screen(&prepared.screening);
+            if !findings.is_empty() {
+                // `prompt.md` is written already, so the user can inspect it.
+                return self.request_agent_screening(key, attempt, &findings);
+            }
+        }
         self.start_agent_turn(prefix, key, node, agent, attempt, prepared);
+    }
+
+    /// Asks the user before a `full-access` turn whose inputs look suspicious.
+    fn request_agent_screening(&mut self, key: &str, attempt: u32, findings: &[screening::Finding]) {
+        let findings: Vec<Value> = findings
+            .iter()
+            .map(|f| serde_json::json!({ "code": f.kind.code(), "line": f.line, "excerpt": f.excerpt }))
+            .collect();
+        self.set_node(key, NodeStatus::AwaitingApproval, attempt, None, None);
+        let request = ApprovalRequest {
+            node_key: Some(key.to_string()),
+            options: COMMAND_APPROVAL_OPTIONS
+                .iter()
+                .map(|s| RequestOption::plain(*s))
+                .collect(),
+            // The UI explains the request from its reason code.
+            message: None,
+            show: BTreeMap::from([(
+                "findings".to_string(),
+                ShowValue::Value(Value::Array(findings)),
+            )]),
+            reason: Reason::new(FLOW_AGENT_SCREENING),
+        };
+        self.emit(Some(key), EventBody::ApprovalRequested(request));
+    }
+
+    /// The user decided on a screening request: `approve` starts the turn in
+    /// the same attempt, anything else fails the node.
+    fn agent_screening_decided(&mut self, key: &str, attempt: u32, choice: &str) {
+        if choice != "approve" {
+            return self.fail_node(key, attempt, Reason::new(FLOW_APPROVAL_REJECTED));
+        }
+        let Some((prefix, node)) = self.def_of(key) else {
+            return;
+        };
+        let NodeKind::Agent(agent) = &node.kind else {
+            return;
+        };
+        if self.offline {
+            // Resuming starts (and screens) a new attempt.
+            self.set_node(key, NodeStatus::Ready, attempt, None, None);
+            return;
+        }
+        self.set_node(key, NodeStatus::Running, attempt, None, None);
+        let previous = self.previous_turn(key, attempt);
+        let prepared = match self.prepare_agent(&prefix, key, agent, attempt, previous.as_ref()) {
+            Ok(prepared) => prepared,
+            Err(reason) => return self.fail_node(key, attempt, reason),
+        };
+        self.screening_ack
+            .insert(key.to_string(), prepared.screening.clone());
+        self.start_agent_turn(&prefix, key, &node, agent, attempt, prepared);
+    }
+
+    /// The question and answer that feed `attempt`: the in-memory answer, or
+    /// (after an offline answer) the previous attempt's `answer.json`.
+    fn previous_turn(&self, key: &str, attempt: u32) -> Option<PreviousTurn> {
+        if let Some((for_attempt, turn)) = self.agent_answers.get(key) {
+            if *for_attempt == attempt {
+                return Some(PreviousTurn {
+                    question: turn.question.clone(),
+                    body: turn.body.clone(),
+                    answer: turn.answer.clone(),
+                });
+            }
+        }
+        let before = attempt.checked_sub(1).filter(|a| *a > 0)?;
+        let dir = self.store.node_attempt_dir(&self.run_id, key, before).ok()?;
+        let saved: Value = serde_json::from_slice(&std::fs::read(dir.join("answer.json")).ok()?).ok()?;
+        let field = |name: &str| saved.get(name).and_then(Value::as_str).map(str::to_string);
+        Some(PreviousTurn {
+            question: field("question")?,
+            body: field("body")?,
+            answer: field("answer")?,
+        })
+    }
+
+    /// An agent answered `awaiting_user`: ask the user its question.
+    fn request_agent_question(&mut self, key: &str, attempt: u32, question: String, body: String) {
+        self.agent_questions
+            .insert(key.to_string(), (question.clone(), body));
+        self.set_node(key, NodeStatus::AwaitingApproval, attempt, None, None);
+        let request = ApprovalRequest {
+            node_key: Some(key.to_string()),
+            options: vec![
+                RequestOption {
+                    name: "answer".into(),
+                    comment_required: true,
+                },
+                RequestOption::plain("reject"),
+            ],
+            message: Some(question),
+            show: BTreeMap::new(),
+            reason: Reason::new(FLOW_AGENT_QUESTION),
+        };
+        self.emit(Some(key), EventBody::ApprovalRequested(request));
+    }
+
+    /// The user answered (or rejected) an agent's question: `answer` reruns
+    /// the agent in a new attempt whose prompt carries the question, the
+    /// previous response body and the answer.
+    fn agent_question_answered(
+        &mut self,
+        key: &str,
+        attempt: u32,
+        request: &ApprovalRequest,
+        choice: &str,
+        answer: String,
+    ) {
+        let asked = self.agent_questions.remove(key);
+        if choice != "answer" {
+            return self.fail_node(key, attempt, Reason::new(FLOW_APPROVAL_REJECTED));
+        }
+        // After a restart the question lives only in the request and the node dir.
+        let (question, body) = asked.unwrap_or_else(|| {
+            let response = self
+                .store
+                .node_attempt_dir(&self.run_id, key, attempt)
+                .ok()
+                .and_then(|dir| std::fs::read_to_string(dir.join("response.md")).ok())
+                .unwrap_or_default();
+            let body = parse_outcome(&response)
+                .map(|o| o.body)
+                .unwrap_or(response);
+            (request.message.clone().unwrap_or_default(), body)
+        });
+        let turn = PreviousTurn {
+            question,
+            body,
+            answer,
+        };
+        if self.offline {
+            // No loop keeps the answer in memory until the resume.
+            if let Ok(dir) = self.store.node_attempt_dir(&self.run_id, key, attempt) {
+                let saved = serde_json::json!({
+                    "question": turn.question,
+                    "body": turn.body,
+                    "answer": turn.answer,
+                });
+                let _ = std::fs::write(
+                    dir.join("answer.json"),
+                    serde_json::to_vec_pretty(&saved).unwrap_or_default(),
+                );
+            }
+        }
+        self.agent_answers
+            .insert(key.to_string(), (attempt + 1, turn));
+        // The node starts its next attempt like any ready node.
+        self.set_node(key, NodeStatus::Ready, attempt, None, None);
     }
 
     /// Renders the inputs and the prompt of an attempt and writes
@@ -3074,6 +3267,7 @@ impl Driver {
         key: &str,
         agent: &AgentNode,
         attempt: u32,
+        previous: Option<&PreviousTurn>,
     ) -> Result<PreparedAgent, Reason> {
         let io_failed =
             |message: String| Reason::new(FLOW_AGENT_START_FAILED).with("message", message);
@@ -3088,7 +3282,8 @@ impl Driver {
             .scope_init(prefix)
             .and_then(|init| root.join(&init.graph.file).parent().map(Path::to_path_buf))
             .unwrap_or_else(|| root.clone());
-        let (inputs, instructions, working_dir) =
+        let default_dir = self.file_flow(prefix).defaults.working_dir.clone();
+        let (inputs, instructions, builtin, working_dir) =
             self.with_ctx(prefix, None, Some(&dir), None, |ctx| {
                 let inputs = match ctx
                     .render_json(&Value::Object(agent.with_args.clone().into_iter().collect()))?
@@ -3129,31 +3324,32 @@ impl Driver {
                             .with("detail", "missing"))
                     }
                 };
-                let working_dir = match agent.working_dir.as_deref() {
-                    Some(dir) => {
-                        let rendered = PathBuf::from(ctx.render_string(dir)?);
-                        if rendered.is_absolute() {
-                            rendered
-                        } else {
-                            root.join(rendered)
-                        }
-                    }
-                    None => root.clone(),
-                };
-                Ok((inputs, instructions, working_dir))
+                let builtin = agent.prompt.is_none()
+                    && agent
+                        .prompt_ref
+                        .as_deref()
+                        .is_some_and(|r| r.starts_with("builtin:"));
+                let working_dir = resolve_working_dir(
+                    ctx,
+                    &root,
+                    agent.working_dir.as_deref().or(default_dir.as_deref()),
+                )?;
+                Ok((inputs, instructions, builtin, working_dir))
             })?;
         std::fs::write(
             dir.join("inputs.json"),
             serde_json::to_vec_pretty(&inputs).unwrap_or_default(),
         )
         .map_err(|e| io_failed(e.to_string()))?;
-        // Task 3b passes the previous question and its answer here.
-        let prompt = prompts::compose(&instructions, &inputs, agent.output_contract, None);
+        let prompt = prompts::compose(&instructions, &inputs, agent.output_contract, previous);
         std::fs::write(dir.join("prompt.md"), &prompt).map_err(|e| io_failed(e.to_string()))?;
+        // Built-in prompts are trusted; everything else may carry injected text.
+        let screening = screening_text(&inputs, (!builtin).then_some(instructions.as_str()));
         Ok(PreparedAgent {
             dir,
             prompt,
             working_dir,
+            screening,
         })
     }
 
@@ -3169,6 +3365,9 @@ impl Driver {
     ) {
         let timeout = self.node_timeout(prefix, node);
         let working_dir = prepared.working_dir.clone();
+        let Ok(baseline) = self.take_integrity_baseline(key, attempt, agent) else {
+            return;
+        };
         let request = AgentTurnRequest {
             session_id: format!("flow-{}-{}-{attempt}", self.run_id, node_dir_name(key)),
             provider: agent.provider,
@@ -3209,6 +3408,7 @@ impl Driver {
             violation: None,
             estimate_usd: node.cost.as_ref().and_then(|c| c.estimate_usd),
             working_dir,
+            baseline,
         });
         self.emit(
             Some(key),
@@ -3217,6 +3417,64 @@ impl Driver {
                 fraction: None,
             },
         );
+    }
+
+    /// Snapshots the project repo before a `full-access` turn. Not a git
+    /// repo: warns and skips the check. A failed snapshot fails the node,
+    /// since the turn could not be verified afterwards (`Err`).
+    fn take_integrity_baseline(
+        &mut self,
+        key: &str,
+        attempt: u32,
+        agent: &AgentNode,
+    ) -> Result<Option<IntegritySnapshot>, ()> {
+        if agent.permission != AgentPermission::FullAccess {
+            return Ok(None);
+        }
+        let root = self.store.project_root().to_path_buf();
+        if !gitops::is_git_repo(&root) {
+            self.emit(
+                Some(key),
+                EventBody::Warning(Reason::new(FLOW_AGENT_INTEGRITY_SKIPPED)),
+            );
+            return Ok(None);
+        }
+        match integrity::snapshot(&root, None) {
+            Ok(snapshot) => Ok(Some(snapshot)),
+            Err(err) => {
+                self.fail_node(key, attempt, integrity_snapshot_failed(&err));
+                Err(())
+            }
+        }
+    }
+
+    /// Compares the repo with the turn's baseline; on any change (or a
+    /// failed snapshot) fails the node and returns `false`.
+    fn check_integrity(&mut self, agent: &RunningAgent) -> bool {
+        let Some(before) = &agent.baseline else {
+            return true;
+        };
+        let reason = match integrity::snapshot(self.store.project_root(), None) {
+            Ok(after) => {
+                let changes = integrity::compare(before, &after);
+                if changes.is_empty() {
+                    return true;
+                }
+                let detail = changes
+                    .iter()
+                    .filter(|c| !c.detail.is_empty())
+                    .map(|c| format!("{}: {}", c.code, c.detail))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                let codes: Vec<Value> = changes.into_iter().map(|c| Value::String(c.code)).collect();
+                Reason::new(FLOW_AGENT_INTEGRITY_CHANGED)
+                    .with("changes", Value::Array(codes))
+                    .with("detail", detail)
+            }
+            Err(err) => integrity_snapshot_failed(&err),
+        };
+        self.fail_node(&agent.key, agent.attempt, reason);
+        false
     }
 
     /// Drains every turn's events and settles the turns that ended.
@@ -3328,7 +3586,9 @@ impl Driver {
         }
         match end {
             AgentTurnEvent::Completed { final_response } => {
-                self.agent_completed(&agent, final_response)
+                if self.check_integrity(&agent) {
+                    self.agent_completed(&agent, final_response)
+                }
             }
             AgentTurnEvent::Failed { code, message } => match agent.violation.take() {
                 Some((rule, summary)) => self.fail_node(
@@ -3411,6 +3671,7 @@ impl Driver {
             }
         };
         let reason = outcome.reason.clone().unwrap_or_default();
+        let body = outcome.body.clone();
         // `body` and `reason` are the node's own outputs; declared ones never replace them.
         for (name, value) in outcome.outputs {
             if name != "body" && name != "reason" {
@@ -3461,12 +3722,10 @@ impl Driver {
                     )
                 }
             }
-            // The question loop is Task 3b; until then the question fails the node.
-            StageOutcomeKind::AwaitingUser => self.fail_node(
-                key,
-                attempt,
-                Reason::new(FLOW_AGENT_ATTENTION).with("reason", reason),
-            ),
+            StageOutcomeKind::AwaitingUser => {
+                let question = outcome.question.clone().unwrap_or(reason);
+                self.request_agent_question(key, attempt, question, body)
+            }
         }
     }
 
@@ -3802,6 +4061,55 @@ fn call_failure_reason(error_code: Option<&str>, detail: Option<String>, entry: 
 }
 
 /// Appends one line to a log file (best effort).
+/// Resolves a node's (or the flow default's) `workingDir` against the
+/// project root; without one the node runs in the project root.
+fn resolve_working_dir(
+    ctx: &TemplateContext,
+    root: &Path,
+    dir: Option<&str>,
+) -> Result<PathBuf, Reason> {
+    Ok(match dir {
+        Some(dir) => {
+            let rendered = PathBuf::from(ctx.render_string(dir)?);
+            if rendered.is_absolute() {
+                rendered
+            } else {
+                root.join(rendered)
+            }
+        }
+        None => root.to_path_buf(),
+    })
+}
+
+/// The text screened before a `full-access` turn: every string in the
+/// rendered inputs, then the instructions (when not built in).
+fn screening_text(inputs: &BTreeMap<String, Value>, instructions: Option<&str>) -> String {
+    fn strings<'v>(value: &'v Value, out: &mut Vec<&'v str>) {
+        match value {
+            Value::String(s) => out.push(s),
+            Value::Array(items) => items.iter().for_each(|v| strings(v, out)),
+            Value::Object(map) => map.values().for_each(|v| strings(v, out)),
+            _ => {}
+        }
+    }
+    let mut parts = Vec::new();
+    for value in inputs.values() {
+        strings(value, &mut parts);
+    }
+    parts.extend(instructions);
+    parts.join("\n\n")
+}
+
+/// An integrity snapshot failed: the turn cannot be verified.
+fn integrity_snapshot_failed(err: &integrity::IntegrityError) -> Reason {
+    Reason::new(FLOW_AGENT_INTEGRITY_CHANGED)
+        .with(
+            "changes",
+            Value::Array(vec![Value::String("INTEGRITY_SNAPSHOT_FAILED".into())]),
+        )
+        .with("detail", err.to_string())
+}
+
 fn append_line(path: &Path, line: &str) {
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
@@ -3837,9 +4145,9 @@ pub struct Editor {
 impl Editor {
     pub fn open(store: RunStore, run_id: &str, env: DriverEnv) -> Result<Self, String> {
         let (_tx, rx) = std::sync::mpsc::channel();
-        Ok(Self {
-            driver: Driver::open(store, run_id, rx, env)?,
-        })
+        let mut driver = Driver::open(store, run_id, rx, env)?;
+        driver.offline = true;
+        Ok(Self { driver })
     }
 
     pub fn state(&self) -> &RunState {

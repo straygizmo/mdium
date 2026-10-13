@@ -546,8 +546,10 @@ pub enum FakeTurn {
     Fail { code: String, message: String },
     /// Reports a guard violation, then fails like a blocked turn.
     Guard { rule: String, summary: String },
-    /// Never ends until cancelled.
+    /// Never ends until cancelled (or `complete_hanging`).
     Hang,
+    /// The runner goes away without ending the turn.
+    Exit,
 }
 
 /// An agent runner that plays scripted turns and records what it got.
@@ -556,6 +558,8 @@ pub struct FakeAgentRunner {
     prompts: Mutex<Vec<String>>,
     dirs: Mutex<Vec<PathBuf>>,
     cancelled: Arc<AtomicUsize>,
+    /// The event queues of every turn handed out, in start order.
+    handles: Mutex<Vec<Arc<Mutex<TurnQueue>>>>,
 }
 
 impl FakeAgentRunner {
@@ -565,7 +569,35 @@ impl FakeAgentRunner {
             prompts: Mutex::new(Vec::new()),
             dirs: Mutex::new(Vec::new()),
             cancelled: Arc::new(AtomicUsize::new(0)),
+            handles: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Ends the first still hanging turn with `Completed { response }`
+    /// (waiting up to 5 s for the driver to start one).
+    pub fn complete_hanging(&self, response: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let queue = loop {
+            let found = self
+                .handles
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|q| q.lock().unwrap().hang)
+                .cloned();
+            match found {
+                Some(queue) => break queue,
+                None if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(10))
+                }
+                None => panic!("no hanging turn"),
+            }
+        };
+        let mut queue = queue.lock().unwrap();
+        queue.hang = false;
+        queue.events.push_back(AgentTurnEvent::Completed {
+            final_response: response.to_string(),
+        });
     }
 
     /// Every prompt received, in order.
@@ -610,10 +642,15 @@ impl AgentRunner for FakeAgentRunner {
                 false,
             ),
             FakeTurn::Hang => (Vec::new(), true),
+            FakeTurn::Exit => (vec![AgentTurnEvent::Exited], false),
         };
-        Ok(Box::new(FakeTurnHandle {
+        let queue = Arc::new(Mutex::new(TurnQueue {
             events: events.into(),
             hang,
+        }));
+        self.handles.lock().unwrap().push(queue.clone());
+        Ok(Box::new(FakeTurnHandle {
+            queue,
             cancelled: self.cancelled.clone(),
         }))
     }
@@ -623,23 +660,29 @@ impl AgentRunner for FakeAgentRunner {
     }
 }
 
-struct FakeTurnHandle {
+/// Events a fake turn still has to deliver.
+struct TurnQueue {
     events: VecDeque<AgentTurnEvent>,
     /// Still hanging (no end event queued yet).
     hang: bool,
+}
+
+struct FakeTurnHandle {
+    queue: Arc<Mutex<TurnQueue>>,
     cancelled: Arc<AtomicUsize>,
 }
 
 impl AgentTurnHandle for FakeTurnHandle {
     fn try_recv(&mut self) -> Option<AgentTurnEvent> {
-        self.events.pop_front()
+        self.queue.lock().unwrap().events.pop_front()
     }
 
     fn cancel(&mut self) {
-        if self.hang {
-            self.hang = false;
+        let mut queue = self.queue.lock().unwrap();
+        if queue.hang {
+            queue.hang = false;
             self.cancelled.fetch_add(1, Ordering::SeqCst);
-            self.events.push_back(AgentTurnEvent::Cancelled);
+            queue.events.push_back(AgentTurnEvent::Cancelled);
         }
     }
 }

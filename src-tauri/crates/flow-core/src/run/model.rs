@@ -133,6 +133,10 @@ pub fn node_transition_allowed(from: NodeStatus, to: NodeStatus) -> bool {
             | (Failed, Succeeded)
             | (Skipped, Pending)
             | (AwaitingApproval, Cancelled)
+            // An agent's screening approval starts its turn (same attempt);
+            // an answered question makes it ready for the next attempt.
+            | (AwaitingApproval, Running)
+            | (AwaitingApproval, Ready)
     )
 }
 
@@ -886,6 +890,8 @@ mod tests {
             (Cancelled, Ready),
             (Skipped, Pending),
             (AwaitingApproval, Cancelled),
+            (AwaitingApproval, Running),
+            (AwaitingApproval, Ready),
         ];
         for from in NodeStatus::ALL {
             for to in NodeStatus::ALL {
