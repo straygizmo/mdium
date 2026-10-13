@@ -4050,6 +4050,33 @@ fn integrity_changes_after_a_failed_full_access_turn_are_a_warning() {
 }
 
 #[test]
+fn integrity_changes_of_a_cancelled_full_access_turn_are_a_warning() {
+    use crate::gitops::test_support::Fixture as GitFixture;
+    let git = GitFixture::new();
+    let root = git.root().to_path_buf();
+    let runner = Arc::new(FakeAgentRunner::new(vec![FakeTurn::Hang]));
+    let f = fixture_at_with_agent(&root, runner.clone());
+    let rel = write_flow(&root, "integ3", json!({}), vec![agent("a", json!({ "permission": "full-access" }))], vec![]);
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while runner.prompts().is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(runner.prompts().len(), 1);
+    std::fs::write(root.join(".git/hooks/pre-commit"), "#!/bin/sh\n").unwrap();
+    f.engine.cancel(&f.root, &run_id).unwrap();
+    let snap = f.wait_settled(&run_id, RunStatus::Cancelled);
+    assert_eq!(node(&snap, "a").status, NodeStatus::Cancelled);
+    // The post-turn check runs after every end, a cancel included.
+    let warned = f.events(&run_id).into_iter().any(|e| {
+        matches!(&e.body, EventBody::Warning(r)
+            if r.code == FLOW_AGENT_INTEGRITY_CHANGED
+                && r.params["changes"].as_array().unwrap().iter().any(|c| c == "INTEGRITY_HOOKS_CHANGED"))
+    });
+    assert!(warned);
+}
+
+#[test]
 fn start_refuses_flows_whose_agent_provider_is_unavailable() {
     let (f, runner) = fixture_with_agent(vec![]);
     runner.set_unavailable(crate::provider::Provider::Codex);
@@ -4648,6 +4675,29 @@ fn repo_with_child() -> (crate::gitops::test_support::Fixture, String) {
 fn outer_in(root_of_project: &Path, name: &str, project_root: &Path) -> String {
     write_flow(root_of_project, name, json!({}),
         vec![json!({ "id": "s", "kind": "subflow", "flow": "lib/child.flow.json", "projectRoot": project_root.to_string_lossy() })], vec![])
+}
+
+#[test]
+fn flow_run_latest_in_a_worktree_scope_reads_the_project_runs() {
+    let repo = crate::gitops::test_support::Fixture::new();
+    let f = fixture_at_with_agent(repo.root(), no_agents());
+    let main = write_flow(&f.root, "main", json!({ "outputs": { "score": "${{ nodes.a.outputs.score }}" } }),
+        vec![cmd("a", json!([ev(json!({ "v": 1, "type": "output", "key": "score", "value": 4 }))]))], vec![]);
+    write_flow(&f.root, "lib/latest", json!({ "id": "latest", "name": "latest", "outputs": { "runId": "${{ nodes.base.outputs.runId }}" } }),
+        vec![json!({ "id": "base", "kind": "action", "uses": "mdium/flow-run-latest", "with": { "flow": main } })], vec![]);
+    let outer = write_flow(&f.root, "outer", json!({}),
+        vec![json!({ "id": "wt", "kind": "action", "uses": "mdium/git-worktree-create", "with": { "title": "t" } }),
+             json!({ "id": "s", "kind": "subflow", "flow": "lib/latest.flow.json", "projectRoot": "${{ nodes.wt.outputs.path }}" })],
+        vec![json!({ "from": "wt", "to": "s" })]);
+    crate::gitops::git(&f.root, &["add", "."]).unwrap();
+    crate::gitops::git(&f.root, &["commit", "-qm", "flows"]).unwrap();
+    let first = f.confirm_and_start(&main, json!({}));
+    f.wait_settled(&first, RunStatus::Completed);
+    let run_id = f.confirm_and_start(&outer, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    // The worktree has no runs of its own: the project's run store is read.
+    assert_eq!(node(&snap, "s/base").outputs["runId"], json!(first));
+    assert_eq!(node(&snap, "s/base").outputs["outputs"]["score"], json!(4));
 }
 
 #[test]

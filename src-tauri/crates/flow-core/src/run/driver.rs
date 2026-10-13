@@ -1159,6 +1159,7 @@ impl Driver {
                 if let Some(pos) = self.agents.iter().position(|a| a.key == key) {
                     let mut agent = self.agents.remove(pos);
                     agent.handle.cancel();
+                    self.warn_integrity(&agent);
                 }
                 // The action thread is asked to end; its end is dropped.
                 if let Some(pos) = self.actions.iter().position(|a| a.key == key) {
@@ -3998,6 +3999,15 @@ impl Driver {
         })
     }
 
+    /// The post-turn integrity check of a turn removed without settling
+    /// (cancel, app exit, a new pass): any change is reported as a warning.
+    /// Best-effort: a failed snapshot is itself only a warning.
+    fn warn_integrity(&mut self, agent: &RunningAgent) {
+        if let Some(violation) = self.integrity_violation(agent) {
+            self.emit(Some(&agent.key), EventBody::Warning(violation));
+        }
+    }
+
     /// Drains every turn's events and settles the turns that ended.
     fn poll_agents(&mut self) {
         let mut agents = std::mem::take(&mut self.agents);
@@ -4318,10 +4328,12 @@ impl Driver {
         let ctx = ActionContext {
             cancel: cancel.clone(),
             project_root: self.scope_root(prefix),
+            store_root: self.store.project_root().to_path_buf(),
             run_id: self.run_id.clone(),
             run_dir: self.run_dir(),
             node_dir: dir.clone(),
             node_id: node.id.clone(),
+            node_key: key.to_string(),
             project: self.meta.project.clone(),
             project_sha256: self.meta.project_sha256.clone(),
             forge: self.env.forge.clone(),
@@ -4666,6 +4678,7 @@ impl Driver {
         // The turn threads cancel and close their sessions on their own.
         for mut agent in std::mem::take(&mut self.agents) {
             agent.handle.cancel();
+            self.warn_integrity(&agent);
             self.set_node(
                 &agent.key,
                 NodeStatus::Cancelled,
@@ -4721,6 +4734,7 @@ impl Driver {
         // Agent turns never survive the app either.
         for mut agent in std::mem::take(&mut self.agents) {
             agent.handle.cancel();
+            self.warn_integrity(&agent);
             self.set_node(
                 &agent.key,
                 NodeStatus::Interrupted,

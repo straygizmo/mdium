@@ -11,6 +11,7 @@ use super::{
 };
 use crate::gitops::{self, GitError, WorktreeInfo};
 use crate::integrity::{self, IntegrityChange, IntegrityError, IntegritySnapshot, MERGE_REVIEW_PATTERNS};
+use crate::run::engine::sha256_hex;
 use crate::run::model::Reason;
 use crate::screening;
 use serde_json::{json, Value};
@@ -93,9 +94,18 @@ fn repo_snapshot(root: &Path, info: &WorktreeInfo) -> Result<IntegritySnapshot, 
         .map_err(integrity_failed)
 }
 
+/// The worktree id of a `git-worktree-create` node instance: the first 16
+/// hex chars of SHA-256 over the run id and the node key, so every node of
+/// a run gets its own worktree and branch while a rerun finds its own again.
+pub(super) fn worktree_id(run_id: &str, node_key: &str) -> String {
+    let mut id = sha256_hex(format!("{run_id}\n{node_key}").as_bytes());
+    id.truncate(16);
+    id
+}
+
 /// `mdium/git-worktree-create` `{ title }` → `{ path, branch, baseBranch,
-/// baseCommit, integrityBaseline }`. The worktree id is the run id; a
-/// worktree this run created before and never worked in (a rerun) is
+/// baseCommit, integrityBaseline }`. The worktree id is [`worktree_id`]; a
+/// worktree this node created before and never worked in (a rerun) is
 /// reused. `integrityBaseline` is the repository's integrity snapshot taken
 /// right after, which `git-merge-local` compares before merging.
 pub(super) fn worktree_create(
@@ -104,10 +114,11 @@ pub(super) fn worktree_create(
 ) -> Result<ActionEnd, Reason> {
     let title = required_str(with, "title")?;
     let root = project_repo(ctx)?;
-    let info = match gitops::create_worktree_in(&ctx.worktree_base, &root, &ctx.run_id, &title) {
+    let id = worktree_id(&ctx.run_id, &ctx.node_key);
+    let info = match gitops::create_worktree_in(&ctx.worktree_base, &root, &id, &title) {
         Ok(info) => info,
         Err(err) if err.code() == gitops::GIT_WORKTREE_EXISTS => {
-            match gitops::orphan_worktree_in(&ctx.worktree_base, &root, &ctx.run_id, &title) {
+            match gitops::orphan_worktree_in(&ctx.worktree_base, &root, &id, &title) {
                 Ok(Some(info)) => info,
                 _ => return Err(git_failed(err)),
             }
@@ -211,6 +222,7 @@ pub(super) fn merge_local(
 #[cfg(test)]
 mod tests {
     use super::super::*;
+    use super::worktree_id;
     use crate::forge::FakeForge;
     use crate::gitops::{self, test_support::{write_file, Fixture, TASK_ID}};
     use crate::run::process::AttachedLauncher;
@@ -223,8 +235,10 @@ mod tests {
     fn ctx(root: &Path, base: &Path) -> ActionContext {
         ActionContext {
             project_root: root.to_path_buf(),
+            store_root: root.to_path_buf(),
             // Worktree ids are 16-hex run ids.
             run_id: TASK_ID.into(),
+            node_key: "wt".into(),
             run_dir: root.join(".mdium/flow-runs/run1"),
             node_dir: root.join(".mdium/flow-runs/run1/nodes/a/1"),
             node_id: "a".into(),
@@ -334,6 +348,29 @@ mod tests {
             ActionEnd::Done { .. }
         ));
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn two_worktree_nodes_of_one_run_get_their_own_worktrees() {
+        let repo = Fixture::new();
+        let base = tempfile::tempdir().unwrap();
+        let first = ctx(repo.root(), base.path());
+        let mut second = ctx(repo.root(), base.path());
+        second.node_key = "sub/wt2".into();
+        let create = |c: &ActionContext| match run_action("mdium/git-worktree-create", &with(json!({ "title": "t" })), c) {
+            ActionEnd::Done { outputs, .. } => outputs,
+            other => panic!("{other:?}"),
+        };
+        let a = create(&first);
+        let b = create(&second);
+        assert_ne!(a["path"], b["path"]);
+        assert_ne!(a["branch"], b["branch"]);
+        // The worktree id is 16 hex chars derived from the run id and the node key.
+        let id = Path::new(b["path"].as_str().unwrap()).file_name().unwrap().to_string_lossy().into_owned();
+        assert_eq!(id, worktree_id(TASK_ID, "sub/wt2"));
+        assert!(id.len() == 16 && id.chars().all(|c| c.is_ascii_hexdigit()));
+        // Each node's rerun still reuses its own untouched worktree.
+        assert_eq!(create(&second), b);
     }
 
     #[test]

@@ -229,7 +229,9 @@ mod tests {
     fn ctx(root: &Path, base: &Path) -> ActionContext {
         ActionContext {
             project_root: root.to_path_buf(),
+            store_root: root.to_path_buf(),
             run_id: TASK_ID.into(),
+            node_key: "a".into(),
             run_dir: root.join(".mdium/flow-runs/run1"),
             node_dir: root.join(".mdium/flow-runs/run1/nodes/a/1"),
             node_id: "a".into(),

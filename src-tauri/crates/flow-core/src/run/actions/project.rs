@@ -113,7 +113,8 @@ pub(super) fn flow_run_latest(
     ctx: &ActionContext,
 ) -> Result<ActionEnd, Reason> {
     let flow = required_str(with, "flow")?.replace('\\', "/");
-    let store = RunStore::new(&ctx.project_root);
+    // Runs live in the project's store even inside a worktree scope.
+    let store = RunStore::new(&ctx.store_root);
     let ids = store
         .list_ids()
         .map_err(|err| failed("RUN_STORE_FAILED", err.to_string()))?;

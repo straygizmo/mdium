@@ -31,12 +31,19 @@ pub const FLOW_ACTION_APPROVAL: &str = "FLOW_ACTION_APPROVAL";
 
 /// Everything an action may use, owned by its thread.
 pub struct ActionContext {
+    /// The scope root: the project, or the worktree a sub-flow runs in
+    /// (`subflow.projectRoot`). The git and setup actions work here.
     pub project_root: PathBuf,
+    /// The real project root, whose `.mdium/flow-runs` holds the run store
+    /// (the same as `project_root` outside a worktree scope).
+    pub store_root: PathBuf,
     pub run_id: String,
     pub run_dir: PathBuf,
     /// The attempt's node directory.
     pub node_dir: PathBuf,
     pub node_id: String,
+    /// The node instance key (`<scope>/<id>[@pass]`), unique within the run.
+    pub node_key: String,
     pub project: Option<ProjectDef>,
     /// SHA-256 of the confirmed `.mdium/project.yaml` (None without a manifest).
     pub project_sha256: Option<String>,
