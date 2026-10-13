@@ -21,6 +21,8 @@ pub enum Reference {
     NodeArtifacts { node: String },
     /// `nodes.<id>.artifacts.<label>` (path of the first artifact with that label)
     NodeArtifact { node: String, label: String },
+    /// `nodes.<id>.costUsd` (actual + estimated cost of a node and everything under it)
+    NodeCost { node: String },
     /// `iteration.outputs.<key>` (only inside a `while` loop's `until`)
     IterationOutput(String),
     /// A loop's iteration variable (`item`, or the loop's `as` name)
@@ -49,6 +51,7 @@ impl fmt::Display for Reference {
             Reference::NodeArtifact { node, label } => {
                 write!(f, "nodes.{node}.artifacts.{label}")
             }
+            Reference::NodeCost { node } => write!(f, "nodes.{node}.costUsd"),
             Reference::IterationOutput(key) => write!(f, "iteration.outputs.{key}"),
             Reference::LoopVar(name) => write!(f, "{name}"),
             Reference::Index => write!(f, "index"),
@@ -164,6 +167,9 @@ pub fn parse_reference(expr: &str) -> Result<Reference, TemplateError> {
         ["nodes", node, "artifacts", label] => Reference::NodeArtifact {
             node: node.to_string(),
             label: label.to_string(),
+        },
+        ["nodes", node, "costUsd"] => Reference::NodeCost {
+            node: node.to_string(),
         },
         ["iteration", "outputs", key] => Reference::IterationOutput(key.to_string()),
         ["run", "id"] => Reference::RunId,
@@ -281,6 +287,17 @@ mod tests {
             .to_string(),
             "nodes.verify.outputs"
         );
+    }
+
+    #[test]
+    fn parses_the_cost_reference() {
+        assert_eq!(
+            parse_reference("nodes.verify.costUsd").unwrap(),
+            Reference::NodeCost {
+                node: "verify".into()
+            }
+        );
+        assert!(parse_reference("nodes.verify.costUsd.x").is_err());
     }
 
     #[test]

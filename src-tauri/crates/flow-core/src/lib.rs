@@ -16,6 +16,7 @@ pub mod model;
 pub mod outcome;
 pub mod parse;
 pub mod project;
+pub mod prompts;
 pub mod provider;
 pub mod run;
 pub mod runner_client;

@@ -77,6 +77,8 @@
     "FLOW_PATH_OUTSIDE_PROJECT": "「{{ref}}」はプロジェクトの外、またはリンクを指しています。",
     "FLOW_TEMPLATE_INVALID": "テンプレートまたは参照が不正です（{{reason}}）。",
     "FLOW_ACTION_UNKNOWN": "組込みアクション「{{uses}}」は存在しません。",
+    "FLOW_TEMPLATE_UNKNOWN": "テンプレートが存在しないものを参照しています。",
+    "FLOW_SUBFLOW_ROOT_INVALID": "サブフローの projectRoot が使用できるディレクトリではありません。",
     "FLOW_PROVIDER_UNAVAILABLE": "エージェントのプロバイダーを使用できません。",
     "FLOW_UNKNOWN_FIELD": "未知の属性「{{field}}」があります。",
     "FLOW_UNKNOWN_NODE_KIND": "未知のノード種別「{{kind}}」です。",

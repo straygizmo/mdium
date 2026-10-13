@@ -267,6 +267,8 @@ pub struct TemplateContext<'a> {
     pub outputs: OutputsLookup<'a>,
     /// Artifacts of a node visible from here.
     pub artifacts: ArtifactsLookup<'a>,
+    /// Actual + estimated cost (USD) of a node and everything under it.
+    pub costs: &'a dyn Fn(&str) -> Option<f64>,
     /// Loop variables of the enclosing inline loops, innermost last.
     pub vars: &'a [LoopVar],
     /// Outputs of the iteration that just ended (`while` loop `until` only).
@@ -295,6 +297,7 @@ impl TemplateContext<'_> {
                 .into_iter()
                 .find(|a| a.label.as_deref() == Some(label.as_str()))
                 .map(|a| Value::String(a.path)),
+            Reference::NodeCost { node } => Some(Value::from((self.costs)(node).unwrap_or(0.0))),
             Reference::RunId => Some(Value::String(self.run_id.to_string())),
             Reference::RunDir => Some(path(self.run_dir)),
             Reference::NodeDir => self.node_dir.map(path),
@@ -520,6 +523,7 @@ nodes:
             params: &params,
             outputs: &outputs,
             artifacts: &|_| None,
+            costs: &|id| (id == "a").then_some(1.5),
             vars: &vars,
             iteration: Some(&iteration),
             run_id: "r1",
@@ -568,6 +572,7 @@ nodes:
             params: &params,
             outputs: &outputs,
             artifacts: &|_| None,
+            costs: &|id| (id == "a").then_some(1.5),
             vars: &[],
             iteration: None,
             run_id: "r",
@@ -581,5 +586,13 @@ nodes:
             serde_json::json!({ "k": 1 })
         );
         assert!(ctx.render_value("${{ nodes.b.outputs }}").is_err());
+        assert_eq!(
+            ctx.render_value("${{ nodes.a.costUsd }}").unwrap(),
+            serde_json::json!(1.5)
+        );
+        assert_eq!(
+            ctx.render_value("${{ nodes.b.costUsd }}").unwrap(),
+            serde_json::json!(0.0)
+        );
     }
 }

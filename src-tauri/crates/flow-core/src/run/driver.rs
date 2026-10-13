@@ -538,6 +538,27 @@ impl Driver {
         }
     }
 
+    /// Actual + estimated cost of node `id` of `prefix` and of everything
+    /// under it (loop iterations, sub-flow scopes).
+    fn cost_seen(&self, prefix: &str, id: &str) -> Option<f64> {
+        let key = self.state.current_key(prefix, id);
+        let mut total = 0.0;
+        let mut seen = false;
+        for (k, n) in &self.state.nodes {
+            // Children are keyed `<key>[i]/...` (loop iterations) or `<key>/...` (sub-flows).
+            let under = k.strip_prefix(key.as_str()).is_some_and(|rest| {
+                rest.is_empty() || rest.starts_with('[') || rest.starts_with('/')
+            });
+            if under {
+                if n.cost_reported {
+                    seen = true;
+                }
+                total += n.cost.actual + n.cost.estimated;
+            }
+        }
+        seen.then_some(total)
+    }
+
     /// Artifacts of node `id` as seen from a scope (same walk as `outputs_seen`).
     fn artifacts_seen(&self, prefix: &str, id: &str) -> Option<ArtifactsOf> {
         let mut current = prefix.to_string();
@@ -594,10 +615,12 @@ impl Driver {
             .unwrap_or_default();
         let lookup = |id: &str| self.outputs_seen(prefix, id);
         let artifacts = |id: &str| self.artifacts_seen(prefix, id);
+        let costs = |id: &str| self.cost_seen(prefix, id);
         let ctx = TemplateContext {
             params: &params,
             outputs: &lookup,
             artifacts: &artifacts,
+            costs: &costs,
             vars: &vars,
             iteration,
             run_id: &self.run_id,

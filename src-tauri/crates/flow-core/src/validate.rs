@@ -358,6 +358,9 @@ impl Validator {
                     }
                     self.value_templates(value, &p, ctx);
                 }
+                if let Some(root) = &sub.project_root {
+                    self.template(root, &join(path, "projectRoot"), ctx);
+                }
             }
             NodeKind::Action(action) => {
                 if !KNOWN_ACTIONS.contains(&action.uses.as_str()) {
@@ -416,6 +419,11 @@ impl Validator {
         if let Some(policy) = &agent.policy {
             self.value_templates(policy, &join(path, "policy"), ctx);
         }
+        self.value_templates(
+            &Value::Object(agent.with_args.clone().into_iter().collect()),
+            &join(path, "with"),
+            ctx,
+        );
     }
 
     fn command(&mut self, command: &CommandNode, path: &str, ctx: &Ctx) {
@@ -697,6 +705,7 @@ impl Validator {
             | Reference::NodeOutputs { node }
             | Reference::NodeArtifacts { node }
             | Reference::NodeArtifact { node, .. }
+            | Reference::NodeCost { node }
                 if !ctx.visible.iter().any(|ids| ids.contains(node)) =>
             {
                 self.issues.error(

@@ -4,6 +4,8 @@
 
 use crate::frontmatter::{split_frontmatter, split_line, strip_bom, DelimiterMatch};
 use serde::Deserialize;
+use serde_json::Value;
+use std::collections::BTreeMap;
 
 /// The declared result of one stage attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,6 +23,10 @@ pub struct StageOutcome {
     pub reason: Option<String>,
     pub question: Option<String>,
     pub body: String,
+    /// Declared `outputs` (a mapping), empty when absent.
+    pub outputs: BTreeMap<String, Value>,
+    /// Declared `artifacts` (paths), empty when absent.
+    pub artifacts: Vec<String>,
 }
 
 /// Why a response did not satisfy the outcome contract.
@@ -34,6 +40,8 @@ pub enum OutcomeError {
     InvalidOutcome(String),
     /// `attention` / `awaiting_user` without a non-empty `reason`.
     MissingReason,
+    /// `outputs` is not a mapping, or `artifacts` is not a list of strings.
+    InvalidOutputs(String),
 }
 
 impl OutcomeError {
@@ -44,6 +52,7 @@ impl OutcomeError {
             OutcomeError::InvalidYaml(_) => "OUTCOME_INVALID_YAML",
             OutcomeError::InvalidOutcome(_) => "OUTCOME_INVALID_VALUE",
             OutcomeError::MissingReason => "OUTCOME_MISSING_REASON",
+            OutcomeError::InvalidOutputs(_) => "OUTCOME_INVALID_OUTPUTS",
         }
     }
 }
@@ -51,7 +60,9 @@ impl OutcomeError {
 impl std::fmt::Display for OutcomeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            OutcomeError::InvalidYaml(detail) | OutcomeError::InvalidOutcome(detail) => {
+            OutcomeError::InvalidYaml(detail)
+            | OutcomeError::InvalidOutcome(detail)
+            | OutcomeError::InvalidOutputs(detail) => {
                 write!(f, "{}: {detail}", self.code())
             }
             OutcomeError::MissingFrontmatter | OutcomeError::MissingReason => {
@@ -94,12 +105,56 @@ pub fn parse_outcome(text: &str) -> Result<StageOutcome, OutcomeError> {
         return Err(OutcomeError::MissingReason);
     }
 
+    let outputs = decode_outputs(raw.outputs)?;
+    let artifacts = decode_artifacts(raw.artifacts)?;
+
     Ok(StageOutcome {
         kind,
         reason,
         question: non_blank(raw.question)?,
         body: body.to_string(),
+        outputs,
+        artifacts,
     })
+}
+
+/// `outputs` must be a mapping with string keys; values become JSON.
+fn decode_outputs(
+    value: Option<serde_yaml_ng::Value>,
+) -> Result<BTreeMap<String, Value>, OutcomeError> {
+    let bad = |detail: &str| OutcomeError::InvalidOutputs(detail.to_string());
+    match value {
+        None | Some(serde_yaml_ng::Value::Null) => Ok(BTreeMap::new()),
+        Some(serde_yaml_ng::Value::Mapping(map)) => {
+            let mut out = BTreeMap::new();
+            for (key, item) in map {
+                let serde_yaml_ng::Value::String(key) = key else {
+                    return Err(bad("outputs keys must be strings"));
+                };
+                let json = serde_json::to_value(&item)
+                    .map_err(|err| OutcomeError::InvalidOutputs(err.to_string()))?;
+                out.insert(key, json);
+            }
+            Ok(out)
+        }
+        Some(_) => Err(bad("outputs is not a mapping")),
+    }
+}
+
+/// `artifacts` must be a sequence of strings.
+fn decode_artifacts(value: Option<serde_yaml_ng::Value>) -> Result<Vec<String>, OutcomeError> {
+    let bad = || OutcomeError::InvalidOutputs("artifacts is not a list of strings".to_string());
+    match value {
+        None | Some(serde_yaml_ng::Value::Null) => Ok(Vec::new()),
+        Some(serde_yaml_ng::Value::Sequence(items)) => items
+            .into_iter()
+            .map(|item| match item {
+                serde_yaml_ng::Value::String(path) => Ok(path),
+                _ => Err(bad()),
+            })
+            .collect(),
+        Some(_) => Err(bad()),
+    }
 }
 
 /// A scalar frontmatter value: a YAML string, or a number/bool rendered as
@@ -196,11 +251,55 @@ struct RawFrontmatter {
     reason: Option<serde_yaml_ng::Value>,
     #[serde(default)]
     question: Option<serde_yaml_ng::Value>,
+    #[serde(default)]
+    outputs: Option<serde_yaml_ng::Value>,
+    #[serde(default)]
+    artifacts: Option<serde_yaml_ng::Value>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn outcome_outputs_and_artifacts_are_parsed() {
+        let text = "---
+outcome: completed
+outputs:
+  proposalPath: docs/p.md
+  score: 7
+artifacts:
+  - docs/p.md
+---
+
+body";
+        let out = parse_outcome(text).unwrap();
+        assert_eq!(out.outputs["proposalPath"], serde_json::json!("docs/p.md"));
+        assert_eq!(out.outputs["score"], serde_json::json!(7));
+        assert_eq!(out.artifacts, vec!["docs/p.md".to_string()]);
+        assert_eq!(out.body, "body");
+        let plain = parse_outcome("---
+outcome: completed
+---
+x").unwrap();
+        assert!(plain.outputs.is_empty() && plain.artifacts.is_empty());
+    }
+
+    #[test]
+    fn outcome_outputs_must_be_a_mapping_and_artifacts_strings() {
+        let err = parse_outcome("---
+outcome: completed
+outputs: [1]
+---
+").unwrap_err();
+        assert_eq!(err.code(), "OUTCOME_INVALID_OUTPUTS");
+        let err = parse_outcome("---
+outcome: completed
+artifacts: [1]
+---
+").unwrap_err();
+        assert_eq!(err.code(), "OUTCOME_INVALID_OUTPUTS");
+    }
 
     fn ok(text: &str) -> StageOutcome {
         parse_outcome(text).unwrap_or_else(|err| panic!("unexpected error {err:?} for {text:?}"))

@@ -77,6 +77,8 @@
     "FLOW_PATH_OUTSIDE_PROJECT": "\"{{ref}}\" points outside the project or through a link.",
     "FLOW_TEMPLATE_INVALID": "Invalid template or reference ({{reason}}).",
     "FLOW_ACTION_UNKNOWN": "Unknown built-in action \"{{uses}}\".",
+    "FLOW_TEMPLATE_UNKNOWN": "The template refers to something that does not exist.",
+    "FLOW_SUBFLOW_ROOT_INVALID": "The sub-flow projectRoot is not a usable directory.",
     "FLOW_PROVIDER_UNAVAILABLE": "The agent provider is not available.",
     "FLOW_UNKNOWN_FIELD": "Unknown attribute \"{{field}}\".",
     "FLOW_UNKNOWN_NODE_KIND": "Unknown node kind \"{{kind}}\".",

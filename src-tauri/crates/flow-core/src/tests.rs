@@ -1285,3 +1285,25 @@ fn artifact_references_need_a_visible_node() {
     assert_eq!(codes(&issues.errors), vec![FLOW_UNKNOWN_NODE_REF]);
     assert_eq!(issues.errors[0].path, "nodes[1].show[2]");
 }
+
+#[test]
+fn agent_with_and_subflow_project_root_parse_and_validate() {
+    let text = "schemaVersion: 1\nid: a\nname: A\nparams: { root: { type: string, default: '' } }\nnodes:\n  - { id: g, kind: agent, provider: claude, permission: read-only, promptRef: 'builtin:design', with: { requirement: 'r ${{ params.root }}' } }\n  - { id: s, kind: subflow, flow: lib/p.flow.yaml, projectRoot: '${{ params.root }}' }\nedges: [{ from: g, to: s }]\n";
+    let (flow, issues) = check_text(text, FlowFormat::Yaml);
+    let flow = flow.unwrap();
+    let NodeKind::Agent(agent) = &flow.nodes[0].kind else {
+        panic!()
+    };
+    assert_eq!(
+        agent.with_args["requirement"],
+        serde_json::json!("r ${{ params.root }}")
+    );
+    let NodeKind::Subflow(sub) = &flow.nodes[1].kind else {
+        panic!()
+    };
+    assert_eq!(sub.project_root.as_deref(), Some("${{ params.root }}"));
+    assert!(
+        issues.errors.iter().all(|i| i.code != FLOW_UNKNOWN_FIELD),
+        "{issues:?}"
+    );
+}

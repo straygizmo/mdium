@@ -18,6 +18,10 @@ pub const FLOW_SUBFLOW_RECURSION: &str = "FLOW_SUBFLOW_RECURSION";
 pub const FLOW_PATH_OUTSIDE_PROJECT: &str = "FLOW_PATH_OUTSIDE_PROJECT";
 pub const FLOW_TEMPLATE_INVALID: &str = "FLOW_TEMPLATE_INVALID";
 pub const FLOW_ACTION_UNKNOWN: &str = "FLOW_ACTION_UNKNOWN";
+/// A template names something that does not exist at run time.
+pub const FLOW_TEMPLATE_UNKNOWN: &str = "FLOW_TEMPLATE_UNKNOWN";
+/// A sub-flow's `projectRoot` does not resolve to a usable directory.
+pub const FLOW_SUBFLOW_ROOT_INVALID: &str = "FLOW_SUBFLOW_ROOT_INVALID";
 /// Checked at run start once agent nodes run (PR 5); defined so the code list is complete.
 #[allow(dead_code)]
 pub const FLOW_PROVIDER_UNAVAILABLE: &str = "FLOW_PROVIDER_UNAVAILABLE";

@@ -253,6 +253,9 @@ pub struct AgentNode {
     pub policy: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub working_dir: Option<String>,
+    /// Inputs handed to the agent as data blocks (templated values).
+    #[serde(rename = "with", default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub with_args: BTreeMap<String, Value>,
 }
 
 /// `run` of a command: an argv array, or a shell string when `shell: true`.
@@ -472,6 +475,9 @@ pub struct SubflowNode {
     pub flow: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub params: BTreeMap<String, Value>,
+    /// Project root of the sub-flow's scope (templated); defaults to the caller's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_root: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

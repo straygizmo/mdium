@@ -82,6 +82,8 @@ export interface FlowAgentNode extends FlowNodeCommon {
   outputContract: "outcome" | "free";
   policy?: unknown;
   workingDir?: string;
+  /** Inputs handed to the agent as data blocks. */
+  with?: Record<string, unknown>;
 }
 
 export interface FlowCommandNode extends FlowNodeCommon {
@@ -135,6 +137,8 @@ export interface FlowSubflowNode extends FlowNodeCommon {
   kind: "subflow";
   flow: string;
   params?: Record<string, unknown>;
+  /** Project root of the sub-flow scope (templated). */
+  projectRoot?: string;
 }
 
 export interface FlowActionNode extends FlowNodeCommon {
@@ -203,6 +207,8 @@ export const FLOW_ERROR_CODES = [
   "FLOW_PATH_OUTSIDE_PROJECT",
   "FLOW_TEMPLATE_INVALID",
   "FLOW_ACTION_UNKNOWN",
+  "FLOW_TEMPLATE_UNKNOWN",
+  "FLOW_SUBFLOW_ROOT_INVALID",
   "FLOW_PROVIDER_UNAVAILABLE",
   "FLOW_UNKNOWN_FIELD",
   "FLOW_UNKNOWN_NODE_KIND",
