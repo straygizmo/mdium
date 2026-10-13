@@ -125,6 +125,8 @@ pub const FLOW_AGENT_PROMPT_INVALID: &str = "FLOW_AGENT_PROMPT_INVALID";
 /// Approval request before a `full-access` turn whose inputs or instructions
 /// look like a prompt injection (`show.findings` = `{ code, line, excerpt }`).
 pub const FLOW_AGENT_SCREENING: &str = "FLOW_AGENT_SCREENING";
+/// Reason param of a screening request: SHA-256 of the screened text.
+const SCREENED_SHA256: &str = "screenedSha256";
 /// Approval request carrying an agent's `awaiting_user` question (`message`).
 pub const FLOW_AGENT_QUESTION: &str = "FLOW_AGENT_QUESTION";
 /// The project repository changed behind MDium's back during a `full-access`
@@ -970,7 +972,7 @@ impl Driver {
             Some(key) => {
                 let attempt = self.node(key).attempt;
                 if request.reason.code == FLOW_AGENT_SCREENING {
-                    self.agent_screening_decided(key, attempt, choice);
+                    self.agent_screening_decided(key, attempt, &request, choice);
                     return true;
                 }
                 if request.reason.code == FLOW_AGENT_QUESTION {
@@ -1680,8 +1682,24 @@ impl Driver {
             Ok(_) => return,
             Err(reason) => return self.fail_node(key, attempt, reason),
         };
+        // Strict: a skipped or not-yet-run node must not render to "" and
+        // silently run the child in the project root.
         let root = match &sub.project_root {
-            Some(text) => self.with_ctx(prefix, None, None, None, |ctx| ctx.render_string(text)),
+            Some(text) => self
+                .with_ctx(prefix, None, None, None, |ctx| ctx.render_string_strict(text))
+                .map_err(|reason| {
+                    if reason.code == "FLOW_TEMPLATE_UNRESOLVED" {
+                        let mut invalid = Reason::new(FLOW_SUBFLOW_ROOT_INVALID)
+                            .with("root", text.as_str())
+                            .with("reason", "unresolved");
+                        if let Some(reference) = reason.params.get("ref") {
+                            invalid = invalid.with("ref", reference.clone());
+                        }
+                        invalid
+                    } else {
+                        reason
+                    }
+                }),
             None => Ok(String::new()),
         };
         let opened = match root {
@@ -2590,6 +2608,10 @@ impl Driver {
                     .working_dir
                     .as_deref()
                     .or(flow.defaults.working_dir.as_deref()),
+                |template| {
+                    Reason::new(FLOW_COMMAND_SPAWN_FAILED)
+                        .with("message", format!("workingDir {template:?} rendered empty"))
+                },
             )?;
             let mut env: Vec<(String, String)> = Vec::new();
             for (name, value) in flow.env.iter().chain(command.env.iter()) {
@@ -3545,14 +3567,22 @@ impl Driver {
             let findings = screening::screen(&prepared.screening);
             if !findings.is_empty() {
                 // `prompt.md` is written already, so the user can inspect it.
-                return self.request_agent_screening(key, attempt, &findings);
+                return self.request_agent_screening(key, attempt, &findings, &prepared.screening);
             }
         }
         self.start_agent_turn(prefix, key, node, agent, attempt, prepared);
     }
 
     /// Asks the user before a `full-access` turn whose inputs look suspicious.
-    fn request_agent_screening(&mut self, key: &str, attempt: u32, findings: &[screening::Finding]) {
+    /// The reason carries the screened text's SHA-256 (`screenedSha256`), so
+    /// the approval covers exactly that text.
+    fn request_agent_screening(
+        &mut self,
+        key: &str,
+        attempt: u32,
+        findings: &[screening::Finding],
+        screened: &str,
+    ) {
         let findings: Vec<Value> = findings
             .iter()
             .map(|f| serde_json::json!({ "code": f.kind.code(), "line": f.line, "excerpt": f.excerpt }))
@@ -3570,14 +3600,24 @@ impl Driver {
                 "findings".to_string(),
                 ShowValue::Value(Value::Array(findings)),
             )]),
-            reason: Reason::new(FLOW_AGENT_SCREENING),
+            reason: Reason::new(FLOW_AGENT_SCREENING)
+                .with(SCREENED_SHA256, sha256_hex(screened.as_bytes())),
         };
         self.emit(Some(key), EventBody::ApprovalRequested(request));
     }
 
     /// The user decided on a screening request: `approve` starts the turn in
-    /// the same attempt, anything else fails the node.
-    fn agent_screening_decided(&mut self, key: &str, attempt: u32, choice: &str) {
+    /// the same attempt, anything else fails the node. The inputs are
+    /// rendered again; when they are no longer the text the user saw (a
+    /// referenced node ran in between), they are screened again and the user
+    /// is asked again instead of starting.
+    fn agent_screening_decided(
+        &mut self,
+        key: &str,
+        attempt: u32,
+        request: &ApprovalRequest,
+        choice: &str,
+    ) {
         if choice != "approve" {
             return self.fail_node(key, attempt, Reason::new(FLOW_APPROVAL_REJECTED));
         }
@@ -3598,6 +3638,17 @@ impl Driver {
             Ok(prepared) => prepared,
             Err(reason) => return self.fail_node(key, attempt, reason),
         };
+        let approved = request
+            .reason
+            .params
+            .get(SCREENED_SHA256)
+            .and_then(Value::as_str);
+        if approved != Some(sha256_hex(prepared.screening.as_bytes()).as_str()) {
+            let findings = screening::screen(&prepared.screening);
+            if !findings.is_empty() {
+                return self.request_agent_screening(key, attempt, &findings, &prepared.screening);
+            }
+        }
         self.screening_ack
             .insert(key.to_string(), prepared.screening.clone());
         self.start_agent_turn(&prefix, key, &node, agent, attempt, prepared);
@@ -3788,6 +3839,11 @@ impl Driver {
                     ctx,
                     &root,
                     agent.working_dir.as_deref().or(default_dir.as_deref()),
+                    |template| {
+                        Reason::new(FLOW_AGENT_PROMPT_INVALID)
+                            .with("detail", "working-dir-empty")
+                            .with("workingDir", template)
+                    },
                 )?;
                 Ok((provider, inputs, instructions, builtin, working_dir))
             })?;
@@ -4784,15 +4840,23 @@ fn runtimes_and_setup(project: Option<&crate::project::ProjectDef>) -> Value {
 }
 
 /// Resolves a node's (or the flow default's) `workingDir` against the
-/// project root; without one the node runs in the project root.
+/// project root; without one the node runs in the project root. Rendering is
+/// strict: a skipped or not-yet-run node's reference is unresolved instead of
+/// `""`, and a template that renders empty is `empty(template)`; either would
+/// otherwise silently run the node in the project root (or at `/`).
 fn resolve_working_dir(
     ctx: &TemplateContext,
     root: &Path,
     dir: Option<&str>,
+    empty: impl Fn(&str) -> Reason,
 ) -> Result<PathBuf, Reason> {
-    Ok(match dir {
+    Ok(match dir.filter(|dir| !dir.trim().is_empty()) {
         Some(dir) => {
-            let rendered = PathBuf::from(ctx.render_string(dir)?);
+            let rendered = ctx.render_string_strict(dir)?;
+            if rendered.trim().is_empty() {
+                return Err(empty(dir));
+            }
+            let rendered = PathBuf::from(rendered);
             if rendered.is_absolute() {
                 rendered
             } else {

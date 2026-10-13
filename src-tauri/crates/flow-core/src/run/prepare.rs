@@ -381,6 +381,14 @@ impl TemplateContext<'_> {
         })
     }
 
+    /// Like [`Self::render_string`], but strict as [`Self::render_value_strict`].
+    pub fn render_string_strict(&self, text: &str) -> Result<String, Reason> {
+        Ok(match self.render_value_strict(text)? {
+            Value::String(s) => s,
+            other => other.to_string(),
+        })
+    }
+
     /// Renders every string inside `value` (arrays and objects recursively).
     pub fn render_json(&self, value: &Value) -> Result<Value, Reason> {
         Ok(match value {
