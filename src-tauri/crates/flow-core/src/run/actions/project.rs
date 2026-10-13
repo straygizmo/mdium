@@ -264,5 +264,7 @@ mod tests {
         let (improved, report) = compare_metrics(&metrics, &base, &unknown);
         assert!(improved && report.contains("| unknown |"));
         assert!(!compare_metrics(&metrics, &base, &base).0, "all same is not an improvement");
+        let pricier = json!({ "outputs": { "coverage": 12.0, "coherence": 8.0 }, "costUsd": 3.0 });
+        assert!(!compare_metrics(&metrics, &base, &pricier).0, "a worse lower-is-better metric blocks the improvement");
     }
 }

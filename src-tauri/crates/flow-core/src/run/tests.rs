@@ -4118,3 +4118,57 @@ fn project_setup_runs_the_manifest_steps_and_asks_when_the_manifest_differs() {
     f.engine.approve(&f.root, &run_id, Some("s"), "approve", None).unwrap();
     f.wait_settled(&run_id, RunStatus::Completed);
 }
+
+#[test]
+fn project_setup_reports_the_failing_step() {
+    let f = fixture();
+    std::fs::create_dir_all(f.root.join(".mdium")).unwrap();
+    // The first step is a no-op; the second one fails (libtest rejects the flag).
+    let ok = serde_json::to_string(&helper_argv()).unwrap();
+    let mut bad_argv = helper_argv();
+    bad_argv.push("--no-such-flag".into());
+    let bad = serde_json::to_string(&bad_argv).unwrap();
+    std::fs::write(f.root.join(".mdium/project.yaml"), format!("schemaVersion: 1\nid: p\nname: P\nsetup:\n  - {{ run: {ok} }}\n  - {{ run: {bad} }}\n")).unwrap();
+    let rel = write_flow(&f.root, "setup", json!({}), vec![json!({ "id": "s", "kind": "action", "uses": "mdium/project-setup" })], vec![]);
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Failed);
+    let reason = node(&snap, "s").reason.unwrap();
+    assert_eq!(reason.code, "FLOW_SETUP_FAILED");
+    assert_eq!(reason.params["step"], json!(2));
+    assert!(reason.params["exitCode"].as_i64().is_some_and(|code| code != 0), "{:?}", reason.params);
+}
+
+#[test]
+fn flow_run_latest_picks_the_newest_completed_run_of_the_flow() {
+    let f = fixture();
+    let score = |n: i64| vec![cmd("a", json!([ev(json!({ "v": 1, "type": "output", "key": "score", "value": n }))]))];
+    let outputs = json!({ "outputs": { "score": "${{ nodes.a.outputs.score }}" } });
+    let main = write_flow(&f.root, "main", outputs.clone(), score(1), vec![]);
+    let first = f.confirm_and_start(&main, json!({}));
+    f.wait_settled(&first, RunStatus::Completed);
+    write_flow(&f.root, "main", outputs.clone(), score(2), vec![]);
+    let second = f.confirm_and_start(&main, json!({}));
+    f.wait_settled(&second, RunStatus::Completed);
+    // A completed run of another flow and a newer failed run of the target.
+    let other = write_flow(&f.root, "other", outputs.clone(), score(9), vec![]);
+    let other_run = f.confirm_and_start(&other, json!({}));
+    f.wait_settled(&other_run, RunStatus::Completed);
+    write_flow(&f.root, "main", json!({}), vec![cmd("a", json!([{ "exit": 3 }]))], vec![]);
+    let failed = f.confirm_and_start(&main, json!({}));
+    f.wait_settled(&failed, RunStatus::Failed);
+    let outer = write_flow(&f.root, "outer", json!({}),
+        vec![json!({ "id": "base", "kind": "action", "uses": "mdium/flow-run-latest", "with": { "flow": main } })], vec![]);
+    let run_id = f.confirm_and_start(&outer, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(node(&snap, "base").outputs["runId"], json!(second));
+    assert_eq!(node(&snap, "base").outputs["outputs"]["score"], json!(2));
+    // A flow without any completed run is not found.
+    let never = write_flow(&f.root, "never", json!({}), vec![cmd("a", json!([]))], vec![]);
+    let outer2 = write_flow(&f.root, "outer2", json!({}),
+        vec![json!({ "id": "base", "kind": "action", "uses": "mdium/flow-run-latest", "with": { "flow": never } })], vec![]);
+    let run_id = f.confirm_and_start(&outer2, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Failed);
+    let reason = node(&snap, "base").reason.unwrap();
+    assert_eq!(reason.code, "FLOW_ACTION_FAILED");
+    assert_eq!(reason.params["code"], json!("FLOW_RUN_NOT_FOUND"));
+}
