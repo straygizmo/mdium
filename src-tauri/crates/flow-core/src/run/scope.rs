@@ -6,9 +6,11 @@
 //! in a new pass: `design@2`. One key always names one instance.
 
 use crate::model::{FlowDef, FlowEdge, FlowNode, LoopBody, NodeKind};
+use crate::run::model::RunState;
 use crate::run::store::RunMeta;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 
 /// Key of a node instance: `<prefix><id>` plus `@<pass>` from pass 2 on.
 pub fn instance_key(prefix: &str, id: &str, pass: u32) -> String {
@@ -165,6 +167,35 @@ pub fn graph<'a>(meta: &'a RunMeta, loc: &GraphLoc) -> Option<Graph<'a>> {
         outputs,
         flow,
     })
+}
+
+/// Snapshot key of a flow file loaded from another working root (a sub-flow
+/// opened with `projectRoot`): `<root>::<project-relative path>`.
+pub fn rooted_file(root: &str, display: &str) -> String {
+    format!("{root}{ROOT_SEPARATOR}{display}")
+}
+
+/// The project-relative path of a snapshot file key (see [`rooted_file`]).
+pub fn unrooted_file(file: &str) -> &str {
+    file.rsplit_once(ROOT_SEPARATOR).map_or(file, |(_, display)| display)
+}
+
+const ROOT_SEPARATOR: &str = "::";
+
+/// The working root recorded for scope `prefix` or the nearest enclosing
+/// scope (`ScopeInit::project_root`); `None` when the project root applies.
+pub fn recorded_root(state: &RunState, prefix: &str) -> Option<PathBuf> {
+    let mut current = prefix;
+    while let Some(scope) = state.scopes.get(current) {
+        if let Some(root) = &scope.init.project_root {
+            return Some(PathBuf::from(root));
+        }
+        match &scope.init.parent {
+            Some(parent) => current = parent,
+            None => break,
+        }
+    }
+    None
 }
 
 /// Key under which a snapshot records where `reference` (written in `file`) resolved.

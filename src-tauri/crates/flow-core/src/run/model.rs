@@ -489,6 +489,10 @@ pub struct ScopeInit {
     pub item: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index: Option<usize>,
+    /// Working root of a sub-flow opened with `projectRoot` (a worktree of
+    /// the project); `None` inherits the enclosing scope's root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_root: Option<String>,
 }
 
 /// A scope's materialized state.
@@ -1022,6 +1026,7 @@ mod tests {
             var: Some("doc".into()),
             item: Some(json!("a")),
             index: Some(0),
+            project_root: None,
         };
         let bodies = vec![
             EventBody::ScopeStarted {

@@ -166,6 +166,15 @@ impl RunStore {
         Ok(())
     }
 
+    /// Rewrites `run.json` atomically (a sub-flow opened in a worktree adds
+    /// the definitions it loaded there).
+    pub fn save_meta(&self, meta: &RunMeta) -> Result<(), StoreError> {
+        let json =
+            serde_json::to_vec_pretty(meta).map_err(|e| StoreError::Corrupt(e.to_string()))?;
+        fsutil::atomic_write(&self.run_dir(&meta.run_id)?.join("run.json"), &json)?;
+        Ok(())
+    }
+
     pub fn load_meta(&self, run_id: &str) -> Result<RunMeta, StoreError> {
         let path = self.run_dir(run_id)?.join("run.json");
         let bytes = fs::read(&path).map_err(|err| match err.kind() {

@@ -13,12 +13,15 @@ use crate::forge::ForgeCli;
 use crate::fsutil;
 use crate::gitops;
 use crate::integrity::{self, IntegritySnapshot};
-use crate::issues::{FLOW_PROVIDER_UNAVAILABLE, FLOW_RUNTIME_UNKNOWN};
+use crate::issues::{
+    FLOW_PROVIDER_UNAVAILABLE, FLOW_RUNTIME_UNKNOWN, FLOW_SUBFLOW_INVALID,
+    FLOW_SUBFLOW_ROOT_INVALID,
+};
 use crate::load;
 use crate::model::{
     parse_duration, ActionNode, AgentNode, AgentPermission, CommandNode, CommandProtocol, CommandRun, FlowDef, FlowNode,
     LoopBody, LoopMode, LoopNode, NodeKind, OnItemFailure, OutputContract, PythonNode, RetryOn,
-    RetryPolicy, PORT_ATTENTION, PORT_FAILURE, PORT_SUCCESS,
+    RetryPolicy, SubflowNode, PORT_ATTENTION, PORT_FAILURE, PORT_SUCCESS,
 };
 use crate::outcome::{parse_outcome, StageOutcomeKind};
 use crate::project::RuntimeDef;
@@ -28,8 +31,12 @@ use crate::run::actions::{
 };
 use crate::run::agent::{AgentRunner, AgentTurnEvent, AgentTurnHandle, AgentTurnRequest};
 use crate::run::artifacts;
+use crate::run::engine::{load_bundle_at, sha256_hex, Bundle};
 use crate::run::model::*;
-use crate::run::prepare::{prepare_params, ArtifactsOf, LoopVar, NodeOutputs, TemplateContext};
+use crate::run::prepare::{
+    check_runnable, command_summaries, prepare_params, stage_summaries, ArtifactsOf, LoopVar,
+    NodeOutputs, TemplateContext,
+};
 use crate::run::process::{
     decide, CommandResult, LaunchSpec, Launcher, ProcessHandle, ProtocolItem, ProtocolOutcome,
     ProtocolReader, MAX_LINES,
@@ -90,6 +97,10 @@ pub const FLOW_LOOP_ITERATION_FAILED: &str = "FLOW_LOOP_ITERATION_FAILED";
 pub const FLOW_SUBFLOW_FAILED: &str = "FLOW_SUBFLOW_FAILED";
 /// A referenced flow is missing from the run snapshot.
 pub const FLOW_SUBFLOW_MISSING: &str = "FLOW_SUBFLOW_MISSING";
+/// Approval request of a sub-flow opened with `projectRoot` whose child flow
+/// in the worktree differs from the confirmed definition (`root`; `show` =
+/// the worktree's `commands`, `stages` and `runtimes`).
+pub const FLOW_SUBFLOW_ROOT_DIFFERS: &str = "FLOW_SUBFLOW_ROOT_DIFFERS";
 /// A node instance was retired because a back-edge opened a new pass.
 pub const FLOW_PASS_RESET: &str = "FLOW_PASS_RESET";
 /// No node can make progress (should not happen; reported instead of hanging).
@@ -230,6 +241,10 @@ struct RunningCommand {
 }
 
 /// The resident worker of one runtime (spec 3.2), shared by the run's calls.
+/// Workers are per runtime and working root: a sub-flow opened in a
+/// worktree gets its own worker of the same runtime.
+type WorkerKey = (String, PathBuf);
+
 struct LiveWorker {
     /// Distinguishes a restarted worker of the same runtime.
     id: u64,
@@ -252,6 +267,8 @@ struct RunningCall {
     attempt: u32,
     dir: PathBuf,
     runtime: String,
+    /// The working root of the call's scope (the worker's root).
+    root: PathBuf,
     /// `LiveWorker::id` of the worker the call was sent to.
     worker: u64,
     /// The stage called (`entry` of the node).
@@ -273,6 +290,17 @@ struct RunningCall {
     error_code: Option<String>,
     /// Outputs the stage declares (others are accepted with a warning).
     declared_outputs: BTreeSet<String>,
+}
+
+impl RunningCall {
+    /// The key of the worker the call runs on.
+    fn worker_key(&self) -> WorkerKey {
+        (self.runtime.clone(), self.root.clone())
+    }
+
+    fn is_on(&self, worker_key: &WorkerKey) -> bool {
+        self.runtime == worker_key.0 && self.root == worker_key.1
+    }
 }
 
 /// An agent turn in flight.
@@ -373,7 +401,7 @@ pub struct Driver {
     shutdown_requested: bool,
     running: Vec<RunningCommand>,
     retry_at: BTreeMap<String, Instant>,
-    workers: BTreeMap<String, LiveWorker>,
+    workers: BTreeMap<WorkerKey, LiveWorker>,
     calls: Vec<RunningCall>,
     agents: Vec<RunningAgent>,
     actions: Vec<RunningAction>,
@@ -560,7 +588,16 @@ impl Driver {
             var: None,
             item: None,
             index: None,
+            project_root: None,
         }
+    }
+
+    /// The working root of a scope: the worktree a sub-flow was opened in
+    /// with `projectRoot` (inherited by everything inside it), else the
+    /// project root. Run and node dirs always stay under the project.
+    fn scope_root(&self, prefix: &str) -> PathBuf {
+        scope::recorded_root(&self.state, prefix)
+            .unwrap_or_else(|| self.store.project_root().to_path_buf())
     }
 
     fn scope_init(&self, prefix: &str) -> Option<ScopeInit> {
@@ -778,6 +815,7 @@ impl Driver {
             .scope_init(prefix)
             .map(|i| i.params)
             .unwrap_or_default();
+        let project_root = self.scope_root(prefix);
         let lookup = |id: &str| self.outputs_seen(prefix, id);
         let artifacts = |id: &str| self.artifacts_seen(prefix, id);
         let costs = |id: &str| self.cost_seen(prefix, id);
@@ -791,7 +829,7 @@ impl Driver {
             run_id: &self.run_id,
             run_dir: &run_dir,
             node_dir,
-            project_root: self.store.project_root(),
+            project_root: &project_root,
             env: &env,
         };
         f(&ctx)
@@ -941,6 +979,10 @@ impl Driver {
                 }
                 if request.reason.code == FLOW_ACTION_APPROVAL {
                     self.action_approval_decided(key, attempt, &request, choice);
+                    return true;
+                }
+                if request.reason.code == FLOW_SUBFLOW_ROOT_DIFFERS {
+                    self.subflow_root_decided(key, attempt, &request, choice);
                     return true;
                 }
                 let is_approval_node = matches!(
@@ -1099,7 +1141,7 @@ impl Driver {
                 }
                 if let Some(pos) = self.calls.iter().position(|c| c.key == key) {
                     let call = self.calls.remove(pos);
-                    self.drop_worker(&call.runtime, call.worker);
+                    self.drop_worker(&call.worker_key(), call.worker);
                 }
                 if let Some(pos) = self.agents.iter().position(|a| a.key == key) {
                     let mut agent = self.agents.remove(pos);
@@ -1614,41 +1656,216 @@ impl Driver {
                 }
                 // Iterations start in `progress_composites`.
             }
-            NodeKind::Subflow(sub) => {
-                let given = self.with_ctx(prefix, None, None, None, |ctx| {
-                    ctx.render_json(&Value::Object(sub.params.clone().into_iter().collect()))
-                });
-                match given {
-                    Ok(Value::Object(given)) => {
-                        let given: BTreeMap<String, Value> = given.into_iter().collect();
-                        if let Err(reason) = self.open_file_scope(
-                            prefix,
-                            key,
-                            &sub.flow,
-                            &subflow_prefix(key),
-                            &given,
-                            None,
-                        ) {
-                            self.fail_node(key, attempt, reason);
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(reason) => self.fail_node(key, attempt, reason),
-                }
-            }
+            NodeKind::Subflow(sub) => self.start_subflow(prefix, key, sub, attempt, None),
         }
     }
 
-    /// Opens a child scope running another flow file (sub-flow or file loop body).
-    fn open_file_scope(
+    /// Starts a sub-flow node: renders its params and `projectRoot`, then
+    /// opens its scope, in a worktree of the project when `projectRoot`
+    /// renders to a non-empty path. `acknowledged`: the `show` of the
+    /// `FLOW_SUBFLOW_ROOT_DIFFERS` request the user approved.
+    fn start_subflow(
         &mut self,
         prefix: &str,
-        owner: &str,
+        key: &str,
+        sub: &SubflowNode,
+        attempt: u32,
+        acknowledged: Option<&BTreeMap<String, ShowValue>>,
+    ) {
+        let given = self.with_ctx(prefix, None, None, None, |ctx| {
+            ctx.render_json(&Value::Object(sub.params.clone().into_iter().collect()))
+        });
+        let given: BTreeMap<String, Value> = match given {
+            Ok(Value::Object(given)) => given.into_iter().collect(),
+            Ok(_) => return,
+            Err(reason) => return self.fail_node(key, attempt, reason),
+        };
+        let root = match &sub.project_root {
+            Some(text) => self.with_ctx(prefix, None, None, None, |ctx| ctx.render_string(text)),
+            None => Ok(String::new()),
+        };
+        let opened = match root {
+            Err(reason) => Err(reason),
+            Ok(root) if root.trim().is_empty() => self.open_file_scope(
+                prefix,
+                key,
+                &sub.flow,
+                &subflow_prefix(key),
+                &given,
+                None,
+                None,
+            ),
+            Ok(root) => self.open_worktree_scope(
+                prefix,
+                key,
+                attempt,
+                &sub.flow,
+                &given,
+                root.trim(),
+                acknowledged,
+            ),
+        };
+        if let Err(reason) = opened {
+            self.fail_node(key, attempt, reason);
+        }
+    }
+
+    /// The user decided on a `FLOW_SUBFLOW_ROOT_DIFFERS` request: approving
+    /// starts the sub-flow again, acknowledged with what was shown (a child
+    /// that changed once more asks again).
+    fn subflow_root_decided(
+        &mut self,
+        key: &str,
+        attempt: u32,
+        request: &ApprovalRequest,
+        choice: &str,
+    ) {
+        if choice != "approve" {
+            return self.fail_node(key, attempt, Reason::new(FLOW_APPROVAL_REJECTED));
+        }
+        let Some((prefix, node)) = self.def_of(key) else {
+            return;
+        };
+        let NodeKind::Subflow(sub) = &node.kind else {
+            return;
+        };
+        if self.offline {
+            // No loop runs here: resuming starts (and asks) a new attempt.
+            self.set_node(key, NodeStatus::Ready, attempt, None, None);
+            return;
+        }
+        self.set_node(key, NodeStatus::Running, attempt, None, None);
+        self.start_subflow(&prefix, key, sub, attempt, Some(&request.show));
+    }
+
+    /// A rendered `projectRoot` as a working root: an existing directory
+    /// (relative values resolve against the project root), registered as a
+    /// worktree of the project, and not the project root itself. Checked
+    /// before anything there is read.
+    fn resolve_scope_root(&self, raw: &str) -> Result<PathBuf, Reason> {
+        let invalid = || Reason::new(FLOW_SUBFLOW_ROOT_INVALID).with("root", raw);
+        let project = self.store.project_root();
+        let given = Path::new(raw);
+        let joined = if given.is_absolute() {
+            given.to_path_buf()
+        } else {
+            project.join(given)
+        };
+        let canonical = std::fs::canonicalize(&joined).map_err(|_| invalid())?;
+        if !canonical.is_dir() {
+            return Err(invalid());
+        }
+        let root = fsutil::normalize_root(&canonical);
+        let key = fsutil::project_key(&root);
+        if key == fsutil::project_key(project) {
+            return Err(invalid());
+        }
+        let worktrees = gitops::list_worktrees(project).map_err(|_| invalid())?;
+        if !worktrees.iter().any(|w| fsutil::project_key(w) == key) {
+            return Err(invalid());
+        }
+        Ok(root)
+    }
+
+    /// Loads the child flow `display` (and everything it references) from
+    /// the worktree `root`, as a start would load it from the project.
+    fn load_worktree_child(
+        &self,
+        root: &Path,
         reference: &str,
-        child: &str,
+        display: &str,
+    ) -> Result<Bundle, Reason> {
+        let invalid = |message: String, details: Vec<Reason>| {
+            Reason::new(FLOW_SUBFLOW_INVALID)
+                .with("ref", reference)
+                .with("errorCount", details.len().max(1))
+                .with("message", message)
+                .with(
+                    "details",
+                    serde_json::to_value(&details).unwrap_or(Value::Null),
+                )
+        };
+        let bundle = load_bundle_at(root, display).map_err(|e| invalid(e.message, e.details))?;
+        let problems = check_runnable(&bundle.files());
+        if !problems.is_empty() {
+            return Err(invalid(
+                "the flow uses features this version cannot run".to_string(),
+                problems,
+            ));
+        }
+        Ok(bundle)
+    }
+
+    /// Compares a child loaded from a worktree with the run's confirmed
+    /// definitions of snapshot file `file` (and the files it references):
+    /// commands, python stages, and the manifest's runtimes and setup.
+    /// `None` when they match, else the worktree's side to show.
+    fn confirmed_differences(&self, file: &str, child: &Bundle) -> Option<BTreeMap<String, Value>> {
+        let mut confirmed: BTreeMap<String, &FlowDef> = BTreeMap::new();
+        let mut queue = vec![file.to_string()];
+        while let Some(current) = queue.pop() {
+            if confirmed.contains_key(&current) {
+                continue;
+            }
+            let Some(flow) = scope::flow_of(&self.meta, &current) else {
+                continue;
+            };
+            confirmed.insert(current.clone(), flow);
+            let owned = ref_key(&current, "");
+            queue.extend(
+                self.meta
+                    .refs
+                    .iter()
+                    .filter(|(k, _)| k.starts_with(&owned))
+                    .map(|(_, v)| v.clone()),
+            );
+        }
+        // Same order as `Bundle::files`: the file itself, then the others by path.
+        let mut files: Vec<(&str, &FlowDef)> = Vec::new();
+        if let Some(flow) = confirmed.remove(file) {
+            files.push((scope::unrooted_file(file), flow));
+        }
+        let others: BTreeMap<&str, &FlowDef> = confirmed
+            .iter()
+            .map(|(k, f)| (scope::unrooted_file(k), *f))
+            .collect();
+        files.extend(others);
+        let child_files = child.files();
+        let commands = command_summaries(&child_files);
+        let stages = stage_summaries(&child_files);
+        let runtimes = runtimes_and_setup(child.project.as_ref().and_then(|p| p.project.as_ref()));
+        if commands == command_summaries(&files)
+            && stages == stage_summaries(&files)
+            && runtimes == runtimes_and_setup(self.meta.project.as_ref())
+        {
+            return None;
+        }
+        let value = |v: serde_json::Result<Value>| v.unwrap_or(Value::Null);
+        Some(BTreeMap::from([
+            ("commands".to_string(), value(serde_json::to_value(&commands))),
+            ("stages".to_string(), value(serde_json::to_value(&stages))),
+            ("runtimes".to_string(), runtimes),
+        ]))
+    }
+
+    /// Opens a sub-flow scope whose child flow comes from `raw_root`, a
+    /// worktree of the project. A child that differs from the confirmed
+    /// definitions waits for the user's approval (unless `acknowledged`
+    /// shows exactly that difference). Opening records the child's
+    /// definitions in `run.json` under `<root>::<path>`.
+    #[allow(clippy::too_many_arguments)]
+    fn open_worktree_scope(
+        &mut self,
+        prefix: &str,
+        key: &str,
+        attempt: u32,
+        reference: &str,
         given: &BTreeMap<String, Value>,
-        iteration: Option<(Value, usize)>,
+        raw_root: &str,
+        acknowledged: Option<&BTreeMap<String, ShowValue>>,
     ) -> Result<(), Reason> {
+        let root = self.resolve_scope_root(raw_root)?;
+        let root_text = root.to_string_lossy().into_owned();
         let owner_file = self
             .scope_init(prefix)
             .map(|i| i.graph.file)
@@ -1659,6 +1876,92 @@ impl Driver {
             .get(&ref_key(&owner_file, reference))
             .cloned()
             .ok_or_else(|| Reason::new(FLOW_SUBFLOW_MISSING).with("ref", reference))?;
+        let display = scope::unrooted_file(&resolved).to_string();
+        let child = self.load_worktree_child(&root, reference, &display)?;
+        if let Some(show) = self.confirmed_differences(&resolved, &child) {
+            let show: BTreeMap<String, ShowValue> = show
+                .into_iter()
+                .map(|(name, value)| (name, ShowValue::Value(value)))
+                .collect();
+            if acknowledged != Some(&show) {
+                self.set_node(key, NodeStatus::AwaitingApproval, attempt, None, None);
+                let request = ApprovalRequest {
+                    node_key: Some(key.to_string()),
+                    options: COMMAND_APPROVAL_OPTIONS
+                        .iter()
+                        .map(|s| RequestOption::plain(*s))
+                        .collect(),
+                    message: None,
+                    show,
+                    reason: Reason::new(FLOW_SUBFLOW_ROOT_DIFFERS).with("root", root_text),
+                };
+                self.emit(Some(key), EventBody::ApprovalRequested(request));
+                return Ok(());
+            }
+        }
+        let rooted = |display: &str| scope::rooted_file(&root_text, display);
+        let file = rooted(&display);
+        let Bundle {
+            flow, others, refs, ..
+        } = child;
+        for (path, (_, def)) in others {
+            self.meta.subflows.insert(rooted(&path), def);
+        }
+        self.meta.subflows.insert(file.clone(), flow);
+        for (k, target) in refs {
+            if let Some((owner, reference)) = k.split_once('\n') {
+                self.meta
+                    .refs
+                    .insert(ref_key(&rooted(owner), reference), rooted(&target));
+            }
+        }
+        self.store.save_meta(&self.meta).map_err(|e| {
+            Reason::new(FLOW_SUBFLOW_INVALID)
+                .with("ref", reference)
+                .with("message", e.to_string())
+        })?;
+        self.open_file_scope(
+            prefix,
+            key,
+            reference,
+            &subflow_prefix(key),
+            given,
+            None,
+            Some((root_text.clone(), file)),
+        )
+    }
+
+    /// Opens a child scope running another flow file (sub-flow or file loop
+    /// body). `worktree`: `(root, snapshot file)` of a child loaded from a
+    /// worktree (see [`Self::open_worktree_scope`]); otherwise the reference
+    /// resolves through the snapshot.
+    #[allow(clippy::too_many_arguments)]
+    fn open_file_scope(
+        &mut self,
+        prefix: &str,
+        owner: &str,
+        reference: &str,
+        child: &str,
+        given: &BTreeMap<String, Value>,
+        iteration: Option<(Value, usize)>,
+        worktree: Option<(String, String)>,
+    ) -> Result<(), Reason> {
+        let (project_root, resolved) = match worktree {
+            Some((root, file)) => (Some(root), file),
+            None => {
+                let owner_file = self
+                    .scope_init(prefix)
+                    .map(|i| i.graph.file)
+                    .unwrap_or_default();
+                let resolved = self
+                    .meta
+                    .refs
+                    .get(&ref_key(&owner_file, reference))
+                    .cloned()
+                    .ok_or_else(|| Reason::new(FLOW_SUBFLOW_MISSING).with("ref", reference))?;
+                (None, resolved)
+            }
+        };
         let flow = scope::flow_of(&self.meta, &resolved)
             .cloned()
             .ok_or_else(|| Reason::new(FLOW_SUBFLOW_MISSING).with("ref", reference))?;
@@ -1684,6 +1987,7 @@ impl Driver {
             var: None,
             item,
             index,
+            project_root,
         };
         let nodes = flow.nodes.iter().map(|n| n.id.clone()).collect();
         self.emit(
@@ -1841,6 +2145,7 @@ impl Driver {
                     var: Some(var),
                     item: Some(item),
                     index: Some(index),
+                    project_root: None,
                 };
                 let nodes = body.nodes.iter().map(|n| n.id.clone()).collect();
                 self.emit(
@@ -1872,6 +2177,7 @@ impl Driver {
                             &child,
                             &given,
                             Some((item, index)),
+                            None,
                         ) {
                             self.fail_node(key, attempt, reason);
                         }
@@ -2235,7 +2541,7 @@ impl Driver {
             .store
             .stop_file(&self.run_id)
             .map_err(|e| Reason::new(FLOW_COMMAND_SPAWN_FAILED).with("message", e.to_string()))?;
-        let root = self.store.project_root().to_path_buf();
+        let root = self.scope_root(prefix);
         self.with_ctx(prefix, None, Some(dir), None, |ctx| {
             let argv = match &command.run {
                 CommandRun::Argv(argv) => argv
@@ -2372,7 +2678,8 @@ impl Driver {
                 Reason::new(FLOW_RUNTIME_UNKNOWN).with("runtime", runtime),
             );
         };
-        if let Err(err) = self.ensure_worker(&runtime, &def) {
+        let worker_key: WorkerKey = (runtime.clone(), self.scope_root(prefix));
+        if let Err(err) = self.ensure_worker(&worker_key, &def) {
             return self.worker_start_error(key, attempt, err);
         }
         if !self.still_starting(key, attempt) {
@@ -2380,7 +2687,7 @@ impl Driver {
         }
         let Some(stage) = self
             .workers
-            .get(&runtime)
+            .get(&worker_key)
             .and_then(|w| w.manifest.stage(&py.entry))
             .cloned()
         else {
@@ -2446,7 +2753,7 @@ impl Driver {
             run_id: self.run_id.clone(),
             node_key: key.to_string(),
             node_dir: dir.to_string_lossy().into_owned(),
-            project_root: self.store.project_root().to_string_lossy().into_owned(),
+            project_root: worker_key.1.to_string_lossy().into_owned(),
             stop_file: self
                 .store
                 .stop_file(&self.run_id)
@@ -2459,7 +2766,7 @@ impl Driver {
         // fresh worker (spec 3.2) before failing the node.
         let mut retried = false;
         let (worker_id, request_id) = loop {
-            let Some(worker) = self.workers.get_mut(&runtime) else {
+            let Some(worker) = self.workers.get_mut(&worker_key) else {
                 return self.fail_node(
                     key,
                     attempt,
@@ -2474,7 +2781,7 @@ impl Driver {
                 Ok(()) => break (worker_id, request_id),
                 Err(err) => err,
             };
-            self.drop_worker(&runtime, worker_id);
+            self.drop_worker(&worker_key, worker_id);
             if retried {
                 return self.fail_node(
                     key,
@@ -2485,7 +2792,7 @@ impl Driver {
                 );
             }
             retried = true;
-            if let Err(err) = self.ensure_worker(&runtime, &def) {
+            if let Err(err) = self.ensure_worker(&worker_key, &def) {
                 return self.worker_start_error(key, attempt, err);
             }
             if !self.still_starting(key, attempt) {
@@ -2501,6 +2808,7 @@ impl Driver {
             attempt,
             dir,
             runtime,
+            root: worker_key.1,
             worker: worker_id,
             entry: py.entry.clone(),
             call_id,
@@ -2559,14 +2867,16 @@ impl Driver {
         }
     }
 
-    /// Starts the runtime's worker unless it runs, and waits (blocking, but
-    /// watching for cancel and app exit) for its manifest.
-    fn ensure_worker(&mut self, runtime: &str, def: &RuntimeDef) -> Result<(), WorkerStartError> {
-        match self.workers.get(runtime) {
+    /// Starts the worker of a runtime and working root unless it runs, and
+    /// waits (blocking, but watching for cancel and app exit) for its
+    /// manifest. The runtime's `python` and `cwd` resolve against the root.
+    fn ensure_worker(&mut self, worker_key: &WorkerKey, def: &RuntimeDef) -> Result<(), WorkerStartError> {
+        let (runtime, root) = (worker_key.0.as_str(), worker_key.1.as_path());
+        match self.workers.get(worker_key) {
             Some(w) if !w.eof && w.exit_code.is_none() => return Ok(()),
             Some(_) => {
                 // Exiting: start a fresh one (its calls end as orphans).
-                if let Some(mut dying) = self.workers.remove(runtime) {
+                if let Some(mut dying) = self.workers.remove(worker_key) {
                     if dying.exit_code.is_none() {
                         dying.handle.kill_tree();
                     }
@@ -2591,14 +2901,19 @@ impl Driver {
                 stop_file.to_string_lossy().into_owned(),
             ),
         ];
-        let spec = worker_spec(
-            self.store.project_root(),
-            runtime,
-            def,
-            &self.run_dir(),
-            &extra_env,
-        )
-        .map_err(WorkerStartError::Failed)?;
+        let mut spec = worker_spec(root, runtime, def, &self.run_dir(), &extra_env)
+            .map_err(WorkerStartError::Failed)?;
+        if root != self.store.project_root() {
+            // A worker of another root keeps its own logs.
+            let digest = sha256_hex(root.to_string_lossy().as_bytes());
+            let logs = self
+                .run_dir()
+                .join("runtimes")
+                .join(format!("{runtime}@{}", &digest[..8]));
+            std::fs::create_dir_all(&logs).map_err(|e| failed(e.to_string()))?;
+            spec.stderr = logs.join("stderr.log");
+            spec.stdout_log = logs.join("stdout.log");
+        }
         let mut handle = self
             .env
             .worker_launcher
@@ -2608,7 +2923,7 @@ impl Driver {
             Ok(manifest) => {
                 self.worker_seq += 1;
                 self.workers.insert(
-                    runtime.to_string(),
+                    worker_key.clone(),
                     LiveWorker {
                         id: self.worker_seq,
                         runtime: runtime.to_string(),
@@ -2715,9 +3030,9 @@ impl Driver {
 
     /// Kills a runtime's worker and forgets it (its calls end next tick) —
     /// only while it still is worker `id`, never a restarted one.
-    fn drop_worker(&mut self, runtime: &str, id: u64) {
-        if self.workers.get(runtime).is_some_and(|w| w.id == id) {
-            if let Some(mut worker) = self.workers.remove(runtime) {
+    fn drop_worker(&mut self, worker_key: &WorkerKey, id: u64) {
+        if self.workers.get(worker_key).is_some_and(|w| w.id == id) {
+            if let Some(mut worker) = self.workers.remove(worker_key) {
                 worker.handle.kill_tree();
             }
         }
@@ -2757,14 +3072,14 @@ impl Driver {
     /// Drains every worker's output, then settles calls that ended, kills
     /// workers whose grace passed and sends `cancel` on timeouts.
     fn poll_calls(&mut self) {
-        let workers: Vec<(String, u64)> = self
+        let workers: Vec<(WorkerKey, u64)> = self
             .workers
             .iter()
-            .map(|(runtime, w)| (runtime.clone(), w.id))
+            .map(|(worker_key, w)| (worker_key.clone(), w.id))
             .collect();
         let mut exited: BTreeMap<u64, Option<i32>> = BTreeMap::new();
-        for (runtime, id) in workers {
-            if let Some(code) = self.poll_worker(&runtime) {
+        for (worker_key, id) in workers {
+            if let Some(code) = self.poll_worker(&worker_key) {
                 exited.insert(id, code);
             }
         }
@@ -2788,7 +3103,7 @@ impl Driver {
                     Finish::WorkerExited(exited.get(&call.worker).copied().flatten())
                 })
             } else if call.grace_deadline.is_some_and(|d| Instant::now() >= d) {
-                self.drop_worker(&call.runtime, call.worker);
+                self.drop_worker(&call.worker_key(), call.worker);
                 Some(if call.timed_out {
                     Finish::Timeout
                 } else {
@@ -2796,7 +3111,7 @@ impl Driver {
                 })
             } else {
                 if !call.cancel_sent && call.timeout.is_some_and(|t| call.started.elapsed() >= t) {
-                    if let Some(worker) = self.workers.get_mut(&call.runtime) {
+                    if let Some(worker) = self.workers.get_mut(&call.worker_key()) {
                         // A failed send shows up as the worker's exit.
                         let _ = worker.handle.send(&cancel_request(&call.call_id));
                     }
@@ -2822,39 +3137,39 @@ impl Driver {
     /// The worker the call was sent to still runs.
     fn worker_alive(&self, call: &RunningCall) -> bool {
         self.workers
-            .get(&call.runtime)
+            .get(&call.worker_key())
             .is_some_and(|w| w.id == call.worker)
     }
 
     /// Handles a worker's pending output. Returns `Some(exit code)` once the
     /// worker is gone (it is then removed).
-    fn poll_worker(&mut self, runtime: &str) -> Option<Option<i32>> {
+    fn poll_worker(&mut self, worker_key: &WorkerKey) -> Option<Option<i32>> {
         let mut events = Vec::new();
         {
-            let worker = self.workers.get_mut(runtime)?;
+            let worker = self.workers.get_mut(worker_key)?;
             while let Some(event) = worker.handle.try_recv() {
                 events.push(event);
             }
         }
         for event in events {
             match event {
-                WorkerEvent::Line(line) => self.worker_line(runtime, &line),
-                WorkerEvent::TooLong => self.worker_line_too_long(runtime),
+                WorkerEvent::Line(line) => self.worker_line(worker_key, &line),
+                WorkerEvent::TooLong => self.worker_line_too_long(worker_key),
                 // Dropped like any over-long line, unless it ends a call:
                 // then it is applied with its text bounded.
                 WorkerEvent::OverLong(line) => match bound_over_long_line(&line) {
-                    Some(bounded) => self.worker_line(runtime, &bounded),
-                    None => self.worker_line_too_long(runtime),
+                    Some(bounded) => self.worker_line(worker_key, &bounded),
+                    None => self.worker_line_too_long(worker_key),
                 },
                 WorkerEvent::Exited(code) => {
-                    if let Some(worker) = self.workers.get_mut(runtime) {
+                    if let Some(worker) = self.workers.get_mut(worker_key) {
                         worker.eof = true;
                         worker.exit_code = worker.exit_code.or(code);
                     }
                 }
             }
         }
-        let worker = self.workers.get_mut(runtime)?;
+        let worker = self.workers.get_mut(worker_key)?;
         if worker.exit_code.is_none() {
             match worker.handle.try_wait() {
                 Ok(code) => worker.exit_code = code,
@@ -2870,7 +3185,7 @@ impl Driver {
         if !(worker.eof && worker.exit_code.is_some()) && worker.dying_ticks <= WORKER_EXIT_TICKS {
             return None;
         }
-        let mut worker = self.workers.remove(runtime)?;
+        let mut worker = self.workers.remove(worker_key)?;
         let code = worker.exit_code;
         if code.is_none() {
             // Still running as far as we know (its stdout closed): end it.
@@ -2880,20 +3195,20 @@ impl Driver {
     }
 
     /// One line of a worker's stdout (spec 3.3).
-    fn worker_line(&mut self, runtime: &str, line: &str) {
+    fn worker_line(&mut self, worker_key: &WorkerKey, line: &str) {
         if line.trim().is_empty() {
             return;
         }
         let Some((stdout_log, worker)) = self
             .workers
-            .get(runtime)
+            .get(worker_key)
             .map(|w| (w.stdout_log.clone(), w.id))
         else {
             return;
         };
-        let mine = |c: &RunningCall| c.runtime == runtime && c.worker == worker;
+        let mine = |c: &RunningCall| c.is_on(worker_key) && c.worker == worker;
         // The call in flight on this worker (one that has no outcome yet).
-        let active = self.active_call(runtime);
+        let active = self.active_call(worker_key);
         let find =
             |calls: &[RunningCall], id: &str| calls.iter().position(|c| mine(c) && c.call_id == id);
         let message = match parse_worker_line(line) {
@@ -2973,18 +3288,18 @@ impl Driver {
     }
 
     /// The call in flight on the runtime's current worker (no outcome yet).
-    fn active_call(&self, runtime: &str) -> Option<usize> {
-        let worker = self.workers.get(runtime)?.id;
+    fn active_call(&self, worker_key: &WorkerKey) -> Option<usize> {
+        let worker = self.workers.get(worker_key)?.id;
         self.calls.iter().position(|c| {
-            c.runtime == runtime && c.worker == worker && c.items.outcome.is_none()
+            c.is_on(worker_key) && c.worker == worker && c.items.outcome.is_none()
         })
     }
 
     /// A dropped line: over `MAX_LINE_BYTES_HARD` (the reader discarded it),
     /// or over `MAX_LINE_BYTES` without ending a call. A counted warning
     /// inside a call, ignored outside.
-    fn worker_line_too_long(&mut self, runtime: &str) {
-        if let Some(idx) = self.active_call(runtime) {
+    fn worker_line_too_long(&mut self, worker_key: &WorkerKey) {
+        if let Some(idx) = self.active_call(worker_key) {
             if let Some(line) = self.count_line(idx) {
                 let key = self.calls[idx].key.clone();
                 self.protocol_warning(Some(&key), "line-too-long", vec![("line", line.into())]);
@@ -3059,8 +3374,18 @@ impl Driver {
         label: Option<String>,
         media_type: Option<String>,
     ) {
+        // Accepted under the project, or under the scope's worktree root.
+        let scope_root = self.scope_root(split_key(key).0);
+        let resolved = artifacts::resolve_artifact_path(self.store.project_root(), node_dir, &raw)
+            .or_else(|reason| {
+                if scope_root == self.store.project_root() {
+                    Err(reason)
+                } else {
+                    artifacts::resolve_artifact_path(&scope_root, node_dir, &raw)
+                }
+            });
         let resolved =
-            match artifacts::resolve_artifact_path(self.store.project_root(), node_dir, &raw) {
+            match resolved {
                 Ok(p) => p,
                 Err(reason) => {
                     let warning = Reason::new(FLOW_ARTIFACT_OUTSIDE_PROJECT)
@@ -3358,11 +3683,17 @@ impl Driver {
             .node_attempt_dir(&self.run_id, key, attempt)
             .map_err(|e| io_failed(e.to_string()))?;
         std::fs::create_dir_all(&dir).map_err(|e| io_failed(e.to_string()))?;
-        let root = self.store.project_root().to_path_buf();
+        // Inside a worktree scope the working dir default and `promptRef`
+        // resolve against the worktree.
+        let root = self.scope_root(prefix);
         // The owner flow file's directory is the base of a relative `promptRef`.
         let base_dir = self
             .scope_init(prefix)
-            .and_then(|init| root.join(&init.graph.file).parent().map(Path::to_path_buf))
+            .and_then(|init| {
+                root.join(scope::unrooted_file(&init.graph.file))
+                    .parent()
+                    .map(Path::to_path_buf)
+            })
             .unwrap_or_else(|| root.clone());
         let default_dir = self.file_flow(prefix).defaults.working_dir.clone();
         let (provider, inputs, instructions, builtin, working_dir) =
@@ -3883,7 +4214,7 @@ impl Driver {
         let (tx, rx) = mpsc::channel();
         let (progress_tx, progress_rx) = mpsc::channel::<String>();
         let ctx = ActionContext {
-            project_root: self.store.project_root().to_path_buf(),
+            project_root: self.scope_root(prefix),
             run_id: self.run_id.clone(),
             run_dir: self.run_dir(),
             node_dir: dir.clone(),
@@ -4116,7 +4447,7 @@ impl Driver {
             return;
         }
         for call in &self.calls {
-            if let Some(worker) = self.workers.get_mut(&call.runtime) {
+            if let Some(worker) = self.workers.get_mut(&call.worker_key()) {
                 if worker.id == call.worker && call.items.outcome.is_none() {
                     // A failed send shows up as the worker's exit.
                     let _ = worker.handle.send(&cancel_request(&call.call_id));
@@ -4126,9 +4457,9 @@ impl Driver {
         let deadline = Instant::now() + self.stop_grace().unwrap_or(DEFAULT_CANCEL_GRACE);
         let pause = self.env.poll.max(Duration::from_millis(5));
         loop {
-            let runtimes: Vec<String> = self.workers.keys().cloned().collect();
-            for runtime in runtimes {
-                self.poll_worker(&runtime);
+            let worker_keys: Vec<WorkerKey> = self.workers.keys().cloned().collect();
+            for worker_key in worker_keys {
+                self.poll_worker(&worker_key);
             }
             let settled = self
                 .calls
@@ -4409,6 +4740,18 @@ fn call_failure_reason(error_code: Option<&str>, detail: Option<String>, entry: 
 
 /// Resolves a node's (or the flow default's) `workingDir` against the
 /// project root; without one the node runs in the project root.
+/// The manifest's `runtimes` and `setup` as compared for a sub-flow opened
+/// in a worktree (no manifest: both empty).
+fn runtimes_and_setup(project: Option<&crate::project::ProjectDef>) -> Value {
+    let runtimes = project
+        .and_then(|p| serde_json::to_value(&p.runtimes).ok())
+        .unwrap_or_else(|| Value::Object(Default::default()));
+    let setup = project
+        .and_then(|p| serde_json::to_value(&p.setup).ok())
+        .unwrap_or_else(|| Value::Array(Vec::new()));
+    serde_json::json!({ "runtimes": runtimes, "setup": setup })
+}
+
 fn resolve_working_dir(
     ctx: &TemplateContext,
     root: &Path,

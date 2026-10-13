@@ -890,6 +890,25 @@ pub fn discard_in(
     Ok(())
 }
 
+/// Every worktree git has registered for the repository of `repo` (the
+/// main checkout included), from `git worktree list --porcelain`. Paths
+/// are normalized ([`crate::fsutil::normalize_root`]: canonical when they
+/// exist, without the Windows verbatim prefix).
+pub fn list_worktrees(repo: &Path) -> Result<Vec<PathBuf>, GitError> {
+    if !is_git_repo(repo) {
+        return Err(GitError::new(
+            GIT_NOT_A_REPO,
+            repo.to_string_lossy().into_owned(),
+        ));
+    }
+    let list = git(repo, &["worktree", "list", "--porcelain"])?;
+    Ok(list
+        .lines()
+        .filter_map(|line| line.strip_prefix("worktree "))
+        .map(|listed| crate::fsutil::normalize_root(Path::new(listed)))
+        .collect())
+}
+
 /// True if `path` is one of the worktrees git has registered for
 /// `repo_root` (compared after canonicalization).
 fn is_registered_worktree(repo_root: &Path, path: &Path) -> Result<bool, GitError> {
@@ -1681,5 +1700,18 @@ mod tests {
         // Remove the hash dir too, so no part of the managed path exists.
         fs::remove_dir_all(Path::new(&info.path).parent().unwrap()).unwrap();
         discard_in(fixture.base(), fixture.root(), &info).unwrap();
+    }
+
+    #[test]
+    fn list_worktrees_reports_the_registered_worktrees() {
+        let repo = test_support::Fixture::new();
+        let base = tempfile::tempdir().unwrap();
+        let info = create_worktree_in(base.path(), repo.root(), "0123456789abcdef", "t").unwrap();
+        let list = list_worktrees(repo.root()).unwrap();
+        let key = crate::fsutil::project_key;
+        assert!(list.iter().any(|p| key(p) == key(Path::new(&info.path))), "{list:?}");
+        // The main checkout is listed too; the driver excludes it.
+        assert!(list.iter().any(|p| key(p) == key(repo.root())), "{list:?}");
+        assert!(list_worktrees(base.path()).is_err());
     }
 }

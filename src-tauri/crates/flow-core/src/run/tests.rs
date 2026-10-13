@@ -4419,3 +4419,77 @@ fn approval_show_of_a_node_that_has_not_run_is_null() {
     f.engine.approve(&f.root, &run_id, Some("ok"), "approve", None).unwrap();
     f.wait_settled(&run_id, RunStatus::Completed);
 }
+
+// ------------------------------------------------- sub-flow projectRoot
+
+/// `lib/child`: one command reporting `seen` = `command`, as a flow output.
+fn child_flow(root: &Path, command: &str) -> String {
+    write_flow(root, "lib/child", json!({ "id": "child", "name": "child", "outputs": { "seen": "${{ nodes.c.outputs.seen }}" } }),
+        vec![cmd("c", json!([ev(json!({ "v": 1, "type": "output", "key": "seen", "value": command }))]))], vec![])
+}
+
+#[test]
+fn project_root_must_be_a_worktree_of_the_project() {
+    let repo = crate::gitops::test_support::Fixture::new();
+    let f = fixture_at_with_agent(repo.root(), no_agents());
+    child_flow(&f.root, "x");
+    let stranger = tempfile::tempdir().unwrap();
+    for root in [stranger.path().to_path_buf(), f.root.clone(), f.root.join("missing")] {
+        let rel = write_flow(&f.root, "outer", json!({}),
+            vec![json!({ "id": "s", "kind": "subflow", "flow": "lib/child.flow.json", "projectRoot": root.to_string_lossy() })], vec![]);
+        let run_id = f.confirm_and_start(&rel, json!({}));
+        let snap = f.wait_settled(&run_id, RunStatus::Failed);
+        let reason = node(&snap, "s").reason.unwrap();
+        assert_eq!(reason.code, crate::issues::FLOW_SUBFLOW_ROOT_INVALID, "{root:?}");
+        assert_eq!(reason.params["root"], json!(root.to_string_lossy()));
+        assert!(!snap.state.scopes.contains_key("s/"));
+    }
+}
+
+#[test]
+fn identical_child_runs_in_the_worktree_and_a_changed_child_waits_for_approval() {
+    let repo = crate::gitops::test_support::Fixture::new();
+    let f = fixture_at_with_agent(repo.root(), no_agents());
+    let child = child_flow(&f.root, "x");
+    let outer = write_flow(&f.root, "outer", json!({}),
+        vec![json!({ "id": "wt", "kind": "action", "uses": "mdium/git-worktree-create", "with": { "title": "t" } }),
+             json!({ "id": "s", "kind": "subflow", "flow": "lib/child.flow.json", "projectRoot": "${{ nodes.wt.outputs.path }}" })],
+        vec![json!({ "from": "wt", "to": "s" })]);
+    crate::gitops::git(&f.root, &["add", "."]).unwrap();
+    crate::gitops::git(&f.root, &["commit", "-qm", "flows"]).unwrap();
+    let run_id = f.confirm_and_start(&outer, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(node(&snap, "s").status, NodeStatus::Succeeded);
+    assert_eq!(node(&snap, "s").outputs["seen"], json!("x"));
+    let wt = PathBuf::from(node(&snap, "wt").outputs["path"].as_str().unwrap());
+    let scope = &snap.state.scopes["s/"];
+    let recorded = scope.init.project_root.as_deref().expect("scope root recorded");
+    assert_eq!(crate::fsutil::project_key(Path::new(recorded)), crate::fsutil::project_key(&wt));
+    // The child definitions are recorded in run.json under the worktree root.
+    let meta = f.engine_store().load_meta(&run_id).unwrap();
+    assert_eq!(scope.init.graph.file, format!("{recorded}::{child}"));
+    assert!(meta.subflows.contains_key(&scope.init.graph.file));
+    // The worktree's copy of the child now runs a different command: a run
+    // pointing at that worktree asks before opening the scope.
+    let text = fs::read_to_string(wt.join(&child)).unwrap();
+    let changed = text.replace(r#"\"value\":\"x\""#, r#"\"value\":\"y\""#);
+    assert_ne!(changed, text);
+    fs::write(wt.join(&child), changed).unwrap();
+    let outer2 = write_flow(&f.root, "outer2", json!({}),
+        vec![json!({ "id": "s", "kind": "subflow", "flow": "lib/child.flow.json", "projectRoot": wt.to_string_lossy() })], vec![]);
+    let run_id = f.confirm_and_start(&outer2, json!({}));
+    let snap = f.wait_for(&run_id, "root approval", |s| s.state.status == RunStatus::AwaitingApproval);
+    let req = &snap.state.approvals[0];
+    assert_eq!(req.reason.code, FLOW_SUBFLOW_ROOT_DIFFERS);
+    assert!(matches!(&req.show["commands"], ShowValue::Value(v) if v.as_array().unwrap().len() == 1));
+    assert!(!snap.state.scopes.contains_key("s/"));
+    f.engine.approve(&f.root, &run_id, Some("s"), "approve", None).unwrap();
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(snap.state.scopes["s/"].outputs["seen"], json!("y"));
+    // Rejecting fails the node.
+    let run_id = f.confirm_and_start(&outer2, json!({}));
+    f.wait_for(&run_id, "root approval", |s| s.state.status == RunStatus::AwaitingApproval);
+    f.engine.approve(&f.root, &run_id, Some("s"), "reject", None).unwrap();
+    let snap = f.wait_settled(&run_id, RunStatus::Failed);
+    assert_eq!(node(&snap, "s").reason.unwrap().code, FLOW_APPROVAL_REJECTED);
+}

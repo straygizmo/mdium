@@ -276,23 +276,23 @@ fn collect_providers(
 
 /// A flow file with every flow file it references (sub-flows, file loop
 /// bodies), read once: what is confirmed, snapshotted and run.
-struct Bundle {
-    display: String,
+pub(crate) struct Bundle {
+    pub(crate) display: String,
     root_sha: String,
-    flow: crate::model::FlowDef,
+    pub(crate) flow: crate::model::FlowDef,
     /// Referenced files by project-relative path: (sha256, flow).
-    others: BTreeMap<String, (String, crate::model::FlowDef)>,
-    refs: BTreeMap<String, String>,
-    project: Option<ProjectInBundle>,
+    pub(crate) others: BTreeMap<String, (String, crate::model::FlowDef)>,
+    pub(crate) refs: BTreeMap<String, String>,
+    pub(crate) project: Option<ProjectInBundle>,
     /// Built-in templates referenced (name, sha256 of the main flow file).
     templates: Vec<(String, String)>,
 }
 
 /// The manifest as read when the bundle was loaded.
-struct ProjectInBundle {
+pub(crate) struct ProjectInBundle {
     display: String,
     sha: String,
-    project: Option<crate::project::ProjectDef>,
+    pub(crate) project: Option<crate::project::ProjectDef>,
     /// The manifest's validation errors (a run refuses to start while any).
     issues: Vec<crate::issues::FlowIssue>,
 }
@@ -363,7 +363,7 @@ impl Bundle {
             || !stage_summaries(&self.files()).is_empty()
     }
 
-    fn files(&self) -> Vec<(&str, &crate::model::FlowDef)> {
+    pub(crate) fn files(&self) -> Vec<(&str, &crate::model::FlowDef)> {
         let mut out = vec![(self.display.as_str(), &self.flow)];
         out.extend(self.others.iter().map(|(p, (_, f))| (p.as_str(), f)));
         out
@@ -385,8 +385,10 @@ fn flow_refs(nodes: &[crate::model::FlowNode], out: &mut Vec<String>) {
     }
 }
 
-/// Reads, validates and resolves a flow and everything it references.
-fn load_bundle(root: &Path, rel: &str) -> Result<Bundle> {
+/// Reads, validates and resolves a flow and everything it references,
+/// relative to `root`: the project root, or a worktree of it (a sub-flow
+/// opened with `projectRoot`).
+pub(crate) fn load_bundle_at(root: &Path, rel: &str) -> Result<Bundle> {
     use crate::load::{check_text, resolve_in_project};
     use crate::parse::FlowFormat;
     let (file, display, bytes) = read_flow(root, rel)?;
@@ -684,7 +686,7 @@ impl FlowEngine {
 
     /// The commands of a flow file as written, for the confirmation dialog.
     pub fn review_commands(&self, root: &Path, rel: &str) -> Result<CommandReview> {
-        let bundle = load_bundle(root, rel)?;
+        let bundle = load_bundle_at(root, rel)?;
         let sha256 = bundle.hash();
         let commands = command_summaries(&bundle.files());
         let confirmed =
@@ -711,7 +713,7 @@ impl FlowEngine {
 
     /// Records that the user reviewed the commands of exactly this content.
     pub fn confirm_commands(&self, root: &Path, rel: &str, sha256: &str) -> Result<()> {
-        let bundle = load_bundle(root, rel)?;
+        let bundle = load_bundle_at(root, rel)?;
         let display = bundle.display.clone();
         if bundle.hash() != sha256 {
             return Err(EngineError::new(
@@ -798,7 +800,7 @@ impl FlowEngine {
         sha256: &str,
     ) -> Result<RunSummary> {
         self.attach(root)?;
-        let bundle = load_bundle(root, rel)?;
+        let bundle = load_bundle_at(root, rel)?;
         if crate::load::flow_kind_of(&bundle.display) == crate::load::FlowKind::Part {
             return Err(EngineError::new(
                 FLOW_RUN_NOT_ENTRY,
@@ -1254,7 +1256,8 @@ impl FlowEngine {
     }
 
     /// The absolute path of a recorded artifact: only what `artifacts.json`
-    /// lists, and only inside the project.
+    /// lists, and only inside the project (or the worktree root of the
+    /// node's scope).
     pub fn artifact_path(
         &self,
         root: &Path,
@@ -1280,6 +1283,13 @@ impl FlowEngine {
                 )
             })?;
         let path = artifacts::resolve_artifact_path(store.project_root(), &dir, &artifact.path)
+            .or_else(|reason| {
+                let prefix = crate::run::scope::split_key(node_key).0;
+                match crate::run::scope::recorded_root(&state, prefix) {
+                    Some(root) => artifacts::resolve_artifact_path(&root, &dir, &artifact.path),
+                    None => Err(reason),
+                }
+            })
             .map_err(|reason| {
                 EngineError::new(
                     FLOW_ARTIFACT_NOT_FOUND,
@@ -1350,7 +1360,7 @@ mod tests {
             "schemaVersion: 1\nid: outer\nname: O\nnodes:\n  - { id: dev, kind: subflow, flow: 'mdium:dev-workflow', params: { title: t, requirement: r } }\n",
         )
         .unwrap();
-        let mut bundle = load_bundle(tmp.path(), rel).unwrap();
+        let mut bundle = load_bundle_at(tmp.path(), rel).unwrap();
         let main = crate::templates::resolve("mdium:dev-workflow").unwrap().main;
         let sha = sha256_hex(&std::fs::read(main).unwrap());
         assert_eq!(bundle.others["mdium:dev-workflow"].0, sha);

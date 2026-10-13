@@ -525,6 +525,19 @@ describe("SubflowForm", () => {
     await typeAndBlur(one("doc *"), "x.md");
     expect(patches.at(-1)).toEqual({ params: { doc: "x.md" } });
   });
+
+  it("round-trips projectRoot and clears it when emptied", async () => {
+    const node: FlowSubflowNode = { id: "s", kind: "subflow", flow: "lib/p.flow.yaml", projectRoot: "${{ nodes.wt.outputs.path }}" };
+    const patches = await mountKind(SubflowForm, node, { parts: [flowPart] });
+    const field = one(i18n.t("attrs.projectRoot", { ns: "flow" })) as HTMLInputElement;
+    expect(field.value).toBe("${{ nodes.wt.outputs.path }}");
+    expect(container.textContent).toContain(i18n.t("attrs.projectRootHint", { ns: "flow" }));
+
+    await typeAndBlur(field, "../wt");
+    expect(patches.at(-1)).toEqual({ projectRoot: "../wt" });
+    await typeAndBlur(field, "");
+    expect(patches.at(-1)).toEqual({ projectRoot: undefined });
+  });
 });
 
 describe("AgentForm", () => {
