@@ -4899,3 +4899,92 @@ fn identical_child_runs_in_the_worktree_and_a_changed_child_waits_for_approval()
     let snap = f.wait_settled(&run_id, RunStatus::Failed);
     assert_eq!(node(&snap, "s").reason.unwrap().code, FLOW_APPROVAL_REJECTED);
 }
+
+// ------------------------------------------------------------ not-run references
+
+/// The dump a command node wrote (`dump_env`).
+fn read_dump(path: &Path) -> Value {
+    serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+}
+
+#[test]
+fn a_node_reads_its_own_outputs_as_not_run_then_as_the_previous_pass() {
+    let f = fixture();
+    // `a` passes its own `v` as its last argument and names its dump after it:
+    // pass 1 sees "" (dump-.json), pass 2 sees pass 1's value (dump-1.json).
+    let dump = f.root.join("dump-${{ nodes.a.outputs.v }}.json");
+    let mut a = cmd("a", json!([
+        { "dump_env": dump.to_string_lossy() },
+        ev(json!({ "v": 1, "type": "output", "key": "v", "value": 1 })),
+        { "emit_if_key_contains": { "needle": "@2", "event": { "v": 1, "type": "output", "key": "second", "value": true } } },
+    ]));
+    a["run"].as_array_mut().unwrap().push(json!("${{ nodes.a.outputs.v }}"));
+    let rel = write_flow(
+        &f.root,
+        "selfref",
+        json!({}),
+        vec![
+            a,
+            json!({ "id": "br", "kind": "branch", "cases": [ { "when": { "ref": "nodes.a.outputs.second", "op": "==", "value": true }, "port": "done" } ], "default": "again" }),
+            cmd("b", json!([])),
+        ],
+        vec![
+            json!({ "from": "a", "to": "br" }),
+            json!({ "from": "br", "to": "b", "port": "again" }),
+            json!({ "from": "b", "to": "a", "maxTraversals": 1 }),
+        ],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(node(&snap, "a@2").status, NodeStatus::Succeeded);
+    let first = read_dump(&f.root.join("dump-.json"));
+    assert_eq!(first["args"].as_array().unwrap().last(), Some(&json!("")), "{first}");
+    let second = read_dump(&f.root.join("dump-1.json"));
+    assert_eq!(second["args"].as_array().unwrap().last(), Some(&json!("1")), "{second}");
+}
+
+#[test]
+fn a_failed_node_without_outputs_reads_as_not_run_and_one_with_outputs_keeps_them() {
+    let f = fixture();
+    let dump_b = f.root.join("b.json");
+    let dump_d = f.root.join("d.json");
+    let with_arg = |id: &str, dump: &Path, arg: &str| {
+        let mut n = cmd(id, json!([{ "dump_env": dump.to_string_lossy() }]));
+        n["run"].as_array_mut().unwrap().push(json!(arg));
+        n
+    };
+    let rel = write_flow(
+        &f.root,
+        "failref",
+        json!({ "outputs": { "r": "${{ nodes.a.outputs.r }}" } }),
+        vec![
+            cmd("a", json!([{ "exit": 3 }])),
+            with_arg("b", &dump_b, "${{ nodes.a.outputs.r }}"),
+            json!({ "id": "br", "kind": "branch", "cases": [ { "when": { "ref": "nodes.a.outputs.r", "op": "==", "value": "" }, "port": "empty" } ], "default": "other" }),
+            cmd("c", json!([ev(json!({ "v": 1, "type": "output", "key": "r", "value": "kept" })), { "exit": 3 }])),
+            with_arg("d", &dump_d, "${{ nodes.c.outputs.r }}"),
+        ],
+        vec![
+            json!({ "from": "a", "to": "b", "port": "failure" }),
+            json!({ "from": "b", "to": "br" }),
+            json!({ "from": "br", "to": "c", "port": "other" }),
+            json!({ "from": "c", "to": "d", "port": "failure" }),
+        ],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    // Lenient rendering: the failed node's missing key is "".
+    assert_eq!(node(&snap, "b").status, NodeStatus::Succeeded);
+    let b = read_dump(&dump_b);
+    assert_eq!(b["args"].as_array().unwrap().last(), Some(&json!("")), "{b}");
+    // A condition still sees it as unresolved (false), not as "".
+    assert_eq!(node(&snap, "br").port.as_deref(), Some("other"));
+    // A failed node that emitted outputs keeps them.
+    assert_eq!(node(&snap, "c").status, NodeStatus::Failed);
+    let d = read_dump(&dump_d);
+    assert_eq!(d["args"].as_array().unwrap().last(), Some(&json!("kept")), "{d}");
+    // Flow outputs stay strict.
+    assert!(!snap.state.scopes[""].outputs.contains_key("r"));
+    assert!(f.events(&run_id).iter().any(|e| matches!(&e.body, EventBody::Warning(r)
+        if r.code == FLOW_OUTPUT_UNRESOLVED && r.params["output"] == json!("r"))));
+}

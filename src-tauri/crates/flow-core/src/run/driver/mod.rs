@@ -563,13 +563,19 @@ impl Driver {
     /// The instance of node `id` of scope `prefix` that templates read: the
     /// current pass's instance once it ran, else the latest earlier pass that
     /// ran (a forward reference inside a cycle). `None` when the node was
-    /// skipped or has not run in any pass (spec 2026-10-10, 8.2).
+    /// skipped or has not run in any pass (spec 2026-10-10, 8.2). The
+    /// instance being started or running does not count; its previous pass
+    /// (if any) does, so a node that references its own outputs reads them
+    /// as not run on its first pass and as the previous pass's afterwards.
     fn template_instance(&self, prefix: &str, id: &str) -> Option<String> {
         for pass in (1..=self.state.pass(prefix, id)).rev() {
             let key = scope::instance_key(prefix, id, pass);
             match self.state.nodes.get(&key).map(|n| n.status) {
                 Some(NodeStatus::Skipped) => return None,
-                None | Some(NodeStatus::Pending) | Some(NodeStatus::Ready) => continue,
+                None
+                | Some(NodeStatus::Pending)
+                | Some(NodeStatus::Ready)
+                | Some(NodeStatus::Running) => continue,
                 Some(_) => return Some(key),
             }
         }
@@ -577,6 +583,9 @@ impl Driver {
     }
 
     /// Outputs of node `id` as seen from a scope (inline bodies see outward).
+    /// A failed instance without outputs reads as not run (lenient rendering
+    /// gives `""`; strict conditions and flow outputs still see it as
+    /// unresolved); a failed instance that emitted outputs keeps them.
     fn outputs_seen(&self, prefix: &str, id: &str) -> Option<NodeOutputs> {
         let mut current = prefix.to_string();
         loop {
@@ -586,6 +595,9 @@ impl Driver {
                         .template_instance(&current, id)
                         .and_then(|key| self.state.nodes.get(&key))
                     {
+                        Some(n) if n.status == NodeStatus::Failed && n.outputs.is_empty() => {
+                            NodeOutputs::NotRun
+                        }
                         Some(n) => NodeOutputs::Ran(n.outputs.clone()),
                         None => NodeOutputs::NotRun,
                     },
