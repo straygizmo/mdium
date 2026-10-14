@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "id": "improve-verify",
+  "name": "Verify an improvement",
+  "description": "setup (project setup in the worktree) -> verify (the project's main flow run inside the worktree) -> compare (metrics against the baseline).",
+  "params": {
+    "baselineCostUsd": {
+      "type": "number",
+      "required": true
+    },
+    "baselineOutputs": {
+      "type": "object",
+      "required": true
+    },
+    "worktreePath": {
+      "type": "string",
+      "required": true
+    }
+  },
+  "nodes": [
+    {
+      "id": "setup",
+      "kind": "action",
+      "uses": "mdium/project-setup",
+      "with": {
+        "projectRoot": "${{ params.worktreePath }}"
+      }
+    },
+    {
+      "id": "verify",
+      "kind": "subflow",
+      "flow": "project:main",
+      "projectRoot": "${{ params.worktreePath }}",
+      "timeout": "24h"
+    },
+    {
+      "id": "compare",
+      "kind": "action",
+      "uses": "mdium/metrics-compare",
+      "with": {
+        "baseline": {
+          "costUsd": "${{ params.baselineCostUsd }}",
+          "outputs": "${{ params.baselineOutputs }}"
+        },
+        "candidate": {
+          "costUsd": "${{ nodes.verify.costUsd }}",
+          "outputs": "${{ nodes.verify.outputs }}"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "setup",
+      "to": "verify"
+    },
+    {
+      "from": "verify",
+      "to": "compare"
+    }
+  ],
+  "outputs": {
+    "candidate": "${{ nodes.verify.outputs }}",
+    "improved": "${{ nodes.compare.outputs.improved }}",
+    "report": "${{ nodes.compare.outputs.report }}"
+  }
+}

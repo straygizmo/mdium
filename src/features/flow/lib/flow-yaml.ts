@@ -19,6 +19,29 @@ const FLOW_MAP_MAX_ENTRIES = 3;
 
 type Rec = Record<string, unknown>;
 
+/** Where a map sits in a flow, for the serde defaults below. */
+type Role = "top" | "paramDefs" | "paramDef" | "nodes" | "node" | "body" | "other";
+
+function childRole(role: Role, key: string): Role {
+  if (role === "top") return key === "params" ? "paramDefs" : key === "nodes" ? "nodes" : "other";
+  if (role === "paramDefs") return "paramDef";
+  if (role === "node") return key === "body" ? "body" : "other";
+  if (role === "body") return key === "nodes" ? "nodes" : "other";
+  return "other";
+}
+
+/**
+ * Values the Rust model (flow-core `model.rs`, `#[serde(default)]` without
+ * `skip_serializing_if`) always serializes. A flow loaded through Rust carries them even when
+ * the file leaves them out, so they are not written into a map that lacks them.
+ */
+function serdeDefaults(role: Role, obj: Rec): Rec | undefined {
+  if (role === "paramDef") return { required: false };
+  if (role === "node" && obj.kind === "command") return { shell: false, protocol: "mdium-v1" };
+  if (role === "node" && obj.kind === "agent") return { outputContract: "outcome" };
+  return undefined;
+}
+
 /** Copy `obj` with keys ordered head, then remaining keys (insertion order), then tail. Drops undefined. */
 function ordered(obj: Rec, head: readonly string[], tail: readonly string[] = []): Rec {
   const out: Rec = {};
@@ -127,16 +150,16 @@ function applyFlowStyle(node: Node): void {
 /**
  * Update the YAML `text` in place to represent `def`: existing nodes keep their comments, key
  * order and scalar styles, new keys are appended to their map, items with an `id` are matched by
- * id and reordered to `def`'s order, and removed keys and items are deleted. Text that does not
- * parse as a mapping falls back to `stringifyFlow(def)`.
+ * id and reordered to `def`'s order, and removed keys and items are deleted. Serde defaults the
+ * text leaves out are not added, and empty collections the text has are kept. Output lines that
+ * differ from a source line only in spacing get the source line back. Text that does not parse
+ * as a mapping falls back to `stringifyFlow(def)`.
  */
 export function mergeFlowIntoText(text: string, def: FlowDef): string {
   const doc = parseDocument(text, { uniqueKeys: true });
   if (doc.errors.length > 0 || !isMap(doc.contents)) return stringifyFlow(def);
-  // Read before the merge changes the nodes and their ranges.
-  const spaced = spacedCommentLines(text, doc);
-  mergeMap(doc, doc.contents, canonicalTop(def));
-  return restoreCommentSpacing(spaced, doc.toString({ lineWidth: 0, indent: 2 }));
+  mergeMap(doc, doc.contents, canonicalTop(def), "top");
+  return restoreSourceLines(text, doc.toString({ lineWidth: 0, indent: 2 }));
 }
 
 function keyOf(pair: Pair): string {
@@ -168,13 +191,15 @@ function isEmptyFlow(node: unknown): boolean {
   return isCollection(node) && node.flow === true && node.items.length === 0;
 }
 
-function mergeMap(doc: Document, map: YAMLMap, obj: Rec): void {
+function mergeMap(doc: Document, map: YAMLMap, obj: Rec, role: Role): void {
   for (const pair of [...map.items]) {
     const k = keyOf(pair as Pair);
-    if (!Object.prototype.hasOwnProperty.call(obj, k) || obj[k] === undefined) map.delete(pair.key);
-    else {
+    if (!Object.prototype.hasOwnProperty.call(obj, k) || obj[k] === undefined) {
+      // The Rust side drops empty collections (`params: {}`); the text's own empty one stays.
+      if (!(isCollection(pair.value) && pair.value.items.length === 0)) map.delete(pair.key);
+    } else {
       const wasEmptyFlow = isEmptyFlow(pair.value);
-      pair.value = mergeValue(doc, pair.value as Node | null, obj[k], k);
+      pair.value = mergeValue(doc, pair.value as Node | null, obj[k], k, childRole(role, k));
       // A collection that just gained items takes the canonical style instead of `[ ... ]`.
       if (wasEmptyFlow && isCollection(pair.value) && pair.value.items.length > 0) {
         pair.value.flow = false;
@@ -182,17 +207,19 @@ function mergeMap(doc: Document, map: YAMLMap, obj: Rec): void {
       }
     }
   }
+  const defaults = serdeDefaults(role, obj);
   for (const [k, v] of Object.entries(obj)) {
     if (v === undefined || map.has(k)) continue;
+    if (defaults && k in defaults && stableKey(defaults[k]) === stableKey(v)) continue;
     const pair = doc.createPair(k, created(doc, v)) as Pair;
     stylePair(pair);
     map.items.push(pair as never);
   }
 }
 
-function mergeValue(doc: Document, existing: Node | null, value: unknown, key: string): Node {
+function mergeValue(doc: Document, existing: Node | null, value: unknown, key: string, role: Role): Node {
   if (isPlainObject(value) && isMap(existing)) {
-    mergeMap(doc, existing, value);
+    mergeMap(doc, existing, value, role);
     return existing;
   }
   if (Array.isArray(value) && isSeq(existing)) {
@@ -205,7 +232,7 @@ function mergeValue(doc: Document, existing: Node | null, value: unknown, key: s
         const id = String((v as Rec).id);
         const prev = byId.get(id);
         byId.delete(id);
-        return prev ? mergeValue(doc, prev, v, key) : created(doc, v);
+        return prev ? mergeValue(doc, prev, v, key, role === "nodes" ? "node" : "other") : created(doc, v);
       });
       setItems(existing, items);
       return existing;
@@ -260,44 +287,41 @@ function isPlainObject(v: unknown): v is Rec {
 }
 
 /**
- * Source lines whose trailing comment has a gap wider than one space, keyed by the line as the
- * yaml stringifier writes it (one space before `#`). Only `#`s the parser read as a node's
- * trailing comment count, so a `#` inside a quoted or block scalar never does.
+ * A line with its spacing normalised after the indentation: runs of blanks collapse to one, and
+ * the blanks inside flow brackets and around commas go, so `[ a, b ]` and `[a,b]` compare equal
+ * and so do trailing comments with different gaps before `#`.
  */
-function spacedCommentLines(source: string, sourceDoc: Document): Map<string, string> {
-  // Offsets of the `#` of each trailing comment, from the nodes the parser gave a `comment`.
-  const hashes = new Set<number>();
-  visit(sourceDoc, (_, node) => {
-    const n = node as { comment?: string | null; range?: [number, number, number] | null };
-    if (!n?.comment || !n.range) return;
-    const tail = source.slice(n.range[1], n.range[2]);
-    const at = tail.indexOf("#");
-    if (at >= 0 && !tail.slice(0, at).includes("\n")) hashes.add(n.range[1] + at);
-  });
-  const spaced = new Map<string, string>();
-  if (hashes.size === 0) return spaced;
-  let offset = 0;
-  for (const line of source.split("\n")) {
-    const bare = line.endsWith("\r") ? line.slice(0, -1) : line;
-    const gap = /(\S)[ \t]{2,}#/.exec(bare);
-    if (gap && hashes.has(offset + gap.index + gap[0].length - 1)) {
-      spaced.set(bare.slice(0, gap.index + 1) + " " + bare.slice(gap.index + gap[0].length - 1), bare);
-    }
-    offset += line.length + 1;
-  }
-  return spaced;
+function normalisedLine(line: string): string {
+  const indent = /^[ \t]*/.exec(line)?.[0] ?? "";
+  const rest = line
+    .slice(indent.length)
+    .replace(/[ \t]+/g, " ")
+    .replace(/([[{]) /g, "$1")
+    .replace(/ ([\]}])/g, "$1")
+    .replace(/ ?, ?/g, ",")
+    .trimEnd();
+  return indent + rest;
 }
 
 /**
- * The yaml stringifier writes one space before a trailing comment: an output line equal to a key
- * of `spaced` gets the source spacing back. The result is kept only if it parses to the same data.
+ * The yaml stringifier re-spaces lines (padding inside `[ ]` / `{ }`, one space before a trailing
+ * comment): each output line whose normalised form equals a source line's gets that source line
+ * back (first unused match). The result is kept only if it parses to the same data.
  */
-function restoreCommentSpacing(spaced: Map<string, string>, out: string): string {
-  if (spaced.size === 0) return out;
+function restoreSourceLines(source: string, out: string): string {
+  const index = new Map<string, string[]>();
+  for (const raw of source.split("\n")) {
+    const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
+    const key = normalisedLine(line);
+    const lines = index.get(key);
+    if (lines) lines.push(line);
+    else index.set(key, [line]);
+  }
   const restored = out
     .split("\n")
-    .map((line) => spaced.get(line) ?? line)
+    .map((line) => index.get(normalisedLine(line))?.shift() ?? line)
     .join("\n");
+  if (restored === out) return out;
   try {
     return JSON.stringify(parse(restored)) === JSON.stringify(parse(out)) ? restored : out;
   } catch {

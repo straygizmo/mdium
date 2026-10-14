@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { FlowDef, FlowNode } from "@/shared/types/flow";
 import { mergeFlowIntoText, parseFlowText, stringifyFlow, stringifyFlowAs } from "../flow-yaml";
@@ -233,5 +235,52 @@ edges:
     const out = mergeFlowIntoText(text, d);
     expect(out).toContain('name: "a #b"\n');
     expect(defOf(out).name).toBe("a #b");
+  });
+});
+
+describe("mergeFlowIntoText with a def decoded by Rust", () => {
+  // The fixtures are `serde_json::to_string_pretty(&FlowDef)` of the template files: they carry
+  // the serde defaults (`required: false`, `shell` / `protocol`, `outputContract`) and drop empty
+  // collections. Regenerate them when the template files change.
+  const root = resolve(__dirname, "../../../../..");
+  const cases = [
+    ["improve-verify", "resources/flow-templates/improve-app/flows/lib/improve-app/improve-verify.flow.yaml"],
+    ["dev-workflow", "resources/flow-templates/dev-workflow/flows/dev-workflow.flow.yaml"],
+  ] as const;
+  for (const [name, file] of cases) {
+    it(`leaves ${name} byte-equal for the unchanged def`, () => {
+      const text = readFileSync(resolve(root, file), "utf8").replace(/\r\n/g, "\n");
+      const decoded = JSON.parse(readFileSync(resolve(__dirname, `fixtures/${name}.decoded.json`), "utf8")) as FlowDef;
+      expect(mergeFlowIntoText(text, decoded)).toBe(text);
+    });
+  }
+
+  it("keeps an explicit default and an empty collection, and adds no absent default", () => {
+    const text = [
+      "schemaVersion: 1", "id: d", "name: D", "params:",
+      "  a: { type: string, required: false }", "  b: { type: string }", "nodes:",
+      "  - { id: c, kind: command, run: [x], with: {} }",
+      "  - id: s", "    kind: subflow", "    flow: f.flow.yaml", "    # Edit here.", "    params: {}", "",
+    ].join("\n");
+    const d = {
+      schemaVersion: 1, id: "d", name: "D",
+      params: { a: { type: "string", required: false }, b: { type: "string", required: false } },
+      nodes: [
+        { id: "c", kind: "command", run: ["x"], shell: false, protocol: "mdium-v1" },
+        { id: "s", kind: "subflow", flow: "f.flow.yaml" },
+      ],
+    } as unknown as FlowDef;
+    expect(mergeFlowIntoText(text, d)).toBe(text);
+  });
+
+  it("writes a non-default value for a key the text lacks", () => {
+    const text = "schemaVersion: 1\nid: d\nname: D\nnodes:\n  - { id: c, kind: command, run: [x] }\n";
+    const d = {
+      schemaVersion: 1, id: "d", name: "D",
+      nodes: [{ id: "c", kind: "command", run: ["x"], shell: true, protocol: "mdium-v1" }],
+    } as unknown as FlowDef;
+    const out = mergeFlowIntoText(text, d);
+    expect(out).toContain("shell: true");
+    expect(out).not.toContain("protocol");
   });
 });
