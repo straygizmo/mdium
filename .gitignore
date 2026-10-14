@@ -28,6 +28,10 @@ coverage/
 # Claude
 .claude
 
+# MDium: flow and setup run stores are local state; project.yaml and flows/ travel with the repo
+.mdium/flow-runs/
+.mdium/setup-runs/
+
 # Vendoring temp
 .vendor-tmp/
 
