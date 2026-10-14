@@ -13,6 +13,15 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path};
 
 pub const PROJECT_FILE: &str = ".mdium/project.yaml";
+/// The directory holding the manifest, flows and run stores.
+pub const PROJECT_DIR: &str = ".mdium";
+
+/// The project-relative display path of the manifest's main flow
+/// (`flows.main` is relative to `.mdium/`), forward slashes.
+pub fn main_flow_display(project: &ProjectDef) -> Option<String> {
+    let main = project.flows.get("main")?;
+    Some(format!("{}/{}", PROJECT_DIR, main.replace('\\', "/")))
+}
 pub const PROJECT_SCHEMA_VERSION: u32 = 1;
 
 const TOP_LEVEL_KEYS: &[&str] = &[

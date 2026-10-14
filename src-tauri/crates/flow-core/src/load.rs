@@ -94,6 +94,30 @@ pub enum PathProblem {
     NotFound,
 }
 
+/// The flow reference naming the project manifest's main flow.
+pub const PROJECT_MAIN_REF: &str = "project:main";
+
+/// Resolves `project:main` under `project_root`: the manifest's `flows.main`.
+pub fn resolve_project_main(project_root: &Path) -> Result<PathBuf, FlowIssue> {
+    let not_found = |reason: &str| {
+        FlowIssue::new(FLOW_REF_NOT_FOUND, "")
+            .with("ref", PROJECT_MAIN_REF)
+            .with("reason", reason)
+    };
+    let report =
+        crate::project::load_project(project_root).ok_or_else(|| not_found("no-project"))?;
+    let project = match report.project {
+        Some(project) if report.errors.is_empty() => project,
+        _ => return Err(not_found("project-invalid")),
+    };
+    let main = project
+        .flows
+        .get("main")
+        .ok_or_else(|| not_found("no-main-flow"))?;
+    let base = project_root.join(crate::project::PROJECT_DIR);
+    resolve_in_project(project_root, &base, main).map_err(|_| not_found("main-flow-missing"))
+}
+
 /// Resolves `relative` against `base_dir` and checks that it stays inside
 /// `project_root`, that no component below the root is a symlink or
 /// junction, and that it names an existing file.
@@ -308,9 +332,20 @@ impl RefChecker<'_> {
         if reference.trim().is_empty() || crate::template::has_template(reference) {
             return; // already reported by the validator
         }
-        let is_template = templates::is_template_ref(reference);
+        let is_template = reference != PROJECT_MAIN_REF && templates::is_template_ref(reference);
         // A template's parts resolve inside the template directory.
-        let (file, child_root) = if is_template {
+        let (file, child_root) = if reference == PROJECT_MAIN_REF {
+            match resolve_project_main(self.project_root) {
+                Ok(file) => (file, self.project_root.to_path_buf()),
+                Err(issue) => {
+                    self.issues.error(FlowIssue {
+                        path: path.to_string(),
+                        ..issue
+                    });
+                    return;
+                }
+            }
+        } else if is_template {
             if !templates::is_valid_ref(reference) {
                 return; // already reported by the validator
             }

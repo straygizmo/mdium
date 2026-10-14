@@ -121,6 +121,7 @@ edges:
   - { from: merge, to: close_issue }
   - { from: merge_gate, to: discard, port: discard }
 outputs:
+  worktree: "${{ nodes.worktree.outputs }}"
   worktreePath: "${{ nodes.worktree.outputs.path }}"
   branch: "${{ nodes.worktree.outputs.branch }}"
   reviewOutcome: "${{ nodes.review.outputs.reason }}"

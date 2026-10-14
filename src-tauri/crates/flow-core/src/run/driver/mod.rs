@@ -35,7 +35,7 @@ use crate::model::{
     RetryPolicy, SubflowNode, PORT_ATTENTION, PORT_FAILURE, PORT_SUCCESS,
 };
 use crate::outcome::{parse_outcome, StageOutcomeKind};
-use crate::project::RuntimeDef;
+use crate::project::{MetricDef, RuntimeDef};
 use crate::prompts::{self, PreviousTurn};
 use crate::run::actions::{
     run_action, ActionContext, ActionEnd, FLOW_ACTION_APPROVAL, FLOW_ACTION_FAILED,
@@ -683,6 +683,12 @@ impl Driver {
             .map(|i| i.params)
             .unwrap_or_default();
         let project_root = self.scope_root(prefix);
+        let metrics: &[MetricDef] = self
+            .meta
+            .project
+            .as_ref()
+            .map(|p| p.metrics.as_slice())
+            .unwrap_or(&[]);
         let lookup = |id: &str| self.outputs_seen(prefix, id);
         let artifacts = |id: &str| self.artifacts_seen(prefix, id);
         let costs = |id: &str| self.cost_seen(prefix, id);
@@ -697,6 +703,7 @@ impl Driver {
             run_dir: &run_dir,
             node_dir,
             project_root: &project_root,
+            metrics,
             env: &env,
         };
         f(&ctx)

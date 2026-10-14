@@ -409,6 +409,9 @@ impl Validator {
     /// template `mdium:<name>`, of which only the name form is checked here
     /// ([`crate::load`] resolves it).
     fn flow_ref_text(&mut self, text: &str, path: &str) {
+        if text == crate::load::PROJECT_MAIN_REF {
+            return;
+        }
         if crate::templates::is_template_ref(text) {
             if !crate::templates::is_valid_ref(text) {
                 self.issues.error(invalid(path, "bad-template-name"));

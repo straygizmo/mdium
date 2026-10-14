@@ -1421,3 +1421,33 @@ fn agent_providers_may_be_templates() {
         )
     );
 }
+
+
+#[test]
+fn project_main_reference_needs_a_manifest_with_a_main_flow() {
+        use crate::load::resolve_project_main;
+    let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join(".mdium/flows")).unwrap();
+        let outer = root.join(".mdium/flows/outer.flow.yaml");
+        std::fs::write(&outer, "schemaVersion: 1\nid: outer\nname: O\nnodes:\n  - { id: v, kind: subflow, flow: 'project:main' }\n").unwrap();
+        // No manifest at all.
+        let report = check_file(root, &outer);
+        let issue = report.errors.iter().find(|i| i.code == FLOW_REF_NOT_FOUND).expect("no-project");
+        assert_eq!(issue.params["reason"], serde_json::json!("no-project"));
+        assert_eq!(issue.params["ref"], serde_json::json!("project:main"));
+        // A manifest without flows.main.
+        std::fs::write(root.join(".mdium/project.yaml"), "schemaVersion: 1\nid: p\nname: P\n").unwrap();
+        let report = check_file(root, &outer);
+        assert_eq!(report.errors.iter().find(|i| i.code == FLOW_REF_NOT_FOUND).unwrap().params["reason"], serde_json::json!("no-main-flow"));
+        // flows.main names a missing file.
+        std::fs::write(root.join(".mdium/project.yaml"), "schemaVersion: 1\nid: p\nname: P\nflows:\n  main: flows/main.flow.yaml\n").unwrap();
+        let report = check_file(root, &outer);
+        assert_eq!(report.errors.iter().find(|i| i.code == FLOW_REF_NOT_FOUND).unwrap().params["reason"], serde_json::json!("main-flow-missing"));
+        // The main flow exists: resolved like a file reference (its params are checked).
+        std::fs::write(root.join(".mdium/flows/main.flow.yaml"), "schemaVersion: 1\nid: main\nname: M\nparams:\n  n: { type: number, required: true }\nnodes:\n  - { id: a, kind: command, run: [echo] }\n").unwrap();
+        let report = check_file(root, &outer);
+        assert!(report.errors.iter().all(|i| i.code != FLOW_REF_NOT_FOUND), "{:?}", report.errors);
+        assert!(report.errors.iter().any(|i| i.code == FLOW_PARAM_MISMATCH && i.params["reason"] == serde_json::json!("missing")), "the callee's required param is checked: {:?}", report.errors);
+        assert_eq!(resolve_project_main(root).unwrap(), root.join(".mdium").join("flows").join("main.flow.yaml"));
+}

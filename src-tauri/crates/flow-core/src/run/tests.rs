@@ -4192,6 +4192,39 @@ fn action_nodes_create_and_discard_worktrees_under_the_engine_base() {
 }
 
 #[test]
+fn flow_run_latest_accepts_the_project_main_reference() {
+    let f = fixture();
+    std::fs::create_dir_all(f.root.join(".mdium")).unwrap();
+    std::fs::write(f.root.join(".mdium/project.yaml"), "schemaVersion: 1\nid: p\nname: P\nflows:\n  main: flows\\main.flow.json\n").unwrap();
+    let main = write_flow(&f.root, "main", json!({ "outputs": { "score": "${{ nodes.a.outputs.score }}" } }),
+        vec![cmd("a", json!([ev(json!({ "v": 1, "type": "output", "key": "score", "value": 5 }))]))], vec![]);
+    let first = f.confirm_and_start(&main, json!({}));
+    f.wait_settled(&first, RunStatus::Completed);
+    let outer = write_flow(&f.root, "outer", json!({}),
+        vec![json!({ "id": "base", "kind": "action", "uses": "mdium/flow-run-latest", "with": { "flow": "project:main" } }),
+             json!({ "id": "v", "kind": "subflow", "flow": "project:main" })],
+        vec![json!({ "from": "base", "to": "v" })]);
+    let run_id = f.confirm_and_start(&outer, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(node(&snap, "base").outputs["runId"], json!(first));
+    assert_eq!(node(&snap, "v").outputs["score"], json!(5));
+    assert_eq!(node(&snap, "v/a").status, NodeStatus::Succeeded);
+}
+
+#[test]
+fn project_metrics_render_as_the_manifest_array() {
+    let f = fixture();
+    std::fs::create_dir_all(f.root.join(".mdium")).unwrap();
+    std::fs::write(f.root.join(".mdium/project.yaml"), "schemaVersion: 1\nid: p\nname: P\nmetrics:\n  - { ref: outputs.score, better: higher }\n  - { ref: costUsd, better: lower }\n").unwrap();
+    let rel = write_flow(&f.root, "m", json!({ "outputs": { "m": "${{ project.metrics }}", "n": "${{ project.metrics }} items" } }), vec![cmd("a", json!([]))], vec![]);
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    let outputs = &snap.state.scopes[""].outputs;
+    assert_eq!(outputs["m"], json!([{ "ref": "outputs.score", "better": "higher" }, { "ref": "costUsd", "better": "lower" }]));
+    assert!(outputs["n"].as_str().unwrap().starts_with("[{"), "{:?}", outputs["n"]);
+}
+
+#[test]
 fn flow_run_latest_and_metrics_compare_read_finished_runs() {
     let f = fixture();
     std::fs::create_dir_all(f.root.join(".mdium")).unwrap();
@@ -4549,6 +4582,7 @@ fn the_dev_workflow_template_runs_without_the_plan_approval() {
     assert_eq!(node(&snap, "dev/plan").status, NodeStatus::Skipped);
     assert_eq!(node(&snap, "dev/approve_plan").status, NodeStatus::Skipped);
     assert!(node(&snap, "dev").outputs["worktreePath"].as_str().is_some());
+    assert!(node(&snap, "dev").outputs["worktree"]["baseBranch"].as_str().is_some());
 }
 
 #[test]

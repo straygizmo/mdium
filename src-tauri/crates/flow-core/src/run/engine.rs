@@ -391,6 +391,21 @@ fn flow_refs(nodes: &[crate::model::FlowNode], out: &mut Vec<String>) {
 pub(crate) fn load_bundle_at(root: &Path, rel: &str) -> Result<Bundle> {
     use crate::load::{check_text, resolve_in_project};
     use crate::parse::FlowFormat;
+    let rel = if rel == load::PROJECT_MAIN_REF {
+        let file = load::resolve_project_main(root).map_err(|issue| {
+            EngineError::new(
+                FLOW_FILE_NOT_FOUND,
+                format!(
+                    "project:main ({})",
+                    issue.params.get("reason").and_then(|v| v.as_str()).unwrap_or("")
+                ),
+            )
+        })?;
+        load::relative_display(root, &file)
+    } else {
+        rel.to_string()
+    };
+    let rel = rel.as_str();
     let (file, display, bytes) = read_flow(root, rel)?;
     let root_sha = sha256_hex(&bytes);
     let text = String::from_utf8_lossy(&bytes);
@@ -430,7 +445,10 @@ pub(crate) fn load_bundle_at(root: &Path, rel: &str) -> Result<Bundle> {
                 || EngineError::new(FLOW_FILE_INVALID, format!("cannot resolve {reference}"));
             // `mdium:<name>`: a built-in template, shown as `mdium:<name>`.
             let (child, child_display, child_template) =
-                if crate::templates::is_template_ref(&reference) {
+                if reference == load::PROJECT_MAIN_REF {
+                    let child = load::resolve_project_main(root).map_err(|_| cannot_resolve())?;
+                    (child.clone(), load::relative_display(root, &child), None)
+                } else if crate::templates::is_template_ref(&reference) {
                     let t = crate::templates::resolve(&reference).map_err(|_| cannot_resolve())?;
                     (t.main, t.display, Some((t.root, t.name)))
                 } else if let Some((t_root, t_name)) = &template {

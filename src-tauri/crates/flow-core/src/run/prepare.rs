@@ -2,6 +2,7 @@
 //! command-safety rules, parameter values, the command list shown for
 //! confirmation (spec 7.2), and the template resolver used while running.
 
+use crate::project::MetricDef;
 use crate::model::{CommandRun, FlowDef, FlowNode, LoopBody, NodeKind, ParamType};
 use crate::run::model::{Artifact, Reason};
 use crate::template::{self, Reference};
@@ -285,6 +286,8 @@ pub struct TemplateContext<'a> {
     pub run_dir: &'a Path,
     pub node_dir: Option<&'a Path>,
     pub project_root: &'a Path,
+    /// The project manifest's metric definitions (empty without a manifest).
+    pub metrics: &'a [MetricDef],
     /// Passthrough environment (`envPassthrough` names only).
     pub env: &'a BTreeMap<String, String>,
 }
@@ -339,6 +342,9 @@ impl TemplateContext<'_> {
             Reference::RunDir => Some(path(self.run_dir)),
             Reference::NodeDir => self.node_dir.map(path),
             Reference::ProjectRoot => Some(path(self.project_root)),
+            Reference::ProjectMetrics => Some(
+                serde_json::to_value(self.metrics).unwrap_or(Value::Array(Vec::new())),
+            ),
             Reference::Env(name) => self.env.get(name).map(|v| Value::String(v.clone())),
             Reference::LoopVar(name) => self
                 .vars
@@ -588,6 +594,7 @@ nodes:
             run_dir: Path::new("/runs/r1"),
             node_dir: None,
             project_root: Path::new("/p"),
+            metrics: &[],
             env: &env,
         };
         assert_eq!(
@@ -640,6 +647,7 @@ nodes:
             run_dir: Path::new("/run"),
             node_dir: None,
             project_root: Path::new("/proj"),
+            metrics: &[],
             env: &env,
         };
         assert_eq!(

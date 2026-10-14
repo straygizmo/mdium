@@ -113,6 +113,14 @@ pub(super) fn flow_run_latest(
     ctx: &ActionContext,
 ) -> Result<ActionEnd, Reason> {
     let flow = required_str(with, "flow")?.replace('\\', "/");
+    let flow = if flow == crate::load::PROJECT_MAIN_REF {
+        ctx.project
+            .as_ref()
+            .and_then(crate::project::main_flow_display)
+            .ok_or_else(|| failed(FLOW_RUN_NOT_FOUND, "the project declares no main flow"))?
+    } else {
+        flow
+    };
     // Runs live in the project's store even inside a worktree scope.
     let store = RunStore::new(&ctx.store_root);
     let ids = store

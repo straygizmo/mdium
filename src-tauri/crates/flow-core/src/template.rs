@@ -37,6 +37,8 @@ pub enum Reference {
     NodeDir,
     /// `project.root`
     ProjectRoot,
+    /// `project.metrics`: the project manifest's `metrics` (an array; empty without a manifest)
+    ProjectMetrics,
     /// `env.<NAME>` (must be listed in `envPassthrough`)
     Env(String),
 }
@@ -59,6 +61,7 @@ impl fmt::Display for Reference {
             Reference::RunDir => write!(f, "run.dir"),
             Reference::NodeDir => write!(f, "node.dir"),
             Reference::ProjectRoot => write!(f, "project.root"),
+            Reference::ProjectMetrics => write!(f, "project.metrics"),
             Reference::Env(name) => write!(f, "env.{name}"),
         }
     }
@@ -176,6 +179,7 @@ pub fn parse_reference(expr: &str) -> Result<Reference, TemplateError> {
         ["run", "dir"] => Reference::RunDir,
         ["node", "dir"] => Reference::NodeDir,
         ["project", "root"] => Reference::ProjectRoot,
+        ["project", "metrics"] => Reference::ProjectMetrics,
         ["env", name] => Reference::Env(name.to_string()),
         ["index"] => Reference::Index,
         [name] if !RESERVED_ROOTS.contains(name) => Reference::LoopVar(name.to_string()),
@@ -239,6 +243,14 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn unknown_project_references_stay_bad() {
+        assert!(matches!(
+            parse_reference("project.nope"),
+            Err(TemplateError::BadReference(_))
+        ));
+    }
+
+    #[test]
     fn parses_every_reference_form() {
         let cases = [
             ("params.sourceDir", Reference::Param("sourceDir".into())),
@@ -257,6 +269,7 @@ mod tests {
             ("run.dir", Reference::RunDir),
             ("node.dir", Reference::NodeDir),
             ("project.root", Reference::ProjectRoot),
+            ("project.metrics", Reference::ProjectMetrics),
             ("env.HOME_DIR", Reference::Env("HOME_DIR".into())),
             ("index", Reference::Index),
             ("item", Reference::LoopVar("item".into())),
