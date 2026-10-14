@@ -4988,3 +4988,139 @@ fn a_failed_node_without_outputs_reads_as_not_run_and_one_with_outputs_keeps_the
     assert!(f.events(&run_id).iter().any(|e| matches!(&e.body, EventBody::Warning(r)
         if r.code == FLOW_OUTPUT_UNRESOLVED && r.params["output"] == json!("r"))));
 }
+
+// ------------------------------------------------------------ improve-app
+
+/// True once the run waits on the approval of node `key` (an `approve` call
+/// returns before the driver clears the previous request).
+fn awaits(snap: &RunSnapshot, key: &str) -> bool {
+    snap.state.status == RunStatus::AwaitingApproval
+        && snap.state.approvals.iter().any(|a| a.node_key.as_deref() == Some(key))
+}
+
+/// The argv of a manifest setup step that fails (libtest rejects the flag).
+fn setup_step_exiting(_code: i32) -> String {
+    let mut bad_argv = helper_argv();
+    bad_argv.push("--no-such-flag".into());
+    serde_json::to_string(&bad_argv).unwrap()
+}
+
+/// A git project whose main flow is one command emitting `score`, with a
+/// manifest declaring `flows.main` and a `score` metric, committed so that
+/// worktrees carry it; the improve-app template copied in as `improve`.
+fn improve_fixture(
+    setup_exit: Option<i32>,
+) -> (crate::gitops::test_support::Fixture, Fixture, Arc<FakeAgentRunner>, String) {
+    use crate::gitops::test_support::Fixture as GitFixture;
+    crate::templates::test_templates();
+    let repo = GitFixture::new();
+    // The worktree must check out the same bytes as written here (the setup
+    // action compares the manifest's sha256), whatever the machine's autocrlf.
+    repo.run(&["config", "core.autocrlf", "false"]);
+    let setup = match setup_exit {
+        None => String::new(),
+        Some(code) => format!("setup:\n  - {{ run: {} }}\n", setup_step_exiting(code)),
+    };
+    repo.write(".mdium/project.yaml", &format!("schemaVersion: 1\nid: p\nname: P\nflows:\n  main: flows/main.flow.json\n{setup}metrics:\n  - {{ ref: outputs.score, better: higher }}\n"));
+    repo.write(".gitignore", ".mdium/flow-runs/\n.mdium/setup-runs/\n");
+    let runner = Arc::new(FakeAgentRunner::new(Vec::new()));
+    let f = fixture_at_with_agent(repo.root(), runner.clone());
+    write_flow(&f.root, "main", json!({ "outputs": { "score": "${{ nodes.a.outputs.score }}" } }),
+        vec![cmd("a", json!([ev(json!({ "v": 1, "type": "output", "key": "score", "value": 5 }))]))], vec![]);
+    crate::templates::copy_into(&f.root, "improve-app", "improve").unwrap();
+    repo.run(&["add", "."]);
+    repo.run(&["commit", "-qm", "project"]);
+    (repo, f, runner, ".mdium/flows/improve.flow.yaml".to_string())
+}
+
+#[test]
+fn improve_app_runs_one_iteration_and_tries_again_after_a_discard() {
+    let (_repo, f, runner, improve) = improve_fixture(None);
+    let main = ".mdium/flows/main.flow.json";
+    let first = f.confirm_and_start(main, json!({}));
+    f.wait_settled(&first, RunStatus::Completed);
+    runner.push_turns(vec![
+        FakeTurn::Respond("---\noutcome: completed\n---\n# Proposal\nBump the score".into()), // analyze
+        FakeTurn::Respond("---\noutcome: completed\n---\n# Design".into()),                  // design
+        FakeTurn::Respond("---\noutcome: completed\n---\n# Done".into()),                    // implement
+        FakeTurn::Respond("---\noutcome: completed\n---\nLGTM".into()),                      // review
+        FakeTurn::Respond("---\noutcome: completed\n---\n# Proposal 2\nAnother idea".into()), // analyze@2
+    ]);
+    let run_id = f.confirm_and_start(&improve, json!({ "goal": "raise the score", "requiresApproval": false }));
+    // Pass 1: the proposal waits for approval.
+    let snap = f.wait_for(&run_id, "proposal", |s| awaits(s, "propose/approve_proposal"));
+    assert_eq!(snap.state.approvals[0].node_key.as_deref(), Some("propose/approve_proposal"));
+    let prompts = runner.prompts();
+    assert!(prompts[0].contains("raise the score") && prompts[0].contains("\"ref\": \"outputs.score\"") && prompts[0].contains(&first), "{}", prompts[0]);
+    f.engine.approve(&f.root, &run_id, Some("propose/approve_proposal"), "approve", None).unwrap();
+    // The dev-workflow runs without the plan approval, then the verification runs the main flow in the worktree.
+    let snap = f.wait_for(&run_id, "adopt gate", |s| awaits(s, "adopt_gate"));
+    assert_eq!(snap.state.approvals[0].node_key.as_deref(), Some("adopt_gate"));
+    assert_eq!(node(&snap, "verify/setup").outputs["ok"], json!(true));
+    assert_eq!(node(&snap, "verify/verify/a").status, NodeStatus::Succeeded);
+    let worktree = node(&snap, "develop").outputs["worktreePath"].as_str().unwrap().to_string();
+    assert!(snap.state.scopes.values().any(|s| s.init.project_root.as_deref() == Some(worktree.as_str())), "the verification ran in the worktree");
+    assert_eq!(node(&snap, "verify/compare").outputs["improved"], json!(false), "same score is not an improvement");
+    assert!(node(&snap, "verify/compare").outputs["report"].as_str().unwrap().contains("| outputs.score | 5 | 5 | same |"));
+    assert_eq!(snap.state.approvals[0].show["nodes.verify.outputs.improved"], ShowValue::Value(json!(false)));
+    f.engine.approve(&f.root, &run_id, Some("adopt_gate"), "discard", None).unwrap();
+    // Pass 2: the back-edge re-runs the propose part; the analysis sees what was tried.
+    let snap = f.wait_for(&run_id, "proposal 2", |s| awaits(s, "propose@2/approve_proposal"));
+    assert_eq!(snap.state.approvals[0].node_key.as_deref(), Some("propose@2/approve_proposal"));
+    let prompts = runner.prompts();
+    assert_eq!(prompts.len(), 5, "{prompts:?}");
+    assert!(prompts[4].contains("Bump the score") && prompts[4].contains("| same |"), "{}", prompts[4]);
+    assert!(!std::path::Path::new(&worktree).exists(), "discard removed the worktree");
+    f.engine.approve(&f.root, &run_id, Some("propose@2/approve_proposal"), "stop", None).unwrap();
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(node(&snap, "proceed@2").port.as_deref(), Some("stopped"));
+    assert_eq!(node(&snap, "develop").status, NodeStatus::Succeeded, "pass 1's develop is untouched");
+}
+
+#[test]
+fn improve_app_revises_the_proposal_with_the_comment() {
+    let (_repo, f, runner, improve) = improve_fixture(None);
+    let first = f.confirm_and_start(".mdium/flows/main.flow.json", json!({}));
+    f.wait_settled(&first, RunStatus::Completed);
+    runner.push_turns(vec![
+        FakeTurn::Respond("---\noutcome: completed\n---\n# Proposal".into()),
+        FakeTurn::Respond("---\noutcome: completed\n---\n# Proposal, revised".into()),
+    ]);
+    let run_id = f.confirm_and_start(&improve, json!({ "goal": "g" }));
+    f.wait_for(&run_id, "proposal", |s| awaits(s, "propose/approve_proposal"));
+    f.engine.approve(&f.root, &run_id, Some("propose/approve_proposal"), "revise", Some("smaller please".into())).unwrap();
+    let snap = f.wait_for(&run_id, "proposal 2", |s| awaits(s, "propose/approve_proposal@2"));
+    assert_eq!(snap.state.approvals[0].node_key.as_deref(), Some("propose/approve_proposal@2"));
+    assert!(runner.prompts()[1].contains("smaller please"));
+    f.engine.approve(&f.root, &run_id, Some("propose/approve_proposal@2"), "stop", None).unwrap();
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(node(&snap, "develop").status, NodeStatus::Skipped);
+    assert_eq!(node(&snap, "propose").outputs["choice"], json!("stop"));
+}
+
+#[test]
+fn improve_app_offers_the_gate_when_the_verification_fails() {
+    let (_repo, f, runner, improve) = improve_fixture(Some(3));
+    let first = f.confirm_and_start(".mdium/flows/main.flow.json", json!({}));
+    f.wait_settled(&first, RunStatus::Completed);
+    runner.push_turns(vec![
+        FakeTurn::Respond("---\noutcome: completed\n---\n# Proposal".into()),
+        FakeTurn::Respond("---\noutcome: completed\n---\n# Design".into()),
+        FakeTurn::Respond("---\noutcome: completed\n---\n# Done".into()),
+        FakeTurn::Respond("---\noutcome: completed\n---\nLGTM".into()),
+    ]);
+    let run_id = f.confirm_and_start(&improve, json!({ "goal": "g", "requiresApproval": false }));
+    f.wait_for(&run_id, "proposal", |s| awaits(s, "propose/approve_proposal"));
+    f.engine.approve(&f.root, &run_id, Some("propose/approve_proposal"), "approve", None).unwrap();
+    let snap = f.wait_for(&run_id, "adopt gate", |s| awaits(s, "adopt_gate"));
+    assert_eq!(snap.state.approvals[0].node_key.as_deref(), Some("adopt_gate"));
+    assert_eq!(node(&snap, "verify/setup").reason.unwrap().code, "FLOW_SETUP_FAILED");
+    assert_eq!(node(&snap, "verify").status, NodeStatus::Failed);
+    assert_eq!(snap.state.approvals[0].show["nodes.verify.outputs.report"], ShowValue::Value(Value::Null));
+    let worktree = node(&snap, "develop").outputs["worktreePath"].as_str().unwrap().to_string();
+    f.engine.approve(&f.root, &run_id, Some("adopt_gate"), "discard", None).unwrap();
+    f.wait_for(&run_id, "proposal 2", |s| awaits(s, "propose@2/approve_proposal"));
+    assert!(!std::path::Path::new(&worktree).exists());
+    f.engine.cancel(&f.root, &run_id).unwrap();
+    f.wait_settled(&run_id, RunStatus::Cancelled);
+}

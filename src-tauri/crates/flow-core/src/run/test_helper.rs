@@ -621,6 +621,11 @@ impl FakeAgentRunner {
         queue.events.push_back(end);
     }
 
+    /// Appends scripted turns after the ones still queued.
+    pub fn push_turns(&self, turns: Vec<FakeTurn>) {
+        self.turns.lock().unwrap().extend(turns);
+    }
+
     /// Every prompt received, in order.
     pub fn prompts(&self) -> Vec<String> {
         self.prompts.lock().unwrap().clone()
