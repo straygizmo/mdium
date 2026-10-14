@@ -4799,6 +4799,39 @@ fn project_root_must_be_a_worktree_of_the_project() {
 }
 
 #[test]
+fn project_main_in_a_worktree_resolves_the_worktree_manifest() {
+    let repo = crate::gitops::test_support::Fixture::new();
+    let f = fixture_at_with_agent(repo.root(), no_agents());
+    let out = |score: i64| json!({ "outputs": { "score": "${{ nodes.a.outputs.score }}" }, "score": score });
+    let _ = out;
+    let main_node = |score: i64| vec![cmd("a", json!([ev(json!({ "v": 1, "type": "output", "key": "score", "value": score }))]))];
+    let outputs = json!({ "outputs": { "score": "${{ nodes.a.outputs.score }}" } });
+    write_flow(&f.root, "main", outputs.clone(), main_node(5), vec![]);
+    std::fs::write(f.root.join(".mdium/project.yaml"), "schemaVersion: 1\nid: p\nname: P\nflows:\n  main: flows/main.flow.json\n").unwrap();
+    crate::gitops::git(&f.root, &["add", "-f", "."]).unwrap();
+    crate::gitops::git(&f.root, &["commit", "-qm", "main flow"]).unwrap();
+    let wt_dir = tempfile::tempdir().unwrap();
+    let wt = wt_dir.path().join("wt");
+    crate::gitops::git(&f.root, &["worktree", "add", "-q", "-b", "alt", &wt.to_string_lossy()]).unwrap();
+    // In the worktree the manifest points at a different main flow.
+    write_flow(&wt, "other", outputs, main_node(9), vec![]);
+    std::fs::write(wt.join(".mdium/project.yaml"), "schemaVersion: 1\nid: p\nname: P\nflows:\n  main: flows/other.flow.json\n").unwrap();
+    crate::gitops::git(&wt, &["add", "-f", "."]).unwrap();
+    crate::gitops::git(&wt, &["commit", "-qm", "other main"]).unwrap();
+    let outer = write_flow(&f.root, "outer", json!({}),
+        vec![json!({ "id": "s", "kind": "subflow", "flow": "project:main", "projectRoot": wt.to_string_lossy() })], vec![]);
+    let run_id = f.confirm_and_start(&outer, json!({}));
+    f.wait_for(&run_id, "root approval", |s| s.state.status == RunStatus::AwaitingApproval);
+    f.engine.approve(&f.root, &run_id, Some("s"), "approve", None).unwrap();
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(snap.state.scopes["s/"].outputs["score"], json!(9));
+    let meta = f.engine_store().load_meta(&run_id).unwrap();
+    let file = &snap.state.scopes["s/"].init.graph.file;
+    assert!(file.ends_with("::.mdium/flows/other.flow.json"), "{file}");
+    assert!(meta.subflows.contains_key(file));
+}
+
+#[test]
 fn a_project_root_that_renders_from_an_unrun_node_is_invalid() {
     let repo = crate::gitops::test_support::Fixture::new();
     let f = fixture_at_with_agent(repo.root(), no_agents());

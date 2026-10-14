@@ -268,8 +268,14 @@ impl Driver {
             .get(&ref_key(&owner_file, reference))
             .cloned()
             .ok_or_else(|| Reason::new(FLOW_SUBFLOW_MISSING).with("ref", reference))?;
-        let display = scope::unrooted_file(&resolved).to_string();
-        let child = self.load_worktree_child(&root, reference, &display)?;
+        // `project:main` resolves through the worktree's own manifest.
+        let load_ref = if reference == crate::load::PROJECT_MAIN_REF {
+            reference.to_string()
+        } else {
+            scope::unrooted_file(&resolved).to_string()
+        };
+        let child = self.load_worktree_child(&root, reference, &load_ref)?;
+        let display = child.display.clone();
         if let Some(show) = self.confirmed_differences(&resolved, &child) {
             let show: BTreeMap<String, ShowValue> = show
                 .into_iter()
