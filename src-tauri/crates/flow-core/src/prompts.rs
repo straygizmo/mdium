@@ -106,6 +106,54 @@ Write the findings so they can be acted on without this conversation: the next s
 pub const REVIEW_CRITERIA: &str = r###"Use `outcome: completed` only when there are no Critical or Important findings; Minor findings may still be listed in the body.
 Otherwise use `outcome: attention`, list all findings in the body grouped by severity, and give a one-line `reason` summarizing them (for example the number of Critical and Important findings)."###;
 
+/// Stage instructions for the analysis stage of the improvement loop
+/// (read-only in the project root).
+pub const IMPROVE_ANALYZE_PROMPT: &str = r###"You are the analysis stage of an automated improvement loop for this project. Your job is to propose exactly one change to the project that is likely to improve its metrics towards the goal, written so that a separate design -> implement -> review pipeline can carry it out in a git worktree without asking you anything.
+
+Do not modify, create or delete any file, and do not run commands that change the repository, its git state or the project's data. You may read files and run read-only commands.
+
+The inputs are:
+- goal: what the user wants to improve, in their words.
+- metrics: the project's metric definitions as a JSON array of { "ref", "better" }. "ref" is "outputs.<key>" (an output of the project's main flow) or "costUsd" (the run's total cost); "better" is "higher" or "lower".
+- baseline: the latest completed run of the main flow as a JSON object: runId, runDir (an absolute directory), status, outputs (the run's outputs, where the metrics are read from), costUsd and failedNodes.
+- revision: the user's comment on your previous proposal in this pass, when they asked for a revision; otherwise empty. A non-empty revision means: keep what they did not object to and change what they asked for.
+- previousProposal and previousReport: in a later iteration, the proposal that was tried before and the metric comparison it produced; otherwise empty. A discarded proposal must not be proposed again; a merged one is now part of the project.
+
+How to work:
+1. Read the goal and the metrics. Decide which metric(s) the goal is about and which direction counts as better.
+2. Study the baseline run under runDir: run.json (the flow, its nodes and their states), each node directory's outputs.json, the last part of its stdout.log and stderr.log, and artifacts.json (the files it produced; open the ones relevant to the goal). Note what the run did, where time and cost went, where quality was lost and what failed.
+3. Explore the project: its layout, how the main flow's stages are implemented (the flow files under .mdium/flows and the code they call), prompts, configuration and tests. Find the smallest change whose effect on the metrics you can argue from what you observed.
+4. Consider at least two candidate changes, compare them on expected metric effect, risk, size and testability, and choose one.
+5. Write the proposal as your final response body, in Markdown, with exactly these sections:
+
+## Goal
+The user's goal restated, the metric(s) it maps to and the direction that counts as better.
+
+## Observations
+What the baseline run shows that motivates the change, with the concrete evidence (file paths under runDir, values from outputs.json, log excerpts).
+
+## Proposal
+The one change to make: what and why, in a few paragraphs.
+
+## Files
+A list per file: the repository-relative path, whether it is new or modified, and what changes in it.
+
+## Verification
+How the next run of the main flow (at a reduced scale) will show the effect, and what else to test.
+
+## Expected metric change
+For each metric: the baseline value, the expected direction and a rough magnitude, and the main risk of making another metric worse.
+
+Keep it specific to this project: name real paths and identifiers. Prefer the smallest change that can plausibly move the metric. If the goal is too ambiguous to analyse responsibly, ask one precise question (using the awaiting_user outcome) instead of guessing."###;
+
+/// Completion criteria for the analysis stage.
+pub const IMPROVE_ANALYZE_CRITERIA: &str = r###"The analysis is complete only when all of the following hold:
+- Exactly one change is proposed, and every file it names as existing does exist in the repository.
+- Every claim in Observations points at a file under the baseline's runDir or in the repository.
+- Expected metric change covers every metric in the input and names the baseline value of each.
+- The revision comment (if any) is addressed, and a previously discarded proposal is not repeated.
+- No file in the repository was modified."###;
+
 /// Plan-mode block; it replaces the stage's own definition of done.
 pub const PLAN_MODE_BLOCK: &str = "## Plan mode
 
@@ -191,6 +239,7 @@ pub fn builtin(name: &str) -> Option<&'static str> {
     static PLAN: OnceLock<String> = OnceLock::new();
     static IMPLEMENT: OnceLock<String> = OnceLock::new();
     static REVIEW: OnceLock<String> = OnceLock::new();
+    static ANALYZE: OnceLock<String> = OnceLock::new();
     let with_criteria = |p: &str, c: &str| format!("{p}\n\n## Completion criteria\n\n{c}");
     Some(match name {
         "design" => DESIGN.get_or_init(|| with_criteria(DESIGN_PROMPT, DESIGN_CRITERIA)),
@@ -204,6 +253,9 @@ pub fn builtin(name: &str) -> Option<&'static str> {
             IMPLEMENT.get_or_init(|| with_criteria(IMPLEMENT_PROMPT, IMPLEMENT_CRITERIA))
         }
         "review" => REVIEW.get_or_init(|| with_criteria(REVIEW_PROMPT, REVIEW_CRITERIA)),
+        "improve-analyze" => {
+            ANALYZE.get_or_init(|| with_criteria(IMPROVE_ANALYZE_PROMPT, IMPROVE_ANALYZE_CRITERIA))
+        }
         _ => return None,
     })
 }
@@ -310,7 +362,7 @@ mod tests {
 
     #[test]
     fn builtin_prompts_exist_and_compose_adds_inputs_and_contract() {
-        for name in ["design", "implement-plan", "implement", "review"] {
+        for name in ["design", "implement-plan", "implement", "review", "improve-analyze"] {
             assert!(builtin(name).is_some(), "{name}");
         }
         assert!(builtin("nope").is_none());
@@ -336,5 +388,17 @@ mod tests {
             again.contains("## Previous attempt\n\nQuestion: Which?")
                 && again.contains("## Answer from the user\n\n<<<\nThe second\n>>>")
         );
+    }
+
+    #[test]
+    fn improve_analyze_is_a_builtin_prompt_naming_its_inputs() {
+        let text = builtin("improve-analyze").expect("builtin");
+        for key in ["goal", "metrics", "baseline", "revision", "previousProposal", "previousReport", "runDir", "outputs.json", "stdout.log", "artifacts.json"] {
+            assert!(text.contains(key), "missing {key}");
+        }
+        assert!(text.contains("## Completion criteria"));
+        assert!(text.contains("Do not modify, create or delete any file"));
+        // The outcome contract is appended by compose, not part of the builtin text.
+        assert!(!text.contains("outcome:"));
     }
 }
