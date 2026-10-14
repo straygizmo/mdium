@@ -350,6 +350,37 @@ mod tests {
         let original = std::fs::read_to_string(&t.main).unwrap();
         assert_eq!(copied.replace("id: develop", "id: dev-workflow"), original);
         assert_eq!(copy_into(tmp.path(), "dev-workflow", "develop").unwrap_err().code, FLOW_INVALID_VALUE);
+        // improve-app: the main flow plus its parts under lib/improve-app/.
+        let improve = resolve("mdium:improve-app").unwrap();
+        assert!(list().iter().any(|t| t.name == "improve-app" && t.main == "flows/improve-app.flow.yaml"));
+        let written = copy_into(tmp.path(), "improve-app", "improve").unwrap();
+        assert_eq!(
+            written,
+            vec![
+                ".mdium/flows/improve.flow.yaml".to_string(),
+                ".mdium/flows/lib/improve-app/improve-propose.flow.yaml".to_string(),
+                ".mdium/flows/lib/improve-app/improve-verify.flow.yaml".to_string(),
+            ]
+        );
+        let copied = std::fs::read_to_string(tmp.path().join(".mdium/flows/improve.flow.yaml")).unwrap();
+        let mut lines = copied.lines();
+        assert!(lines.next().unwrap().starts_with("schemaVersion:"));
+        assert_eq!(lines.next().unwrap(), "id: improve");
+        let original = std::fs::read_to_string(&improve.main).unwrap();
+        assert_eq!(copied.replacen("id: improve", "id: improve-app", 1), original);
+        let main_dir = improve.main.parent().unwrap();
+        for part in ["improve-propose.flow.yaml", "improve-verify.flow.yaml"] {
+            let copied = std::fs::read(tmp.path().join(".mdium/flows/lib/improve-app").join(part)).unwrap();
+            let original = std::fs::read(main_dir.join("lib/improve-app").join(part)).unwrap();
+            assert_eq!(copied, original, "{part}");
+        }
+        // The verify part runs `project:main` without params, so the copy checks
+        // clean in a project whose main flow needs none.
+        std::fs::write(tmp.path().join(".mdium/flows/main.flow.yaml"), "schemaVersion: 1\nid: main\nname: Main\nnodes:\n  - { id: ok, kind: approval }\n").unwrap();
+        std::fs::write(tmp.path().join(".mdium/project.yaml"), "schemaVersion: 1\nid: p\nname: P\nflows:\n  main: flows/main.flow.yaml\n").unwrap();
+        let report = crate::load::check_content(tmp.path(), &tmp.path().join(".mdium/flows/improve.flow.yaml"), &copied);
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        assert_eq!(report.flow.unwrap().id, "improve");
     }
 
     #[test]
@@ -386,5 +417,24 @@ mod tests {
             vec!["template-prompt-ref"]
         );
         assert!(reasons(&flow("nodes:\n  - { id: a, kind: agent, provider: claude, permission: read-only, promptRef: 'builtin:design' }\n")).is_empty());
+    }
+
+    #[test]
+    fn the_improve_app_flows_pass_the_template_check() {
+        test_templates();
+        let main = resolve("mdium:improve-app").unwrap().main;
+        let main_dir = main.parent().unwrap().to_path_buf();
+        let files = [
+            main,
+            main_dir.join("lib/improve-app/improve-propose.flow.yaml"),
+            main_dir.join("lib/improve-app/improve-verify.flow.yaml"),
+        ];
+        for file in files {
+            let text = std::fs::read_to_string(&file).unwrap();
+            let (flow, issues) = crate::load::check_text(&text, FlowFormat::Yaml);
+            assert!(issues.errors.is_empty(), "{}: {:?}", file.display(), issues.errors);
+            let issues = check_template_flow(&flow.unwrap());
+            assert!(issues.is_empty(), "{}: {issues:?}", file.display());
+        }
     }
 }

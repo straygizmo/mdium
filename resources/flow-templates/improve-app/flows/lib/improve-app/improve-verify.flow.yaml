@@ -1,0 +1,30 @@
+schemaVersion: 1
+id: improve-verify
+name: Verify an improvement
+description: setup (project setup in the worktree) -> verify (the project's main flow run inside the worktree) -> compare (metrics against the baseline).
+params:
+  worktreePath: { type: string, required: true }
+  baselineOutputs: { type: object, required: true }
+  baselineCostUsd: { type: number, required: true }
+nodes:
+  - { id: setup, kind: action, uses: mdium/project-setup, with: { projectRoot: "${{ params.worktreePath }}" } }
+  - id: verify
+    kind: subflow
+    flow: project:main
+    projectRoot: "${{ params.worktreePath }}"
+    # The project's copy narrows the scale here (for example one story, one chapter, no review).
+    params: {}
+    timeout: 24h
+  - id: compare
+    kind: action
+    uses: mdium/metrics-compare
+    with:
+      baseline: { outputs: "${{ params.baselineOutputs }}", costUsd: "${{ params.baselineCostUsd }}" }
+      candidate: { outputs: "${{ nodes.verify.outputs }}", costUsd: "${{ nodes.verify.costUsd }}" }
+edges:
+  - { from: setup, to: verify }
+  - { from: verify, to: compare }
+outputs:
+  improved: "${{ nodes.compare.outputs.improved }}"
+  report: "${{ nodes.compare.outputs.report }}"
+  candidate: "${{ nodes.verify.outputs }}"
