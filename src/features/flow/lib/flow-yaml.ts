@@ -133,8 +133,10 @@ function applyFlowStyle(node: Node): void {
 export function mergeFlowIntoText(text: string, def: FlowDef): string {
   const doc = parseDocument(text, { uniqueKeys: true });
   if (doc.errors.length > 0 || !isMap(doc.contents)) return stringifyFlow(def);
+  // Read before the merge changes the nodes and their ranges.
+  const spaced = spacedCommentLines(text, doc);
   mergeMap(doc, doc.contents, canonicalTop(def));
-  return restoreCommentSpacing(text, doc.toString({ lineWidth: 0, indent: 2 }));
+  return restoreCommentSpacing(spaced, doc.toString({ lineWidth: 0, indent: 2 }));
 }
 
 function keyOf(pair: Pair): string {
@@ -199,27 +201,28 @@ function mergeValue(doc: Document, existing: Node | null, value: unknown, key: s
       for (const item of existing.items) {
         if (isMap(item) && !byId.has(String(item.get("id")))) byId.set(String(item.get("id")), item as Node);
       }
-      // A comment above the whole list belongs to the item that was first.
-      const first = existing.items[0] as Node | undefined;
       const items = value.map((v) => {
         const id = String((v as Rec).id);
         const prev = byId.get(id);
         byId.delete(id);
         return prev ? mergeValue(doc, prev, v, key) : created(doc, v);
       });
-      if (existing.commentBefore && first && items[0] !== first && items.includes(first)) {
-        first.commentBefore = first.commentBefore
-          ? `${existing.commentBefore}\n${first.commentBefore}`
-          : existing.commentBefore;
-        existing.commentBefore = undefined;
-      }
-      existing.items = items;
+      setItems(existing, items);
       return existing;
     }
-    if (JSON.stringify(existing.toJSON()) === JSON.stringify(value)) return existing;
-    const node = replaced(existing, created(doc, value));
-    if (key === "edges" && isSeq(node)) for (const item of node.items) if (isMap(item)) item.flow = true;
-    return node;
+    // Items without an id (edges, options, scalars) are matched by value, ignoring key order:
+    // an unchanged item keeps its node (comments, style); only new values are created.
+    const json = existing.toJSON() as unknown[];
+    const pool = existing.items.map((node, i) => ({ node: node as Node, key: stableKey(json[i]) }));
+    const items = value.map((v) => {
+      const i = pool.findIndex((p) => p.key === stableKey(v));
+      if (i >= 0) return pool.splice(i, 1)[0].node;
+      const node = created(doc, v);
+      if (key === "edges" && isMap(node)) node.flow = true;
+      return node;
+    });
+    setItems(existing, items);
+    return existing;
   }
   if (
     isScalar(existing) &&
@@ -230,7 +233,26 @@ function mergeValue(doc: Document, existing: Node | null, value: unknown, key: s
     styleScalar(existing);
     return existing;
   }
-  return replaced(existing, created(doc, value));
+  const node = replaced(existing, created(doc, value));
+  if (key === "edges" && isSeq(node)) for (const item of node.items) if (isMap(item)) item.flow = true;
+  return node;
+}
+
+/** Replace `seq`'s items; a comment above the whole list stays with the item that was first. */
+function setItems(seq: YAMLSeq, items: Node[]): void {
+  const first = seq.items[0] as Node | undefined;
+  if (seq.commentBefore && first && items[0] !== first && items.includes(first)) {
+    first.commentBefore = first.commentBefore ? `${seq.commentBefore}\n${first.commentBefore}` : seq.commentBefore;
+    seq.commentBefore = undefined;
+  }
+  seq.items = items;
+}
+
+/** JSON of `v` with object keys sorted, so values compare regardless of key order. */
+function stableKey(v: unknown): string {
+  return JSON.stringify(v, (_, x: unknown) =>
+    isPlainObject(x) ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, x[k]])) : x,
+  );
 }
 
 function isPlainObject(v: unknown): v is Rec {
@@ -238,20 +260,49 @@ function isPlainObject(v: unknown): v is Rec {
 }
 
 /**
- * The yaml stringifier writes one space before a trailing comment. An output line that equals a
- * source line with its comment gap collapsed is the same line: put the source spacing back.
+ * Source lines whose trailing comment has a gap wider than one space, keyed by the line as the
+ * yaml stringifier writes it (one space before `#`). Only `#`s the parser read as a node's
+ * trailing comment count, so a `#` inside a quoted or block scalar never does.
  */
-function restoreCommentSpacing(source: string, out: string): string {
+function spacedCommentLines(source: string, sourceDoc: Document): Map<string, string> {
+  // Offsets of the `#` of each trailing comment, from the nodes the parser gave a `comment`.
+  const hashes = new Set<number>();
+  visit(sourceDoc, (_, node) => {
+    const n = node as { comment?: string | null; range?: [number, number, number] | null };
+    if (!n?.comment || !n.range) return;
+    const tail = source.slice(n.range[1], n.range[2]);
+    const at = tail.indexOf("#");
+    if (at >= 0 && !tail.slice(0, at).includes("\n")) hashes.add(n.range[1] + at);
+  });
   const spaced = new Map<string, string>();
-  for (const line of source.split(/\r?\n/)) {
-    const collapsed = line.replace(/(\S)[ \t]{2,}#/, "$1 #");
-    if (collapsed !== line) spaced.set(collapsed, line);
+  if (hashes.size === 0) return spaced;
+  let offset = 0;
+  for (const line of source.split("\n")) {
+    const bare = line.endsWith("\r") ? line.slice(0, -1) : line;
+    const gap = /(\S)[ \t]{2,}#/.exec(bare);
+    if (gap && hashes.has(offset + gap.index + gap[0].length - 1)) {
+      spaced.set(bare.slice(0, gap.index + 1) + " " + bare.slice(gap.index + gap[0].length - 1), bare);
+    }
+    offset += line.length + 1;
   }
+  return spaced;
+}
+
+/**
+ * The yaml stringifier writes one space before a trailing comment: an output line equal to a key
+ * of `spaced` gets the source spacing back. The result is kept only if it parses to the same data.
+ */
+function restoreCommentSpacing(spaced: Map<string, string>, out: string): string {
   if (spaced.size === 0) return out;
-  return out
+  const restored = out
     .split("\n")
     .map((line) => spaced.get(line) ?? line)
     .join("\n");
+  try {
+    return JSON.stringify(parse(restored)) === JSON.stringify(parse(out)) ? restored : out;
+  } catch {
+    return out;
+  }
 }
 
 /** Thin wrapper over yaml.parse; duplicate keys are errors. Rust remains the validator. */

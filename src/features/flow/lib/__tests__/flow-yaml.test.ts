@@ -191,4 +191,47 @@ describe("mergeFlowIntoText", () => {
     expect(out).toContain("edges:\n  - { from: a, to: b }\n");
     expect(defOf(out)).toEqual(defOf(stringifyFlow(d)));
   });
+
+  const EDGES = `schemaVersion: 1
+id: demo
+name: Demo
+nodes:
+  - id: a
+    kind: command
+    run: [echo, a]
+  - id: b
+    kind: command
+    run: [echo, b]
+edges:
+  - { from: a, to: b }   # main path
+  # loop
+  - { from: b, to: a, port: revise }
+`;
+
+  it("adds an edge and keeps the comments on the existing edges", () => {
+    const d = defOf(EDGES);
+    d.edges = [...(d.edges ?? []), { from: "a", to: "a" }];
+    const out = mergeFlowIntoText(EDGES, d);
+    expect(out).toContain("  - { from: a, to: b }   # main path\n");
+    expect(out).toContain("  # loop\n  - { from: b, to: a, port: revise }\n  - { from: a, to: a }\n");
+    expect(defOf(out)).toEqual(defOf(stringifyFlow(d)));
+  });
+
+  it("leaves non-canonical edge key order alone when only the name changes", () => {
+    const text = EDGES.replace("{ from: a, to: b }", "{ to: b, from: a }");
+    const d = { ...defOf(text), name: "Renamed" };
+    const out = mergeFlowIntoText(text, d);
+    expect(out).toContain("name: Renamed\n");
+    expect(out).toContain("  - { to: b, from: a }   # main path\n");
+    expect(out).toContain("  # loop\n");
+    expect(defOf(out)).toEqual(defOf(stringifyFlow(d)));
+  });
+
+  it("does not revert an edit to a quoted value that looks like a spaced comment", () => {
+    const text = 'schemaVersion: 1\nid: demo\nname: "a   #b"\nnodes: []\n';
+    const d = { ...defOf(text), name: "a #b" };
+    const out = mergeFlowIntoText(text, d);
+    expect(out).toContain('name: "a #b"\n');
+    expect(defOf(out).name).toBe("a #b");
+  });
 });
