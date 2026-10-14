@@ -273,6 +273,35 @@ describe("mergeFlowIntoText with a def decoded by Rust", () => {
     expect(mergeFlowIntoText(text, d)).toBe(text);
   });
 
+  it("removes an emptied param default and an empty subflow argument when the definition drops them", () => {
+    const text = [
+      "schemaVersion: 1", "id: d", "name: D", "params:",
+      "  tags: { type: array, default: [] }", "nodes:",
+      "  - id: s", "    kind: subflow", "    flow: f.flow.yaml", "    params: { list: [], n: 1 }", "",
+    ].join("\n");
+    const d = {
+      schemaVersion: 1, id: "d", name: "D",
+      params: { tags: { type: "array", required: false } },
+      nodes: [{ id: "s", kind: "subflow", flow: "f.flow.yaml", params: { n: 1 } }],
+    } as unknown as FlowDef;
+    const out = mergeFlowIntoText(text, d);
+    expect(out).not.toContain("default:");
+    expect(out).not.toContain("list:");
+    expect(out).toContain("n: 1");
+  });
+
+  it("keeps an empty top-level params map and an empty node with map that the definition omits", () => {
+    const text = [
+      "schemaVersion: 1", "id: d", "name: D", "# No params yet.", "params: {}", "nodes:",
+      "  - id: g", "    kind: agent", "    provider: p", "    with: {}", "",
+    ].join("\n");
+    const d = {
+      schemaVersion: 1, id: "d", name: "D",
+      nodes: [{ id: "g", kind: "agent", provider: "p", outputContract: "outcome" }],
+    } as unknown as FlowDef;
+    expect(mergeFlowIntoText(text, d)).toBe(text);
+  });
+
   it("writes a non-default value for a key the text lacks", () => {
     const text = "schemaVersion: 1\nid: d\nname: D\nnodes:\n  - { id: c, kind: command, run: [x] }\n";
     const d = {

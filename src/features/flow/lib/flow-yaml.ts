@@ -14,6 +14,8 @@ export const CANONICAL_EDGE_KEYS = ["from", "to", "port", "maxTraversals"] as co
 const EMPTY_OMITTED = ["params", "defaults", "limits", "env", "envPassthrough", "edges", "outputs"] as const;
 // Inline loop body keys that are dropped when empty.
 const BODY_EMPTY_OMITTED = ["edges", "outputs"] as const;
+// Node-level typed collections the Rust model drops when empty (`skip_serializing_if`).
+const NODE_EMPTY_OMITTED = ["with", "params", "env", "show"] as const;
 // Maps with at most this many scalar entries are written in flow style.
 const FLOW_MAP_MAX_ENTRIES = 3;
 
@@ -35,6 +37,17 @@ function childRole(role: Role, key: string): Role {
  * `skip_serializing_if`) always serializes. A flow loaded through Rust carries them even when
  * the file leaves them out, so they are not written into a map that lacks them.
  */
+/**
+ * Whether the Rust model drops `key` of a map in `role` when it is empty, so an empty one in the
+ * text is not a value the definition removed. Empty `[]` / `{}` inside `Value` content (a param
+ * `default`, argument values, `items`) are serialized by Rust and are not covered.
+ */
+function omitsEmpty(role: Role, key: string): boolean {
+  const keys: readonly string[] =
+    role === "top" ? EMPTY_OMITTED : role === "node" ? NODE_EMPTY_OMITTED : role === "body" ? BODY_EMPTY_OMITTED : [];
+  return keys.includes(key);
+}
+
 function serdeDefaults(role: Role, obj: Rec): Rec | undefined {
   if (role === "paramDef") return { required: false };
   if (role === "node" && obj.kind === "command") return { shell: false, protocol: "mdium-v1" };
@@ -195,8 +208,9 @@ function mergeMap(doc: Document, map: YAMLMap, obj: Rec, role: Role): void {
   for (const pair of [...map.items]) {
     const k = keyOf(pair as Pair);
     if (!Object.prototype.hasOwnProperty.call(obj, k) || obj[k] === undefined) {
-      // The Rust side drops empty collections (`params: {}`); the text's own empty one stays.
-      if (!(isCollection(pair.value) && pair.value.items.length === 0)) map.delete(pair.key);
+      // Rust drops empty typed collections (`params: {}`); the text's own empty one stays.
+      const keptEmpty = omitsEmpty(role, k) && isCollection(pair.value) && pair.value.items.length === 0;
+      if (!keptEmpty) map.delete(pair.key);
     } else {
       const wasEmptyFlow = isEmptyFlow(pair.value);
       pair.value = mergeValue(doc, pair.value as Node | null, obj[k], k, childRole(role, k));
