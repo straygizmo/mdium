@@ -341,7 +341,6 @@
     "yaml": "YAML",
     "validate": "Validate",
     "saveWithErrors": "The flow has validation errors. Save anyway?",
-    "commentLoss": "Comments in this file will be lost when saving (the editor writes normalized YAML). Continue?",
     "continue": "Continue",
     "cancel": "Cancel",
     "changedOutside": "The file changed outside the editor.",

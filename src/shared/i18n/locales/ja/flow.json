@@ -341,7 +341,6 @@
     "yaml": "YAML",
     "validate": "検証",
     "saveWithErrors": "検証エラーがあります。保存しますか？",
-    "commentLoss": "保存すると、このファイルのコメントは失われます（正規化した YAML を書き出します）。続けますか？",
     "continue": "続ける",
     "cancel": "キャンセル",
     "changedOutside": "ファイルがエディタの外で変更されました。",

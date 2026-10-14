@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FlowDef, FlowIssue, FlowLoadResult } from "@/shared/types/flow";
 import { setFlowTransport, type FlowTransport } from "../lib/transport";
 import { addNode, defaultsFor, emptyFlow } from "../lib/editor-state";
-import { commentLossDue, droppedUnknownKeys, useFlowEditorStore } from "../editor-store";
+import { droppedUnknownKeys, useFlowEditorStore } from "../editor-store";
 
 const ROOT = "C:\\proj";
 const PATH = ".mdium/flows/a.flow.yaml";
@@ -67,13 +67,12 @@ afterEach(() => {
 const store = () => useFlowEditorStore.getState();
 
 describe("editor store", () => {
-  it("open loads text, def, issues and the comment flag", async () => {
+  it("open loads text, def and issues", async () => {
     await store().open(ROOT, PATH);
     const s = store();
     expect(s.text).toBe(TEXT);
     expect(s.def).toEqual(def);
     expect(s.savedSha256).toBe("h1");
-    expect(s.commentWarningPending).toBe(true);
     expect(s.dirty).toBe(false);
     expect(s.kind).toBe("entry");
     expect(s.loadError).toBeNull();
@@ -290,15 +289,6 @@ describe("editor store", () => {
     store().applyEdit((d) => ({ ...d, name: "Z", description: "two\nlines" }));
     expect(store().text).toContain("\r\n");
     expect(store().text.replace(/\r\n/g, "")).not.toContain("\n");
-  });
-
-  it("warns about comment loss only when the comments are actually gone", async () => {
-    await store().open(ROOT, PATH);
-    expect(commentLossDue(store())).toBe(false);
-    store().setText(`${TEXT}# another\n`);
-    expect(commentLossDue(store())).toBe(false);
-    store().setText("schemaVersion: 1\nid: f\nname: F\nnodes: []\n");
-    expect(commentLossDue(store())).toBe(true);
   });
 
   it("lists the unknown keys on disk that the text no longer has", async () => {

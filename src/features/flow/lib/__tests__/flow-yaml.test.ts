@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { FlowDef } from "@/shared/types/flow";
-import { hasComments, parseFlowText, stringifyFlow, stringifyFlowAs } from "../flow-yaml";
+import type { FlowDef, FlowNode } from "@/shared/types/flow";
+import { mergeFlowIntoText, parseFlowText, stringifyFlow, stringifyFlowAs } from "../flow-yaml";
 
 const def: FlowDef = {
   schemaVersion: 1, id: "demo", name: "Demo",
@@ -115,11 +115,80 @@ describe("parseFlowText", () => {
   });
 });
 
-describe("hasComments", () => {
-  it("detects comments anywhere in the document", () => {
-    expect(hasComments("# top\nid: a\n")).toBe(true);
-    expect(hasComments("id: a\nnodes:\n  - id: x # trailing\n    kind: command\n")).toBe(true);
-    expect(hasComments("id: a\nname: 'not # a comment'\n")).toBe(false);
-    expect(hasComments("")).toBe(false);
+const SOURCE = `# Production flow
+schemaVersion: 1
+id: demo
+name: Demo   # the display name
+params:
+  n: { type: number, default: 1 }
+nodes:
+  # First step
+  - id: a
+    kind: command
+    run: [echo, a]
+    timeout: 5m
+  - id: b
+    kind: command
+    run: [echo, b]
+edges:
+  - { from: a, to: b }
+`;
+
+function defOf(text: string) {
+  const r = parseFlowText(text);
+  if ("error" in r) throw new Error(r.error.message);
+  return r.value as FlowDef;
+}
+
+describe("mergeFlowIntoText", () => {
+  it("merge keeps comments and key order and drops removed nodes", () => {
+    const d = defOf(SOURCE);
+    d.nodes[0] = { ...d.nodes[0], timeout: "10m" } as FlowNode;
+    d.nodes = [d.nodes[0]];
+    d.edges = [];
+    const out = mergeFlowIntoText(SOURCE, d);
+    expect(out).toContain("# Production flow");
+    expect(out).toContain("name: Demo   # the display name");
+    expect(out).toContain("  # First step\n  - id: a");
+    expect(out).toContain("timeout: 10m");
+    expect(out).not.toContain("id: b");
+    expect(out).not.toContain("edges:");
+    expect(out.indexOf("schemaVersion")).toBeLessThan(out.indexOf("id: demo"));
+    expect(defOf(out)).toEqual(defOf(stringifyFlow(d)));
+  });
+
+  it("appends new nodes and keys in flow style with templates double-quoted", () => {
+    const d = defOf(SOURCE);
+    d.nodes.push({ id: "c", kind: "command", run: ["echo", "c"], with: { x: "${{ params.n }}", y: 2 } } as unknown as FlowNode);
+    d.outputs = { done: "${{ nodes.c.outputs.ok }}" };
+    const out = mergeFlowIntoText(SOURCE, d);
+    expect(out).toContain('with: { x: "${{ params.n }}", y: 2 }');
+    expect(out).toContain('done: "${{ nodes.c.outputs.ok }}"');
+    expect(out.indexOf("id: b")).toBeLessThan(out.indexOf("id: c"));
+    expect(defOf(out)).toEqual(defOf(stringifyFlow(d)));
+  });
+
+  it("reorders nodes by the definition and keeps each node's comment", () => {
+    const d = defOf(SOURCE);
+    d.nodes = [d.nodes[1], d.nodes[0]];
+    const out = mergeFlowIntoText(SOURCE, d);
+    expect(out.indexOf("id: b")).toBeLessThan(out.indexOf("id: a"));
+    expect(out).toContain("  # First step\n  - id: a");
+    expect(defOf(out)).toEqual(defOf(stringifyFlow(d)));
+  });
+
+  it("falls back to a full rewrite when the text does not parse", () => {
+    const d = defOf(SOURCE);
+    expect(mergeFlowIntoText("nodes: [", d)).toEqual(stringifyFlow(d));
+  });
+
+  it("writes items added to an empty list in block style", () => {
+    const text = "# c\nschemaVersion: 1\nid: f\nname: F\nnodes: []\nedges: []\n";
+    const d = { ...defOf(SOURCE), id: "f", name: "F", params: undefined };
+    const out = mergeFlowIntoText(text, d);
+    expect(out).toContain("# c\n");
+    expect(out).toContain("nodes:\n  - id: a\n");
+    expect(out).toContain("edges:\n  - { from: a, to: b }\n");
+    expect(defOf(out)).toEqual(defOf(stringifyFlow(d)));
   });
 });

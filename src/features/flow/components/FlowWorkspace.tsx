@@ -21,7 +21,7 @@ import {
 } from "../lib/editor-state";
 import { portsOf } from "../lib/flow-ports";
 import { useFlowViewStore } from "../flow-store";
-import { commentLossDue, confirmDiscard, droppedUnknownKeys, useFlowEditorStore, type Selection } from "../editor-store";
+import { confirmDiscard, droppedUnknownKeys, useFlowEditorStore, type Selection } from "../editor-store";
 import { commitExtraction } from "../lib/extract-commit";
 import { describeError } from "../lib/run-format";
 import { FlowCanvas, type ConnectRequest, type NodeMove } from "./FlowCanvas";
@@ -302,7 +302,7 @@ export function FlowWorkspace() {
     }
   }, []);
 
-  /** Validates, asks about errors / dropped keys / lost comments, then saves (or overwrites). */
+  /** Validates, asks about errors / dropped keys, then saves (or overwrites). */
   const runSave = useCallback(
     async (overwrite = false) => {
       if (savingRef.current || !current || editor().loadError) return;
@@ -319,10 +319,6 @@ export function FlowWorkspace() {
         if (dropped.length > 0) lines.push(t("editor.droppedKeys", { keys: dropped.join(", ") }));
         if (editor().errors.length > 0) lines.push(t("editor.saveWithErrors"));
         if (lines.length > 0 && !(await ask(lines.join("\n")))) return;
-        if (commentLossDue(editor())) {
-          if (!(await ask(t("editor.commentLoss")))) return;
-          useFlowEditorStore.setState({ commentWarningPending: false });
-        }
         const outcome = await editor().save({ overwrite });
         if (outcome === "saved") {
           setJustSaved(true);

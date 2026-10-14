@@ -1,4 +1,5 @@
 import { Document, isMap, isScalar, isSeq, parse, parseDocument, visit } from "yaml";
+import type { Node, Pair, Scalar, YAMLMap, YAMLSeq } from "yaml";
 import type { FlowDef, FlowEdge, FlowFormat, FlowInlineBody, FlowNode } from "@/shared/types/flow";
 
 export const CANONICAL_TOP_KEYS = [
@@ -77,32 +78,180 @@ export function stringifyFlowAs(def: FlowDef, format: FlowFormat): string {
 /** Serialize a flow definition to canonical, stable YAML text. */
 export function stringifyFlow(def: FlowDef): string {
   const doc = new Document(canonicalTop(def));
-  visit(doc, {
+  if (doc.contents) applyFlowStyle(doc.contents as Node);
+  return doc.toString({ lineWidth: 0, indent: 2 });
+}
+
+/** Double-quote single-line strings carrying a `${{ ... }}` template. */
+function styleScalar(scalar: Scalar): void {
+  // Multi-line ones (agent prompts) keep their block scalar so they stay readable in diffs.
+  if (typeof scalar.value === "string" && scalar.value.includes("${{") && !scalar.value.includes("\n")) {
+    scalar.type = "QUOTE_DOUBLE";
+  }
+}
+
+/** Flow style for small scalar-only `with` / `params` maps and for `edges` items. */
+function stylePair(pair: Pair): void {
+  const key = isScalar(pair.key) ? String(pair.key.value) : "";
+  const value = pair.value;
+  if (
+    (key === "with" || key === "params") &&
+    isMap(value) &&
+    value.items.length <= FLOW_MAP_MAX_ENTRIES &&
+    value.items.every((p) => isScalar(p.value))
+  ) {
+    value.flow = true;
+  }
+  // Edge lists (top-level and in inline loop bodies): one flow object per line.
+  if (key === "edges" && isSeq(value)) {
+    for (const item of value.items) if (isMap(item)) item.flow = true;
+  }
+}
+
+/** Apply the canonical writing style to `node` and everything below it. */
+function applyFlowStyle(node: Node): void {
+  if (isScalar(node)) {
+    styleScalar(node);
+    return;
+  }
+  visit(node, {
     Scalar(_, scalar) {
-      // Double-quote single-line strings carrying a `${{ ... }}` template; multi-line ones
-      // (agent prompts) keep their block scalar so they stay readable in diffs.
-      if (typeof scalar.value === "string" && scalar.value.includes("${{") && !scalar.value.includes("\n")) {
-        scalar.type = "QUOTE_DOUBLE";
-      }
+      styleScalar(scalar);
     },
     Pair(_, pair) {
-      const key = isScalar(pair.key) ? String(pair.key.value) : "";
-      const value = pair.value;
-      if (
-        (key === "with" || key === "params") &&
-        isMap(value) &&
-        value.items.length <= FLOW_MAP_MAX_ENTRIES &&
-        value.items.every((p) => isScalar(p.value))
-      ) {
-        value.flow = true;
-      }
-      // Edge lists (top-level and in inline loop bodies): one flow object per line.
-      if (key === "edges" && isSeq(value)) {
-        for (const item of value.items) if (isMap(item)) item.flow = true;
-      }
+      stylePair(pair as Pair);
     },
   });
-  return doc.toString({ lineWidth: 0, indent: 2 });
+}
+
+/**
+ * Update the YAML `text` in place to represent `def`: existing nodes keep their comments, key
+ * order and scalar styles, new keys are appended to their map, items with an `id` are matched by
+ * id and reordered to `def`'s order, and removed keys and items are deleted. Text that does not
+ * parse as a mapping falls back to `stringifyFlow(def)`.
+ */
+export function mergeFlowIntoText(text: string, def: FlowDef): string {
+  const doc = parseDocument(text, { uniqueKeys: true });
+  if (doc.errors.length > 0 || !isMap(doc.contents)) return stringifyFlow(def);
+  mergeMap(doc, doc.contents, canonicalTop(def));
+  return restoreCommentSpacing(text, doc.toString({ lineWidth: 0, indent: 2 }));
+}
+
+function keyOf(pair: Pair): string {
+  return isScalar(pair.key) ? String(pair.key.value) : String(pair.key);
+}
+
+function created(doc: Document, value: unknown): Node {
+  const node = doc.createNode(value) as Node;
+  applyFlowStyle(node);
+  return node;
+}
+
+/** `next` takes the place of `prev`: it inherits the comments, spacing and flow style around it. */
+function replaced(prev: Node | null, next: Node): Node {
+  if (!prev) return next;
+  next.commentBefore = prev.commentBefore;
+  next.comment = prev.comment;
+  next.spaceBefore = prev.spaceBefore;
+  if (isCollection(prev) && isCollection(next) && prev.flow && !isEmptyFlow(prev)) next.flow = true;
+  return next;
+}
+
+function isCollection(node: unknown): node is YAMLMap | YAMLSeq {
+  return isMap(node) || isSeq(node);
+}
+
+/** `[]` / `{}`: written in flow style only because it is empty, not by choice. */
+function isEmptyFlow(node: unknown): boolean {
+  return isCollection(node) && node.flow === true && node.items.length === 0;
+}
+
+function mergeMap(doc: Document, map: YAMLMap, obj: Rec): void {
+  for (const pair of [...map.items]) {
+    const k = keyOf(pair as Pair);
+    if (!Object.prototype.hasOwnProperty.call(obj, k) || obj[k] === undefined) map.delete(pair.key);
+    else {
+      const wasEmptyFlow = isEmptyFlow(pair.value);
+      pair.value = mergeValue(doc, pair.value as Node | null, obj[k], k);
+      // A collection that just gained items takes the canonical style instead of `[ ... ]`.
+      if (wasEmptyFlow && isCollection(pair.value) && pair.value.items.length > 0) {
+        pair.value.flow = false;
+        stylePair(pair as Pair);
+      }
+    }
+  }
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === undefined || map.has(k)) continue;
+    const pair = doc.createPair(k, created(doc, v)) as Pair;
+    stylePair(pair);
+    map.items.push(pair as never);
+  }
+}
+
+function mergeValue(doc: Document, existing: Node | null, value: unknown, key: string): Node {
+  if (isPlainObject(value) && isMap(existing)) {
+    mergeMap(doc, existing, value);
+    return existing;
+  }
+  if (Array.isArray(value) && isSeq(existing)) {
+    if (value.length > 0 && value.every((v) => isPlainObject(v) && typeof v.id === "string")) {
+      const byId = new Map<string, Node>();
+      for (const item of existing.items) {
+        if (isMap(item) && !byId.has(String(item.get("id")))) byId.set(String(item.get("id")), item as Node);
+      }
+      // A comment above the whole list belongs to the item that was first.
+      const first = existing.items[0] as Node | undefined;
+      const items = value.map((v) => {
+        const id = String((v as Rec).id);
+        const prev = byId.get(id);
+        byId.delete(id);
+        return prev ? mergeValue(doc, prev, v, key) : created(doc, v);
+      });
+      if (existing.commentBefore && first && items[0] !== first && items.includes(first)) {
+        first.commentBefore = first.commentBefore
+          ? `${existing.commentBefore}\n${first.commentBefore}`
+          : existing.commentBefore;
+        existing.commentBefore = undefined;
+      }
+      existing.items = items;
+      return existing;
+    }
+    if (JSON.stringify(existing.toJSON()) === JSON.stringify(value)) return existing;
+    const node = replaced(existing, created(doc, value));
+    if (key === "edges" && isSeq(node)) for (const item of node.items) if (isMap(item)) item.flow = true;
+    return node;
+  }
+  if (
+    isScalar(existing) &&
+    (typeof value === "string" || typeof value === "number" || typeof value === "boolean" || value === null)
+  ) {
+    if (existing.value === value) return existing;
+    existing.value = value;
+    styleScalar(existing);
+    return existing;
+  }
+  return replaced(existing, created(doc, value));
+}
+
+function isPlainObject(v: unknown): v is Rec {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/**
+ * The yaml stringifier writes one space before a trailing comment. An output line that equals a
+ * source line with its comment gap collapsed is the same line: put the source spacing back.
+ */
+function restoreCommentSpacing(source: string, out: string): string {
+  const spaced = new Map<string, string>();
+  for (const line of source.split(/\r?\n/)) {
+    const collapsed = line.replace(/(\S)[ \t]{2,}#/, "$1 #");
+    if (collapsed !== line) spaced.set(collapsed, line);
+  }
+  if (spaced.size === 0) return out;
+  return out
+    .split("\n")
+    .map((line) => spaced.get(line) ?? line)
+    .join("\n");
 }
 
 /** Thin wrapper over yaml.parse; duplicate keys are errors. Rust remains the validator. */
@@ -118,21 +267,4 @@ export function parseFlowText(
       error: { message: e.message ?? String(err), line: pos?.line ?? 0, column: pos?.col ?? 0 },
     };
   }
-}
-
-/** True when the YAML document carries any comment. */
-export function hasComments(text: string): boolean {
-  if (!text.trim()) return false;
-  const doc = parseDocument(text);
-  if (doc.commentBefore || doc.comment) return true;
-  let found = false;
-  visit(doc, (_, node) => {
-    const n = node as { comment?: string | null; commentBefore?: string | null };
-    if (n && (n.comment || n.commentBefore)) {
-      found = true;
-      return visit.BREAK;
-    }
-    return undefined;
-  });
-  return found;
 }

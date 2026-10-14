@@ -283,38 +283,14 @@ describe("flow workspace editing", () => {
     expect(String(callsTo("flow_save")[0].content)).toContain("# note");
   });
 
-  it("warns about comment loss once before the first save", async () => {
+  it("keeps the file's comments through a form edit and saves without a warning", async () => {
     routes.flow_load = () => loadResult({ content: `# note\n${stringifyFlow(demo)}` });
     await mountWorkspace();
-    // A canvas / form edit re-serializes the text, which drops the comment.
     await editName("nodes[0]", "Run");
-
     await pressCtrlS();
-    await waitFor(() => expect(dialog()?.textContent).toContain("Comments in this file will be lost"));
-    expect(callsTo("flow_save")).toHaveLength(0);
-    await click(button("Continue", dialog()!));
     await waitFor(() => expect(callsTo("flow_save")).toHaveLength(1));
     expect(dialog()).toBeNull();
-
-    // Another edit, then save again: no second warning.
-    await click(container.querySelector<HTMLElement>('.react-flow__node[data-id="nodes[1]"]')!);
-    await typeAndBlur(container.querySelector('.flow-workspace__side [aria-label="Name"]')!, "Done");
-    await pressCtrlS();
-    await waitFor(() => expect(callsTo("flow_save")).toHaveLength(2));
-    expect(dialog()).toBeNull();
-    expect(callsTo("flow_save")[1].expectedSha256).toBe("h-saved");
-  });
-
-  it("aborts the save when the comment warning is cancelled", async () => {
-    routes.flow_load = () => loadResult({ content: `# note\n${stringifyFlow(demo)}` });
-    await mountWorkspace();
-    await editName("nodes[0]", "Run");
-    await pressCtrlS();
-    await waitFor(() => expect(dialog()).not.toBeNull());
-    await click(button("Cancel", dialog()!));
-    expect(dialog()).toBeNull();
-    expect(callsTo("flow_save")).toHaveLength(0);
-    expect(useFlowEditorStore.getState().commentWarningPending).toBe(true);
+    expect(String(callsTo("flow_save")[0].content)).toContain("# note");
   });
 
   it("warns but allows saving with validation errors", async () => {

@@ -2,7 +2,7 @@ import { create } from "zustand";
 import type { FlowDef, FlowFormat, FlowIssue, FlowKind, FlowLoadResult } from "@/shared/types/flow";
 import { flowApi, isFlowCommandError } from "./lib/flow-api";
 import { nodeAt } from "./lib/editor-state";
-import { hasComments, stringifyFlowAs } from "./lib/flow-yaml";
+import { mergeFlowIntoText, stringifyFlowAs } from "./lib/flow-yaml";
 import { showConfirm } from "@/stores/dialog-store";
 
 export type Selection =
@@ -45,8 +45,6 @@ export interface EditorState {
   warnings: FlowIssue[];
   dirty: boolean;
   validating: boolean;
-  /** The file had comments when it was loaded and the user has not yet agreed to drop them. */
-  commentWarningPending: boolean;
   /** Unknown top-level keys present in the file on disk (load / last save). */
   diskUnknownKeys: string[];
   selection: Selection;
@@ -102,7 +100,6 @@ const initial = {
   warnings: [],
   dirty: false,
   validating: false,
-  commentWarningPending: false,
   diskUnknownKeys: [],
   selection: null,
   selectedMany: [] as string[],
@@ -157,11 +154,6 @@ function unknownKeys(warnings: FlowIssue[]): string[] {
     .map((w) => (typeof w.params.key === "string" ? w.params.key : w.path));
 }
 
-/** True when the file had comments on load and the current text no longer has them. */
-export function commentLossDue(s: Pick<EditorState, "commentWarningPending" | "text">): boolean {
-  return s.commentWarningPending && !hasComments(s.text);
-}
-
 /** Unknown keys present on disk that the current text no longer carries (normalization dropped them). */
 export function droppedUnknownKeys(s: Pick<EditorState, "diskUnknownKeys" | "warnings">): string[] {
   const now = new Set(unknownKeys(s.warnings));
@@ -202,7 +194,6 @@ export const useFlowEditorStore = create<EditorState>()((set, get) => {
       eol: detectEol(result.content),
       errors: result.errors,
       warnings: result.warnings,
-      commentWarningPending: hasComments(result.content),
       diskUnknownKeys: unknownKeys(result.warnings),
       loadError: unreadableCode(result),
     });
@@ -247,7 +238,9 @@ export const useFlowEditorStore = create<EditorState>()((set, get) => {
       if (s.loadError || !s.path || !s.def || !s.defCurrent) return;
       const next = edit(s.def);
       if (next === s.def) return;
-      const serialized = stringifyFlowAs(next, s.format ?? "yaml");
+      // YAML is patched in place so hand-written comments and key order survive the edit.
+      const serialized =
+        s.format === "yaml" ? mergeFlowIntoText(s.text, next) : stringifyFlowAs(next, s.format ?? "yaml");
       const text = s.eol === "\r\n" ? serialized.replace(/\r?\n/g, "\r\n") : serialized;
       set({ text, def: next, defCurrent: true, dirty: true, saveError: null, validating: true });
       schedule();
