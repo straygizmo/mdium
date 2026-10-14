@@ -2224,6 +2224,38 @@ fn file_bodies_get_params_from_the_item() {
 }
 
 #[test]
+fn project_main_works_as_a_file_loop_body() {
+    let f = fixture();
+    std::fs::create_dir_all(f.root.join(".mdium")).unwrap();
+    std::fs::write(f.root.join(".mdium/project.yaml"), "schemaVersion: 1
+id: p
+name: P
+flows:
+  main: flows/main.flow.json
+").unwrap();
+    write_child(&f, "main", None);
+    let rel = write_flow(
+        &f.root,
+        "mainloop",
+        json!({}),
+        vec![
+            json!({ "id": "l", "kind": "loop", "mode": "foreach", "items": ["p", "q"], "maxIterations": 5, "body": "project:main", "params": { "x": "${{ item }}" } }),
+        ],
+        vec![],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(node(&snap, "l[0]/echo").status, NodeStatus::Succeeded);
+    assert_eq!(node(&snap, "l[1]/echo").status, NodeStatus::Succeeded);
+    assert_eq!(node(&snap, "l[0]/echo").outputs["arg"], json!("p"));
+    assert_eq!(node(&snap, "l[1]/echo").outputs["arg"], json!("q"));
+    assert_eq!(
+        node(&snap, "l").outputs["results"],
+        json!([{ "res": "p" }, { "res": "q" }])
+    );
+}
+
+#[test]
 fn rerunning_a_failed_loop_starts_a_new_pass() {
     let f = fixture();
     let marker = f.root.join("broken");
