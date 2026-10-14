@@ -4802,8 +4802,6 @@ fn project_root_must_be_a_worktree_of_the_project() {
 fn project_main_in_a_worktree_resolves_the_worktree_manifest() {
     let repo = crate::gitops::test_support::Fixture::new();
     let f = fixture_at_with_agent(repo.root(), no_agents());
-    let out = |score: i64| json!({ "outputs": { "score": "${{ nodes.a.outputs.score }}" }, "score": score });
-    let _ = out;
     let main_node = |score: i64| vec![cmd("a", json!([ev(json!({ "v": 1, "type": "output", "key": "score", "value": score }))]))];
     let outputs = json!({ "outputs": { "score": "${{ nodes.a.outputs.score }}" } });
     write_flow(&f.root, "main", outputs.clone(), main_node(5), vec![]);
