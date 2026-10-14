@@ -447,6 +447,7 @@
     "inlineBodyHint": "Inline bodies are edited in the YAML view.",
     "flow": "Sub-flow",
     "projectRoot": "Project root (worktree)",
+    "flowProjectMainHint": "`project:main` names the project's main flow (flows.main in project.yaml).",
     "projectRootHint": "Runs the sub-flow in this git worktree of the project, e.g. the path output of a git-worktree-create action. Leave empty to use the project root.",
     "choosePart": "Choose a part",
     "extraKeys": "Other keys",
@@ -530,6 +531,10 @@
     "dev-workflow": {
       "title": "Standard development workflow",
       "description": "Design, plan, implement and review a change on a git worktree of this project, then merge or discard it locally."
+    },
+    "improve-app": {
+      "title": "Improvement loop",
+      "description": "Reads the latest run of the main flow, proposes a change, implements it with the development workflow in a worktree, re-runs the main flow there and compares the metrics before merging or discarding."
     }
   }
 }

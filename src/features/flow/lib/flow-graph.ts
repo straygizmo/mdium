@@ -105,7 +105,8 @@ function nodeSignature(
 ): NodeSignature | undefined {
   const ref = node.kind === "subflow" ? node.flow : node.kind === "loop" && typeof node.body === "string" ? node.body : null;
   if (ref === null) return undefined;
-  const file = resolvePartPath(currentFile, ref);
+  // `mdium:` and `project:` references are opaque names, not paths relative to the current file.
+  const file = /^(mdium|project):/.test(ref) ? ref : resolvePartPath(currentFile, ref);
   const callee = signatures[file];
   const given = (node.kind === "subflow" || node.kind === "loop" ? node.params : undefined) ?? {};
   if (!callee) {

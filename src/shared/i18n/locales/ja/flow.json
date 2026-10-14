@@ -447,6 +447,7 @@
     "inlineBodyHint": "インライン本体は YAML ビューで編集します。",
     "flow": "サブフロー",
     "projectRoot": "プロジェクトルート（ワークツリー）",
+    "flowProjectMainHint": "`project:main` はプロジェクトの主フロー（project.yaml の flows.main）を指します。",
     "projectRootHint": "プロジェクトの git ワークツリーでサブフローを実行します（例: git-worktree-create アクションの path 出力）。空欄ならプロジェクトルートを使います。",
     "choosePart": "部品を選択",
     "extraKeys": "その他のキー",
@@ -530,6 +531,10 @@
     "dev-workflow": {
       "title": "標準開発ワークフロー",
       "description": "このプロジェクトの git worktree 上で設計・計画・実装・レビューを行い、ローカルでマージまたは破棄します。"
+    },
+    "improve-app": {
+      "title": "改善ループ",
+      "description": "主フローの最新実行を読んで変更を提案し、開発ワークフローで worktree に実装して主フローを再実行し、指標を比べてからマージまたは破棄します。"
     }
   }
 }

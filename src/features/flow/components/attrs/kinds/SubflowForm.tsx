@@ -17,6 +17,7 @@ export function SubflowForm({ node, path, parts, currentFile, onChange }: KindFo
         onPick={(flow, params) => onChange(path, { flow, params })}
         onParamsChange={(params) => onChange(path, { params })}
       />
+      <div className="flow-attrs__hint">{t("attrs.flowProjectMainHint")}</div>
       <TextField label={t("attrs.projectRoot")} value={node.projectRoot} onCommit={(projectRoot) => onChange(path, { projectRoot })} />
       <div className="flow-attrs__hint">{t("attrs.projectRootHint")}</div>
     </div>

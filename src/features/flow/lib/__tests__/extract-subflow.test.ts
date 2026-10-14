@@ -263,6 +263,8 @@ describe("extractSubflow", () => {
         agent("p2", "builtin:review"),
         agent("p3", "mdium:review"),
         agent("p4", "/abs/review.md"),
+        { id: "pm", kind: "subflow", flow: "project:main" },
+        { id: "dw", kind: "subflow", flow: "mdium:dev-workflow" },
         {
           id: "il", kind: "loop", mode: "foreach", items: "${{ params.items }}", maxIterations: 2,
           body: { nodes: [{ id: "deep", kind: "subflow", flow: "other.flow.yaml" }] },
@@ -270,7 +272,7 @@ describe("extractSubflow", () => {
       ],
       edges: [
         { from: "sub", to: "fl" }, { from: "fl", to: "p1" }, { from: "p1", to: "p2" },
-        { from: "p2", to: "p3" }, { from: "p3", to: "p4" }, { from: "p4", to: "il" },
+        { from: "p2", to: "p3" }, { from: "p3", to: "p4" }, { from: "p4", to: "pm" }, { from: "pm", to: "dw" }, { from: "dw", to: "il" },
       ],
     };
     const r = ok(extractSubflow(def, def.nodes.map((_, i) => `nodes[${i}]`), "all", MAIN));
@@ -280,6 +282,8 @@ describe("extractSubflow", () => {
     expect((byId(r.part.nodes, "p2") as FlowAgentNode).promptRef).toBe("builtin:review");
     expect((byId(r.part.nodes, "p3") as FlowAgentNode).promptRef).toBe("mdium:review");
     expect((byId(r.part.nodes, "p4") as FlowAgentNode).promptRef).toBe("/abs/review.md");
+    expect((byId(r.part.nodes, "pm") as FlowSubflowNode).flow).toBe("project:main");
+    expect((byId(r.part.nodes, "dw") as FlowSubflowNode).flow).toBe("mdium:dev-workflow");
     const inner = (byId(r.part.nodes, "il") as FlowLoopNode).body;
     if (typeof inner === "string") throw new Error("body must stay inline");
     expect((inner.nodes[0] as FlowSubflowNode).flow).toBe("../other.flow.yaml");

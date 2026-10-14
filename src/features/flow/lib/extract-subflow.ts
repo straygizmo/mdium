@@ -144,12 +144,13 @@ function mapBodyRefs(body: FlowInlineBody, ctx: RefContext, fn: ContextMapper): 
 // File references
 // ---------------------------------------------------------------------------
 
-/** A file reference that is relative to the flow file holding it (not `builtin:`, `mdium:`, absolute or templated). */
+/** A file reference that is relative to the flow file holding it (not `builtin:`, `mdium:`, `project:`, absolute or templated). */
 function isRelativeFileRef(ref: string): boolean {
   return (
     ref.trim() !== "" &&
     !ref.startsWith("builtin:") &&
     !ref.startsWith("mdium:") &&
+    !ref.startsWith("project:") &&
     !/^([\\/]|[A-Za-z]:)/.test(ref) &&
     !ref.includes("${{")
   );

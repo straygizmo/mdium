@@ -177,6 +177,21 @@ describe("signatures", () => {
     });
   });
 
+  it.each(["project:main", "mdium:dev-workflow"])("keeps the opaque reference %s as the signature file", (ref) => {
+    const graph = buildFlowGraph(
+      def([{ id: "s", kind: "subflow", flow: ref, params: { a: 1 } }]),
+      new Set(),
+      undefined,
+      sigs,
+      FILE,
+    );
+    expect(graph.nodes[0].signature).toMatchObject({
+      file: ref,
+      params: [{ name: "a", value: "1", declared: false }],
+      outputs: [],
+    });
+  });
+
   it("marks a reference to an unknown file as missing", () => {
     const graph = buildFlowGraph(def([{ id: "s", kind: "subflow", flow: "nope.flow.yaml" }]), new Set(), undefined, sigs, FILE);
     expect(graph.nodes[0].signature).toMatchObject({ missing: true, params: [], outputs: [] });
