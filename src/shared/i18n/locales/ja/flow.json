@@ -79,6 +79,7 @@
     "FLOW_ACTION_UNKNOWN": "組込みアクション「{{uses}}」は存在しません。",
     "FLOW_TEMPLATE_UNKNOWN": "テンプレートが存在しないものを参照しています。",
     "FLOW_SUBFLOW_ROOT_INVALID": "サブフローの projectRoot が使用できるディレクトリではありません。",
+    "FLOW_SUBFLOW_PARAMS_INVALID": "サブフローの paramsFrom がオブジェクトに展開されませんでした。",
     "FLOW_PROVIDER_UNAVAILABLE": "エージェントのプロバイダーを使用できません。",
     "FLOW_UNKNOWN_FIELD": "未知の属性「{{field}}」があります。",
     "FLOW_UNKNOWN_NODE_KIND": "未知のノード種別「{{kind}}」です。",
