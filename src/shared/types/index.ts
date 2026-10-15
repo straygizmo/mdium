@@ -220,6 +220,8 @@ export interface BuiltinSkill {
   name: string;
   description: string;
   content: string;
+  /** Bumped whenever content changes so auto-install overwrites older copies. */
+  version: number;
 }
 
 /** Built-in command definition */

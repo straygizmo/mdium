@@ -22,7 +22,8 @@ import { useTabStore } from "@/stores/tab-store";
 import { resolveMdiumVbaMcpServer } from "../lib/builtin-mcp-servers";
 import type { OpencodeMcpServer } from "@/shared/types";
 import { BUILTIN_AGENTS, BUILTIN_CUSTOM_TOOLS } from "../lib/builtin-registry";
-import { TOOL_VERSION_RE, builtinVersion, shouldWriteBuiltinFile } from "../lib/builtin-install";
+import { SKILL_VERSION_RE, TOOL_VERSION_RE, buildSkillMd, builtinVersion, shouldWriteBuiltinFile } from "../lib/builtin-install";
+import { BUILTIN_SKILLS } from "../lib/builtin-skills";
 import { isAzureRefusal, isAzureProviderActive } from "../lib/provider-detection";
 import { evaluateStall, STALL_TICK_MS } from "./stall-watchdog";
 import { applyForward, applyReverse } from "@/shared/lib/replacement";
@@ -1072,6 +1073,26 @@ async function ensureBuiltinFiles(): Promise<void> {
       console.log(`[opencode] installed builtin tool: ${toolPath}`);
     } catch (e) {
       console.warn(`[opencode] failed to install tool ${entry.fileName}:`, e);
+    }
+  }
+
+  // Builtin skills: same marker rule, and a user-disabled skill
+  // (SKILL.md.disabled) is left alone entirely.
+  for (const skill of Object.values(BUILTIN_SKILLS)) {
+    const skillPath = `${configDir}${sep}skills${sep}${skill.name}${sep}SKILL.md`;
+    const disabled = await invoke<string>("read_text_file", { path: `${skillPath}.disabled` }).catch(() => null);
+    if (disabled !== null) continue;
+    const existing = await invoke<string>("read_text_file", { path: skillPath }).catch(() => null);
+    if (!shouldWriteBuiltinFile(existing, String(skill.version), SKILL_VERSION_RE)) continue;
+    try {
+      await invoke("write_skill", {
+        baseDir: configDir,
+        dirName: skill.name,
+        content: buildSkillMd(skill.name, skill.description, skill.content, skill.version),
+      });
+      console.log(`[opencode] installed builtin skill: ${skillPath}`);
+    } catch (e) {
+      console.warn(`[opencode] failed to install skill ${skill.name}:`, e);
     }
   }
 
