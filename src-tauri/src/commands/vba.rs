@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::fs;
 use serde_json;
 use crate::commands::vba_streams::{DirStream, REC_MODULETYPE_PROCEDURAL};
+use crate::commands::vba_source::{extract_vb_name, fix_vb_name};
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -696,68 +697,6 @@ pub fn pull_vba_modules(xlsm_path: String) -> Result<PullResult, String> {
 }
 
 // ---------------------------------------------------------------------------
-// Helper: extract Attribute VB_Name from VBA source
-// ---------------------------------------------------------------------------
-
-/// Parse the `Attribute VB_Name = "..."` line from VBA source code.
-/// Returns the module name if found, None otherwise.
-fn extract_vb_name(source: &str) -> Option<String> {
-    for line in source.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("Attribute VB_Name") {
-            let rest = rest.trim();
-            if let Some(rest) = rest.strip_prefix('=') {
-                let rest = rest.trim();
-                if let Some(rest) = rest.strip_prefix('"') {
-                    if let Some(end) = rest.find('"') {
-                        return Some(rest[..end].to_string());
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Ensure the `Attribute VB_Name = "..."` line in VBA source matches the
-/// expected module name.  When VBE renames a module the dir-stream
-/// MODULENAME is updated but the compressed source may still carry the old
-/// `Attribute VB_Name`.  This helper rewrites the line so that the source
-/// is always consistent with the dir stream, which prevents VBA/Excel from
-/// rejecting the compressed source in favour of the (stale) performance
-/// cache.
-fn fix_vb_name(source: &str, expected_name: &str) -> String {
-    let mut result = String::with_capacity(source.len());
-    let mut found = false;
-    for line in source.lines() {
-        if !found {
-            let trimmed = line.trim();
-            if trimmed.starts_with("Attribute VB_Name") {
-                if let Some(rest) = trimmed.strip_prefix("Attribute VB_Name") {
-                    let rest = rest.trim();
-                    if let Some(rest) = rest.strip_prefix('=') {
-                        let rest = rest.trim();
-                        if rest.starts_with('"') {
-                            result.push_str(&format!("Attribute VB_Name = \"{}\"", expected_name));
-                            result.push_str("\r\n");
-                            found = true;
-                            continue;
-                        }
-                    }
-                }
-            }
-        }
-        result.push_str(line);
-        result.push_str("\r\n");
-    }
-    // Remove the trailing \r\n if the original source didn't end with one
-    if !source.ends_with('\n') && result.ends_with("\r\n") {
-        result.truncate(result.len() - 2);
-    }
-    result
-}
-
-// ---------------------------------------------------------------------------
 // Command: inject_vba_modules
 // ---------------------------------------------------------------------------
 
@@ -1389,41 +1328,6 @@ mod tests {
         assert_eq!(project.modules.len(), 1);
         // Unicode name should take priority
         assert_eq!(project.modules[0].name, "TestModule");
-    }
-
-    // --- fix_vb_name tests ---
-
-    #[test]
-    fn test_fix_vb_name_replaces_old_name() {
-        let source = "Attribute VB_Name = \"Module1\"\r\nSub Test()\r\nEnd Sub\r\n";
-        let result = fix_vb_name(source, "mdlMain");
-        assert!(result.starts_with("Attribute VB_Name = \"mdlMain\"\r\n"));
-        assert!(result.contains("Sub Test()"));
-    }
-
-    #[test]
-    fn test_fix_vb_name_keeps_matching_name() {
-        let source = "Attribute VB_Name = \"mdlMain\"\r\nSub Test()\r\nEnd Sub\r\n";
-        let result = fix_vb_name(source, "mdlMain");
-        assert!(result.starts_with("Attribute VB_Name = \"mdlMain\"\r\n"));
-        assert!(result.contains("Sub Test()"));
-    }
-
-    #[test]
-    fn test_fix_vb_name_no_attribute_line() {
-        let source = "Sub Test()\r\nEnd Sub\r\n";
-        let result = fix_vb_name(source, "mdlMain");
-        // No Attribute line to fix — source returned as-is
-        assert!(result.contains("Sub Test()"));
-    }
-
-    #[test]
-    fn test_fix_vb_name_preserves_other_attributes() {
-        let source = "Attribute VB_Name = \"Module1\"\r\nAttribute VB_Exposed = False\r\nSub Test()\r\nEnd Sub\r\n";
-        let result = fix_vb_name(source, "mdlMain");
-        assert!(result.contains("Attribute VB_Name = \"mdlMain\""));
-        assert!(result.contains("Attribute VB_Exposed = False"));
-        assert!(result.contains("Sub Test()"));
     }
 
     // --- Task 1: paths and lock ---
