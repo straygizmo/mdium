@@ -61,7 +61,7 @@ video_gen の `orchestrate.py` が内容（ストーリー）のレベルで回�
 | サブフローの扱い | **関数として扱う**。`outputs` の宣言を署名とし、呼び出し側の参照を検証する（`FLOW_OUTPUT_UNKNOWN`）。`.mdium/flows/lib/` を部品の置き場にし、一覧を入口・部品・テンプレートに分ける。エディタに折りたたみ表示・ドリルダウン・抽出を足し、実行パネルをサブフロー単位のツリーにする | 16 章 |
 | `approval` | 出力 `choice` と `comment` を持つ。`show` に成果物参照を認める | 5.3 |
 | 外部プロトコル `artifact` | `mediaType` を任意で追加 | 5.1 |
-| 値の参照（2.5） | `nodes.<id>.artifacts` / `nodes.<id>.artifacts.<label>`、`nodes.<id>.costUsd`（サブフローの実費合計）を追加。`with` の値が**ちょうど 1 つの** `${{ }}` だけから成る場合は参照先の型（オブジェクト・配列・数値・真偽）を保ち、それ以外は文字列に展開する | 3.1, 5.1, 8.2 |
+| 値の参照（2.5） | `nodes.<id>.artifacts` / `nodes.<id>.artifacts.<label>`、`nodes.<id>.costUsd`（サブフローの実費合計）、`nodes.<id>.params`（サブフローの子スコープの確定した引数。開く前は `{}`。2026-10-15 追加）を追加。`with` の値が**ちょうど 1 つの** `${{ }}` だけから成る場合は参照先の型（オブジェクト・配列・数値・真偽）を保ち、それ以外は文字列に展開する | 3.1, 5.1, 8.2 |
 | 条件 | 変更なし（指標の比較は組込みアクションで行う） | 8.3 |
 | PR の順序 | エディタ（旧 7）と `agent`（旧 5）・開発ワークフローのテンプレート化（旧 8）を前倒し。並列度（旧 4b）と重ね表示（旧 6）は後回し | 12 章 |
 | 7.4「MDium のコードに外部プロジェクト固有の処理を入れない」 | **維持**。video_gen 固有の段階・プロンプト・フロー定義は video_gen リポジトリに置く | 9 章 |
@@ -86,6 +86,8 @@ runtimes:                          # execution environments the flows refer to b
     env: { PYTHONUTF8: "1" }           # non-secret env
 setup:                             # how to make a fresh copy runnable (run on demand, never automatically)
   - { run: [uv, sync], workingDir: . }
+test:                              # how to test a copy (mdium/project-test; the dev-workflow runs it before the review)
+  - { run: [uv, run, pytest, -q] }
 secrets: [GOOGLE_API_KEY, ANTHROPIC_API_KEY]   # names only; values come from the machine's environment
 flows:
   main: flows/production-cycle.flow.yaml       # "run this app"
@@ -100,6 +102,7 @@ metrics:                           # what the outer loop compares (8.3); refs ar
 - `runtimes.<name>.kind` は初版 `python` のみ。`python` と `cwd` はプロジェクト相対パスで、ルート外とシンボリックリンクは拒否する（フローファイルと同じ規則）。`python` は文字列または文字列の配列（OS ごとの候補。例 `[.venv/Scripts/python.exe, .venv/bin/python]`）で、配列なら最初に存在するものを使う。
   - V3 実装メモ: `python` と `cwd` はルートから成分ごとに辿り、途中の成分（`.venv` など）がシンボリックリンク・ジャンクションなら拒否する。ただしインタプリタの末端（unix の venv の `bin/python`）だけはリンクでよく、辿った先が通常ファイルであること。`cwd` は末端も含めてリンクを拒否し、ディレクトリであること。
 - `setup[].run` は argv 配列（シェル文字列は使わない）。`workingDir` の既定はプロジェクトルート。
+- `test[]` は `setup[]` と同じ形（2026-10-15 追加）。`mdium/project-test` が worktree などで実行し、失敗は結果（`ok: false`・終了コード・出力末尾・ログディレクトリ）として返す。実行開始時の確認画面には `setup` と同様に一覧を出し、確認済みのマニフェストと違う worktree 側のマニフェストは承認を求める（テンプレートに `command` を置けない規則の下で、テストコマンドを利用者の確認済みファイルから取る仕組み）。
 - `secrets` は名前だけ。MDium は値を保存せず、フロー実行の開始時に MDium プロセスの環境変数に全名が存在することを確認し、無ければ `FLOW_SECRET_MISSING`（不足した名前の一覧）で開始を拒む。ワーカーとコマンドは MDium の環境変数を引き継ぐ（2026-10-06 仕様 7.2 のとおり）。
 - `flows.main` は必須ではない。`.mdium/flows/*.flow.yaml` の自動一覧は変えず、`flows` は役割の印（UI で「主フロー」「改善」と表示）と改善ループの既定値に使う。
 - `metrics[].ref` は `outputs.<key>`（主フローの `outputs`）または `costUsd`（実行の実費合計）。`better` は `higher` / `lower`。
@@ -328,6 +331,7 @@ V5 は 2 つに分けた。V5a はエディタの中核、V5b はサブフロー
 - 費用: ランナーが返す使用量から `cost` を記録する（提供元が返さない場合は `estimated`）。
 - `full-access` のガード一式（screening / containment / integrity）は 7.1 のとおり必須。
 - V7 実装メモ: `with` で入力を渡す。`inputs.json` に保存し、プロンプト末尾に `## Inputs` のデータブロックとして付ける。`builtin:` のプロンプトは `design` / `implement-plan` / `implement` / `review`。`awaiting_user` は承認（`answer` / `reject`）で再実行、コストは `cost.estimateUsd` のみ。詳細は 12 章 V7 行。
+- V8 後続メモ（2026-10-15）: Claude プロバイダは応答の `total_cost_usd` を `turn_completed.costUsd` として返し、`cost.actual` に記録する（その場合 `estimateUsd` は加算しない）。他プロバイダは見積のまま。
 
 ### 7.2 組込みアクション
 
@@ -336,8 +340,9 @@ V5 は 2 つに分けた。V5a はエディタの中核、V5b はサブフロー
 | `uses` | 内容 | 出力 |
 |---|---|---|
 | `mdium/project-setup` | `with.projectRoot`（既定は実行のプロジェクト）の `project.yaml` の `setup` を実行する。2.3 の確認は実行開始時の確認に含める（`setup` の一覧も確認画面に出す） | `ok` |
-| `mdium/flow-run-latest` | `with.flow`（フローのパス）の、完了した最新の実行を探す | `runId`, `runDir`, `status`, `outputs`（オブジェクト）, `costUsd`, `failedNodes`（配列） |
-| `mdium/metrics-compare` | `with.baseline` と `with.candidate`（それぞれ `{ outputs, costUsd }`）を `project.yaml` の `metrics` で比べる。1 つでも悪化があれば `improved: false`。指標が片方に無ければ `unknown` として報告に含め、判定には使わない | `improved`（bool）, `report`（markdown 文字列）, `reportPath`（成果物） |
+| `mdium/project-test` | `with.projectRoot`（既定は実行のプロジェクト）の `project.yaml` の `test` を実行する（2026-10-15 追加）。マニフェストが無い・`test` が無ければ `ran: false, ok: true`。失敗は結果であってノードの失敗ではない。確認済みと違うマニフェストは承認（`show`: `test` の一覧と sha） | `ran`, `ok`, `exitCode`（失敗した手順の終了コード。無ければ null）, `logDir`, `tail`（失敗した手順の出力末尾） |
+| `mdium/flow-run-latest` | `with.flow`（フローのパス。`project:main` 可）の、完了した最新の実行を探す | `runId`, `runDir`, `status`, `outputs`（オブジェクト）, `params`（既定値込みの引数。2026-10-15 追加）, `costUsd`, `failedNodes`（配列） |
+| `mdium/metrics-compare` | `with.baseline` と `with.candidate`（それぞれ `{ outputs, costUsd }`）を `project.yaml` の `metrics` で比べる。1 つでも悪化があれば `improved: false`。指標が片方に無ければ `unknown` として報告に含め、判定には使わない。任意の `with.baselineParams` / `with.candidateParams`（両方あるとき）で異なる引数をレポート冒頭に列挙する（2026-10-15 追加） | `improved`（bool）, `report`（markdown 文字列）, `reportPath`（成果物）, `differingParams`（名前の配列） |
 
 - V7 実装メモ: 10 アクションを実装。承認は確認済みの `show` を渡した再実行で処理する。`git-worktree-create` は `integrityBaseline` を出力し、`git-merge-local` が整合性とレビュー対象パスを承認に載せる。
 
@@ -348,6 +353,8 @@ V5 は 2 つに分けた。V5a はエディタの中核、V5b はサブフロー
 - テンプレートのフローは `command` ノードを含まない（`action` と `agent` のみ）ので、確認画面には「組込みテンプレート（内容ハッシュ）」として表示する。
 - `dev-workflow` の変更点: 引数 `mergeGate`（bool、既定 `true`）を足す。`false` のときは `merge_gate` 以降（`merge` / `close_issue` / `discard`）を `when` で飛ばし、worktree を残したまま終了して `outputs.worktreePath` / `outputs.branch` / `outputs.reviewOutcome` を返す。外側のフローが検証してから採用・破棄を決めるため。
 - V7 実装メモ: `provider` はテンプレート可（`ProviderRef`）。テンプレートのプロンプトは `builtin:` かインラインに限る。
+- V8 後続メモ（2026-10-15）: `dev-workflow` に `setup`（bool、既定 false。true なら worktree 作成直後に `mdium/project-setup`）と `test` 段階（`mdium/project-test`。implement の後、review の前。`testRan` / `testOk` / `testExitCode` / `testTail` / `testLogDir` を review の入力に渡し、`builtin:review` はテストを自分で走らせずそれを読む）を追加。
+- `subflow.paramsFrom`（任意、2026-10-15 追加）: オブジェクトに展開されるテンプレート。その項目を `params` の下に引数として渡す（明示した `params` が優先）。子が宣言していない項目は捨てる（実行の `params` をそのまま渡せるように）。オブジェクト以外に展開されれば `FLOW_SUBFLOW_PARAMS_INVALID`、未実行ノードの参照は strict（未解決）。`paramsFrom` があるノードでは子の必須引数の静的検査を省き、実行時の `FLOW_PARAM_MISSING` に任せる。
 - `subflow.projectRoot`（任意）: 子フローを別のプロジェクトルートで実行する。許すのは**実行中のプロジェクトの git worktree**（`git worktree list` で確認）だけ。それ以外は `FLOW_SUBFLOW_ROOT_INVALID`。子フローのファイルはその worktree 側から読む（変更後のフロー定義で検証するため）。子の確認ハッシュは親の開始時の確認に含められないため、**子フローの `command` と `runtimes` が親プロジェクトの確認済み内容と一致する場合のみ**実行し、違えば承認待ち（`needs_approval` 相当。確認画面で差分を表示）にする。
 - V8 実装メモ: フロー参照 `project:main`（`subflow.flow`・ループ本体・`flow-run-latest`）とテンプレート参照 `project.metrics` を追加。`subflow.projectRoot` との組み合わせでは worktree のマニフェストの `flows.main` を解決する。`mdium:` テンプレートの内部では `project:main` を使えない。`dev-workflow` は出力 `worktree` を追加した。
 
@@ -361,72 +368,172 @@ V5 は 2 つに分けた。V5a はエディタの中核、V5b はサブフロー
 
 ### 8.2 フロー（テンプレートの既定）
 
+テンプレート `improve-app` の実体（16.5 の分割形。V8 で確定、以下は同梱ファイルそのもの）。
+
+`flows/improve-app.flow.yaml`（入口）:
+
 ```yaml
 schemaVersion: 1
 id: improve-app
 name: Improve this project
+description: propose (baseline -> analyze -> approve) -> develop (dev-workflow, no merge) -> verify (setup -> main flow in the worktree -> compare) -> adopt gate -> merge or discard, then the next iteration.
 params:
-  goal: { type: string, required: true }            # what to improve, in the user's words
-  maxIterations: { type: number, default: 3 }
+  goal: { type: string, required: true }
+  provider: { type: string, default: claude }
+  requiresApproval: { type: bool, default: true }
 limits: { maxConcurrentNodes: 1, budgetUsd: 50 }
 nodes:
-  - { id: baseline, kind: action, uses: mdium/flow-run-latest, with: { flow: flows/main.flow.yaml } }
+  - id: propose
+    kind: subflow
+    flow: lib/improve-app/improve-propose.flow.yaml
+    params:
+      goal: "${{ params.goal }}"
+      provider: "${{ params.provider }}"
+      # Empty on the first pass; the next iteration sees what was tried.
+      previousProposal: "${{ nodes.propose.outputs.proposal }}"
+      previousReport: "${{ nodes.verify.outputs.report }}"
+    timeout: 2h
+  - id: proceed
+    kind: branch
+    cases:
+      - { when: { ref: nodes.propose.outputs.choice, op: "==", value: stop }, port: stopped }
+    default: go
+  - id: develop
+    kind: subflow
+    flow: mdium:dev-workflow
+    params:
+      title: "${{ params.goal }}"
+      requirement: "${{ nodes.propose.outputs.proposal }}"
+      mergeGate: false
+      provider: "${{ params.provider }}"
+      requiresApproval: "${{ params.requiresApproval }}"
+    timeout: 6h
+  - id: verify
+    kind: subflow
+    flow: lib/improve-app/improve-verify.flow.yaml
+    params:
+      worktreePath: "${{ nodes.develop.outputs.worktreePath }}"
+      baselineOutputs: "${{ nodes.propose.outputs.baselineOutputs }}"
+      baselineCostUsd: "${{ nodes.propose.outputs.baselineCostUsd }}"
+      baselineParams: "${{ nodes.propose.outputs.baselineParams }}"
+    timeout: 24h
+  - id: adopt_gate
+    kind: approval
+    message: Adopt the change? The report compares the latest completed run of the main flow with the verification run in the worktree, which starts from the baseline run's arguments; arguments that still differ are listed at the top of the report. After a merge, run the main flow once more before the next iteration so the next proposal starts from the new baseline.
+    show: [nodes.verify.outputs.report, nodes.verify.outputs.improved, nodes.develop.outputs.branch]
+    options: [merge, discard]
+  - { id: merge, kind: action, uses: mdium/git-merge-local, with: { worktree: "${{ nodes.develop.outputs.worktree }}" } }
+  - { id: discard, kind: action, uses: mdium/git-worktree-discard, with: { worktree: "${{ nodes.develop.outputs.worktree }}" } }
+edges:
+  - { from: propose, to: proceed }
+  - { from: proceed, to: develop, port: go }
+  - { from: develop, to: verify }
+  - { from: verify, to: adopt_gate }
+  # A failed verification is still the human's call.
+  - { from: verify, to: adopt_gate, port: failure }
+  - { from: adopt_gate, to: merge, port: merge }
+  - { from: adopt_gate, to: discard, port: discard }
+  # The next iteration proposes again (after a merge, run the main flow first so the baseline is
+  # the merged code; the verification run is a child scope and never becomes the baseline).
+  - { from: merge, to: propose, maxTraversals: 3 }
+  - { from: discard, to: propose, maxTraversals: 3 }
+```
+
+`flows/lib/improve-app/improve-propose.flow.yaml`:
+
+```yaml
+schemaVersion: 1
+id: improve-propose
+name: Propose an improvement
+description: baseline (latest completed run of the main flow) -> analyze (read-only agent) -> approve_proposal (approve / revise / stop).
+params:
+  goal: { type: string, required: true }
+  provider: { type: string, default: claude }
+  previousProposal: { type: string, default: "" }
+  previousReport: { type: string, default: "" }
+nodes:
+  - { id: baseline, kind: action, uses: mdium/flow-run-latest, with: { flow: "project:main" } }
   - id: analyze
     kind: agent
-    provider: claude
+    provider: "${{ params.provider }}"
     permission: read-only
-    promptRef: builtin:improve-analyze           # reads goal, metrics, the baseline run dir (outputs, logs, artifacts)
-    outputContract: outcome                      # outputs.proposalPath (markdown: what to change and why)
+    promptRef: builtin:improve-analyze
+    outputContract: outcome
+    with:
+      goal: "${{ params.goal }}"
+      metrics: "${{ project.metrics }}"
+      baseline: "${{ nodes.baseline.outputs }}"
+      revision: "${{ nodes.approve_proposal.outputs.comment }}"
+      previousProposal: "${{ params.previousProposal }}"
+      previousReport: "${{ params.previousReport }}"
     timeout: 30m
   - id: approve_proposal
     kind: approval
-    message: "Review the improvement proposal"
-    show: [ "nodes.analyze.artifacts.proposal" ]
-    options: [ approve, { name: revise, commentRequired: true }, stop ]
-  - id: develop
-    kind: subflow
-    flow: "mdium:dev-workflow"
-    params: { title: "${{ params.goal }}", requirement: "${{ nodes.analyze.outputs.proposalPath }}", mergeGate: false }
-  - { id: setup, kind: action, uses: mdium/project-setup, with: { projectRoot: "${{ nodes.develop.outputs.worktreePath }}" } }
+    message: Review the improvement proposal. Approve to implement it, revise with a comment, or stop the loop.
+    show: [nodes.analyze.outputs.body]
+    options: [approve, { name: revise, commentRequired: true }, stop]
+edges:
+  - { from: baseline, to: analyze }
+  - { from: analyze, to: approve_proposal }
+  - { from: approve_proposal, to: analyze, port: revise, maxTraversals: 5 }
+outputs:
+  proposal: "${{ nodes.analyze.outputs.body }}"
+  choice: "${{ nodes.approve_proposal.outputs.choice }}"
+  baselineOutputs: "${{ nodes.baseline.outputs.outputs }}"
+  baselineCostUsd: "${{ nodes.baseline.outputs.costUsd }}"
+  baselineParams: "${{ nodes.baseline.outputs.params }}"
+```
+
+`flows/lib/improve-app/improve-verify.flow.yaml`:
+
+```yaml
+schemaVersion: 1
+id: improve-verify
+name: Verify an improvement
+description: setup (project setup in the worktree) -> verify (the project's main flow run inside the worktree) -> compare (metrics against the baseline).
+params:
+  worktreePath: { type: string, required: true }
+  baselineOutputs: { type: object, required: true }
+  baselineCostUsd: { type: number, required: true }
+  # The baseline run's arguments: the verification starts from them (see `paramsFrom`).
+  baselineParams: { type: object, default: {} }
+nodes:
+  - { id: setup, kind: action, uses: mdium/project-setup, with: { projectRoot: "${{ params.worktreePath }}" } }
   - id: verify
     kind: subflow
-    flow: flows/main.flow.yaml
-    projectRoot: "${{ nodes.develop.outputs.worktreePath }}"
-    params: {}                                   # the project's copy narrows the scale here (e.g. one story)
+    flow: project:main
+    projectRoot: "${{ params.worktreePath }}"
+    # The baseline's arguments, so the two runs compare like with like; `params` overrides them.
+    paramsFrom: "${{ params.baselineParams }}"
+    # The project's copy narrows the scale here (for example one story, one chapter, no review).
+    params: {}
+    timeout: 24h
   - id: compare
     kind: action
     uses: mdium/metrics-compare
     with:
-      baseline: { outputs: "${{ nodes.baseline.outputs.outputs }}", costUsd: "${{ nodes.baseline.outputs.costUsd }}" }
+      baseline: { outputs: "${{ params.baselineOutputs }}", costUsd: "${{ params.baselineCostUsd }}" }
       candidate: { outputs: "${{ nodes.verify.outputs }}", costUsd: "${{ nodes.verify.costUsd }}" }
-  - id: adopt_gate
-    kind: approval
-    message: "Adopt the change?"
-    show: [ "nodes.compare.artifacts.report", "nodes.develop.outputs.branch" ]
-    options: [ merge, discard ]
-  - { id: merge, kind: action, uses: mdium/git-merge-local, with: { worktree: "${{ nodes.develop.outputs.worktreePath }}" } }
-  - { id: discard, kind: action, uses: mdium/git-worktree-discard, with: { worktree: "${{ nodes.develop.outputs.worktreePath }}" } }
+      # Arguments that still differ are listed at the top of the report.
+      baselineParams: "${{ params.baselineParams }}"
+      candidateParams: "${{ nodes.verify.params }}"
 edges:
-  - { from: baseline, to: analyze }
-  - { from: analyze, to: approve_proposal }
-  - { from: approve_proposal, to: develop, port: approve }
-  - { from: approve_proposal, to: analyze, port: revise, maxTraversals: 5 }   # the comment feeds the next analysis
-  - { from: develop, to: setup }
   - { from: setup, to: verify }
   - { from: verify, to: compare }
-  - { from: verify, to: adopt_gate, port: failure }     # a failed verify run is still the human's call
-  - { from: compare, to: adopt_gate }
-  - { from: adopt_gate, to: merge, port: merge }
-  - { from: adopt_gate, to: discard, port: discard }
-  - { from: merge, to: baseline, maxTraversals: 3 }     # next iteration starts from the new baseline
-  - { from: discard, to: analyze, maxTraversals: 3 }    # try a different proposal
+outputs:
+  improved: "${{ nodes.compare.outputs.improved }}"
+  report: "${{ nodes.compare.outputs.report }}"
+  candidate: "${{ nodes.verify.outputs }}"
 ```
 
-- `nodes.verify.outputs` はサブフローの `outputs` 全体（オブジェクト）、`nodes.verify.costUsd` はサブフローの実費合計。テンプレート参照に `nodes.<id>.costUsd` を追加する。
-- `approve_proposal` の `revise` のコメントは、次の周回の `analyze` のプロンプトに `${{ nodes.approve_proposal.outputs.comment }}` で入る（周回で `skipped` になった参照は空文字列）。
-- 人の判断点は「提案の承認」と「採用」の 2 か所。`stop` は `approve_proposal` の出口にエッジを張らず、フローを正常終了させる。
-- `maxIterations` は後退エッジの `maxTraversals` と二重になるため、テンプレートでは後者を正とし、`maxIterations` は表示用の説明に留める（エディタのフォームで同期する）。
-- V8 実装メモ: テンプレートの実体は 16.5 の分割形（`flows/improve-app.flow.yaml` + `lib/improve-app/improve-propose.flow.yaml` / `improve-verify.flow.yaml`）。主フローは `project:main`（project.yaml の `flows.main`）で参照し、提案は analyze の応答本文（read-only のためファイルは書かない）。`maxIterations` は持たない（後退エッジの `maxTraversals` が正）。
+- 主フローは `project:main`（project.yaml の `flows.main`）で参照する。`subflow.projectRoot` 付きでは worktree 側のマニフェストで解決する。
+- `nodes.verify.outputs` はサブフローの `outputs` 全体（オブジェクト）、`nodes.verify.costUsd` はサブフローの実費合計、`nodes.verify.params` は子スコープの確定した引数。
+- 提案は analyze の応答本文（read-only のためファイルは書かない。応答は `response.md` に残る）。`develop` には提案本文を `requirement` として渡す。
+- `approve_proposal` の `revise` のコメントは、次の周回の `analyze` のプロンプトに `${{ nodes.approve_proposal.outputs.comment }}` で入る（周回で `skipped` になった参照は空文字列）。周回時は前回の提案と比較レポート（`previousProposal` / `previousReport`。初回は空文字列）も渡す。
+- 人の判断点は「提案の承認」と「採用」の 2 か所。`stop` は `proceed` の `stopped` ポートにエッジを張らず、フローを正常終了させる。後退エッジの `maxTraversals` が周回の上限で（上限に達すると `FLOW_TRAVERSAL_LIMIT`）、`maxIterations` パラメータは持たない。
+- 検証は基準実行の引数（`flow-run-latest` の `params`）から始め（`subflow.paramsFrom`）、プロジェクト側のコピーが `verify.params` で縮小分を上書きする。`metrics-compare` には両方の引数を渡し、なお異なる引数はレポート冒頭に列挙する（2026-10-15 の後続。それまでは「基準は検証と同じ縮小パラメータで回す」運用だった）。
+- 既知の制限: 比較の基準は main フローの最新の完了実行で、検証実行は子スコープのため基準にならない。merge 後は main フローを再実行してから次の周回に進む（`verify.outputs.candidate` を次の基準に渡すのは後続）。
+- 入口フローは `outputs` を持たない（初回で `stop` すると未解決の警告になるため）。
 
 ### 8.3 指標の比較
 
@@ -435,9 +542,7 @@ edges:
 
 ### 8.4 プロンプト `builtin:improve-analyze`
 
-英語の組込みプロンプト。入力: `goal`、`metrics`、基準実行のディレクトリ（`outputs.json`、ノードごとのログ末尾、成果物の一覧）、前回の `revise` コメント。出力契約: `outcome: completed` と `outputs.proposalPath`（markdown。変更の目的、対象ファイル、検証方法、想定される指標の変化）、`artifacts: [proposalPath]`（ラベル `proposal`）。コードは変更しない（read-only）。
-
-- V8 実装メモ: 入力は `goal` / `metrics`（`project.metrics`）/ `baseline`（flow-run-latest の出力）/ `revision` / `previousProposal` / `previousReport` の 6 つ。ログと成果物はエージェントが `baseline.runDir` を自分で読む。出力は応答本文の提案で、`proposalPath` は持たない。
+英語の組込みプロンプト。入力（`with`）は `goal` / `metrics`（`project.metrics`）/ `baseline`（`flow-run-latest` の出力。ログと成果物はエージェントが `baseline.runDir` を自分で読む）/ `revision`（前回の `revise` コメント）/ `previousProposal` / `previousReport` の 6 つ。出力契約は `outcome: completed` で、提案は応答本文（markdown。変更の目的、対象ファイル、検証方法、想定される指標の変化）。コードは変更しない（read-only）。
 
 ---
 
@@ -535,9 +640,7 @@ outputs: videoPath, reviewVideoPath, revisionCount
 
 ### 9.4 改善フロー（`improve.flow.yaml`）
 
-8.2 のテンプレートをコピーし（部品 `lib/improve-propose.flow.yaml` / `lib/improve-verify.flow.yaml` も一緒にコピーされる。16.5）、`verify` の `params` を小さくする（例: `count: 1`、`qualityIters: 1`）。`metrics` は 2.1 の例のとおり。`analyze` のプロンプトには `goal` の例として「レビュー動画で指摘された台詞の間延びを減らす」「継続性ゲートの誤検出を減らす」のような内容を想定する。
-
-- V8 実装メモ: 実体は `improve.flow.yaml`（id `improve`）と `lib/improve-app/` の 2 部品。検証は `maxStories: 1`、`chapters: "1"`、`review: false`、`title: verify`。台帳は章別レイアウト（`video/chapters/ch_NN/`）の動画指標を集計し、不正な型の値は無視する。
+8.2 のテンプレートのコピー（`improve.flow.yaml`、id `improve`、name `Improve video_gen`。部品 `lib/improve-app/improve-propose.flow.yaml` / `improve-verify.flow.yaml` も一緒にコピーされる。16.5）。`verify` の `params` で検証を縮小する: `maxStories: 1`、`chapters: "1"`、`review: false`、`title: verify`、`resumeDir: ""`（worktree には `output/` が無いので、基準実行が既存シーズンを再利用していても新規に作る）。`develop` には `setup: true`（worktree で project.yaml の setup を実行してから設計に入る）を渡し、project.yaml の `test` 手順（フロー周りの pytest）が実装後に走って review に渡る。`metrics` は 2.1 の例のとおり。`goal` の例: 「レビュー動画で指摘された台詞の間延びを減らす」「継続性ゲートの誤検出を減らす」。台帳は章別レイアウト（`video/chapters/ch_NN/`）の動画指標を集計し、不正な型の値は無視する。
 
 ### 9.5 移行しないもの
 
@@ -607,6 +710,7 @@ export interface FlowTransport {
 | V9 | サーバと Web フロント | `flow-server`、HTTP トランスポート、`src/web/`、ロックファイル、ブラウザでの通し確認 | **ブラウザからの利用** |
 | 後続 | 並列度（旧 4b）、重ね表示と実行履歴（旧 6）、旧エンジンの同等性と退役（旧 8.3）、ワーカーの切り離し、複数利用者化 | — | 必要になった時点で |
 
+- V8 後続（2026-10-15、Task 9 の判明事項の対応。ブランチ `fix/v8-followups`）: 検証引数の引き継ぎ（`flow-run-latest.params`、`subflow.paramsFrom`、`nodes.<id>.params`、`metrics-compare` の引数差分）、Claude の実費記録、`project.yaml` の `test` と `mdium/project-test`、`dev-workflow` の `setup` / `test` 段階、セットアップダイアログの再読込、エディタ保存の folded scalar 保持、driver 子モジュールの doc と可視性、`tools/mdium_setup.py` の cwd 非依存。見送り: `verify.outputs.candidate` を次周回の基準にする（merge 経路の実機確認後）。エディタ保存の「未知キー削除」は Rust が未知フィールドを拒むため実害なしと裁定。
 - V6 と V7 は独立しており、並行して進められる。V8 は V6・V7 の両方に依存する。
 - V9 は V4 以降のどの時点でも着手できるが、V8 の後に置く（デスクトップで目標を達成してから）。
 - V7 最終修正メモ（ブランチ全体レビュー後、2026-10-14）: `when` で飛ばしたノードは後退エッジを辿らないため、`dev-workflow` の `issue_review_return`（review → design の戻り）は `when` を外し、`issue-entry` は `issue` が空・空白なら forge に触れず `posted: false` で終わる（`issue` は必須のまま `""` を許す。8.1 の形は維持）。`full-access` の screening 承認は確認した本文の SHA-256（`screenedSha256`）を持ち、承認時に入力を描き直して本文が変わっていれば再 screening して再確認する（`screen-input` も承認済みの findings と現在の findings が異なれば再確認）。`workingDir`（agent / command）と `subflow.projectRoot` は厳密に描画する（未実行・skipped ノードの参照は `""` にせず `FLOW_TEMPLATE_UNRESOLVED`、空でないテンプレートが空に描画されたら agent は `FLOW_AGENT_PROMPT_INVALID`（`detail: working-dir-empty`）、command は `FLOW_COMMAND_SPAWN_FAILED`、`projectRoot` の未解決は `FLOW_SUBFLOW_ROOT_INVALID`（`reason: unresolved`））。アクションの承認は英語の `message` を送らず、理由 `FLOW_ACTION_APPROVAL` が `uses` を持ち UI が翻訳文で示す（`run.option.answer` も追加）。アクションは停止できる: `ActionContext.cancel` を停止（猶予つき、`FLOW_NODE_STOPPED` / 猶予切れは `FLOW_STOP_GRACE_EXCEEDED`）・キャンセル・アプリ終了・新しい周回で立て、`project-setup` は実行中の手順のプロセスツリーを止める。旧エンジンは元の出力契約（`OUTPUT_CONTRACT_BASE`）と寛容な解析（`parse_outcome_lenient`、不正な `outputs` / `artifacts` は無視）を保つ。`flow-run-latest` は worktree スコープ内でも本来のプロジェクトの実行ストア（`ActionContext.store_root`）を読む。`git-worktree-create` の worktree ID は実行 ID とノードキーの SHA-256 先頭 16 桁（同じ実行の複数ノードが衝突しない、再実行は自分の worktree を再利用）。`full-access` ターンがキャンセル・アプリ終了・新しい周回で除かれた場合も整合性比較を行い Warning にする。
