@@ -158,6 +158,219 @@ impl ProjectWm {
     }
 }
 
+// dir stream record ids (MS-OVBA 2.3.4.2)
+pub const REC_PROJECTCODEPAGE: u16 = 0x0003;
+pub const REC_PROJECTVERSION: u16 = 0x0009;
+pub const REC_PROJECTMODULES: u16 = 0x000F;
+pub const REC_PROJECTTERMINATOR: u16 = 0x0010;
+pub const REC_MODULENAME: u16 = 0x0019;
+pub const REC_MODULESTREAMNAME: u16 = 0x001A;
+pub const REC_MODULEDOCSTRING: u16 = 0x001C;
+pub const REC_MODULEHELPCONTEXT: u16 = 0x001E;
+pub const REC_MODULETYPE_PROCEDURAL: u16 = 0x0021;
+pub const REC_MODULETYPE_OTHER: u16 = 0x0022;
+pub const REC_MODULETERMINATOR: u16 = 0x002B;
+pub const REC_MODULECOOKIE: u16 = 0x002C;
+pub const REC_MODULEOFFSET: u16 = 0x0031;
+pub const REC_MODULESTREAMNAMEUNICODE: u16 = 0x0032;
+pub const REC_MODULENAMEUNICODE: u16 = 0x0047;
+pub const REC_MODULEDOCSTRINGUNICODE: u16 = 0x0048;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirRecord {
+    pub id: u16,
+    /// Raw payload. For PROJECTVERSION this holds all 6 bytes even though the
+    /// on-disk size field says 4 (MS-OVBA 2.3.4.2.1.10).
+    pub data: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DirModule {
+    pub name: String,
+    pub stream_name: String,
+    pub type_id: u16,
+    pub text_offset: u32,
+}
+
+/// The decompressed `/VBA/dir` stream as a flat record list. Unknown records
+/// are preserved byte-for-byte so `serialize` reproduces the input exactly.
+#[derive(Debug, Clone)]
+pub struct DirStream {
+    pub records: Vec<DirRecord>,
+    /// Bytes after PROJECTTERMINATOR, if any (carried through unchanged).
+    pub trailing: Vec<u8>,
+}
+
+impl DirStream {
+    pub fn parse(data: &[u8]) -> Result<Self, String> {
+        let mut records = Vec::new();
+        let mut pos = 0usize;
+        while pos + 6 <= data.len() {
+            let id = u16::from_le_bytes([data[pos], data[pos + 1]]);
+            let declared = u32::from_le_bytes([data[pos + 2], data[pos + 3], data[pos + 4], data[pos + 5]]) as usize;
+            pos += 6;
+            let size = if id == REC_PROJECTVERSION { declared + 2 } else { declared };
+            if pos + size > data.len() {
+                return Err(format!(
+                    "dir record 0x{:04X} at {} claims {} bytes but {} remain",
+                    id, pos - 6, size, data.len() - pos
+                ));
+            }
+            records.push(DirRecord { id, data: data[pos..pos + size].to_vec() });
+            pos += size;
+            if id == REC_PROJECTTERMINATOR {
+                break;
+            }
+        }
+        if pos < data.len() && records.last().map(|r| r.id) != Some(REC_PROJECTTERMINATOR) {
+            return Err("dir stream ends with a partial record".to_string());
+        }
+        Ok(Self { records, trailing: data[pos..].to_vec() })
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        for r in &self.records {
+            out.extend_from_slice(&r.id.to_le_bytes());
+            let declared = if r.id == REC_PROJECTVERSION { r.data.len().saturating_sub(2) } else { r.data.len() };
+            out.extend_from_slice(&(declared as u32).to_le_bytes());
+            out.extend_from_slice(&r.data);
+        }
+        out.extend_from_slice(&self.trailing);
+        out
+    }
+
+    pub fn code_page(&self) -> u16 {
+        self.records
+            .iter()
+            .find(|r| r.id == REC_PROJECTCODEPAGE && r.data.len() >= 2)
+            .map(|r| u16::from_le_bytes([r.data[0], r.data[1]]))
+            .unwrap_or(1252)
+    }
+
+    pub fn module_count(&self) -> Option<u16> {
+        self.records
+            .iter()
+            .find(|r| r.id == REC_PROJECTMODULES && r.data.len() >= 2)
+            .map(|r| u16::from_le_bytes([r.data[0], r.data[1]]))
+    }
+
+    pub fn set_module_count(&mut self, count: u16) -> Result<(), String> {
+        let rec = self
+            .records
+            .iter_mut()
+            .find(|r| r.id == REC_PROJECTMODULES)
+            .ok_or("dir stream has no PROJECTMODULES record")?;
+        rec.data = count.to_le_bytes().to_vec();
+        Ok(())
+    }
+
+    /// (start index of MODULENAME, index of MODULETERMINATOR) for each module.
+    fn module_ranges(&self) -> Vec<(usize, usize)> {
+        let mut ranges = Vec::new();
+        let mut start: Option<usize> = None;
+        for (i, r) in self.records.iter().enumerate() {
+            if r.id == REC_MODULENAME && start.is_none() {
+                start = Some(i);
+            } else if r.id == REC_MODULETERMINATOR {
+                if let Some(s) = start.take() {
+                    ranges.push((s, i));
+                }
+            }
+        }
+        ranges
+    }
+
+    fn utf16_string(data: &[u8]) -> Option<String> {
+        let units: Vec<u16> = data.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        String::from_utf16(&units).ok()
+    }
+
+    pub fn modules(&self) -> Vec<DirModule> {
+        let code_page = self.code_page();
+        self.module_ranges()
+            .into_iter()
+            .map(|(s, e)| {
+                let recs = &self.records[s..=e];
+                let text = |id: u16| recs.iter().find(|r| r.id == id).map(|r| r.data.as_slice());
+                let mbcs = |id: u16| text(id).map(|d| decode_bytes(d, code_page).unwrap_or_else(|_| String::from_utf8_lossy(d).into_owned()));
+                let name = text(REC_MODULENAMEUNICODE)
+                    .and_then(Self::utf16_string)
+                    .or_else(|| mbcs(REC_MODULENAME))
+                    .unwrap_or_default();
+                let stream_name = text(REC_MODULESTREAMNAMEUNICODE)
+                    .and_then(Self::utf16_string)
+                    .or_else(|| mbcs(REC_MODULESTREAMNAME))
+                    .unwrap_or_else(|| name.clone());
+                let type_id = recs
+                    .iter()
+                    .find(|r| r.id == REC_MODULETYPE_PROCEDURAL || r.id == REC_MODULETYPE_OTHER)
+                    .map(|r| r.id)
+                    .unwrap_or(REC_MODULETYPE_PROCEDURAL);
+                let text_offset = text(REC_MODULEOFFSET)
+                    .filter(|d| d.len() >= 4)
+                    .map(|d| u32::from_le_bytes([d[0], d[1], d[2], d[3]]))
+                    .unwrap_or(0);
+                DirModule { name, stream_name, type_id, text_offset }
+            })
+            .collect()
+    }
+
+    pub fn append_module(
+        &mut self,
+        name: &str,
+        stream_name: &str,
+        kind: ModuleKind,
+        text_offset: u32,
+        code_page: u16,
+    ) -> Result<(), String> {
+        let utf16 = |s: &str| -> Vec<u8> { s.encode_utf16().flat_map(|u| u.to_le_bytes()).collect() };
+        let type_id = match kind {
+            ModuleKind::Standard => REC_MODULETYPE_PROCEDURAL,
+            _ => REC_MODULETYPE_OTHER,
+        };
+        let new_records = vec![
+            DirRecord { id: REC_MODULENAME, data: encode_string(name, code_page)? },
+            DirRecord { id: REC_MODULENAMEUNICODE, data: utf16(name) },
+            DirRecord { id: REC_MODULESTREAMNAME, data: encode_string(stream_name, code_page)? },
+            DirRecord { id: REC_MODULESTREAMNAMEUNICODE, data: utf16(stream_name) },
+            DirRecord { id: REC_MODULEDOCSTRING, data: vec![] },
+            DirRecord { id: REC_MODULEDOCSTRINGUNICODE, data: vec![] },
+            DirRecord { id: REC_MODULEOFFSET, data: text_offset.to_le_bytes().to_vec() },
+            DirRecord { id: REC_MODULEHELPCONTEXT, data: 0u32.to_le_bytes().to_vec() },
+            DirRecord { id: REC_MODULECOOKIE, data: 0xFFFFu16.to_le_bytes().to_vec() },
+            DirRecord { id: type_id, data: vec![] },
+            DirRecord { id: REC_MODULETERMINATOR, data: vec![] },
+        ];
+        let at = self
+            .records
+            .iter()
+            .position(|r| r.id == REC_PROJECTTERMINATOR)
+            .unwrap_or(self.records.len());
+        self.records.splice(at..at, new_records);
+        let count = self.module_ranges().len() as u16;
+        self.set_module_count(count)
+    }
+
+    pub fn remove_module(&mut self, name: &str) -> bool {
+        let target = self
+            .modules()
+            .iter()
+            .zip(self.module_ranges())
+            .find(|(m, _)| m.name.eq_ignore_ascii_case(name))
+            .map(|(_, range)| range);
+        match target {
+            Some((s, e)) => {
+                self.records.drain(s..=e);
+                let count = self.module_ranges().len() as u16;
+                let _ = self.set_module_count(count);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,5 +470,116 @@ mod tests {
         let bytes = wm.serialize(932).unwrap();
         let back = ProjectWm::parse(&bytes, 932).unwrap();
         assert_eq!(back.names, vec!["シート1"]);
+    }
+
+    fn rec(id: u16, data: &[u8]) -> Vec<u8> {
+        let mut v = id.to_le_bytes().to_vec();
+        v.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        v.extend_from_slice(data);
+        v
+    }
+
+    /// Minimal project header: SYSKIND, VERSION (odd size), CODEPAGE, NAME,
+    /// MODULES(count), COOKIE, then modules, then TERMINATOR.
+    fn dir_bytes_with_modules(count: u16, modules: &[u8]) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(&rec(0x0001, &3u32.to_le_bytes()));
+        // PROJECTVERSION: size says 4 but 6 bytes follow (Major u32 + Minor u16).
+        v.extend_from_slice(&0x0009u16.to_le_bytes());
+        v.extend_from_slice(&4u32.to_le_bytes());
+        v.extend_from_slice(&0x0000_0001u32.to_le_bytes());
+        v.extend_from_slice(&0x0002u16.to_le_bytes());
+        v.extend_from_slice(&rec(0x0003, &1252u16.to_le_bytes()));
+        v.extend_from_slice(&rec(0x0004, b"VBAProject"));
+        v.extend_from_slice(&rec(0x000F, &count.to_le_bytes()));
+        v.extend_from_slice(&rec(0x0013, &0xFFFFu16.to_le_bytes()));
+        v.extend_from_slice(modules);
+        v.extend_from_slice(&rec(0x0010, &[]));
+        v
+    }
+
+    fn module_bytes(name: &str, type_id: u16, offset: u32) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(&rec(0x0019, name.as_bytes()));
+        let utf16: Vec<u8> = name.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+        v.extend_from_slice(&rec(0x0047, &utf16));
+        v.extend_from_slice(&rec(0x001A, name.as_bytes()));
+        v.extend_from_slice(&rec(0x0032, &utf16));
+        v.extend_from_slice(&rec(0x001C, &[]));
+        v.extend_from_slice(&rec(0x0048, &[]));
+        v.extend_from_slice(&rec(0x0031, &offset.to_le_bytes()));
+        v.extend_from_slice(&rec(0x001E, &0u32.to_le_bytes()));
+        v.extend_from_slice(&rec(0x002C, &0xFFFFu16.to_le_bytes()));
+        v.extend_from_slice(&rec(type_id, &[]));
+        v.extend_from_slice(&rec(0x002B, &[]));
+        v
+    }
+
+    #[test]
+    fn dir_stream_round_trips_including_project_version_quirk() {
+        let mut mods = module_bytes("Module1", 0x0021, 100);
+        mods.extend_from_slice(&module_bytes("Sheet1", 0x0022, 0));
+        let bytes = dir_bytes_with_modules(2, &mods);
+        let dir = DirStream::parse(&bytes).unwrap();
+        assert_eq!(dir.serialize(), bytes);
+        assert_eq!(dir.code_page(), 1252);
+        assert_eq!(dir.module_count(), Some(2));
+    }
+
+    #[test]
+    fn dir_stream_lists_modules() {
+        let mut mods = module_bytes("Module1", 0x0021, 100);
+        mods.extend_from_slice(&module_bytes("Sheet1", 0x0022, 0));
+        let dir = DirStream::parse(&dir_bytes_with_modules(2, &mods)).unwrap();
+        let m = dir.modules();
+        assert_eq!(m.len(), 2);
+        assert_eq!(m[0].name, "Module1");
+        assert_eq!(m[0].stream_name, "Module1");
+        assert_eq!(m[0].type_id, 0x0021);
+        assert_eq!(m[0].text_offset, 100);
+        assert_eq!(m[1].name, "Sheet1");
+        assert_eq!(m[1].type_id, 0x0022);
+    }
+
+    #[test]
+    fn dir_stream_append_module_matches_hand_built_records_and_bumps_count() {
+        let mut dir = DirStream::parse(&dir_bytes_with_modules(0, &[])).unwrap();
+        dir.append_module("Helpers", "Helpers", ModuleKind::Standard, 0, 1252).unwrap();
+        let expected = dir_bytes_with_modules(1, &module_bytes("Helpers", 0x0021, 0));
+        assert_eq!(dir.serialize(), expected);
+        assert_eq!(dir.module_count(), Some(1));
+    }
+
+    #[test]
+    fn dir_stream_append_class_uses_type_0x22() {
+        let mut dir = DirStream::parse(&dir_bytes_with_modules(0, &[])).unwrap();
+        dir.append_module("C", "C", ModuleKind::Class, 0, 1252).unwrap();
+        assert_eq!(dir.modules()[0].type_id, 0x0022);
+    }
+
+    #[test]
+    fn dir_stream_remove_module_keeps_neighbours_and_decrements_count() {
+        let mut mods = module_bytes("Module1", 0x0021, 100);
+        mods.extend_from_slice(&module_bytes("Old", 0x0021, 0));
+        mods.extend_from_slice(&module_bytes("Sheet1", 0x0022, 0));
+        let mut dir = DirStream::parse(&dir_bytes_with_modules(3, &mods)).unwrap();
+        assert!(dir.remove_module("old")); // case-insensitive
+        assert!(!dir.remove_module("Old"));
+        let mut keep = module_bytes("Module1", 0x0021, 100);
+        keep.extend_from_slice(&module_bytes("Sheet1", 0x0022, 0));
+        assert_eq!(dir.serialize(), dir_bytes_with_modules(2, &keep));
+    }
+
+    #[test]
+    fn dir_stream_set_module_count_requires_record() {
+        let mut dir = DirStream::parse(&rec(0x0010, &[])).unwrap();
+        assert!(dir.set_module_count(1).is_err());
+    }
+
+    #[test]
+    fn dir_stream_rejects_truncated_record() {
+        let mut bytes = rec(0x0003, &1252u16.to_le_bytes());
+        bytes.truncate(bytes.len() - 1);
+        assert!(DirStream::parse(&bytes).is_err());
     }
 }

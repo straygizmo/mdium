@@ -4,6 +4,7 @@ use std::io::{Read, Write, Cursor};
 use std::path::{Path, PathBuf};
 use std::fs;
 use serde_json;
+use crate::commands::vba_streams::{DirStream, REC_MODULETYPE_PROCEDURAL};
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -464,147 +465,21 @@ pub struct VbaProject {
 ///     0x002B = MODULETERMINATOR
 ///     0x0010 = PROJECTTERMINATOR
 pub fn parse_dir_stream(data: &[u8]) -> Result<VbaProject, String> {
-    let mut pos: usize = 0;
-    let mut code_page: u16 = 1252; // default to Windows-1252
-    let mut modules: Vec<VbaModuleInfo> = Vec::new();
-
-    // Current module being accumulated
-    let mut cur_name: Option<String> = None;
-    let mut cur_stream_name: Option<String> = None;
-    let mut cur_type: Option<String> = None;
-    let mut cur_offset: u32 = 0;
-
-    while pos + 6 <= data.len() {
-        let record_id = u16::from_le_bytes([data[pos], data[pos + 1]]);
-        let record_size = u32::from_le_bytes([
-            data[pos + 2],
-            data[pos + 3],
-            data[pos + 4],
-            data[pos + 5],
-        ]) as usize;
-        pos += 6;
-
-        if pos + record_size > data.len() {
-            return Err(format!(
-                "Record 0x{:04X} at offset {} claims size {} but only {} bytes remain",
-                record_id,
-                pos - 6,
-                record_size,
-                data.len() - pos
-            ));
-        }
-
-        let record_data = &data[pos..pos + record_size];
-
-        match record_id {
-            0x0009 => {
-                // PROJECTVERSION: size field (always 4) covers MajorVersion only.
-                // MinorVersion (2 bytes) follows OUTSIDE the size field per MS-OVBA 2.3.4.2.1.10.
-                pos += record_size;
-                if pos + 2 <= data.len() {
-                    pos += 2; // skip MinorVersion
-                }
-                continue; // skip the normal pos += record_size at the end
-            }
-            0x0003 => {
-                // PROJECTCODEPAGE
-                if record_size >= 2 {
-                    code_page = u16::from_le_bytes([record_data[0], record_data[1]]);
-                }
-            }
-            0x0019 => {
-                // MODULENAME (code-page encoded)
-                // Only use if we don't get a Unicode version
-                if cur_name.is_none() {
-                    cur_name = Some(
-                        decode_bytes(record_data, code_page)
-                            .unwrap_or_else(|_| String::from_utf8_lossy(record_data).into_owned()),
-                    );
-                }
-            }
-            0x0047 => {
-                // MODULENAMEUNICODE (UTF-16LE)
-                if record_size >= 2 {
-                    let utf16: Vec<u16> = record_data
-                        .chunks_exact(2)
-                        .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                        .collect();
-                    cur_name = Some(
-                        String::from_utf16(&utf16)
-                            .map_err(|e| format!("Invalid UTF-16LE module name: {}", e))?,
-                    );
-                }
-            }
-            0x001A => {
-                // MODULESTREAMNAME (code-page encoded)
-                cur_stream_name = Some(
-                    decode_bytes(record_data, code_page)
-                        .unwrap_or_else(|_| String::from_utf8_lossy(record_data).into_owned()),
-                );
-                // The next record (0x0032) is MODULESTREAMNAMEUNICODE - we'll handle it below
-            }
-            0x0032 => {
-                // MODULESTREAMNAMEUNICODE (UTF-16LE)
-                if record_size >= 2 {
-                    let utf16: Vec<u16> = record_data
-                        .chunks_exact(2)
-                        .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                        .collect();
-                    if let Ok(s) = String::from_utf16(&utf16) {
-                        cur_stream_name = Some(s);
-                    }
-                }
-            }
-            0x0021 => {
-                // MODULETYPE procedural (standard module)
-                cur_type = Some("standard".to_string());
-            }
-            0x0022 => {
-                // MODULETYPE document/class
-                cur_type = Some("class".to_string());
-            }
-            0x0031 => {
-                // MODULEOFFSET
-                if record_size >= 4 {
-                    cur_offset = u32::from_le_bytes([
-                        record_data[0],
-                        record_data[1],
-                        record_data[2],
-                        record_data[3],
-                    ]);
-                }
-            }
-            0x002B => {
-                // MODULETERMINATOR - finalize current module
-                if let (Some(name), Some(stream_name)) = (cur_name.take(), cur_stream_name.take())
-                {
-                    modules.push(VbaModuleInfo {
-                        name,
-                        stream_name,
-                        module_type: cur_type.take().unwrap_or_else(|| "standard".to_string()),
-                        text_offset: cur_offset,
-                    });
-                }
-                cur_type = None;
-                cur_offset = 0;
-            }
-            0x0010 => {
-                // PROJECTTERMINATOR - stop parsing
-                break;
-            }
-            _ => {
-                // Skip unknown records
-            }
-        }
-
-        pos += record_size;
-    }
-
-    Ok(VbaProject {
-        code_page,
-        modules,
-    })
+    let dir = DirStream::parse(data)?;
+    let code_page = dir.code_page();
+    let modules = dir
+        .modules()
+        .into_iter()
+        .map(|m| VbaModuleInfo {
+            name: m.name,
+            stream_name: m.stream_name,
+            module_type: if m.type_id == REC_MODULETYPE_PROCEDURAL { "standard" } else { "class" }.to_string(),
+            text_offset: m.text_offset,
+        })
+        .collect();
+    Ok(VbaProject { code_page, modules })
 }
+
 
 // ---------------------------------------------------------------------------
 // Helper: read vbaProject.bin from an xlsm/xlam ZIP file
