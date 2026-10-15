@@ -1,9 +1,13 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
-import type { ConvertibleFile } from "../lib/collectConvertibleFiles";
-import type { ConvertibleTreeNode } from "../lib/collectConvertibleFiles";
+import type {
+  ConvertibleFile,
+  ConvertibleFilter,
+  ConvertibleTreeNode,
+} from "../lib/collectConvertibleFiles";
 import {
+  pruneTreeByDoc,
   pruneTreeByFilter,
   pruneTreeByHasMd,
   collectFilePaths,
@@ -13,7 +17,7 @@ import { useBatchDeleteMd } from "../hooks/useBatchDeleteMd";
 import { BatchConvertTree } from "./BatchConvertTree";
 import "./BatchConvertModal.css";
 
-type FilterTab = "all" | "docx" | "pdf" | "xlsx" | "pptx";
+type FilterTab = ConvertibleFilter;
 type BatchMode = "convert" | "delete";
 
 interface BatchConvertModalProps {
@@ -60,8 +64,18 @@ export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, o
   const [filter, setFilter] = useState<FilterTab>("all");
   const [skipExisting, setSkipExisting] = useState(true);
   const [saveToMdium, setSaveToMdium] = useState(false);
+  const [convertDocViaWord, setConvertDocViaWord] = useState(false);
   const [deleteInMdium, setDeleteInMdium] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+
+  // Legacy .doc files are only actionable in convert mode with the Word
+  // option on. In delete mode they would duplicate the .docx Word produced
+  // (both map to the same .md), so they are hidden there as well.
+  const includeDoc = mode === "convert" && convertDocViaWord;
+  const visibleFiles = useMemo(
+    () => (includeDoc ? files : files.filter((f) => f.type !== "doc")),
+    [files, includeDoc]
+  );
 
   const effectiveHasExistingMd = useCallback(
     (f: ConvertibleFile) =>
@@ -118,18 +132,19 @@ export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, o
   }, []);
 
   const filteredTree = useMemo(() => {
+    const base = pruneTreeByDoc(tree, includeDoc);
     if (mode === "delete") {
-      return pruneTreeByFilter(pruneTreeByHasMd(tree, deleteInMdium), filter);
+      return pruneTreeByFilter(pruneTreeByHasMd(base, deleteInMdium), filter);
     }
-    return pruneTreeByFilter(tree, filter);
-  }, [tree, filter, mode, deleteInMdium]);
+    return pruneTreeByFilter(base, filter);
+  }, [tree, filter, mode, deleteInMdium, includeDoc]);
 
   const totalSelected = useMemo(() => {
     if (mode === "delete") {
-      return files.filter((f) => selected.has(f.path) && hasMdInLocation(f)).length;
+      return visibleFiles.filter((f) => selected.has(f.path) && hasMdInLocation(f)).length;
     }
-    return files.filter((f) => selected.has(f.path)).length;
-  }, [files, selected, mode, hasMdInLocation]);
+    return visibleFiles.filter((f) => selected.has(f.path)).length;
+  }, [visibleFiles, selected, mode, hasMdInLocation]);
 
   const handleSelectAll = useCallback(() => {
     setSelected((prev) => {
@@ -191,19 +206,19 @@ export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, o
   );
 
   const handleConvert = useCallback(async () => {
-    const selectedFiles = files.filter((f) => selected.has(f.path));
+    const selectedFiles = visibleFiles.filter((f) => selected.has(f.path));
     if (selectedFiles.length === 0) return;
     await convert(selectedFiles, skipExisting, saveToMdium);
-  }, [files, selected, skipExisting, saveToMdium, convert]);
+  }, [visibleFiles, selected, skipExisting, saveToMdium, convert]);
 
   const handleDelete = useCallback(async () => {
-    const selectedFiles = files.filter(
+    const selectedFiles = visibleFiles.filter(
       (f) => selected.has(f.path) && hasMdInLocation(f)
     );
     setConfirmOpen(false);
     if (selectedFiles.length === 0) return;
     await deleteMd(selectedFiles, deleteInMdium);
-  }, [files, selected, hasMdInLocation, deleteMd, deleteInMdium]);
+  }, [visibleFiles, selected, hasMdInLocation, deleteMd, deleteInMdium]);
 
   const handleClose = useCallback(() => {
     if (summary || deleteSummary) {
@@ -412,6 +427,17 @@ export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, o
                   onChange={(e) => setSkipExisting(e.target.checked)}
                 />
                 {t("batchConvertSkipExisting")}
+              </label>
+              <label
+                className="batch-convert__skip-label"
+                title={t("batchConvertDocViaWordHint")}
+              >
+                <input
+                  type="checkbox"
+                  checked={convertDocViaWord}
+                  onChange={(e) => setConvertDocViaWord(e.target.checked)}
+                />
+                {t("batchConvertDocViaWord")}
               </label>
             </>
           ) : (
