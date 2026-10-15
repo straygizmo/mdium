@@ -5,7 +5,6 @@ mod http_bridge;
 mod markdown_parser;
 mod workflow;
 
-use commands::active_xlsm::{new_state as new_active_xlsm_state, ActiveXlsmState};
 use commands::fs_search::{new_active_folder_state, ActiveFolderState};
 use http_bridge::{
     new_rag_pending, new_state as new_http_bridge_state, HttpBridgeState, RagBridgePending,
@@ -86,7 +85,6 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .manage(Arc::new(Mutex::new(FileWatcherState::new())))
         .manage(Arc::new(Mutex::new(FolderWatcherState::new())))
-        .manage::<ActiveXlsmState>(new_active_xlsm_state())
         .manage::<HttpBridgeState>(new_http_bridge_state())
         .manage::<RagBridgePending>(new_rag_pending())
         .manage::<ActiveFolderState>(new_active_folder_state())
@@ -331,13 +329,10 @@ pub fn run() {
             commands::env::set_env_var,
             // VBA macro operations
             commands::vba::pull_vba_modules,
-            commands::vba::check_workbook_lock,
             commands::vba::push_vba_modules,
             commands::vba::list_vba_modules,
-            // Active xlsm state
-            commands::active_xlsm::set_active_xlsm_path,
-            commands::active_xlsm::get_active_xlsm_path,
-            commands::active_xlsm::get_http_bridge_info,
+            commands::vba::check_workbook_lock,
+            http_bridge::get_http_bridge_info,
             // RAG bridge (opencode rag_search tool → webview embedding + search)
             http_bridge::rag_bridge_respond,
             // Folder-scoped search (opencode folder_glob/folder_grep tools)
