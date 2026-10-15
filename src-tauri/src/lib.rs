@@ -330,7 +330,8 @@ pub fn run() {
             commands::env::get_env_var,
             commands::env::set_env_var,
             // VBA macro operations
-            commands::vba::extract_vba_modules,
+            commands::vba::pull_vba_modules,
+            commands::vba::check_workbook_lock,
             commands::vba::inject_vba_modules,
             commands::vba::list_vba_modules,
             // Active xlsm state

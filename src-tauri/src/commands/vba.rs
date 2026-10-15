@@ -1,7 +1,7 @@
 use serde::Serialize;
 use encoding_rs::*;
 use std::io::{Read, Write, Cursor};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::fs;
 use serde_json;
 
@@ -10,16 +10,19 @@ use serde_json;
 pub struct VbaModule {
     pub name: String,
     pub module_type: String, // "standard" | "class" | "document"
-    pub path: String,
+    /// Path of the extracted file; None when the macros dir has no file for it.
+    pub path: Option<String>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ExtractResult {
+pub struct PullResult {
+    pub xlsm_path: String,
     pub macros_dir: String,
     pub modules: Vec<VbaModule>,
 }
 
+// Kept until Task 5 replaces inject_vba_modules.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InjectResult {
@@ -30,9 +33,87 @@ pub struct InjectResult {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListResult {
+    pub xlsm_path: String,
     pub macros_dir: String,
-    pub exists: bool,
+    pub extracted: bool,
+    pub locked: bool,
     pub modules: Vec<VbaModule>,
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkbookLock {
+    pub locked: bool,
+    /// "owner_file" | "write_denied" when locked.
+    pub reason: Option<String>,
+}
+
+/// Structured error string shared by commands, bridge and UI:
+/// `{"error": <code>, "message": <text>}`.
+pub fn vba_error(code: &str, message: impl Into<String>) -> String {
+    serde_json::json!({ "error": code, "message": message.into() }).to_string()
+}
+
+/// `<stem>_assets/macros/` next to the workbook. The single source of truth
+/// for where extracted modules live.
+pub fn macros_dir_for(xlsm_path: &Path) -> Result<PathBuf, String> {
+    let stem = xlsm_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| vba_error("invalid_workbook", "Invalid file name"))?;
+    let parent = xlsm_path
+        .parent()
+        .ok_or_else(|| vba_error("invalid_workbook", "Cannot determine parent directory"))?;
+    Ok(parent.join(format!("{}_assets", stem)).join("macros"))
+}
+
+pub fn is_macro_workbook(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref(),
+        Some("xlsm") | Some("xlam")
+    )
+}
+
+/// Validate path + extension; returns the structured error used by all commands.
+fn require_macro_workbook(xlsm_path: &str) -> Result<&Path, String> {
+    let p = Path::new(xlsm_path);
+    if !p.exists() {
+        return Err(vba_error("invalid_workbook", format!("File not found: {}", xlsm_path)));
+    }
+    if !is_macro_workbook(p) {
+        return Err(vba_error("invalid_workbook", "Only .xlsm and .xlam workbooks are supported"));
+    }
+    Ok(p)
+}
+
+/// Excel holds an open workbook without write sharing, so a write-mode open
+/// fails while it is open. The `~$<name>` owner file only refines the reason
+/// (a stale owner file after a crash must not lock the workbook forever).
+pub fn workbook_lock(path: &Path) -> WorkbookLock {
+    let write_denied = match fs::OpenOptions::new().write(true).open(path) {
+        Ok(_) => false,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(_) => true,
+    };
+    if !write_denied {
+        return WorkbookLock { locked: false, reason: None };
+    }
+    let owner_file_exists = match (path.parent(), path.file_name().and_then(|n| n.to_str())) {
+        (Some(parent), Some(name)) => parent.join(format!("~${}", name)).exists(),
+        _ => false,
+    };
+    WorkbookLock {
+        locked: true,
+        reason: Some(if owner_file_exists { "owner_file" } else { "write_denied" }.to_string()),
+    }
+}
+
+#[tauri::command]
+pub fn check_workbook_lock(xlsm_path: String) -> Result<WorkbookLock, String> {
+    Ok(workbook_lock(Path::new(&xlsm_path)))
 }
 
 // ---------------------------------------------------------------------------
@@ -614,58 +695,49 @@ fn replace_zip_entry(
 }
 
 // ---------------------------------------------------------------------------
-// Command: extract_vba_modules
+// Command: pull_vba_modules
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub fn extract_vba_modules(xlsm_path: String) -> Result<ExtractResult, String> {
-    let file_path = Path::new(&xlsm_path);
-    if !file_path.exists() {
-        return Err(format!("File not found: {}", xlsm_path));
-    }
+pub fn pull_vba_modules(xlsm_path: String) -> Result<PullResult, String> {
+    let file_path = require_macro_workbook(&xlsm_path)?;
 
     // 1. Read vbaProject.bin from the ZIP
-    let vba_bin = read_vba_project_bin(&xlsm_path)?;
+    let vba_bin = read_vba_project_bin(&xlsm_path)
+        .map_err(|e| vba_error("no_vba_project", e))?;
 
     // 2. Parse as OLE2 compound file
     let mut comp = cfb::CompoundFile::open(Cursor::new(vba_bin))
-        .map_err(|e| format!("Failed to parse vbaProject.bin as OLE2: {}", e))?;
+        .map_err(|e| vba_error("pull_failed", format!("Failed to parse vbaProject.bin as OLE2: {}", e)))?;
 
     // 3. Read and decompress the /VBA/dir stream
     let mut dir_compressed = Vec::new();
     comp.open_stream("/VBA/dir")
-        .map_err(|e| format!("Failed to open /VBA/dir stream: {}", e))?
+        .map_err(|e| vba_error("pull_failed", format!("Failed to open /VBA/dir stream: {}", e)))?
         .read_to_end(&mut dir_compressed)
-        .map_err(|e| format!("Failed to read /VBA/dir stream: {}", e))?;
+        .map_err(|e| vba_error("pull_failed", format!("Failed to read /VBA/dir stream: {}", e)))?;
 
-    let dir_data = vba_decompress(&dir_compressed)?;
+    let dir_data = vba_decompress(&dir_compressed).map_err(|e| vba_error("pull_failed", e))?;
 
     // 4. Parse dir stream to get module list and code page
-    let project = parse_dir_stream(&dir_data)?;
+    let project = parse_dir_stream(&dir_data).map_err(|e| vba_error("pull_failed", e))?;
 
     if project.modules.is_empty() {
-        return Err("No VBA macros found in this file".to_string());
+        return Err(vba_error("no_vba_project", "No VBA macros found in this file"));
     }
 
     // 5. Determine output directory
-    let file_stem = file_path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .ok_or("Invalid file name")?;
-    let parent_dir = file_path
-        .parent()
-        .ok_or("Cannot determine parent directory")?;
-    let macros_dir = parent_dir.join(format!("{}_assets", file_stem)).join("macros");
+    let macros_dir = macros_dir_for(file_path)?;
 
     fs::create_dir_all(&macros_dir)
-        .map_err(|e| format!("Failed to create macros directory: {}", e))?;
+        .map_err(|e| vba_error("pull_failed", format!("Failed to create macros directory: {}", e)))?;
 
     // 6. Write .codepage file
     fs::write(
         macros_dir.join(".codepage"),
         project.code_page.to_string(),
     )
-    .map_err(|e| format!("Failed to write .codepage file: {}", e))?;
+    .map_err(|e| vba_error("pull_failed", format!("Failed to write .codepage file: {}", e)))?;
 
     // 7. For each module, read stream, decompress, decode, write file
     let mut modules = Vec::new();
@@ -693,17 +765,15 @@ pub fn extract_vba_modules(xlsm_path: String) -> Result<ExtractResult, String> {
         // followed by compressed VBA source
         let text_offset = module_info.text_offset as usize;
         if text_offset > stream_data.len() {
-            return Err(format!(
-                "Module '{}': text_offset {} exceeds stream length {}",
-                module_info.name, text_offset, stream_data.len()
-            ));
+            return Err(vba_error("pull_failed", format!("Module '{}': text_offset {} exceeds stream length {}", module_info.name, text_offset, stream_data.len()
+            )));
         }
 
         let compressed_source = &stream_data[text_offset..];
-        let decompressed = vba_decompress(compressed_source)?;
+        let decompressed = vba_decompress(compressed_source).map_err(|e| vba_error("pull_failed", e))?;
 
         // Decode from code page to UTF-8
-        let source = decode_bytes(&decompressed, project.code_page)?;
+        let source = decode_bytes(&decompressed, project.code_page).map_err(|e| vba_error("pull_failed", e))?;
 
         // Ensure Attribute VB_Name matches the dir-stream MODULENAME.
         // After a VBE rename the compressed source may still carry the old name.
@@ -727,16 +797,17 @@ pub fn extract_vba_modules(xlsm_path: String) -> Result<ExtractResult, String> {
         let module_path = macros_dir.join(&file_name);
 
         fs::write(&module_path, &source)
-            .map_err(|e| format!("Failed to write module '{}': {}", file_name, e))?;
+            .map_err(|e| vba_error("pull_failed", format!("Failed to write module '{}': {}", file_name, e)))?;
 
         modules.push(VbaModule {
             name: module_info.name.clone(),
             module_type,
-            path: module_path.to_string_lossy().into_owned(),
+            path: Some(module_path.to_string_lossy().into_owned()),
         });
     }
 
-    Ok(ExtractResult {
+    Ok(PullResult {
+        xlsm_path: xlsm_path.clone(),
         macros_dir: macros_dir.to_string_lossy().into_owned(),
         modules,
     })
@@ -1092,16 +1163,8 @@ pub fn list_vba_modules(xlsm_path: String) -> Result<ListResult, String> {
         return Err(format!("File not found: {}", xlsm_path));
     }
 
-    // Derive macros_dir from xlsm path ({stem}_macros/)
-    let stem = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .ok_or("Invalid file name")?;
-    let parent = path
-        .parent()
-        .ok_or("Cannot determine parent directory")?;
-    let macros_dir = parent.join(format!("{}_macros", stem));
-    let exists = macros_dir.exists() && macros_dir.is_dir();
+    let macros_dir = macros_dir_for(path)?;
+    let extracted = macros_dir.is_dir();
 
     // Read vbaProject.bin and parse dir stream (same as extract, but no writes)
     let file = fs::File::open(&xlsm_path)
@@ -1148,9 +1211,9 @@ pub fn list_vba_modules(xlsm_path: String) -> Result<ListResult, String> {
             };
             let file_path = macros_dir.join(format!("{}{}", m.name, ext));
             let path_str = if file_path.exists() {
-                file_path.to_string_lossy().into_owned()
+                Some(file_path.to_string_lossy().into_owned())
             } else {
-                String::new()
+                None
             };
             VbaModule {
                 name: m.name.clone(),
@@ -1161,8 +1224,10 @@ pub fn list_vba_modules(xlsm_path: String) -> Result<ListResult, String> {
         .collect();
 
     Ok(ListResult {
+        xlsm_path: xlsm_path.clone(),
         macros_dir: macros_dir.to_string_lossy().into_owned(),
-        exists,
+        extracted,
+        locked: workbook_lock(path).locked,
         modules,
     })
 }
@@ -1480,6 +1545,71 @@ mod tests {
         assert!(result.contains("Attribute VB_Name = \"mdlMain\""));
         assert!(result.contains("Attribute VB_Exposed = False"));
         assert!(result.contains("Sub Test()"));
+    }
+
+    // --- Task 1: paths and lock ---
+
+    #[test]
+    fn macros_dir_is_assets_macros_next_to_workbook() {
+        let dir = macros_dir_for(Path::new("C:/work/Book1.xlsm")).unwrap();
+        assert_eq!(dir, Path::new("C:/work").join("Book1_assets").join("macros"));
+    }
+
+    #[test]
+    fn macro_workbook_extension_is_case_insensitive() {
+        assert!(is_macro_workbook(Path::new("C:/w/BOOK.XLSM")));
+        assert!(is_macro_workbook(Path::new("C:/w/addin.xlam")));
+        assert!(!is_macro_workbook(Path::new("C:/w/plain.xlsx")));
+    }
+
+    #[test]
+    fn workbook_lock_is_false_for_writable_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("Book1.xlsm");
+        std::fs::write(&p, b"x").unwrap();
+        let lock = workbook_lock(&p);
+        assert!(!lock.locked);
+        assert_eq!(lock.reason, None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn workbook_lock_reports_write_denied_when_another_handle_denies_sharing() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("Book1.xlsm");
+        std::fs::write(&p, b"x").unwrap();
+        // Excel keeps the workbook open without write sharing; emulate that.
+        let _holder = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&p)
+            .unwrap();
+        let lock = workbook_lock(&p);
+        assert!(lock.locked);
+        assert_eq!(lock.reason.as_deref(), Some("write_denied"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn workbook_lock_names_owner_file_when_present() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("Book1.xlsm");
+        std::fs::write(&p, b"x").unwrap();
+        std::fs::write(tmp.path().join("~$Book1.xlsm"), b"owner").unwrap();
+        let _holder = std::fs::OpenOptions::new().read(true).share_mode(0).open(&p).unwrap();
+        let lock = workbook_lock(&p);
+        assert!(lock.locked);
+        assert_eq!(lock.reason.as_deref(), Some("owner_file"));
+    }
+
+    #[test]
+    fn vba_error_is_json_with_code_and_message() {
+        let e = vba_error("invalid_workbook", "not an xlsm");
+        let v: serde_json::Value = serde_json::from_str(&e).unwrap();
+        assert_eq!(v["error"], "invalid_workbook");
+        assert_eq!(v["message"], "not an xlsm");
     }
 
     #[test]

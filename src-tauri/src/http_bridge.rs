@@ -357,7 +357,7 @@ fn handle_request(app: &AppHandle, expected_token: &str, mut request: tiny_http:
                         json!({
                             "activeFile": active,
                             "macrosDir": result.macros_dir,
-                            "exists": result.exists,
+                            "exists": result.extracted,
                             "modules": result.modules,
                         }),
                     ));
@@ -388,7 +388,7 @@ fn handle_request(app: &AppHandle, expected_token: &str, mut request: tiny_http:
                     return;
                 }
             };
-            match vba::extract_vba_modules(req.xlsm_path.clone()) {
+            match vba::pull_vba_modules(req.xlsm_path.clone()) {
                 Ok(result) => {
                     let _ = request.respond(json_response(
                         200,
