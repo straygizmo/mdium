@@ -13,6 +13,9 @@ import { BUILTIN_SKILLS as SRC_SKILLS } from "./builtin-skills";
 import ragSearchToolSrc from "../../../../.opencode/tools/rag_search.ts?raw";
 import folderGlobToolSrc from "../../../../.opencode/tools/folder_glob.ts?raw";
 import folderGrepToolSrc from "../../../../.opencode/tools/folder_grep.ts?raw";
+import vbaListToolSrc from "../../../../.opencode/tools/vba_list.ts?raw";
+import vbaPullToolSrc from "../../../../.opencode/tools/vba_pull.ts?raw";
+import vbaPushToolSrc from "../../../../.opencode/tools/vba_push.ts?raw";
 
 export interface BuiltinAgentEntry {
   /** Agent description (used by UI badges and dropdown) */
@@ -114,6 +117,21 @@ export const BUILTIN_CUSTOM_TOOLS: Record<string, BuiltinCustomToolEntry> = {
       "Search file contents by regex, scoped strictly to the open folder. Pairs with the built-in rag agent.",
     fileName: "folder_grep.ts",
     content: folderGrepToolSrc,
+  },
+  vba_list: {
+    description: "List the VBA modules of an .xlsm/.xlam workbook via mdium. Pairs with the vba-mdium-flow skill.",
+    fileName: "vba_list.ts",
+    content: vbaListToolSrc,
+  },
+  vba_pull: {
+    description: "Extract VBA modules of a workbook into <stem>_assets/macros/ via mdium.",
+    fileName: "vba_pull.ts",
+    content: vbaPullToolSrc,
+  },
+  vba_push: {
+    description: "Write edited .bas/.cls files back into the workbook (add/remove supported) via mdium.",
+    fileName: "vba_push.ts",
+    content: vbaPushToolSrc,
   },
 };
 

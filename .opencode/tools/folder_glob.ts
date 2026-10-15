@@ -1,3 +1,4 @@
+// mdium-tool-version: 1
 // .opencode/tools/folder_glob.ts
 //
 // Folder-scoped glob for the built-in `rag` agent. opencode's own glob escapes

@@ -22,6 +22,7 @@ import { useTabStore } from "@/stores/tab-store";
 import { resolveMdiumVbaMcpServer } from "../lib/builtin-mcp-servers";
 import type { OpencodeMcpServer } from "@/shared/types";
 import { BUILTIN_AGENTS, BUILTIN_CUSTOM_TOOLS } from "../lib/builtin-registry";
+import { TOOL_VERSION_RE, builtinVersion, shouldWriteBuiltinFile } from "../lib/builtin-install";
 import { isAzureRefusal, isAzureProviderActive } from "../lib/provider-detection";
 import { evaluateStall, STALL_TICK_MS } from "./stall-watchdog";
 import { applyForward, applyReverse } from "@/shared/lib/replacement";
@@ -1052,32 +1053,25 @@ function doDisconnect() {
   });
 }
 
-// ─── Auto-register builtin agents as markdown files ───
-async function ensureBuiltinAgents(): Promise<void> {
+// ─── Auto-install builtin tools, skills and agents ───
+async function ensureBuiltinFiles(): Promise<void> {
   const home = await invoke<string>("get_home_dir");
   const sep = home.includes("\\") ? "\\" : "/";
   const configDir = `${home}${sep}.config${sep}opencode`;
   const toolsDir = `${configDir}${sep}tools`;
 
-  // The rag agent depends on these custom tools to stay confined to the open
-  // folder, so (unlike opt-in tools) install them automatically when missing.
-  for (const toolName of ["rag_search", "folder_glob", "folder_grep"] as const) {
-    const entry = BUILTIN_CUSTOM_TOOLS[toolName];
-    if (!entry) continue;
+  // Builtin tools carry a `mdium-tool-version` marker; files without one are
+  // user-authored and never touched.
+  for (const entry of Object.values(BUILTIN_CUSTOM_TOOLS)) {
     const toolPath = `${toolsDir}${sep}${entry.fileName}`;
+    const wanted = builtinVersion(entry.content, TOOL_VERSION_RE) ?? "0";
+    const existing = await invoke<string>("read_text_file", { path: toolPath }).catch(() => null);
+    if (!shouldWriteBuiltinFile(existing, wanted, TOOL_VERSION_RE)) continue;
     try {
-      await invoke<string>("read_text_file", { path: toolPath });
-    } catch {
-      try {
-        await invoke("write_tool_file", {
-          baseDir: toolsDir,
-          fileName: entry.fileName,
-          content: entry.content,
-        });
-        console.log(`[opencode] installed builtin tool: ${toolPath}`);
-      } catch (e) {
-        console.warn(`[opencode] failed to install tool ${entry.fileName}:`, e);
-      }
+      await invoke("write_tool_file", { baseDir: toolsDir, fileName: entry.fileName, content: entry.content });
+      console.log(`[opencode] installed builtin tool: ${toolPath}`);
+    } catch (e) {
+      console.warn(`[opencode] failed to install tool ${entry.fileName}:`, e);
     }
   }
 
@@ -1129,7 +1123,7 @@ export async function doConnect(folderPath?: string) {
   try {
     // Auto-register builtin agents before starting the server
     if (folderPath) {
-      await ensureBuiltinAgents();
+      await ensureBuiltinFiles();
     }
 
     const baseUrl = await ensureOpencodeServer(folderPath);
