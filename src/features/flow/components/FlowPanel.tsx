@@ -67,6 +67,15 @@ export function FlowPanel() {
     void refresh();
   }, [refresh]);
 
+  // The dialog runs exactly the manifest it shows: re-read it first, so an
+  // edit made since the folder was opened is not refused as "changed".
+  const openSetup = useCallback(async () => {
+    if (!folder) return;
+    const loaded = await flowApi.projectLoad(folder).catch(() => null);
+    if (loaded) setProject(loaded);
+    setSetupOpen(true);
+  }, [folder]);
+
   // A failed create is reported until the next selection.
   useEffect(() => setCreateError(null), [selected]);
 
@@ -182,7 +191,7 @@ export function FlowPanel() {
             <div className="flow-panel__message flow-panel__message--error">{t("project.invalid", { count: project.errors.length })}</div>
           )}
           {project.project && (project.project.setup?.length ?? 0) > 0 && (
-            <button type="button" className="flow-panel__setup" onClick={() => setSetupOpen(true)}>
+            <button type="button" className="flow-panel__setup" onClick={() => void openSetup()}>
               {t("project.setup")}
             </button>
           )}
