@@ -611,8 +611,6 @@ impl Driver {
         }
     }
 
-    /// Actual + estimated cost of node `id` of `prefix` and of everything
-    /// under it (loop iterations, sub-flow scopes).
     /// The resolved params of the child scope that the sub-flow node `id`
     /// (visible from `prefix`, current pass) opened; `NotRun` before it
     /// opened one, `None` when no such node is visible.
@@ -637,6 +635,8 @@ impl Driver {
         }
     }
 
+    /// Actual + estimated cost of node `id` of `prefix` and of everything
+    /// under it (loop iterations, sub-flow scopes).
     fn cost_seen(&self, prefix: &str, id: &str) -> Option<f64> {
         let key = self.state.current_key(prefix, id);
         let mut total = 0.0;

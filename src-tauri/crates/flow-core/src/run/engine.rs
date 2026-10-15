@@ -374,6 +374,7 @@ impl Bundle {
         !command_summaries(&self.files()).is_empty()
             || !self.runtime_summaries().is_empty()
             || !self.setup_summaries().is_empty()
+            || !self.test_summaries().is_empty()
             || !stage_summaries(&self.files()).is_empty()
     }
 
@@ -706,7 +707,7 @@ impl FlowEngine {
             || meta
                 .project
                 .as_ref()
-                .is_some_and(|p| !p.runtimes.is_empty() || !p.setup.is_empty());
+                .is_some_and(|p| !p.runtimes.is_empty() || !p.setup.is_empty() || !p.test.is_empty());
         if needs && !self.is_confirmed(root, &meta.flow_path, &meta.flow_sha256) {
             return Err(EngineError::new(
                 FLOW_COMMANDS_UNCONFIRMED,

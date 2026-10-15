@@ -46,10 +46,10 @@ fn root_of(with: &BTreeMap<String, Value>, ctx: &ActionContext) -> Result<PathBu
     Ok(root)
 }
 
-/// The manifest at `root`: its definition and content hash.
-fn manifest_at(root: &std::path::Path) -> Result<(ProjectDef, String), Reason> {
+/// The manifest at `root`: its definition and content hash; `None` without one.
+fn manifest_at(root: &std::path::Path) -> Result<Option<(ProjectDef, String)>, Reason> {
     let Some((bytes, report)) = project::load_project_bytes(root) else {
-        return Err(Reason::new(FLOW_PROJECT_REQUIRED).with("projectRoot", root.to_string_lossy()));
+        return Ok(None);
     };
     let project = match report.project {
         Some(project) if report.errors.is_empty() => project,
@@ -59,13 +59,17 @@ fn manifest_at(root: &std::path::Path) -> Result<(ProjectDef, String), Reason> {
                 .with("errors", report.errors.len()))
         }
     };
-    Ok((project, sha256_hex(&bytes)))
+    Ok(Some((project, sha256_hex(&bytes))))
 }
 
 /// The approval a manifest other than the confirmed one needs before its
 /// `list` (`setup` / `test`) steps run: `None` when they may run now.
 fn unconfirmed(ctx: &ActionContext, list: &str, steps: &[SetupStep], sha256: &str) -> Option<ActionEnd> {
-    let runs: Vec<Value> = steps.iter().map(|step| json!(step.run)).collect();
+    // Shown as the run-start review lists them: argv and working directory.
+    let runs: Vec<Value> = steps
+        .iter()
+        .map(|step| json!({ "run": step.run, "workingDir": step.working_dir }))
+        .collect();
     let show = BTreeMap::from([
         (list.to_string(), Value::Array(runs)),
         ("sha256".to_string(), Value::String(sha256.to_string())),
@@ -105,7 +109,8 @@ pub(super) fn project_setup(
     ctx: &ActionContext,
 ) -> Result<ActionEnd, Reason> {
     let root = root_of(with, ctx)?;
-    let (project, sha256) = manifest_at(&root)?;
+    let (project, sha256) = manifest_at(&root)?
+        .ok_or_else(|| Reason::new(FLOW_PROJECT_REQUIRED).with("projectRoot", root.to_string_lossy()))?;
     if let Some(ask) = unconfirmed(ctx, "setup", &project.setup, &sha256) {
         return Ok(ask);
     }
@@ -131,19 +136,18 @@ pub(super) fn project_setup(
 
 /// `mdium/project-test` `{ projectRoot? }` -> `{ ran, ok, exitCode, logDir, tail }`:
 /// runs the manifest's `test` steps. Unlike setup, a failing step is a result
-/// (`ok: false`, the step's exit code and output tail), not a failed node, so
-/// a review stage can read it. No manifest or no steps: `ran: false,
-/// ok: true`. A manifest other than the confirmed one asks first.
+/// (`ok: false`, that step's exit code and output tail; both `null` / `""`
+/// when every step passed), not a failed node, so a review stage can read
+/// it. No manifest or no steps: `ran: false, ok: true`. A manifest other
+/// than the confirmed one asks first. The steps run code the worktree holds,
+/// including what an agent changed there (the point of testing it): the
+/// confirmation covers the commands, not the files they run.
 pub(super) fn project_test(
     with: &BTreeMap<String, Value>,
     ctx: &ActionContext,
 ) -> Result<ActionEnd, Reason> {
     let root = root_of(with, ctx)?;
-    let manifest = match project::load_project_bytes(&root) {
-        Some(_) => Some(manifest_at(&root)?),
-        None => None,
-    };
-    let Some((project, sha256)) = manifest.filter(|(project, _)| !project.test.is_empty()) else {
+    let Some((project, sha256)) = manifest_at(&root)?.filter(|(project, _)| !project.test.is_empty()) else {
         return Ok(ActionEnd::done(BTreeMap::from([
             ("ran".to_string(), Value::Bool(false)),
             ("ok".to_string(), Value::Bool(true)),
@@ -159,11 +163,8 @@ pub(super) fn project_test(
     if result.cancelled {
         return Ok(ActionEnd::Cancelled);
     }
-    let step = result
-        .steps
-        .iter()
-        .find(|step| step.exit_code != Some(0))
-        .or(result.steps.last());
+    // The failing step, if any; a passed run reports no code and no tail.
+    let step = result.steps.iter().find(|step| step.exit_code != Some(0));
     let tail = step.map_or(String::new(), |s| {
         let mut tail = s.stdout_tail.clone();
         if !s.stderr_tail.is_empty() {

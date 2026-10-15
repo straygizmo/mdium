@@ -102,7 +102,7 @@ metrics:                           # what the outer loop compares (8.3); refs ar
 - `runtimes.<name>.kind` は初版 `python` のみ。`python` と `cwd` はプロジェクト相対パスで、ルート外とシンボリックリンクは拒否する（フローファイルと同じ規則）。`python` は文字列または文字列の配列（OS ごとの候補。例 `[.venv/Scripts/python.exe, .venv/bin/python]`）で、配列なら最初に存在するものを使う。
   - V3 実装メモ: `python` と `cwd` はルートから成分ごとに辿り、途中の成分（`.venv` など）がシンボリックリンク・ジャンクションなら拒否する。ただしインタプリタの末端（unix の venv の `bin/python`）だけはリンクでよく、辿った先が通常ファイルであること。`cwd` は末端も含めてリンクを拒否し、ディレクトリであること。
 - `setup[].run` は argv 配列（シェル文字列は使わない）。`workingDir` の既定はプロジェクトルート。
-- `test[]` は `setup[]` と同じ形（2026-10-15 追加）。`mdium/project-test` が worktree などで実行し、失敗は結果（`ok: false`・終了コード・出力末尾・ログディレクトリ）として返す。実行開始時の確認画面には `setup` と同様に一覧を出し、確認済みのマニフェストと違う worktree 側のマニフェストは承認を求める（テンプレートに `command` を置けない規則の下で、テストコマンドを利用者の確認済みファイルから取る仕組み）。
+- `test[]` は `setup[]` と同じ形（2026-10-15 追加）。`mdium/project-test` が worktree などで実行し、失敗は結果（`ok: false`・終了コード・出力末尾・ログディレクトリ）として返す。実行開始時の確認画面には `setup` と同様に一覧を出し（`test` だけのマニフェストも確認が要る）、確認済みのマニフェストと違う worktree 側のマニフェストは承認を求める（テンプレートに `command` を置けない規則の下で、テストコマンドを利用者の確認済みファイルから取る仕組み）。確認が覆うのはコマンド列であって、そのコマンドが読むファイル（テスト本体・`conftest.py`・`package.json` のスクリプトなど）ではない。worktree ではエージェントが変えたコードをそのまま実行する——それがテストの目的で、`improve-verify` の検証実行と同じ信頼の置き方（2026-10-15 の裁定。ガードも整合性検査も掛からない通常プロセスとして動くことを利用者は承知の上で `test` を宣言する）。
 - `secrets` は名前だけ。MDium は値を保存せず、フロー実行の開始時に MDium プロセスの環境変数に全名が存在することを確認し、無ければ `FLOW_SECRET_MISSING`（不足した名前の一覧）で開始を拒む。ワーカーとコマンドは MDium の環境変数を引き継ぐ（2026-10-06 仕様 7.2 のとおり）。
 - `flows.main` は必須ではない。`.mdium/flows/*.flow.yaml` の自動一覧は変えず、`flows` は役割の印（UI で「主フロー」「改善」と表示）と改善ループの既定値に使う。
 - `metrics[].ref` は `outputs.<key>`（主フローの `outputs`）または `costUsd`（実行の実費合計）。`better` は `higher` / `lower`。
@@ -331,7 +331,7 @@ V5 は 2 つに分けた。V5a はエディタの中核、V5b はサブフロー
 - 費用: ランナーが返す使用量から `cost` を記録する（提供元が返さない場合は `estimated`）。
 - `full-access` のガード一式（screening / containment / integrity）は 7.1 のとおり必須。
 - V7 実装メモ: `with` で入力を渡す。`inputs.json` に保存し、プロンプト末尾に `## Inputs` のデータブロックとして付ける。`builtin:` のプロンプトは `design` / `implement-plan` / `implement` / `review`。`awaiting_user` は承認（`answer` / `reject`）で再実行、コストは `cost.estimateUsd` のみ。詳細は 12 章 V7 行。
-- V8 後続メモ（2026-10-15）: Claude プロバイダは応答の `total_cost_usd` を `turn_completed.costUsd` として返し、`cost.actual` に記録する（その場合 `estimateUsd` は加算しない）。他プロバイダは見積のまま。
+- V8 後続メモ（2026-10-15）: Claude プロバイダは応答の `total_cost_usd` を `turn_completed.costUsd` として返し、`cost.actual` に記録する（その場合 `estimateUsd` は加算しない）。他プロバイダは見積のまま。失敗で終わったターン（`turn_failed`）は実費を持たず見積のまま。
 
 ### 7.2 組込みアクション
 
@@ -354,7 +354,7 @@ V5 は 2 つに分けた。V5a はエディタの中核、V5b はサブフロー
 - `dev-workflow` の変更点: 引数 `mergeGate`（bool、既定 `true`）を足す。`false` のときは `merge_gate` 以降（`merge` / `close_issue` / `discard`）を `when` で飛ばし、worktree を残したまま終了して `outputs.worktreePath` / `outputs.branch` / `outputs.reviewOutcome` を返す。外側のフローが検証してから採用・破棄を決めるため。
 - V7 実装メモ: `provider` はテンプレート可（`ProviderRef`）。テンプレートのプロンプトは `builtin:` かインラインに限る。
 - V8 後続メモ（2026-10-15）: `dev-workflow` に `setup`（bool、既定 false。true なら worktree 作成直後に `mdium/project-setup`）と `test` 段階（`mdium/project-test`。implement の後、review の前。`testRan` / `testOk` / `testExitCode` / `testTail` / `testLogDir` を review の入力に渡し、`builtin:review` はテストを自分で走らせずそれを読む）を追加。
-- `subflow.paramsFrom`（任意、2026-10-15 追加）: オブジェクトに展開されるテンプレート。その項目を `params` の下に引数として渡す（明示した `params` が優先）。子が宣言していない項目は捨てる（実行の `params` をそのまま渡せるように）。オブジェクト以外に展開されれば `FLOW_SUBFLOW_PARAMS_INVALID`、未実行ノードの参照は strict（未解決）。`paramsFrom` があるノードでは子の必須引数の静的検査を省き、実行時の `FLOW_PARAM_MISSING` に任せる。
+- `subflow.paramsFrom`（任意、2026-10-15 追加）: オブジェクトに展開されるテンプレート。その項目を `params` の下に引数として渡す（明示した `params` が優先）。子が宣言していない項目は捨てる（実行の `params` をそのまま渡せるように）。オブジェクト以外に展開されれば `FLOW_SUBFLOW_PARAMS_INVALID`、未実行ノードの参照は strict（未解決）。`paramsFrom` があるノードでは子の必須引数の静的検査を省き、実行時の `FLOW_PARAM_MISSING` に任せる。`paramsFrom` の静的な形（1 つの `${{ }}` だけか）は検査しない（実行時の検査で足りるとの裁定）。`nodes.<id>.params` は `subflow` ノード以外を指すと検証エラー（`params-not-subflow`）。
 - `subflow.projectRoot`（任意）: 子フローを別のプロジェクトルートで実行する。許すのは**実行中のプロジェクトの git worktree**（`git worktree list` で確認）だけ。それ以外は `FLOW_SUBFLOW_ROOT_INVALID`。子フローのファイルはその worktree 側から読む（変更後のフロー定義で検証するため）。子の確認ハッシュは親の開始時の確認に含められないため、**子フローの `command` と `runtimes` が親プロジェクトの確認済み内容と一致する場合のみ**実行し、違えば承認待ち（`needs_approval` 相当。確認画面で差分を表示）にする。
 - V8 実装メモ: フロー参照 `project:main`（`subflow.flow`・ループ本体・`flow-run-latest`）とテンプレート参照 `project.metrics` を追加。`subflow.projectRoot` との組み合わせでは worktree のマニフェストの `flows.main` を解決する。`mdium:` テンプレートの内部では `project:main` を使えない。`dev-workflow` は出力 `worktree` を追加した。
 
