@@ -85,7 +85,7 @@ graph LR
 - **画像**（.png, .jpg, .gif, .bmp, .svg, .webp 等）— プレビュー・キャンバス編集
 - DOCX/Markdown の双方向変換
 - Excel から Markdown への変換 — [xlsx2md](https://github.com/igapyon/xlsx2md) によるテーブル検出・ナラティブ抽出・画像/チャート/シェイプ・リッチテキスト対応
-- Excel VBA マクロの抽出・注入（.xlsm）
+- Excel VBA マクロの専用チャット編集（.xlsm / .xlam）— 展開・書き戻し・モジュールの追加・削除
 - PowerPoint から Markdown への変換（.pptx）— スライドプレビューと任意の AI 補強に対応
 - PDF エクスポート
 

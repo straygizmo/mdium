@@ -85,7 +85,7 @@ graph LR
 - **Images** (.png, .jpg, .gif, .bmp, .svg, .webp, etc.) — preview and canvas editing
 - Bidirectional DOCX/Markdown conversion
 - Excel to Markdown conversion powered by [xlsx2md](https://github.com/igapyon/xlsx2md) (table detection, narrative extraction, images/charts/shapes, rich text)
-- Excel VBA macro extraction and injection (.xlsm)
+- Excel VBA macro editing in a dedicated chat (.xlsm / .xlam): extract, write back, add and remove modules
 - PowerPoint to Markdown conversion (.pptx) with slide preview and optional AI enrichment
 - Export to PDF
 

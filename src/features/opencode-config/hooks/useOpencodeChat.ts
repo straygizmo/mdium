@@ -17,10 +17,8 @@ import { useOpencodeUsageStore } from "@/stores/opencode-usage-store";
 import { sessionTotalsFromMessageInfos } from "@/stores/opencode-usage-core";
 import { ensureCommand, OPENCODE_INSTALL_URL } from "@/shared/lib/ensureCommand";
 import { useSettingsStore } from "@/stores/settings-store";
-import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 import { useTabStore } from "@/stores/tab-store";
-import { resolveMdiumVbaMcpServer } from "../lib/builtin-mcp-servers";
-import type { OpencodeMcpServer } from "@/shared/types";
+import { wrapWithMdiumContext } from "../lib/mdium-context";
 import { BUILTIN_AGENTS, BUILTIN_CUSTOM_TOOLS } from "../lib/builtin-registry";
 import { SKILL_VERSION_RE, TOOL_VERSION_RE, buildSkillMd, builtinVersion, shouldWriteBuiltinFile } from "../lib/builtin-install";
 import { BUILTIN_SKILLS } from "../lib/builtin-skills";
@@ -97,90 +95,9 @@ export function getOpencodeClient(): OpencodeClient | null {
   return _client;
 }
 
-/**
- * Prefix every user message sent to opencode with the active xlsm/xlam file
- * path so the LLM can reason about which file the user is looking at.
- */
-async function wrapWithMdiumContext(userMessage: string): Promise<string> {
-  try {
-    const active = await invoke<string | null>("get_active_xlsm_path");
-    if (!active) return userMessage;
-    return `<mdium_context>\nactive_file="${active.replace(/"/g, '\\"')}"\n</mdium_context>\n\n${userMessage}`;
-  } catch {
-    return userMessage;
-  }
-}
-
 /** Current replacement (masking) settings, read at call time. */
 function replacementSettings() {
   return useSettingsStore.getState().replacement;
-}
-
-/**
- * Sync the mdium-vba MCP server entry to opencode config based on the
- * current allowLlmVbaImport toggle. Call at app startup and on toggle change.
- * Port/token change each MDium run, so this must be called on every startup
- * while the toggle is ON.
- */
-export async function syncMdiumVbaMcpConfig(): Promise<void> {
-  const enabled = useSettingsStore.getState().allowLlmVbaImport;
-  const mcpServersPath = await invoke<string>("resolve_mcp_servers_path").catch(
-    () => null
-  );
-  if (!mcpServersPath) return;
-
-  const store = useOpencodeConfigStore.getState();
-  const name = "mdium-vba";
-
-  if (enabled) {
-    const entry = await resolveMdiumVbaMcpServer(mcpServersPath);
-    if (!entry) return;
-    const server: OpencodeMcpServer = {
-      type: entry.type,
-      command: entry.command,
-      enabled: entry.enabled,
-      environment: entry.environment,
-    };
-    try {
-      await store.saveMcpServer(name, server);
-    } catch (e) {
-      console.warn("[mdium-vba] saveMcpServer failed:", e);
-      return;
-    }
-    // Also sync to running opencode instance (if connected).
-    const client = getOpencodeClient();
-    if (client) {
-      try {
-        await client.mcp.add({
-          body: {
-            name,
-            config: {
-              type: "local",
-              command: entry.command,
-              environment: entry.environment,
-              enabled: true,
-            },
-          },
-        });
-      } catch (e) {
-        console.warn("[mdium-vba] client.mcp.add failed:", e);
-      }
-    }
-  } else {
-    try {
-      await store.deleteMcpServer(name);
-    } catch (e) {
-      console.warn("[mdium-vba] deleteMcpServer failed:", e);
-    }
-    const client = getOpencodeClient();
-    if (client) {
-      try {
-        await client.mcp.disconnect({ path: { name } });
-      } catch (e) {
-        console.warn("[mdium-vba] client.mcp.disconnect failed:", e);
-      }
-    }
-  }
 }
 
 /**
@@ -1180,11 +1097,6 @@ export async function doConnect(folderPath?: string) {
 
     console.log("[opencode] connected to", baseUrl, "for folder:", folderPath);
 
-    // Sync mdium-vba MCP config on every successful connection (port/token may change per run)
-    syncMdiumVbaMcpConfig().catch((e) => {
-      console.warn("[mdium-vba] initial sync failed:", e);
-    });
-
     // Write the HTTP bridge sidecar so the rag_search tool can call back into mdium.
     syncRagBridgeSidecar().catch((e) => {
       console.warn("[rag-bridge] sidecar write failed:", e);
@@ -1293,7 +1205,7 @@ export async function doSendMessage(
   _pendingQuestionRequestId = null;
 
   // L1: inject active tab context into every user message payload (SDK call only)
-  const wrappedText = applyForward(await wrapWithMdiumContext(text), replacementSettings());
+  const wrappedText = applyForward(wrapWithMdiumContext(text, useTabStore.getState().getActiveTab()?.filePath), replacementSettings());
 
   useChatUIStore.setState({ error: null });
   const sessionId = await ensureSessionId(text || "image");
@@ -1537,7 +1449,7 @@ export async function doCreateNewSession() {
   });
 }
 
-async function doLoadSession(sessionId: string) {
+export async function doLoadSession(sessionId: string) {
   if (!_client) return;
   useChatUIStore.setState({ error: null, loading: true });
   try {

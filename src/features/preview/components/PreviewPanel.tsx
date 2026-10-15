@@ -28,8 +28,9 @@ import { DEFAULT_META, DEFAULT_TTS_CONFIG, DEFAULT_TRANSITION, type NarrationSeg
 import { splitNarration } from "@/features/video/lib/narration-splitter";
 import { videoFilePrefix } from "@/features/video/lib/audio-filename";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
-import { useChatUIStore, consumePendingVideoOutput, doConnect, doCreateNewSession, doSendMessage, setPendingVideoOutput, syncMdiumVbaMcpConfig } from "@/features/opencode-config/hooks/useOpencodeChat";
+import { useChatUIStore, consumePendingVideoOutput, doConnect, doCreateNewSession, doSendMessage, setPendingVideoOutput } from "@/features/opencode-config/hooks/useOpencodeChat";
 import { BUILTIN_COMMANDS } from "@/features/opencode-config/lib/builtin-commands";
 import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 import { useAgentChatStore } from "@/features/agent-chat/agent-chat-store";
@@ -225,6 +226,18 @@ interface PreviewPanelProps {
   onJumpToLine?: (line: number) => void;
 }
 
+/** Rust vba commands fail with `{"error","message"}` JSON; show the message. */
+function vbaErrorMessage(e: unknown): string {
+  const raw = e instanceof Error ? e.message : String(e);
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed?.message === "string") return parsed.message;
+  } catch {
+    // not JSON
+  }
+  return raw;
+}
+
 export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree, onJumpToLine }: PreviewPanelProps) {
   const { t, i18n } = useTranslation("editor");
   const activeTab = useTabStore((s) => s.getActiveTab());
@@ -238,8 +251,6 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree, onJump
   const [convertError, setConvertError] = useState<string | null>(null);
   const [macroExporting, setMacroExporting] = useState(false);
   const [macroImporting, setMacroImporting] = useState(false);
-  const allowLlmVbaImport = useSettingsStore((s) => s.allowLlmVbaImport);
-  const setAllowLlmVbaImport = useSettingsStore((s) => s.setAllowLlmVbaImport);
   const [macroError, setMacroError] = useState<string | null>(null);
   const [macroSuccess, setMacroSuccess] = useState<string | null>(null);
   const [macrosDirExists, setMacrosDirExists] = useState(false);
@@ -1135,18 +1146,6 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree, onJump
     );
   }, [isMacroEnabled, activeTab?.filePath]);
 
-  // Sync active xlsm/xlam path to Rust state for LLM bridge
-  useEffect(() => {
-    const fp = activeTab?.filePath ?? null;
-    const isMacroFile =
-      fp !== null &&
-      (fp.toLowerCase().endsWith(".xlsm") ||
-        fp.toLowerCase().endsWith(".xlam"));
-    invoke("set_active_xlsm_path", {
-      path: isMacroFile ? fp : null,
-    }).catch(() => {});
-  }, [activeTab?.filePath]);
-
   const handleConvertToMarkdown = useCallback(async () => {
     if (!activeTab?.binaryData || !activeTab?.filePath) return;
     setConverting(true);
@@ -1188,18 +1187,28 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree, onJump
     setMacroSuccess(null);
     try {
       const result = await invoke<{ macrosDir: string; modules: { name: string; moduleType: string; path: string }[] }>(
-        "extract_vba_modules",
+        "pull_vba_modules",
         { xlsmPath: activeTab.filePath }
       );
       setMacroSuccess(t("macroExportSuccess", { count: result.modules.length }));
       setMacrosDirExists(true);
       onRefreshFileTree?.();
     } catch (e) {
-      setMacroError(e instanceof Error ? e.message : String(e));
+      setMacroError(vbaErrorMessage(e));
     } finally {
       setMacroExporting(false);
     }
   }, [activeTab?.filePath, onRefreshFileTree, t]);
+
+  const reloadWorkbookTab = useCallback(async (path: string) => {
+    const bytes = await invoke<number[]>("read_binary_file", { path });
+    const binaryData = new Uint8Array(bytes);
+    const { tabs } = useTabStore.getState();
+    useTabStore.setState({
+      tabs: tabs.map((tab) => (tab.filePath === path ? { ...tab, binaryData } : tab)),
+    });
+    onRefreshFileTree?.();
+  }, [onRefreshFileTree]);
 
   const handleImportMacros = useCallback(async () => {
     if (!activeTab?.filePath) return;
@@ -1208,52 +1217,36 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree, onJump
     setMacroSuccess(null);
     try {
       const filePath = activeTab.filePath;
-      const lastDot = filePath.lastIndexOf(".");
-      const macrosDir = filePath.substring(0, lastDot) + "_assets/macros";
-
-      const result = await invoke<{ backupPath: string; updatedModules: string[] }>(
-        "inject_vba_modules",
-        { xlsmPath: filePath, macrosDir }
+      const result = await invoke<{ updated: string[]; added: string[]; removed: string[] }>(
+        "push_vba_modules",
+        { xlsmPath: filePath },
       );
-      setMacroSuccess(t("macroImportSuccess", { count: result.updatedModules.length }));
-
-      // Reload binary data to refresh preview
-      const bytes = await invoke<number[]>("read_binary_file", { path: filePath });
-      const binaryData = new Uint8Array(bytes);
-      const tabs = useTabStore.getState().tabs;
-      const activeId = useTabStore.getState().activeTabId;
-      useTabStore.setState({
-        tabs: tabs.map((tab) =>
-          tab.id === activeId ? { ...tab, binaryData } : tab
-        ),
-      });
-
-      // Ask user if they want to open the file
+      setMacroSuccess(
+        t("macroPushSuccess", { updated: result.updated.length, added: result.added.length, removed: result.removed.length }),
+      );
+      await reloadWorkbookTab(filePath);
       const shouldOpen = await showConfirm(t("macroImportOpenFile"));
       if (shouldOpen) {
         await invoke("open_in_default_app", { path: filePath });
       }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      // Try to parse structured error from Rust (module_set_changed carries JSON)
-      try {
-        const parsed = JSON.parse(msg);
-        if (parsed?.error === "module_set_changed") {
-          const newList = (parsed.newInFiles ?? []).join(", ") || "-";
-          const missingList = (parsed.missingInFiles ?? []).join(", ") || "-";
-          setMacroError(
-            t("macroModuleSetChanged", { new: newList, missing: missingList })
-          );
-          return;
-        }
-      } catch {
-        // Not JSON; fall through to raw message
-      }
-      setMacroError(msg);
+      setMacroError(vbaErrorMessage(e));
     } finally {
       setMacroImporting(false);
     }
-  }, [activeTab?.filePath, t]);
+  }, [activeTab?.filePath, reloadWorkbookTab, t]);
+
+  // Refresh the preview when a push done through the bridge (LLM tool) lands.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    listen<{ path: string }>("vba-pushed", (ev) => {
+      const current = useTabStore.getState().getActiveTab()?.filePath;
+      if (current && current === ev.payload.path) {
+        reloadWorkbookTab(current).catch(() => {});
+      }
+    }).then((fn) => { unlisten = fn; });
+    return () => { unlisten?.(); };
+  }, [reloadWorkbookTab]);
 
   // Show VideoPanel for .video.json files
   if (isVideoJson) {
@@ -1302,37 +1295,6 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree, onJump
               >
                 {macroImporting ? t("importingMacros") : t("importMacros")}
               </button>
-            )}
-            {isMacroEnabled && (
-              <label
-                className="preview-panel__llm-toggle"
-                title={t("allowLlmVbaImportHint") ?? ""}
-              >
-                <span className="preview-panel__llm-toggle-label">
-                  {t("allowLlmVbaImport")}
-                </span>
-                <span
-                  className={`preview-panel__switch${allowLlmVbaImport ? " preview-panel__switch--on" : ""}`}
-                  data-switch
-                  role="switch"
-                  aria-label={t("allowLlmVbaImport")}
-                  aria-checked={allowLlmVbaImport}
-                  tabIndex={0}
-                  onClick={() => {
-                    setAllowLlmVbaImport(!allowLlmVbaImport);
-                    syncMdiumVbaMcpConfig().catch(() => {});
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      setAllowLlmVbaImport(!allowLlmVbaImport);
-                      syncMdiumVbaMcpConfig().catch(() => {});
-                    }
-                  }}
-                >
-                  <span className="preview-panel__switch-thumb" data-switch-thumb />
-                </span>
-              </label>
             )}
             {convertError && (
               <span className="preview-panel__convert-error">{convertError}</span>
