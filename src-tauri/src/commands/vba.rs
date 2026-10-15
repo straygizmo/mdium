@@ -748,16 +748,16 @@ pub fn pull_vba_modules(xlsm_path: String) -> Result<PullResult, String> {
         let mut stream_data = Vec::new();
         comp.open_stream(&stream_path)
             .map_err(|e| {
-                format!(
-                    "Failed to open stream '{}': {}",
-                    stream_path, e
+                vba_error(
+                    "pull_failed",
+                    format!("Failed to open stream '{}': {}", stream_path, e),
                 )
             })?
             .read_to_end(&mut stream_data)
             .map_err(|e| {
-                format!(
-                    "Failed to read stream '{}': {}",
-                    stream_path, e
+                vba_error(
+                    "pull_failed",
+                    format!("Failed to read stream '{}': {}", stream_path, e),
                 )
             })?;
 
@@ -765,8 +765,15 @@ pub fn pull_vba_modules(xlsm_path: String) -> Result<PullResult, String> {
         // followed by compressed VBA source
         let text_offset = module_info.text_offset as usize;
         if text_offset > stream_data.len() {
-            return Err(vba_error("pull_failed", format!("Module '{}': text_offset {} exceeds stream length {}", module_info.name, text_offset, stream_data.len()
-            )));
+            return Err(vba_error(
+                "pull_failed",
+                format!(
+                    "Module '{}': text_offset {} exceeds stream length {}",
+                    module_info.name,
+                    text_offset,
+                    stream_data.len()
+                ),
+            ));
         }
 
         let compressed_source = &stream_data[text_offset..];
@@ -1158,41 +1165,38 @@ pub fn inject_vba_modules(xlsm_path: String, macros_dir: String) -> Result<Injec
 
 #[tauri::command]
 pub fn list_vba_modules(xlsm_path: String) -> Result<ListResult, String> {
-    let path = Path::new(&xlsm_path);
-    if !path.exists() {
-        return Err(format!("File not found: {}", xlsm_path));
-    }
+    let path = require_macro_workbook(&xlsm_path)?;
 
     let macros_dir = macros_dir_for(path)?;
     let extracted = macros_dir.is_dir();
 
     // Read vbaProject.bin and parse dir stream (same as extract, but no writes)
     let file = fs::File::open(&xlsm_path)
-        .map_err(|e| format!("Failed to open file: {}", e))?;
+        .map_err(|e| vba_error("list_failed", format!("Failed to open file: {}", e)))?;
     let mut archive = zip::ZipArchive::new(file)
-        .map_err(|e| format!("Failed to read ZIP archive: {}", e))?;
+        .map_err(|e| vba_error("list_failed", format!("Failed to read ZIP archive: {}", e)))?;
 
     let vba_bin = {
         let mut entry = archive
             .by_name("xl/vbaProject.bin")
-            .map_err(|_| "No VBA macros found in this file (xl/vbaProject.bin not present)".to_string())?;
+            .map_err(|_| vba_error("no_vba_project", "No VBA macros found in this file (xl/vbaProject.bin not present)"))?;
         let mut buf = Vec::new();
         entry.read_to_end(&mut buf)
-            .map_err(|e| format!("Failed to read vbaProject.bin: {}", e))?;
+            .map_err(|e| vba_error("list_failed", format!("Failed to read vbaProject.bin: {}", e)))?;
         buf
     };
 
     let mut comp = cfb::CompoundFile::open(Cursor::new(&vba_bin))
-        .map_err(|e| format!("Failed to parse vbaProject.bin as OLE2: {}", e))?;
+        .map_err(|e| vba_error("list_failed", format!("Failed to parse vbaProject.bin as OLE2: {}", e)))?;
 
     let mut dir_compressed = Vec::new();
     comp.open_stream("/VBA/dir")
-        .map_err(|e| format!("Failed to open /VBA/dir stream: {}", e))?
+        .map_err(|e| vba_error("list_failed", format!("Failed to open /VBA/dir stream: {}", e)))?
         .read_to_end(&mut dir_compressed)
-        .map_err(|e| format!("Failed to read /VBA/dir stream: {}", e))?;
+        .map_err(|e| vba_error("list_failed", format!("Failed to read /VBA/dir stream: {}", e)))?;
 
-    let dir_data = vba_decompress(&dir_compressed)?;
-    let project = parse_dir_stream(&dir_data)?;
+    let dir_data = vba_decompress(&dir_compressed).map_err(|e| vba_error("list_failed", e))?;
+    let project = parse_dir_stream(&dir_data).map_err(|e| vba_error("list_failed", e))?;
 
     // Build module list. path is only populated when the extracted file exists.
     let modules: Vec<VbaModule> = project
@@ -1610,6 +1614,23 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&e).unwrap();
         assert_eq!(v["error"], "invalid_workbook");
         assert_eq!(v["message"], "not an xlsm");
+    }
+
+    #[test]
+    fn list_vba_modules_missing_file_is_invalid_workbook() {
+        let e = list_vba_modules("C:/nope/missing.xlsm".to_string()).err().unwrap();
+        let v: serde_json::Value = serde_json::from_str(&e).unwrap();
+        assert_eq!(v["error"], "invalid_workbook");
+    }
+
+    #[test]
+    fn list_vba_modules_non_macro_extension_is_invalid_workbook() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("plain.xlsx");
+        std::fs::write(&p, b"x").unwrap();
+        let e = list_vba_modules(p.to_string_lossy().into_owned()).err().unwrap();
+        let v: serde_json::Value = serde_json::from_str(&e).unwrap();
+        assert_eq!(v["error"], "invalid_workbook");
     }
 
     #[test]
