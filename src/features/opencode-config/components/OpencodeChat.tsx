@@ -24,7 +24,16 @@ function computeLineColFromContext(text: string, pos: number) {
   return { line: lines.length, col: lines[lines.length - 1].length + 1 };
 }
 
-export function OpencodeChat() {
+export interface OpencodeChatProps {
+  /** "panel": the left-panel chat with toolbar and history. "macro": embedded
+   * in a workbook tab; the caller supplies the header instead of the toolbar. */
+  variant?: "panel" | "macro";
+  header?: React.ReactNode;
+  placeholder?: string;
+}
+
+export function OpencodeChat({ variant = "panel", header, placeholder }: OpencodeChatProps = {}) {
+  const isMacro = variant === "macro";
   const { t } = useTranslation("opencode-config");
   const activeFolderPath = useTabStore((s) => s.activeFolderPath);
   const activeTabName = useTabStore((s) => s.getActiveTab()?.fileName);
@@ -389,6 +398,8 @@ export function OpencodeChat() {
         </div>
       )}
       {/* Toolbar */}
+      {isMacro && header}
+      {!isMacro && (
       <div className="oc-chat__toolbar">
         <button
           className="oc-chat__toolbar-btn"
@@ -457,6 +468,7 @@ export function OpencodeChat() {
           </svg>
         </button>
       </div>
+      )}
 
       {error && (
         <div className="oc-chat__error">
@@ -633,6 +645,7 @@ export function OpencodeChat() {
         {/* Bottom section */}
         <div className="oc-chat__bottom" style={{ flex: `0 0 ${100 - chatSplitRatio}%` }}>
           {/* MD context toggle and session usage */}
+          {!isMacro && (
           <div className="oc-chat__md-toggle-row">
             <label
               className={`oc-chat__md-toggle-bar${canUseMdContext ? "" : " oc-chat__md-toggle-bar--disabled"}`}
@@ -652,6 +665,7 @@ export function OpencodeChat() {
             </label>
             <OpencodeUsagePopover />
           </div>
+          )}
 
           {/* Input area */}
           <div className="oc-chat__input-area">
@@ -684,7 +698,7 @@ export function OpencodeChat() {
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 onPaste={handlePaste}
-                placeholder={connected ? t("ocChatPlaceholder") : t("ocChatDisconnected")}
+                placeholder={connected ? (placeholder ?? t("ocChatPlaceholder")) : t("ocChatDisconnected")}
                 rows={2}
                 disabled={!connected || loading}
               />
@@ -705,7 +719,7 @@ export function OpencodeChat() {
       </div>
 
       {/* History dialog */}
-      {showHistory && (
+      {!isMacro && showHistory && (
         <div className="oc-chat__overlay" onClick={() => setShowHistory(false)}>
           <div className="oc-chat__dialog" onClick={(e) => e.stopPropagation()}>
             <div className="oc-chat__dialog-header">
