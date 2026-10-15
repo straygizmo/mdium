@@ -1,4 +1,5 @@
-//! Driver: lifecycle.
+//! Driver: run-level control (pause, resume, cancel, stop grace, budget)
+//! and the settlement of a run's final status.
 
 use super::*;
 

@@ -1,4 +1,5 @@
-//! Driver: command.
+//! Driver: `command` nodes, their protocol reader, exit decision and
+//! detached-process reconnect.
 
 use super::*;
 
@@ -125,7 +126,7 @@ impl Driver {
         }
     }
 
-    pub(super) fn poll_one(&mut self, command: &mut RunningCommand) -> Option<Finish> {
+    fn poll_one(&mut self, command: &mut RunningCommand) -> Option<Finish> {
         if let Some(reader) = command.reader.as_mut() {
             let items = reader.poll(false);
             if !items.is_empty() {
@@ -162,7 +163,7 @@ impl Driver {
         None
     }
 
-    pub(super) fn finish_command(&mut self, mut command: RunningCommand, finish: Finish) {
+    fn finish_command(&mut self, mut command: RunningCommand, finish: Finish) {
         let key = command.key.clone();
         if let Some(mut reader) = command.reader.take() {
             for item in reader.poll(true) {
@@ -226,7 +227,7 @@ impl Driver {
         }
     }
 
-    pub(super) fn prepare_launch(
+    fn prepare_launch(
         &self,
         prefix: &str,
         key: &str,

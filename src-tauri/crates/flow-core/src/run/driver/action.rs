@@ -1,4 +1,5 @@
-//! Driver: action.
+//! Driver: built-in `action` nodes, run on a worker thread with their
+//! approval re-runs (`acknowledged` show values).
 
 use super::*;
 
@@ -196,7 +197,7 @@ impl Driver {
     }
 
     /// Emits the progress lines an action reported since the last poll.
-    pub(super) fn action_progress(&mut self, action: &RunningAction) {
+    fn action_progress(&mut self, action: &RunningAction) {
         while let Ok(text) = action.progress_rx.try_recv() {
             self.emit(
                 Some(&action.key),
@@ -209,7 +210,7 @@ impl Driver {
     }
 
     /// Settles an action node from how its action ended.
-    pub(super) fn finish_action(&mut self, action: RunningAction, finish: ActionFinish) {
+    fn finish_action(&mut self, action: RunningAction, finish: ActionFinish) {
         self.action_progress(&action);
         // Whatever ends the monitoring, a thread left behind must stop too.
         action.cancel.store(true, Ordering::SeqCst);
