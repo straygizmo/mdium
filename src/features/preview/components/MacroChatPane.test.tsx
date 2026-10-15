@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { act } from "react";
 import { createRoot } from "react-dom/client";
+import { listen } from "@tauri-apps/api/event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MacroChatPane } from "./MacroChatPane";
 import { useMacroChatStore } from "@/stores/macro-chat-store";
@@ -55,7 +56,11 @@ describe("MacroChatPane", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     invoke.mockReset();
     doConnect.mockClear();
-    doLoadSession.mockClear();
+    doLoadSession.mockReset();
+    // A successful load leaves the loaded id as the current session.
+    doLoadSession.mockImplementation(async (id: string) => {
+      useChatUIStore.setState({ currentSessionId: id });
+    });
     doCreateNewSession.mockClear();
     invoke.mockImplementation(async (cmd: string) => {
       if (cmd === "list_vba_modules") return listOk;
@@ -96,13 +101,52 @@ describe("MacroChatPane", () => {
     await unmount();
   });
 
-  it("falls back to a new session when loading the bound one fails", async () => {
+  it("falls back to a new session when the bound session does not load", async () => {
     useMacroChatStore.getState().setSession(props.filePath, "ses_gone");
-    doLoadSession.mockRejectedValueOnce(new Error("404"));
+    // doLoadSession resolves without error but leaves currentSessionId unchanged.
+    doLoadSession.mockImplementationOnce(async () => {});
     const { unmount } = await render(<MacroChatPane {...props} />);
+    expect(doLoadSession).toHaveBeenCalledWith("ses_gone");
     expect(doCreateNewSession).toHaveBeenCalledTimes(1);
     expect(useMacroChatStore.getState().getSession(props.filePath)).toBeNull();
     await unmount();
+  });
+
+  it("keeps the binding when the bound session loads", async () => {
+    useMacroChatStore.getState().setSession(props.filePath, "ses_ok");
+    const { unmount } = await render(<MacroChatPane {...props} />);
+    expect(doCreateNewSession).not.toHaveBeenCalled();
+    expect(useMacroChatStore.getState().getSession(props.filePath)).toBe("ses_ok");
+    await unmount();
+  });
+
+  it("does not bind a late-loading session of one workbook to another", async () => {
+    const other = { filePath: "C:/project/other.xlsm", fileName: "other.xlsm", folderPath: "C:/project" };
+    useMacroChatStore.getState().setSession(props.filePath, "ses_A");
+    let resolveLoad!: () => void;
+    doLoadSession.mockImplementationOnce(() => new Promise<void>((r) => { resolveLoad = r; }));
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    await act(async () => root.render(<MacroChatPane {...props} />));
+    await act(async () => root.render(<MacroChatPane {...other} />));
+    await act(async () => {
+      resolveLoad();
+      useChatUIStore.setState({ currentSessionId: "ses_A" });
+    });
+    expect(useMacroChatStore.getState().getSession(other.filePath)).toBeNull();
+    expect(useMacroChatStore.getState().getSession(props.filePath)).toBe("ses_A");
+    await act(async () => root.unmount());
+  });
+
+  it("removes the vba-pushed listener when it resolves after unmount", async () => {
+    const unlisten = vi.fn();
+    let resolveListen!: (fn: () => void) => void;
+    vi.mocked(listen).mockImplementationOnce(() => new Promise((r) => { resolveListen = r; }));
+    const { unmount } = await render(<MacroChatPane {...props} />);
+    await unmount();
+    expect(unlisten).not.toHaveBeenCalled();
+    await act(async () => resolveListen(unlisten));
+    expect(unlisten).toHaveBeenCalledTimes(1);
   });
 
   it("new chat button clears the binding and starts a fresh session", async () => {

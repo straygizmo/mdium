@@ -9,7 +9,7 @@ import {
   doLoadSession,
   useChatUIStore,
 } from "@/features/opencode-config/hooks/useOpencodeChat";
-import { useMacroChatStore } from "@/stores/macro-chat-store";
+import { useMacroChatStore, workbookKey } from "@/stores/macro-chat-store";
 import "./MacroChatPane.css";
 
 const LOCK_RECHECK_MS = 5000;
@@ -59,6 +59,10 @@ export function MacroChatPane({ filePath, fileName, folderPath }: MacroChatPaneP
   const currentSessionId = useChatUIStore((s) => s.currentSessionId);
   // True while this pane owns the shared chat session (between bind and unmount).
   const boundRef = useRef(false);
+  // Session id the current bind loaded, or null when a fresh session awaits its first message.
+  const expectedSessionRef = useRef<string | null>(null);
+  // currentSessionId observed when the bind settled; a fresh session must differ from it.
+  const previousSessionRef = useRef<string | null>(null);
 
   const refreshModules = useCallback(async () => {
     try {
@@ -89,22 +93,35 @@ export function MacroChatPane({ filePath, fileName, folderPath }: MacroChatPaneP
     if (!folderPath) return;
     let cancelled = false;
     boundRef.current = false;
+    expectedSessionRef.current = null;
+    previousSessionRef.current = useChatUIStore.getState().currentSessionId;
     (async () => {
       await doConnect(folderPath);
       if (cancelled) return;
       const store = useMacroChatStore.getState();
       const bound = store.getSession(filePath);
+      let expected: string | null = null;
       if (bound) {
+        // doLoadSession swallows its errors, so success is judged by the resulting id.
         try {
           await doLoadSession(bound);
         } catch {
+          // handled by the id check below
+        }
+        if (cancelled) return;
+        if (useChatUIStore.getState().currentSessionId === bound) {
+          expected = bound;
+        } else {
           store.setSession(filePath, null);
           await doCreateNewSession();
         }
       } else {
         await doCreateNewSession();
       }
-      if (!cancelled) boundRef.current = true;
+      if (cancelled) return;
+      expectedSessionRef.current = expected;
+      previousSessionRef.current = useChatUIStore.getState().currentSessionId;
+      boundRef.current = true;
     })();
     return () => {
       cancelled = true;
@@ -115,7 +132,14 @@ export function MacroChatPane({ filePath, fileName, folderPath }: MacroChatPaneP
   // Remember the session opencode creates on the first message.
   useEffect(() => {
     if (!boundRef.current || !currentSessionId) return;
+    const expected = expectedSessionRef.current;
+    if (expected === null ? currentSessionId === previousSessionRef.current : currentSessionId !== expected) return;
     const store = useMacroChatStore.getState();
+    // Never steal a session that another workbook already owns (late loads of a previous bind).
+    const ownedElsewhere = Object.entries(store.sessionByWorkbook).some(
+      ([key, id]) => key !== workbookKey(filePath) && id === currentSessionId,
+    );
+    if (ownedElsewhere) return;
     if (store.getSession(filePath) !== currentSessionId) store.setSession(filePath, currentSessionId);
   }, [currentSessionId, filePath]);
 
@@ -133,13 +157,20 @@ export function MacroChatPane({ filePath, fileName, folderPath }: MacroChatPaneP
 
   useEffect(() => {
     let unlisten: (() => void) | null = null;
+    let disposed = false;
     listen<{ path: string }>("vba-pushed", (ev) => {
       if (ev.payload.path === filePath) {
         refreshModules();
         checkLock();
       }
-    }).then((fn) => { unlisten = fn; });
-    return () => { unlisten?.(); };
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, [filePath, refreshModules, checkLock]);
 
   const handleNewChat = useCallback(async () => {
