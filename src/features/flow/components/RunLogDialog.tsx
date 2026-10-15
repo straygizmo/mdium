@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { DialogShell } from "@/features/workflow/components/DialogShell";
-import { flowRunApi, toFlowRunError } from "../lib/flow-run-api";
+import { flowRunApi, toFlowRunError, type LogStream } from "../lib/flow-run-api";
 
 interface RunLogDialogProps {
   projectRoot: string;
   runId: string;
   nodeKey: string;
   attempt: number;
+  /** The tab shown first; agent nodes also offer prompt and response. */
+  initialStream?: LogStream;
+  agent?: boolean;
   onClose(): void;
 }
 
@@ -15,9 +18,9 @@ interface RunLogDialogProps {
 export const LOG_TAIL_BYTES = 64 * 1024;
 
 /** The tail of a node attempt's stdout / stderr. */
-export function RunLogDialog({ projectRoot, runId, nodeKey, attempt, onClose }: RunLogDialogProps) {
+export function RunLogDialog({ projectRoot, runId, nodeKey, attempt, initialStream = "stdout", agent = false, onClose }: RunLogDialogProps) {
   const { t } = useTranslation("flow");
-  const [stream, setStream] = useState<"stdout" | "stderr">("stdout");
+  const [stream, setStream] = useState<LogStream>(initialStream);
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -41,7 +44,7 @@ export function RunLogDialog({ projectRoot, runId, nodeKey, attempt, onClose }: 
         {t("run.logTitle", { node: nodeKey, attempt })}
       </h2>
       <div className="flow-dialog__tabs" role="tablist">
-        {(["stdout", "stderr"] as const).map((s) => (
+        {(agent ? (["prompt", "response", "stdout", "stderr"] as const) : (["stdout", "stderr"] as const)).map((s) => (
           <button
             key={s}
             type="button"

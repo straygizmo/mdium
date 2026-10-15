@@ -1,0 +1,5 @@
+schemaVersion: 1
+id: python-without-project
+name: Python node without a manifest
+nodes:
+  - { id: render, kind: python, runtime: video_gen, entry: video.render }

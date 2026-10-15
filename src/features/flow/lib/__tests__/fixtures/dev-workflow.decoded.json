@@ -1,0 +1,370 @@
+{
+  "schemaVersion": 1,
+  "id": "dev-workflow",
+  "name": "Standard development workflow",
+  "description": "screen -> worktree -> design -> plan -> approve -> implement -> review -> merge gate -> merge or discard (no push, no PR).",
+  "params": {
+    "designDocPath": {
+      "type": "string",
+      "required": false,
+      "default": ""
+    },
+    "issue": {
+      "type": "string",
+      "required": false,
+      "default": ""
+    },
+    "mergeGate": {
+      "type": "bool",
+      "required": false,
+      "default": true
+    },
+    "provider": {
+      "type": "string",
+      "required": false,
+      "default": "codex"
+    },
+    "requirement": {
+      "type": "string",
+      "required": true
+    },
+    "requiresApproval": {
+      "type": "bool",
+      "required": false,
+      "default": true
+    },
+    "title": {
+      "type": "string",
+      "required": true
+    }
+  },
+  "limits": {
+    "maxConcurrentNodes": 1
+  },
+  "nodes": [
+    {
+      "id": "screen",
+      "kind": "action",
+      "uses": "mdium/screen-input",
+      "with": {
+        "text": "${{ params.requirement }}"
+      }
+    },
+    {
+      "id": "worktree",
+      "kind": "action",
+      "uses": "mdium/git-worktree-create",
+      "with": {
+        "title": "${{ params.title }}"
+      }
+    },
+    {
+      "id": "design",
+      "kind": "agent",
+      "provider": "${{ params.provider }}",
+      "promptRef": "builtin:design",
+      "permission": "read-only",
+      "outputContract": "outcome",
+      "workingDir": "${{ nodes.worktree.outputs.path }}",
+      "with": {
+        "requirement": "${{ params.requirement }}",
+        "reviewFindings": "${{ nodes.review.outputs.body }}",
+        "title": "${{ params.title }}"
+      },
+      "timeout": "60m"
+    },
+    {
+      "id": "design_doc",
+      "kind": "action",
+      "uses": "mdium/design-doc-commit",
+      "with": {
+        "body": "${{ nodes.design.outputs.body }}",
+        "docPath": "${{ params.designDocPath }}",
+        "title": "${{ params.title }}",
+        "worktree": "${{ nodes.worktree.outputs }}"
+      },
+      "when": {
+        "op": "!=",
+        "ref": "params.designDocPath",
+        "value": ""
+      }
+    },
+    {
+      "id": "issue_design",
+      "kind": "action",
+      "uses": "mdium/issue-entry",
+      "with": {
+        "body": "${{ nodes.design.outputs.body }}",
+        "entry": "design",
+        "issue": "${{ params.issue }}"
+      },
+      "when": {
+        "op": "!=",
+        "ref": "params.issue",
+        "value": ""
+      }
+    },
+    {
+      "id": "plan",
+      "kind": "agent",
+      "provider": "${{ params.provider }}",
+      "promptRef": "builtin:implement-plan",
+      "permission": "read-only",
+      "outputContract": "outcome",
+      "workingDir": "${{ nodes.worktree.outputs.path }}",
+      "with": {
+        "design": "${{ nodes.design.outputs.body }}",
+        "requirement": "${{ params.requirement }}",
+        "revision": "${{ nodes.approve_plan.outputs.comment }}",
+        "title": "${{ params.title }}"
+      },
+      "timeout": "60m",
+      "when": {
+        "op": "==",
+        "ref": "params.requiresApproval",
+        "value": true
+      }
+    },
+    {
+      "id": "approve_plan",
+      "kind": "approval",
+      "message": "Review the implementation plan.",
+      "show": [
+        "nodes.plan.outputs.body"
+      ],
+      "options": [
+        "approve",
+        {
+          "name": "revise",
+          "commentRequired": true
+        }
+      ],
+      "when": {
+        "op": "==",
+        "ref": "params.requiresApproval",
+        "value": true
+      }
+    },
+    {
+      "id": "implement",
+      "kind": "agent",
+      "provider": "${{ params.provider }}",
+      "promptRef": "builtin:implement",
+      "permission": "full-access",
+      "outputContract": "outcome",
+      "workingDir": "${{ nodes.worktree.outputs.path }}",
+      "with": {
+        "design": "${{ nodes.design.outputs.body }}",
+        "plan": "${{ nodes.plan.outputs.body }}",
+        "requirement": "${{ params.requirement }}",
+        "title": "${{ params.title }}"
+      },
+      "timeout": "120m"
+    },
+    {
+      "id": "issue_impl",
+      "kind": "action",
+      "uses": "mdium/issue-entry",
+      "with": {
+        "body": "${{ nodes.implement.outputs.body }}",
+        "entry": "implement",
+        "issue": "${{ params.issue }}",
+        "worktree": "${{ nodes.worktree.outputs }}"
+      },
+      "when": {
+        "op": "!=",
+        "ref": "params.issue",
+        "value": ""
+      }
+    },
+    {
+      "id": "review",
+      "kind": "agent",
+      "provider": "${{ params.provider }}",
+      "promptRef": "builtin:review",
+      "permission": "read-only",
+      "outputContract": "outcome",
+      "workingDir": "${{ nodes.worktree.outputs.path }}",
+      "with": {
+        "baseBranch": "${{ nodes.worktree.outputs.baseBranch }}",
+        "branch": "${{ nodes.worktree.outputs.branch }}",
+        "design": "${{ nodes.design.outputs.body }}",
+        "requirement": "${{ params.requirement }}",
+        "summary": "${{ nodes.implement.outputs.body }}",
+        "title": "${{ params.title }}"
+      },
+      "timeout": "60m"
+    },
+    {
+      "id": "issue_review",
+      "kind": "action",
+      "uses": "mdium/issue-entry",
+      "with": {
+        "body": "${{ nodes.review.outputs.body }}",
+        "entry": "review",
+        "issue": "${{ params.issue }}"
+      },
+      "when": {
+        "op": "!=",
+        "ref": "params.issue",
+        "value": ""
+      }
+    },
+    {
+      "id": "issue_review_return",
+      "kind": "action",
+      "uses": "mdium/issue-entry",
+      "with": {
+        "body": "${{ nodes.review.outputs.body }}",
+        "entry": "review",
+        "issue": "${{ params.issue }}",
+        "returned": true
+      }
+    },
+    {
+      "id": "gate_switch",
+      "kind": "branch",
+      "cases": [
+        {
+          "when": {
+            "op": "==",
+            "ref": "params.mergeGate",
+            "value": false
+          },
+          "port": "keep"
+        }
+      ],
+      "default": "gate"
+    },
+    {
+      "id": "merge_gate",
+      "kind": "approval",
+      "message": "Merge the branch into the base branch locally, or discard the worktree?",
+      "show": [
+        "nodes.worktree.outputs.branch",
+        "nodes.review.outputs.body"
+      ],
+      "options": [
+        "merge",
+        "discard"
+      ]
+    },
+    {
+      "id": "merge",
+      "kind": "action",
+      "uses": "mdium/git-merge-local",
+      "with": {
+        "worktree": "${{ nodes.worktree.outputs }}"
+      }
+    },
+    {
+      "id": "close_issue",
+      "kind": "action",
+      "uses": "mdium/issue-close",
+      "with": {
+        "issue": "${{ params.issue }}"
+      },
+      "when": {
+        "op": "!=",
+        "ref": "params.issue",
+        "value": ""
+      }
+    },
+    {
+      "id": "discard",
+      "kind": "action",
+      "uses": "mdium/git-worktree-discard",
+      "with": {
+        "worktree": "${{ nodes.worktree.outputs }}"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "screen",
+      "to": "worktree"
+    },
+    {
+      "from": "worktree",
+      "to": "design"
+    },
+    {
+      "from": "design",
+      "to": "design_doc"
+    },
+    {
+      "from": "design_doc",
+      "to": "issue_design"
+    },
+    {
+      "from": "issue_design",
+      "to": "plan"
+    },
+    {
+      "from": "plan",
+      "to": "approve_plan"
+    },
+    {
+      "from": "approve_plan",
+      "to": "implement",
+      "port": "approve"
+    },
+    {
+      "from": "approve_plan",
+      "to": "plan",
+      "port": "revise",
+      "maxTraversals": 10
+    },
+    {
+      "from": "implement",
+      "to": "issue_impl"
+    },
+    {
+      "from": "issue_impl",
+      "to": "review"
+    },
+    {
+      "from": "review",
+      "to": "issue_review"
+    },
+    {
+      "from": "review",
+      "to": "issue_review_return",
+      "port": "attention"
+    },
+    {
+      "from": "issue_review_return",
+      "to": "design",
+      "maxTraversals": 5
+    },
+    {
+      "from": "issue_review",
+      "to": "gate_switch"
+    },
+    {
+      "from": "gate_switch",
+      "to": "merge_gate",
+      "port": "gate"
+    },
+    {
+      "from": "merge_gate",
+      "to": "merge",
+      "port": "merge"
+    },
+    {
+      "from": "merge",
+      "to": "close_issue"
+    },
+    {
+      "from": "merge_gate",
+      "to": "discard",
+      "port": "discard"
+    }
+  ],
+  "outputs": {
+    "branch": "${{ nodes.worktree.outputs.branch }}",
+    "reviewOutcome": "${{ nodes.review.outputs.reason }}",
+    "worktree": "${{ nodes.worktree.outputs }}",
+    "worktreePath": "${{ nodes.worktree.outputs.path }}"
+  }
+}

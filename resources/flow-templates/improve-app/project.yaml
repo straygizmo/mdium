@@ -1,0 +1,6 @@
+schemaVersion: 1
+id: improve-app
+name: Improve this project
+description: Reads the latest run of the project's main flow, proposes one change, implements it with the development workflow in a worktree, re-runs the main flow there and compares the metrics before a human merges or discards.
+flows:
+  main: flows/improve-app.flow.yaml

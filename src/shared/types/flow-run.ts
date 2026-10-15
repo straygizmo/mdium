@@ -1,5 +1,5 @@
 /**
- * TypeScript mirrors of flow runs (`src-tauri/src/flow/run/`,
+ * TypeScript mirrors of flow runs (`src-tauri/crates/flow-core/src/run/`,
  * `src-tauri/src/commands/flow_run.rs`). Field names are camelCase as
  * serialized by serde; optional fields are omitted when unset.
  */
@@ -34,12 +34,63 @@ export interface Reason {
   params?: Record<string, unknown>;
 }
 
+/** A file a node recorded as its artifact. */
+export interface Artifact {
+  index: number;
+  path: string;
+  label?: string;
+  mediaType: string;
+  bytes?: number;
+  recordedAt: string;
+}
+
+/** Addresses one recorded artifact. */
+export interface ArtifactRef {
+  runId: string;
+  nodeKey: string;
+  attempt: number;
+  index: number;
+}
+
+/** Where an artifact lives on disk (answer of `flow_artifact_path`). */
+export interface ArtifactLocation {
+  path: string;
+  mediaType: string;
+  bytes?: number;
+}
+
+/** One choice of an approval; the wire form is always an object. */
+export interface ApprovalOption {
+  name: string;
+  commentRequired?: boolean;
+}
+
+/** A `show` entry that points at a node's recorded artifacts. */
+export interface ShowArtifacts {
+  kind: "artifacts";
+  nodeKey: string;
+  attempt: number;
+  artifacts: Artifact[];
+}
+
+/** A `show` value: either artifacts or any plain value. */
+export type ShowValue = ShowArtifacts | unknown;
+
+export function isShowArtifacts(v: unknown): v is ShowArtifacts {
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    (v as { kind?: unknown }).kind === "artifacts" &&
+    Array.isArray((v as { artifacts?: unknown }).artifacts)
+  );
+}
+
 export interface ApprovalRequest {
   /** Absent for the run-level budget approval. */
   nodeKey?: string;
-  options: string[];
+  options: ApprovalOption[];
   message?: string;
-  show?: Record<string, unknown>;
+  show?: Record<string, ShowValue>;
   reason: Reason;
 }
 
@@ -54,7 +105,7 @@ export interface NodeState {
   port?: string;
   reason?: Reason;
   outputs?: Record<string, unknown>;
-  artifacts?: Array<{ path: string; label?: string }>;
+  artifacts?: Artifact[];
   progress?: { text: string; fraction?: number };
   cost: CostTotals;
   costReported: boolean;
@@ -142,11 +193,44 @@ export interface CommandSummary {
   templated: boolean;
 }
 
+export interface RuntimeSummary {
+  name: string;
+  python: string[];
+  module: string;
+  cwd: string;
+}
+
+export interface SetupSummary {
+  run: string[];
+  workingDir?: string;
+}
+
+export interface StageSummary {
+  file: string;
+  within?: string[];
+  nodeId: string;
+  runtime: string;
+  entry: string;
+}
+
 export interface CommandReview {
   path: string;
   sha256: string;
   confirmed: boolean;
   commands: CommandSummary[];
+  runtimes: RuntimeSummary[];
+  setup: SetupSummary[];
+  stages: StageSummary[];
+  projectPath?: string;
+  /** Built-in templates (`mdium:<name>`) the flow uses, hashed into `sha256`. */
+  templates: TemplateSummary[];
+}
+
+/** A built-in template used by a flow, as shown for confirmation. */
+export interface TemplateSummary {
+  name: string;
+  /** Hash of the template's main flow file. */
+  sha256: string;
 }
 
 /** Command failures of run operations (plus `details`). */
@@ -160,6 +244,36 @@ export const FLOW_RUN_CHANGED_EVENT = "flow://run-changed";
 export const FLOW_NODE_CHANGED_EVENT = "flow://node-changed";
 export const FLOW_PROGRESS_EVENT = "flow://progress";
 export const FLOW_APPROVAL_REQUESTED_EVENT = "flow://approval-requested";
+export const FLOW_SETUP_PROGRESS_EVENT = "flow://setup-progress";
+
+export type SetupStatus = "started" | "succeeded" | "failed" | "finished";
+
+export interface SetupProgressEvent {
+  projectRoot: string;
+  setupId: string;
+  step: number;
+  total: number;
+  status: SetupStatus;
+  run: string[];
+  exitCode?: number;
+}
+
+export interface SetupStepResult {
+  index: number;
+  run: string[];
+  workingDir: string;
+  exitCode?: number;
+  error?: string;
+  stdoutTail: string;
+  stderrTail: string;
+}
+
+export interface SetupResult {
+  setupId: string;
+  ok: boolean;
+  logDir: string;
+  steps: SetupStepResult[];
+}
 
 export interface RunChangedEvent {
   projectRoot: string;

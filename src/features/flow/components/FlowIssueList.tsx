@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import type { FlowIssue } from "@/shared/types/flow";
-import { issueNodePath } from "../lib/flow-graph";
+import { issueContext, issueNodePath } from "../lib/flow-graph";
 
 interface FlowIssueListProps {
   errors: FlowIssue[];
@@ -32,7 +32,7 @@ function IssueItem({ issue, severity, onSelectNode }: { issue: FlowIssue; severi
       <span className={`flow-issue__severity flow-issue__severity--${severity}`} aria-hidden="true" />
       <span className="flow-issue__body">
         <span className="flow-issue__message">
-          {t(`issue.${issue.code}`, { ...params, defaultValue: issue.code, interpolation: { escapeValue: false } })}
+          {t(`issue.${issue.code}`, { ...params, context: issueContext(issue), defaultValue: issue.code, interpolation: { escapeValue: false } })}
         </span>
         <span className="flow-issue__location">
           {location}

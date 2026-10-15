@@ -1,0 +1,36 @@
+[package]
+name = "flow-core"
+version = "0.1.0"
+edition = "2021"
+description = "Generic flow engine of MDium: definitions, validation, runs. No Tauri dependency."
+
+[lib]
+name = "flow_core"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml_ng = "0.10"
+sha2 = "0.10"
+rand = "0.8"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+dirs = "5"
+regex = "1"
+percent-encoding = "2"
+tempfile = { version = "3", optional = true }
+
+# Process creation times for reconnecting to detached flow commands.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
+
+[features]
+# Exposes the git fixture helpers and the fake forge to other crates tests.
+test-support = ["dep:tempfile"]
+
+[dev-dependencies]
+tempfile = "3"
+
+# Used by the junction rejection test in src/tests.rs.
+[target.'cfg(windows)'.dev-dependencies]
+junction = "1"

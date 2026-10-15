@@ -1,0 +1,15 @@
+schemaVersion: 1
+id: python-demo
+name: Python demo
+description: Two python stages through mdium-worker
+runtimes:
+  demo:
+    kind: python
+    python: [.venv/Scripts/python.exe, .venv/bin/python]
+    module: demo_flow
+setup:
+  - { run: [uv, venv, --clear, .venv] }
+  - { run: [uv, pip, install, --python, .venv, -e, ../../../../../python/mdium-worker] }
+flows:
+  main: flows/demo.flow.yaml
+  artifacts: flows/artifacts.flow.yaml

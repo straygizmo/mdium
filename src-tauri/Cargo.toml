@@ -1,3 +1,7 @@
+[workspace]
+members = ["crates/flow-core"]
+default-members = [".", "crates/flow-core"]
+
 [package]
 name = "mdium"
 version = "0.3.0"
@@ -11,7 +15,8 @@ crate-type = ["lib", "cdylib", "staticlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["image-png"] }
+flow-core = { path = "crates/flow-core" }
+tauri = { version = "2", features = ["image-png", "protocol-asset"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-http = "2"
@@ -40,12 +45,9 @@ regex = "1"
 serde_yaml_ng = "0.10"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
-# Process creation times for reconnecting to detached flow commands.
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
-
 [dev-dependencies]
 tempfile = "3"
+flow-core = { path = "crates/flow-core", features = ["test-support"] }
 
 [profile.release]
 panic = "abort"

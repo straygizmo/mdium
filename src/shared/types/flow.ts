@@ -1,6 +1,6 @@
 /**
  * TypeScript mirrors of the generic flow engine's definition model and
- * Tauri command payloads (`src-tauri/src/flow/`, `src-tauri/src/commands/flow.rs`).
+ * Tauri command payloads (`src-tauri/crates/flow-core/src/`, `src-tauri/src/commands/flow.rs`).
  * Field names are the camelCase names used on disk and by serde.
  *
  * Flow files: `<project>/.mdium/flows/*.flow.yaml` (primary), `*.flow.yml`,
@@ -15,7 +15,7 @@ export type FlowFormat = "yaml" | "json";
 /** Which coding agent runs an `agent` node (same set as the dev workflow). */
 export type FlowAgentProvider = "codex" | "copilot" | "opencode" | "claude";
 
-export type FlowParamType = "string" | "number" | "bool" | "path";
+export type FlowParamType = "string" | "number" | "bool" | "path" | "object" | "array";
 
 export interface FlowParamDef {
   type: FlowParamType;
@@ -73,7 +73,8 @@ export interface FlowNodeCommon {
 
 export interface FlowAgentNode extends FlowNodeCommon {
   kind: "agent";
-  provider: FlowAgentProvider;
+  /** A provider, or a template (`${{ params.provider }}`) rendered when the node starts. */
+  provider: FlowAgentProvider | (string & {});
   model?: string;
   prompt?: string;
   /** File-relative path, or `builtin:<name>`. */
@@ -82,6 +83,8 @@ export interface FlowAgentNode extends FlowNodeCommon {
   outputContract: "outcome" | "free";
   policy?: unknown;
   workingDir?: string;
+  /** Inputs handed to the agent as data blocks. */
+  with?: Record<string, unknown>;
 }
 
 export interface FlowCommandNode extends FlowNodeCommon {
@@ -101,7 +104,7 @@ export interface FlowApprovalNode extends FlowNodeCommon {
   message?: string;
   show?: string[];
   /** Output ports; defaults to `["approve", "reject"]`. */
-  options?: string[];
+  options?: Array<string | { name: string; commentRequired?: boolean }>;
 }
 
 export interface FlowInlineBody {
@@ -135,12 +138,22 @@ export interface FlowSubflowNode extends FlowNodeCommon {
   kind: "subflow";
   flow: string;
   params?: Record<string, unknown>;
+  /** Project root of the sub-flow scope (templated). */
+  projectRoot?: string;
 }
 
 export interface FlowActionNode extends FlowNodeCommon {
   kind: "action";
   /** `mdium/<name>` */
   uses: string;
+  with?: Record<string, unknown>;
+}
+
+/** Runs a stage of a runtime declared in `.mdium/project.yaml`. */
+export interface FlowPythonNode extends FlowNodeCommon {
+  kind: "python";
+  runtime: string;
+  entry: string;
   with?: Record<string, unknown>;
 }
 
@@ -151,7 +164,8 @@ export type FlowNode =
   | FlowLoopNode
   | FlowBranchNode
   | FlowSubflowNode
-  | FlowActionNode;
+  | FlowActionNode
+  | FlowPythonNode;
 
 export type FlowNodeKind = FlowNode["kind"];
 
@@ -181,7 +195,7 @@ export interface FlowDef {
   ui?: unknown;
 }
 
-/** Stable validation issue codes (`src-tauri/src/flow/issues.rs`). */
+/** Stable validation issue codes (`src-tauri/crates/flow-core/src/issues.rs`). */
 export const FLOW_ERROR_CODES = [
   "FLOW_SCHEMA_UNSUPPORTED",
   "FLOW_PARSE_FAILED",
@@ -194,6 +208,8 @@ export const FLOW_ERROR_CODES = [
   "FLOW_PATH_OUTSIDE_PROJECT",
   "FLOW_TEMPLATE_INVALID",
   "FLOW_ACTION_UNKNOWN",
+  "FLOW_TEMPLATE_UNKNOWN",
+  "FLOW_SUBFLOW_ROOT_INVALID",
   "FLOW_PROVIDER_UNAVAILABLE",
   "FLOW_UNKNOWN_FIELD",
   "FLOW_UNKNOWN_NODE_KIND",
@@ -204,6 +220,10 @@ export const FLOW_ERROR_CODES = [
   "FLOW_SUBFLOW_INVALID",
   "FLOW_PARAM_MISMATCH",
   "FLOW_FILE_TOO_LARGE",
+  "FLOW_OUTPUT_UNKNOWN",
+  "FLOW_PARAM_TYPE",
+  "FLOW_PROJECT_REQUIRED",
+  "FLOW_RUNTIME_UNKNOWN",
 ] as const;
 
 export const FLOW_WARNING_CODES = [
@@ -228,17 +248,39 @@ export interface FlowLoadResult {
   /** Project-relative path with `/` separators. */
   path: string;
   format: FlowFormat;
+  kind: FlowKind;
   /** `null` when the file could not be parsed or decoded. */
   flow: FlowDef | null;
   errors: FlowIssue[];
   warnings: FlowIssue[];
+  /** The checked text; empty when the file could not be read (the report then carries the error). */
+  content: string;
+  /** SHA-256 of `content` as the engine read it. */
+  sha256: string;
+}
+
+export type FlowKind = "entry" | "part";
+
+/** A built-in flow template (`mdium:<name>`), from `flow_template_list`. */
+export interface FlowTemplateInfo {
+  name: string;
+  title: string;
+  description: string;
+  /** The main flow file, relative to the template directory. */
+  main: string;
 }
 
 /** One entry of `flow_list`. */
 export interface FlowSummary {
   path: string;
+  kind: FlowKind;
+  /** Role from the manifest's `flows` (e.g. `main`). */
+  role?: string;
   id: string | null;
   name: string | null;
+  description?: string;
+  params: Record<string, FlowParamDef>;
+  outputs: string[];
   errorCount: number;
   warningCount: number;
 }
@@ -254,4 +296,80 @@ export type FlowCommandErrorCode =
 export interface FlowCommandError {
   code: FlowCommandErrorCode;
   message: string;
+}
+
+/** `.mdium/project.yaml` (spec 2026-10-10, 2.1). */
+export interface RuntimeDef {
+  kind: "python";
+  python: string | string[];
+  module: string;
+  cwd: string;
+  env?: Record<string, string>;
+}
+
+export interface SetupStep {
+  run: string[];
+  workingDir?: string;
+}
+
+export interface MetricDef {
+  ref: string;
+  better: "higher" | "lower";
+}
+
+export interface ProjectDef {
+  schemaVersion: 1;
+  id: string;
+  name: string;
+  description?: string;
+  runtimes?: Record<string, RuntimeDef>;
+  setup?: SetupStep[];
+  secrets?: string[];
+  flows?: Record<string, string>;
+  metrics?: MetricDef[];
+}
+
+/** `flow_project_load` result. */
+export interface ProjectLoadResult {
+  exists: boolean;
+  path: string;
+  /** Hex sha256 of the manifest bytes, when the file exists. */
+  sha256?: string;
+  project: ProjectDef | null;
+  errors: FlowIssue[];
+  warnings: FlowIssue[];
+}
+
+/** Value type of a python stage input or output. */
+export type StageInputType = "string" | "number" | "bool" | "path" | "object" | "array";
+
+export interface StageInput {
+  type: StageInputType;
+  required: boolean;
+  default?: unknown;
+  description?: string;
+}
+
+export interface StageOutput {
+  type?: StageInputType;
+  description?: string;
+}
+
+export interface StageArtifact {
+  label: string;
+  mediaType?: string;
+}
+
+export interface StageDef {
+  name: string;
+  description?: string;
+  inputs: Record<string, StageInput>;
+  outputs: Record<string, StageOutput>;
+  artifacts: StageArtifact[];
+}
+
+/** A runtime's stage manifest, as reported by its worker (`flow_runtime_describe`). */
+export interface Manifest {
+  module: string;
+  stages: StageDef[];
 }

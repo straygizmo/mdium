@@ -3,12 +3,17 @@ import type { FlowRunError, Reason } from "@/shared/types/flow-run";
 import type { FlowIssue } from "@/shared/types/flow";
 import { issueParams } from "../components/FlowIssueList";
 
-/** Localizes a reason code: `reason.*`, then `issue.*`, else the code itself. */
+/**
+ * Localizes a reason code: `reason.*`, then `issue.*`, else the code itself.
+ * A reason with a non-empty `detail` prefers the `<key>_detail` variant
+ * (i18next context) when one exists, so wording never shows empty params.
+ */
 export function describeReason(t: TFunction, reason: Reason): string {
   const params = issueParams({ code: reason.code as FlowIssue["code"], path: "", params: reason.params ?? {} });
+  const context = typeof params.detail === "string" && params.detail !== "" ? "detail" : undefined;
   for (const ns of ["reason", "issue"]) {
     const key = `${ns}.${reason.code}`;
-    const text = t(key, { ...params, defaultValue: "", interpolation: { escapeValue: false } });
+    const text = t(key, { ...params, context, defaultValue: "", interpolation: { escapeValue: false } });
     if (text) return text;
   }
   return reason.code;

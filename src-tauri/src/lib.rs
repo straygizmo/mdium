@@ -1,6 +1,5 @@
 mod commands;
 mod file_watcher;
-mod flow;
 mod http_bridge;
 mod markdown_parser;
 mod workflow;
@@ -75,7 +74,7 @@ fn ensure_loopback_no_proxy() {
 /// Runs the flow command supervisor when the executable was started as one
 /// (`--flow-supervise <spec>`); returns its exit code, or `None` for a normal start.
 pub fn flow_supervise(args: &[String]) -> Option<i32> {
-    flow::run::supervise::supervise_from_args(args)
+    flow_core::run::supervise::supervise_from_args(args)
 }
 
 pub fn run() {
@@ -99,8 +98,15 @@ pub fn run() {
             // The one workflow orchestrator of this process.
             let workflow_state = commands::workflow::create_state(app.handle());
             app.manage::<commands::workflow::WorkflowState>(workflow_state);
-            let flow_engine = commands::flow_run::create_state(app.handle());
-            app.manage::<commands::flow_run::FlowEngineState>(flow_engine);
+            // Built-in `mdium:` flow templates, before any flow is checked or run.
+            if let Some(dir) = commands::flow_run::templates_dir(app.handle()) {
+                flow_core::templates::set_dir(dir);
+            }
+            let (flow_service, flow_agent_host) = commands::flow_run::create_state(app.handle());
+            if let Some(host) = flow_agent_host {
+                app.manage(commands::flow_run::FlowAgentHost(host));
+            }
+            app.manage::<commands::flow::FlowServiceState>(flow_service);
             // Start local HTTP bridge for MCP server callback
             let handle = app.handle().clone();
             let bridge_state = app.state::<HttpBridgeState>().inner().clone();
@@ -399,6 +405,10 @@ pub fn run() {
             commands::flow::flow_list,
             commands::flow::flow_load,
             commands::flow::flow_validate,
+            commands::flow::flow_save,
+            commands::flow::flow_project_load,
+            commands::flow::flow_project_setup,
+            commands::flow::flow_runtime_describe,
             commands::flow_run::flow_command_review,
             commands::flow_run::flow_confirm_commands,
             commands::flow_run::flow_run_start,
@@ -412,7 +422,10 @@ pub fn run() {
             commands::flow_run::flow_run_mark_succeeded,
             commands::flow_run::flow_run_delete,
             commands::flow_run::flow_run_log,
+            commands::flow_run::flow_artifact_path,
             commands::flow_run::flow_gitignore_status,
+            commands::flow_run::flow_template_list,
+            commands::flow_run::flow_template_copy,
         ])
         .on_window_event(|window, event| {
             // Intake windows do not outlive the main window: closing it
@@ -434,8 +447,13 @@ pub fn run() {
                     state.shutdown(workflow::orchestrator::SHUTDOWN_WAIT);
                 }
                 // Flow runs: kill running commands and record `interrupted`.
-                if let Some(engine) = app.try_state::<commands::flow_run::FlowEngineState>() {
-                    engine.shutdown(commands::flow_run::SHUTDOWN_WAIT);
+                if let Some(flow_service) = app.try_state::<commands::flow::FlowServiceState>() {
+                    flow_service.shutdown(commands::flow_run::SHUTDOWN_WAIT);
+                }
+                // The flow agent runner goes down after the runs that use it.
+                if let Some(host) = app.try_state::<commands::flow_run::FlowAgentHost>() {
+                    use workflow::runner_host::RunnerApi;
+                    host.0.shutdown();
                 }
             }
         });

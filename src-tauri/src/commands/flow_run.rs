@@ -1,33 +1,39 @@
 // src-tauri/src/commands/flow_run.rs
-//! Tauri commands and events of flow runs (spec 4–6; PR 3a). The engine
-//! is process-wide state; every command validates `projectRoot`. The UI
+//! Tauri commands and events of flow runs (spec 4–6; PR 3a). The flow
+//! service is process-wide state and validates `projectRoot`. The UI
 //! that calls these is gated behind the `experimentalFlows` setting, but
 //! the setting lives in the frontend: what actually gates execution is the
 //! backend's per-machine command confirmation (spec 7.2).
 
-use super::flow::{blocking, project_root, FlowCommandError};
-use crate::flow::run::driver::{ApprovalNotifier, DriverEnv, EventSink};
-use crate::flow::run::engine::{CommandReview, FlowEngine, RunSnapshot, RunSummary};
-use crate::flow::run::model::{
+use super::flow::{with_service, FlowCommandError, FlowServiceState};
+use super::node_sidecar;
+use crate::workflow::runner_host::{RunnerApi, RunnerHost, SidecarSpawner};
+use flow_core::forge::CliForge;
+use flow_core::gitops;
+use flow_core::run::agent::{AgentRunner, NoAgentRunner, RunnerApiAgentRunner};
+use flow_core::run::driver::{ApprovalNotifier, DriverEnv, EventSink};
+use flow_core::run::engine::{ArtifactLocation, CommandReview, FlowEngine, RunSnapshot, RunSummary};
+use flow_core::run::model::{
     ApprovalRequest, NodeState, NodeStatus, Progress, Reason, RunState, RunStatus,
 };
-use crate::flow::run::process::{AttachedLauncher, Launcher};
-use crate::flow::run::supervise::DetachedLauncher;
+use flow_core::run::process::{AttachedLauncher, Launcher};
+use flow_core::run::supervise::DetachedLauncher;
+use flow_core::run::worker::PipedWorkerLauncher;
+use flow_core::service::{FlowService, GitignoreStatus};
+use flow_core::templates::TemplateInfo;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter};
-
-/// The process-wide engine, managed as Tauri state.
-pub type FlowEngineState = Arc<FlowEngine>;
+use tauri::{AppHandle, Emitter, Manager};
 
 pub const RUN_CHANGED_EVENT: &str = "flow://run-changed";
 pub const NODE_CHANGED_EVENT: &str = "flow://node-changed";
 pub const PROGRESS_EVENT: &str = "flow://progress";
 pub const APPROVAL_REQUESTED_EVENT: &str = "flow://approval-requested";
+pub const SETUP_PROGRESS_EVENT: &str = "flow://setup-progress";
 
 /// How long app exit waits for drivers to record `interrupted`.
 pub const SHUTDOWN_WAIT: Duration = Duration::from_secs(5);
@@ -167,8 +173,41 @@ impl ApprovalNotifier for InAppNotifier {
     }
 }
 
-/// Creates the engine (called once in `setup`).
-pub fn create_state(app: &AppHandle) -> FlowEngineState {
+/// The runner host dedicated to flow agent nodes (independent of the
+/// workflow orchestrator's); shut down on app exit.
+pub struct FlowAgentHost(pub Arc<RunnerHost>);
+
+/// Builds the flow-dedicated runner host, `None` when the sidecar script is
+/// missing.
+fn create_agent_host(app: &AppHandle) -> Option<Arc<RunnerHost>> {
+    match node_sidecar::resolve_script(app, "agent-runner", "agent-runner.mjs") {
+        Ok(script_path) => {
+            let data_dir = dirs::data_local_dir()
+                .unwrap_or_else(std::env::temp_dir)
+                .join("mdium");
+            Some(Arc::new(RunnerHost::new(Box::new(SidecarSpawner {
+                script_path,
+                data_dir,
+            }))))
+        }
+        Err(err) => {
+            eprintln!("[flow] agent runner unavailable: {err}");
+            None
+        }
+    }
+}
+
+/// Creates the engine and its service (called once in `setup`). The agent
+/// runner host is returned too so the caller can manage and shut it down.
+pub fn create_state(app: &AppHandle) -> (FlowServiceState, Option<Arc<RunnerHost>>) {
+    let host = create_agent_host(app);
+    let agent_runner: Arc<dyn AgentRunner> = match &host {
+        Some(host) => Arc::new(RunnerApiAgentRunner {
+            api: host.clone() as Arc<dyn RunnerApi>,
+            probe_timeout: Duration::from_secs(15),
+        }),
+        None => Arc::new(NoAgentRunner),
+    };
     let base = dirs::data_local_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join("mdium");
@@ -188,187 +227,186 @@ pub fn create_state(app: &AppHandle) -> FlowEngineState {
         ]),
         process_env: Arc::new(std::env::vars().collect()),
         poll: Duration::from_millis(200),
+        worker_launcher: Arc::new(PipedWorkerLauncher),
+        agent_runner,
+        forge: Arc::new(CliForge),
+        worktree_base: gitops::default_worktree_base(),
     };
-    Arc::new(FlowEngine::new(
+    let engine = Arc::new(FlowEngine::new(
         env,
         base.join("flow-command-confirmations.json"),
-    ))
+    ));
+    (Arc::new(FlowService::new(engine)), host)
 }
 
-async fn with_engine<T, F>(
-    state: tauri::State<'_, FlowEngineState>,
-    root: String,
-    op: F,
-) -> Result<T, FlowCommandError>
-where
-    T: Send + 'static,
-    F: FnOnce(&FlowEngine, &Path) -> Result<T, FlowCommandError> + Send + 'static,
-{
-    let engine = state.inner().clone();
-    blocking(move || {
-        let root = project_root(&root)?;
-        op(&engine, &root)
-    })
-    .await
-}
-
-/// The commands a flow file runs, for the one-time confirmation (spec 7.2).
 #[tauri::command]
 pub async fn flow_command_review(
-    state: tauri::State<'_, FlowEngineState>,
+    state: tauri::State<'_, FlowServiceState>,
     project_root: String,
     path: String,
 ) -> Result<CommandReview, FlowCommandError> {
-    with_engine(state, project_root, move |e, root| {
-        Ok(e.review_commands(root, &path)?)
-    })
-    .await
+    with_service(state, move |s| s.command_review(&project_root, &path)).await
 }
 
-/// Records the user's confirmation of the reviewed content (by hash).
 #[tauri::command]
 pub async fn flow_confirm_commands(
-    state: tauri::State<'_, FlowEngineState>,
+    state: tauri::State<'_, FlowServiceState>,
     project_root: String,
     path: String,
     sha256: String,
 ) -> Result<(), FlowCommandError> {
-    with_engine(state, project_root, move |e, root| {
-        Ok(e.confirm_commands(root, &path, &sha256)?)
+    with_service(state, move |s| {
+        s.confirm_commands(&project_root, &path, &sha256)
     })
     .await
 }
 
 #[tauri::command]
 pub async fn flow_run_start(
-    state: tauri::State<'_, FlowEngineState>,
+    state: tauri::State<'_, FlowServiceState>,
     project_root: String,
     path: String,
     params: BTreeMap<String, Value>,
     sha256: String,
 ) -> Result<RunSummary, FlowCommandError> {
-    with_engine(state, project_root, move |e, root| {
-        Ok(e.start(root, &path, &params, &sha256)?)
+    with_service(state, move |s| {
+        s.run_start(&project_root, &path, &params, &sha256)
     })
     .await
 }
 
 #[tauri::command]
 pub async fn flow_run_list(
-    state: tauri::State<'_, FlowEngineState>,
+    state: tauri::State<'_, FlowServiceState>,
     project_root: String,
 ) -> Result<Vec<RunSummary>, FlowCommandError> {
-    with_engine(state, project_root, move |e, root| Ok(e.list(root)?)).await
+    with_service(state, move |s| s.run_list(&project_root)).await
 }
 
 #[tauri::command]
 pub async fn flow_run_get(
-    state: tauri::State<'_, FlowEngineState>,
+    state: tauri::State<'_, FlowServiceState>,
     project_root: String,
     run_id: String,
 ) -> Result<RunSnapshot, FlowCommandError> {
-    with_engine(
-        state,
-        project_root,
-        move |e, root| Ok(e.get(root, &run_id)?),
-    )
-    .await
+    with_service(state, move |s| s.run_get(&project_root, &run_id)).await
 }
 
 #[tauri::command]
 pub async fn flow_run_stop(
-    state: tauri::State<'_, FlowEngineState>,
+    state: tauri::State<'_, FlowServiceState>,
     project_root: String,
     run_id: String,
 ) -> Result<(), FlowCommandError> {
-    with_engine(state, project_root, move |e, root| {
-        Ok(e.stop(root, &run_id)?)
-    })
-    .await
+    with_service(state, move |s| s.run_stop(&project_root, &run_id)).await
 }
 
 #[tauri::command]
 pub async fn flow_run_resume(
-    state: tauri::State<'_, FlowEngineState>,
+    state: tauri::State<'_, FlowServiceState>,
     project_root: String,
     run_id: String,
 ) -> Result<(), FlowCommandError> {
-    with_engine(state, project_root, move |e, root| {
-        Ok(e.resume(root, &run_id)?)
-    })
-    .await
+    with_service(state, move |s| s.run_resume(&project_root, &run_id)).await
 }
 
 #[tauri::command]
 pub async fn flow_run_cancel(
-    state: tauri::State<'_, FlowEngineState>,
+    state: tauri::State<'_, FlowServiceState>,
     project_root: String,
     run_id: String,
 ) -> Result<(), FlowCommandError> {
-    with_engine(state, project_root, move |e, root| {
-        Ok(e.cancel(root, &run_id)?)
-    })
-    .await
+    with_service(state, move |s| s.run_cancel(&project_root, &run_id)).await
 }
 
 /// Answers an approval; `nodeKey` null answers the budget approval.
 #[tauri::command]
 pub async fn flow_run_approve(
-    state: tauri::State<'_, FlowEngineState>,
+    state: tauri::State<'_, FlowServiceState>,
     project_root: String,
     run_id: String,
     node_key: Option<String>,
     choice: String,
     comment: Option<String>,
 ) -> Result<(), FlowCommandError> {
-    with_engine(state, project_root, move |e, root| {
-        Ok(e.approve(root, &run_id, node_key.as_deref(), &choice, comment)?)
+    with_service(state, move |s| {
+        s.run_approve(
+            &project_root,
+            &run_id,
+            node_key.as_deref(),
+            &choice,
+            comment,
+        )
     })
     .await
 }
 
 #[tauri::command]
 pub async fn flow_run_rerun_node(
-    state: tauri::State<'_, FlowEngineState>,
+    state: tauri::State<'_, FlowServiceState>,
     project_root: String,
     run_id: String,
     node_key: String,
 ) -> Result<(), FlowCommandError> {
-    with_engine(state, project_root, move |e, root| {
-        Ok(e.rerun_node(root, &run_id, &node_key)?)
+    with_service(state, move |s| {
+        s.run_rerun_node(&project_root, &run_id, &node_key)
     })
     .await
 }
 
 #[tauri::command]
 pub async fn flow_run_mark_succeeded(
-    state: tauri::State<'_, FlowEngineState>,
+    state: tauri::State<'_, FlowServiceState>,
     project_root: String,
     run_id: String,
     node_key: String,
 ) -> Result<(), FlowCommandError> {
-    with_engine(state, project_root, move |e, root| {
-        Ok(e.mark_succeeded(root, &run_id, &node_key)?)
+    with_service(state, move |s| {
+        s.run_mark_succeeded(&project_root, &run_id, &node_key)
     })
     .await
 }
 
 #[tauri::command]
 pub async fn flow_run_delete(
-    state: tauri::State<'_, FlowEngineState>,
+    state: tauri::State<'_, FlowServiceState>,
     project_root: String,
     run_id: String,
 ) -> Result<(), FlowCommandError> {
-    with_engine(state, project_root, move |e, root| {
-        Ok(e.delete(root, &run_id)?)
+    with_service(state, move |s| s.run_delete(&project_root, &run_id)).await
+}
+
+/// Absolute path of a recorded artifact; the file joins the asset-protocol scope (spec 5.2).
+#[tauri::command]
+pub async fn flow_artifact_path(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, FlowServiceState>,
+    project_root: String,
+    run_id: String,
+    node_key: String,
+    attempt: u32,
+    index: u32,
+) -> Result<ArtifactLocation, FlowCommandError> {
+    let location = with_service(state, move |s| {
+        s.run_artifact_path(&project_root, &run_id, &node_key, attempt, index)
     })
-    .await
+    .await?;
+    // Only recorded artifacts become loadable through the asset protocol.
+    app.asset_protocol_scope()
+        .allow_file(&location.path)
+        .map_err(|e| {
+            FlowCommandError::new(
+                flow_core::run::engine::FLOW_ARTIFACT_NOT_FOUND,
+                e.to_string(),
+            )
+        })?;
+    Ok(location)
 }
 
 /// Tail of a node attempt's `stdout` / `stderr` log (at most 256 KiB).
 #[tauri::command]
 pub async fn flow_run_log(
-    state: tauri::State<'_, FlowEngineState>,
+    state: tauri::State<'_, FlowServiceState>,
     project_root: String,
     run_id: String,
     node_key: String,
@@ -376,91 +414,75 @@ pub async fn flow_run_log(
     stream: String,
     max_bytes: u64,
 ) -> Result<String, FlowCommandError> {
-    with_engine(state, project_root, move |e, root| {
-        Ok(e.log(root, &run_id, &node_key, attempt, &stream, max_bytes)?)
+    with_service(state, move |s| {
+        s.run_log(
+            &project_root,
+            &run_id,
+            &node_key,
+            attempt,
+            &stream,
+            max_bytes,
+        )
     })
     .await
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GitignoreStatus {
-    /// `.mdium/flow-runs/` is ignored by git (or the folder is not a git repository).
-    pub ignored: bool,
-}
-
-/// Whether git ignores `.mdium/flow-runs/` in `root` (the UI suggests
-/// adding it otherwise; nothing is written automatically).
-fn flow_runs_ignored(root: &Path) -> bool {
-    let mut command = std::process::Command::new("git");
-    command
-        .args(["check-ignore", "-q", ".mdium/flow-runs/probe"])
-        .current_dir(root)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
-    match command.status() {
-        Ok(status) => status.code() != Some(1),
-        // No git: nothing to suggest.
-        Err(_) => true,
-    }
 }
 
 #[tauri::command]
 pub async fn flow_gitignore_status(
+    state: tauri::State<'_, FlowServiceState>,
     project_root: String,
 ) -> Result<GitignoreStatus, FlowCommandError> {
-    blocking(move || {
-        let root = super::flow::project_root(&project_root)?;
-        Ok(GitignoreStatus {
-            ignored: flow_runs_ignored(&root),
-        })
+    with_service(state, move |s| s.gitignore_status(&project_root)).await
+}
+
+#[tauri::command]
+pub async fn flow_template_list(
+    state: tauri::State<'_, FlowServiceState>,
+    project_root: String,
+) -> Result<Vec<TemplateInfo>, FlowCommandError> {
+    with_service(state, move |s| s.template_list(&project_root)).await
+}
+
+#[tauri::command]
+pub async fn flow_template_copy(
+    state: tauri::State<'_, FlowServiceState>,
+    project_root: String,
+    template: String,
+    file_name: String,
+) -> Result<Vec<String>, FlowCommandError> {
+    with_service(state, move |s| {
+        s.template_copy(&project_root, &template, &file_name)
     })
     .await
+}
+
+/// Locates `resources/flow-templates` (the built-in `mdium:` flow templates)
+/// in the production bundle or the dev tree, with the same candidates as
+/// `node_sidecar::resolve_script`.
+pub fn templates_dir(app: &AppHandle) -> Option<PathBuf> {
+    let resource_dir = app.path().resource_dir().ok()?;
+    let candidates = [
+        // Production bundle (Tauri copies ../resources/... into _up_/resources/...)
+        resource_dir.join("_up_").join("resources").join("flow-templates"),
+        resource_dir.join("flow-templates"),
+        // Dev fallback: repo-root resources dir relative to src-tauri.
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("resources")
+            .join("flow-templates"),
+    ];
+    candidates.into_iter().find(|c| c.is_dir()).map(|c| {
+        let text = c.to_string_lossy().into_owned();
+        match text.strip_prefix(r"\\?\") {
+            Some(plain) => PathBuf::from(plain),
+            None => c,
+        }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::flow::run::engine::{EngineError, FLOW_RUN_INVALID_ID};
-
-    #[test]
-    fn detects_whether_flow_runs_are_ignored() {
-        let tmp = tempfile::tempdir().unwrap();
-        // Not a repository: nothing to suggest.
-        assert!(flow_runs_ignored(tmp.path()));
-        let git = |args: &[&str]| {
-            std::process::Command::new("git")
-                .args(args)
-                .current_dir(tmp.path())
-                .output()
-                .unwrap()
-        };
-        git(&["init", "-q"]);
-        assert!(!flow_runs_ignored(tmp.path()));
-        std::fs::write(tmp.path().join(".gitignore"), ".mdium/flow-runs/\n").unwrap();
-        assert!(flow_runs_ignored(tmp.path()));
-    }
-
-    #[test]
-    fn engine_errors_keep_code_and_details() {
-        let err = FlowCommandError::from(EngineError {
-            code: FLOW_RUN_INVALID_ID.into(),
-            message: "x".into(),
-            details: vec![Reason::new("D")],
-        });
-        assert_eq!(err.code, FLOW_RUN_INVALID_ID);
-        assert_eq!(err.details.len(), 1);
-        let json = serde_json::to_value(&err).unwrap();
-        assert_eq!(json["details"][0]["code"], "D");
-        let plain = serde_json::to_value(FlowCommandError::new("C", "m")).unwrap();
-        assert!(plain.get("details").is_none());
-    }
 
     #[test]
     fn payloads_are_camel_case() {
@@ -477,5 +499,24 @@ mod tests {
         assert_eq!(json["nodeKey"], "a");
         assert_eq!(json["status"], "running");
         assert_eq!(json["costUsd"], 0.0);
+    }
+
+    const LIB_RS: &str = include_str!("../lib.rs");
+
+    /// The flow handlers are read from `generate_handler!` in `lib.rs`, so the
+    /// test pins the registered Tauri commands to the service's dispatch table
+    /// and HTTP and Tauri never drift.
+    #[test]
+    fn tauri_commands_match_the_service_dispatch_table() {
+        let re = regex::Regex::new(r"commands::flow(?:_run)?::(flow_\w+)").unwrap();
+        let mut tauri: Vec<&str> = re
+            .captures_iter(LIB_RS)
+            .map(|c| c.get(1).unwrap().as_str())
+            .collect();
+        tauri.sort();
+        tauri.dedup();
+        let mut service: Vec<&str> = flow_core::service::COMMAND_NAMES.to_vec();
+        service.sort();
+        assert_eq!(tauri, service);
     }
 }

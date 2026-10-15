@@ -1,0 +1,35 @@
+schemaVersion: 1
+id: approval-options
+name: Approval options
+description: >-
+  An approval that shows a node's output and artifacts, offers a plain option
+  and an option that requires a comment, and exposes choice and comment.
+nodes:
+  - id: render
+    kind: command
+    run:
+      - powershell
+      - -NoProfile
+      - -Command
+      - >-
+        Add-Content -Path $env:MDIUM_FLOW_EVENTS_FILE -Value '{"v":1,"type":"artifact","path":"shot.png","label":"shot"}'
+  - id: review
+    kind: approval
+    message: "Accept the render?"
+    show:
+      - nodes.render.artifacts
+      - nodes.render.artifacts.shot
+    options:
+      - accept
+      - { name: revise, commentRequired: true }
+  - id: done
+    kind: command
+    run:
+      - powershell
+      - -NoProfile
+      - -Command
+      - Write-Output "${{ nodes.review.outputs.choice }}"
+edges:
+  - { from: render, to: review }
+  - { from: review, to: done, port: accept }
+  - { from: review, to: render, port: revise, maxTraversals: 2 }

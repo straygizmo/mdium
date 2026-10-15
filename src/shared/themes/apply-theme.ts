@@ -40,6 +40,7 @@ const CSS_VAR_MAP: Record<string, string> = {
   flowNodeBranch: "--flow-node-branch",
   flowNodeSubflow: "--flow-node-subflow",
   flowNodeAction: "--flow-node-action",
+  flowNodePython: "--flow-node-python",
 };
 
 type TaskStatusColorKey =
@@ -58,7 +59,8 @@ type FlowNodeColorKey =
   | "flowNodeLoop"
   | "flowNodeBranch"
   | "flowNodeSubflow"
-  | "flowNodeAction";
+  | "flowNodeAction"
+  | "flowNodePython";
 
 function tint(accent: string, percent: number, surface: string): string {
   return `color-mix(in srgb, ${accent} ${percent}%, ${surface})`;
@@ -88,6 +90,7 @@ export function flowNodeDefaults(colors: ThemeColors): Required<Pick<ThemeColors
     flowNodeBranch: colors.secondary,
     flowNodeSubflow: colors.textSecondary,
     flowNodeAction: colors.textMuted,
+    flowNodePython: colors.primaryHover,
   };
 }
 

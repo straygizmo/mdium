@@ -90,7 +90,7 @@ describe("flow node theme tokens", () => {
     document.documentElement.style.cssText = "";
   });
 
-  const kinds = ["agent", "command", "approval", "loop", "branch", "subflow", "action"];
+  const kinds = ["agent", "command", "approval", "loop", "branch", "subflow", "action", "python"];
 
   it("publishes a variable per node kind for every preset", () => {
     for (const theme of themePresets) {

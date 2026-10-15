@@ -1,11 +1,12 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getFlowTransport, type FlowEventName } from "./transport";
+import "./tauri-transport";
 import {
   FLOW_APPROVAL_REQUESTED_EVENT,
   FLOW_NODE_CHANGED_EVENT,
   FLOW_PROGRESS_EVENT,
   FLOW_RUN_CHANGED_EVENT,
   type ApprovalRequestedEvent,
+  type ArtifactRef,
   type CommandReview,
   type FlowRunError,
   type NodeChangedEvent,
@@ -37,11 +38,14 @@ export function toFlowRunError(err: unknown): FlowRunError | null {
 
 async function call<T>(command: string, args: Record<string, unknown>): Promise<T> {
   try {
-    return await invoke<T>(command, args);
+    return await getFlowTransport().call<T>(command, args);
   } catch (err) {
     throw toFlowRunError(err) ?? err;
   }
 }
+
+/** Log kinds: prompt and response exist for agent nodes only. */
+export type LogStream = "stdout" | "stderr" | "prompt" | "response";
 
 /** Run commands of the flow engine. Paths are project-relative. */
 export const flowRunApi = {
@@ -63,9 +67,11 @@ export const flowRunApi = {
   markSucceeded: (projectRoot: string, runId: string, nodeKey: string) =>
     call<void>("flow_run_mark_succeeded", { projectRoot, runId, nodeKey }),
   delete: (projectRoot: string, runId: string) => call<void>("flow_run_delete", { projectRoot, runId }),
-  log: (projectRoot: string, runId: string, nodeKey: string, attempt: number, stream: "stdout" | "stderr", maxBytes: number) =>
+  log: (projectRoot: string, runId: string, nodeKey: string, attempt: number, stream: LogStream, maxBytes: number) =>
     call<string>("flow_run_log", { projectRoot, runId, nodeKey, attempt, stream, maxBytes }),
   gitignoreStatus: (projectRoot: string) => call<{ ignored: boolean }>("flow_gitignore_status", { projectRoot }),
+  /** A webview-loadable URL for a recorded artifact (not a plain command). */
+  artifactUrl: (projectRoot: string, ref: ArtifactRef) => getFlowTransport().artifactUrl(projectRoot, ref),
 };
 
 export interface FlowRunEventHandlers {
@@ -76,10 +82,11 @@ export interface FlowRunEventHandlers {
 }
 
 /** Subscribes to the flow run events; resolves to an unsubscribe function. */
-export async function subscribeFlowRunEvents(handlers: FlowRunEventHandlers): Promise<UnlistenFn> {
-  const unlisten: UnlistenFn[] = [];
-  const add = async <T,>(name: string, handler?: (payload: T) => void) => {
-    if (handler) unlisten.push(await listen<T>(name, (e) => handler(e.payload)));
+export async function subscribeFlowRunEvents(handlers: FlowRunEventHandlers): Promise<() => void> {
+  const transport = getFlowTransport();
+  const unlisten: Array<() => void> = [];
+  const add = async <T,>(name: FlowEventName, handler?: (payload: T) => void) => {
+    if (handler) unlisten.push(await transport.subscribe<T>(name, handler));
   };
   await add(FLOW_RUN_CHANGED_EVENT, handlers.onRunChanged);
   await add(FLOW_NODE_CHANGED_EVENT, handlers.onNodeChanged);

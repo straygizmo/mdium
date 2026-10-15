@@ -3,9 +3,14 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const invoke = vi.hoisted(() => vi.fn());
-vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke,
+  convertFileSrc: vi.fn((p: string, proto: string) => `${proto}://${p}`),
+}));
 
-import { flowApi, isFlowCommandError } from "../flow-api";
+import { flowApi, isFlowCommandError, subscribeSetupProgress } from "../flow-api";
+import { setFlowTransport } from "../transport";
+import type { SetupProgressEvent } from "@/shared/types/flow-run";
 import { FLOW_ERROR_CODES, FLOW_WARNING_CODES } from "@/shared/types/flow";
 
 const ROOT = "C:\proj";
@@ -22,6 +27,22 @@ describe("flowApi", () => {
       () => flowApi.validate(ROOT, PATH, "schemaVersion: 1"),
       "flow_validate",
       { projectRoot: ROOT, path: PATH, content: "schemaVersion: 1" },
+    ],
+    [
+      "save",
+      () => flowApi.save(ROOT, PATH, "schemaVersion: 1", "h1"),
+      "flow_save",
+      { projectRoot: ROOT, path: PATH, content: "schemaVersion: 1", expectedSha256: "h1" },
+    ],
+    ["projectLoad", () => flowApi.projectLoad(ROOT), "flow_project_load", { projectRoot: ROOT }],
+    ["projectSetup", () => flowApi.projectSetup(ROOT, "abc"), "flow_project_setup", { projectRoot: ROOT, sha256: "abc" }],
+    ["runtimeDescribe", () => flowApi.runtimeDescribe(ROOT, "r", "abc"), "flow_runtime_describe", { projectRoot: ROOT, runtime: "r", sha256: "abc" }],
+    ["listTemplates", () => flowApi.listTemplates(ROOT), "flow_template_list", { projectRoot: ROOT }],
+    [
+      "copyTemplate",
+      () => flowApi.copyTemplate(ROOT, "dev-workflow", "develop"),
+      "flow_template_copy",
+      { projectRoot: ROOT, template: "dev-workflow", fileName: "develop" },
     ],
   ] as const)("%s invokes %s", async (_name, call, command, args) => {
     invoke.mockResolvedValueOnce("ok");
@@ -44,6 +65,37 @@ describe("flowApi", () => {
     await expect(flowApi.list(ROOT)).rejects.toBe("not json");
   });
 
+  it("subscribes to setup progress through the transport", async () => {
+    const seen: Array<[string, (payload: unknown) => void]> = [];
+    const unlisten = () => {};
+    setFlowTransport({
+      call: async () => undefined as never,
+      artifactUrl: async () => "",
+      watchFolder: async () => () => {},
+      subscribe: async <T,>(event: string, handler: (payload: T) => void) => {
+        seen.push([event, handler as (payload: unknown) => void]);
+        return unlisten;
+      },
+    });
+    try {
+      const received: SetupProgressEvent[] = [];
+      await expect(subscribeSetupProgress((e) => received.push(e))).resolves.toBe(unlisten);
+      expect(seen[0][0]).toBe("flow://setup-progress");
+      const payload: SetupProgressEvent = {
+        projectRoot: ROOT,
+        setupId: "s1",
+        step: 1,
+        total: 2,
+        status: "started",
+        run: ["npm", "ci"],
+      };
+      seen[0][1](payload);
+      expect(received).toEqual([payload]);
+    } finally {
+      setFlowTransport(null);
+    }
+  });
+
   it("recognizes command errors", () => {
     expect(isFlowCommandError({ code: "A", message: "b" })).toBe(true);
     expect(isFlowCommandError({ code: "A" })).toBe(false);
@@ -53,7 +105,7 @@ describe("flowApi", () => {
 
 describe("issue codes", () => {
   it("mirror the Rust constants exactly", () => {
-    const rust = readFileSync(resolve(__dirname, "../../../../../src-tauri/src/flow/issues.rs"), "utf8");
+    const rust = readFileSync(resolve(__dirname, "../../../../../src-tauri/crates/flow-core/src/issues.rs"), "utf8");
     const codes = [...rust.matchAll(/pub const (FLOW_[A-Z_]+): &str = "\1";/g)].map((m) => m[1]);
     expect([...codes].sort()).toEqual([...FLOW_ERROR_CODES, ...FLOW_WARNING_CODES].sort());
   });

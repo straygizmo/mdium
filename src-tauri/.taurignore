@@ -1,0 +1,5 @@
+# Paths the `tauri dev` file watcher must not restart the app for.
+# Test fixtures include runnable sample projects (e.g. tests/fixtures/projects/python-demo)
+# whose Setup and runs write `.venv/` and `.mdium/` under src-tauri; without this the
+# dev watcher restarts the app mid-setup and mid-run.
+tests/

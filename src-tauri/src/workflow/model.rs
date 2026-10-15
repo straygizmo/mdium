@@ -23,15 +23,7 @@ pub enum Role {
     Review,
 }
 
-/// Which coding agent runs a stage. Serializes as lowercase.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Provider {
-    Codex,
-    Copilot,
-    Opencode,
-    Claude,
-}
+pub use flow_core::provider::Provider;
 
 /// Whether the workflow auto-creates/updates an issue tracker entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -227,15 +219,7 @@ pub struct Task {
     pub body: String,
 }
 
-/// Location and branch info for a run's dedicated worktree.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WorktreeInfo {
-    pub path: String,
-    pub branch: String,
-    pub base_branch: String,
-    pub base_commit: String,
-}
+pub use flow_core::gitops::WorktreeInfo;
 
 /// Lifecycle status of a workflow run. Serializes as snake_case on disk,
 /// matching `TaskStatus`.
@@ -550,36 +534,7 @@ impl std::fmt::Display for ValidationError {
 
 crate::workflow::errors::impl_workflow_error!(ValidationError);
 
-/// True if `path` is not a safe repo-relative `designDocPath`: absolute,
-/// containing a `..` segment, or rooted under `.git`/`.mdium`.
-pub(crate) fn is_invalid_design_doc_path(path: &str) -> bool {
-    if std::path::Path::new(path).is_absolute() {
-        return true;
-    }
-    // `Path::is_absolute` only recognizes a Windows drive/UNC prefix or,
-    // on Unix, a leading `/`. A workflow file can be authored on any OS, so
-    // also reject a leading separator here directly: on Windows a bare
-    // "/etc/passwd" is "rooted" but not "absolute" per std, yet it is still
-    // not a safe repo-relative path.
-    if path.starts_with('/') || path.starts_with('\\') {
-        return true;
-    }
-
-    let mut first_segment: Option<&str> = None;
-    for segment in path.split(['/', '\\']).filter(|s| !s.is_empty()) {
-        if first_segment.is_none() {
-            first_segment = Some(segment);
-        }
-        if segment == ".." {
-            return true;
-        }
-    }
-
-    // Compare case-insensitively: Windows/macOS filesystems are typically
-    // case-insensitive, so ".Git"/".GIT" resolve to the same directory as
-    // ".git" and must be rejected too.
-    matches!(first_segment, Some(seg) if seg.eq_ignore_ascii_case(".git") || seg.eq_ignore_ascii_case(".mdium"))
-}
+pub(crate) use flow_core::prompts::is_invalid_design_doc_path;
 
 impl Workflow {
     /// Validate this workflow against the fixed shape rules (constraints.md):
