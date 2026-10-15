@@ -171,8 +171,81 @@ function applyFlowStyle(node: Node): void {
 export function mergeFlowIntoText(text: string, def: FlowDef): string {
   const doc = parseDocument(text, { uniqueKeys: true });
   if (doc.errors.length > 0 || !isMap(doc.contents)) return stringifyFlow(def);
+  const folded = foldedScalars(doc, text);
   mergeMap(doc, doc.contents, canonicalTop(def), "top");
-  return restoreSourceLines(text, doc.toString({ lineWidth: 0, indent: 2 }));
+  const out = doc.toString(STRINGIFY);
+  return restoreSourceLines(text, restoreFoldedScalars(doc, folded, out));
+}
+
+const STRINGIFY = { lineWidth: 0, indent: 2 } as const;
+
+/** A folded block scalar (`>`) of the source: the node, its value and its source text. */
+interface FoldedScalar {
+  scalar: Scalar;
+  value: string;
+  /** The block from its `>` indicator to the end of its last line, as written. */
+  block: string;
+  /** Indentation of the line the indicator sits on. */
+  indent: number;
+}
+
+function foldedScalars(doc: Document, text: string): FoldedScalar[] {
+  const found: FoldedScalar[] = [];
+  visit(doc, {
+    Scalar(_, scalar) {
+      if (scalar.type !== "BLOCK_FOLDED" || typeof scalar.value !== "string" || !scalar.range) return;
+      const [start, end] = scalar.range;
+      const lineStart = text.lastIndexOf("\n", start - 1) + 1;
+      const indent = /^[ \t]*/.exec(text.slice(lineStart, start))?.[0].length ?? 0;
+      found.push({ scalar, value: scalar.value, block: text.slice(start, end).replace(/\s+$/, ""), indent });
+    },
+  });
+  return found;
+}
+
+const FOLDED_MARK = "__mdium_folded_";
+
+/**
+ * With `lineWidth: 0` the stringifier writes a folded block scalar on one line, losing the
+ * line breaks the author chose. Each folded scalar whose value the merge left unchanged and
+ * that is still in the document gets its source block back (re-indented to where it now sits).
+ * The result is kept only if it parses to the same data as `out`.
+ */
+function restoreFoldedScalars(doc: Document, folded: FoldedScalar[], out: string): string {
+  const present = new Set<Scalar>();
+  visit(doc, {
+    Scalar(_, scalar) {
+      present.add(scalar);
+    },
+  });
+  const kept = folded.filter((f) => present.has(f.scalar) && f.scalar.value === f.value);
+  if (kept.length === 0) return out;
+  kept.forEach((f, i) => {
+    f.scalar.type = "PLAIN";
+    f.scalar.value = `${FOLDED_MARK}${i}__`;
+  });
+  const marked = doc.toString(STRINGIFY);
+  kept.forEach((f) => {
+    f.scalar.type = "BLOCK_FOLDED";
+    f.scalar.value = f.value;
+  });
+  const restored = marked
+    .split("\n")
+    .map((line) => {
+      const m = new RegExp(`^([ ]*)(.*?)${FOLDED_MARK}(\\d+)__$`).exec(line);
+      if (!m) return line;
+      const f = kept[Number(m[3])];
+      const [head, ...body] = f.block.split("\n");
+      const shift = m[1].length - f.indent;
+      const moved = body.map((l) => (shift >= 0 ? " ".repeat(shift) + l : l.slice(Math.min(-shift, /^[ ]*/.exec(l)?.[0].length ?? 0))));
+      return [m[1] + m[2] + head, ...moved].join("\n");
+    })
+    .join("\n");
+  try {
+    return JSON.stringify(parse(restored)) === JSON.stringify(parse(out)) ? restored : out;
+  } catch {
+    return out;
+  }
 }
 
 function keyOf(pair: Pair): string {
