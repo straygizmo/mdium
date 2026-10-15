@@ -543,6 +543,8 @@ use std::sync::Mutex;
 pub enum FakeTurn {
     /// Completes with this final response.
     Respond(String),
+    /// Completes with this final response and a reported cost in USD.
+    RespondPriced(String, f64),
     Fail { code: String, message: String },
     /// Reports a guard violation, then fails like a blocked turn.
     Guard { rule: String, summary: String },
@@ -594,6 +596,7 @@ impl FakeAgentRunner {
     pub fn complete_hanging(&self, response: &str) {
         self.end_hanging(AgentTurnEvent::Completed {
             final_response: response.to_string(),
+            cost_usd: None,
         });
     }
 
@@ -654,8 +657,21 @@ impl AgentRunner for FakeAgentRunner {
             .unwrap_or_else(|| FakeTurn::Respond("---\noutcome: completed\n---\n".into()));
         let (events, hang) = match turn {
             FakeTurn::Respond(final_response) => {
-                (vec![AgentTurnEvent::Completed { final_response }], false)
+                (
+                    vec![AgentTurnEvent::Completed {
+                        final_response,
+                        cost_usd: None,
+                    }],
+                    false,
+                )
             }
+            FakeTurn::RespondPriced(final_response, usd) => (
+                vec![AgentTurnEvent::Completed {
+                    final_response,
+                    cost_usd: Some(usd),
+                }],
+                false,
+            ),
             FakeTurn::Fail { code, message } => (vec![AgentTurnEvent::Failed { code, message }], false),
             FakeTurn::Guard { rule, summary } => (
                 vec![

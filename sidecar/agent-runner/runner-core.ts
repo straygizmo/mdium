@@ -334,7 +334,14 @@ export class RunnerCore {
           return;
         }
         const nativeSessionId = entry.session.nativeSessionId();
-        this.deps.send({ type: "turn_completed", sessionId, finalResponse, ...(nativeSessionId ? { nativeSessionId } : {}) });
+        const costUsd = entry.session.lastTurnCostUsd?.();
+        this.deps.send({
+          type: "turn_completed",
+          sessionId,
+          finalResponse,
+          ...(nativeSessionId ? { nativeSessionId } : {}),
+          ...(typeof costUsd === "number" ? { costUsd } : {}),
+        });
       })
       .catch((error: unknown) => {
         // A guard block also aborts the turn; its outcome takes precedence

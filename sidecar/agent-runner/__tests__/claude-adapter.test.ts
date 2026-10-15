@@ -38,7 +38,8 @@ function callbacks(events: AgentEvent[], overrides: Partial<SessionCallbacks> = 
   };
 }
 
-const success = (result: string, session_id = "s-1") => ({ type: "result", subtype: "success", is_error: false, result, session_id });
+const success = (result: string, session_id = "s-1", total_cost_usd?: number) =>
+  ({ type: "result", subtype: "success", is_error: false, result, session_id, ...(total_cost_usd === undefined ? {} : { total_cost_usd }) });
 
 const turnScript = [
   { type: "system", subtype: "init", session_id: "s-1" },
@@ -100,6 +101,16 @@ describe("ClaudeAdapter", () => {
     expect(options.abortController).toBeInstanceOf(AbortController);
     expect(typeof options.canUseTool).toBe("function");
     expect(JSON.stringify(options)).not.toContain("bypassPermissions");
+  });
+
+  it("reports the result's total_cost_usd for the turn, and nothing without it", async () => {
+    const fake = fakeQuery([success("a", "s-1", 0.42)], [success("b")]);
+    const session = await adapter(fake.query).startSession(baseOptions, callbacks([]));
+    expect(session.lastTurnCostUsd?.()).toBeUndefined();
+    await session.runTurn("one", new AbortController().signal);
+    expect(session.lastTurnCostUsd?.()).toBe(0.42);
+    await session.runTurn("two", new AbortController().signal);
+    expect(session.lastTurnCostUsd?.()).toBeUndefined();
   });
 
   it("resumes the recorded session on the next turn", async () => {

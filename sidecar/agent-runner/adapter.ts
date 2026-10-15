@@ -33,6 +33,8 @@ export interface AdapterSession {
    * `images` are validated absolute image paths inside the session's workspace root.
    */
   runTurn(text: string, signal: AbortSignal, images?: readonly string[]): Promise<string>;
+  /** Cost in USD of the last completed turn, when the provider reports it. */
+  lastTurnCostUsd?(): number | undefined;
   close(): Promise<void>;
 }
 export interface ProviderAdapter {

@@ -1938,6 +1938,7 @@ mod tests {
                 vec![RunnerEvent::TurnCompleted {
                     final_response: text.to_string(),
                     native_session_id: None,
+                    cost_usd: None,
                 }],
             )
         }

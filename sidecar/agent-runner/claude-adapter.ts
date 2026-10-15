@@ -68,6 +68,8 @@ type ClaudeMessage = {
   result?: string;
   is_error?: boolean;
   errors?: string[];
+  /** Result messages: the turn's cost in USD as the SDK computed it. */
+  total_cost_usd?: number;
 };
 
 /** Largest image sent inline; larger images are skipped with a note. */
@@ -135,6 +137,8 @@ function contentBlocks(message: ClaudeMessage): ContentBlock[] {
 class ClaudeSession implements AdapterSession {
   private sessionId: string | undefined;
   private controller: AbortController | undefined;
+  /** `total_cost_usd` of the last turn's result message. */
+  private costUsd: number | undefined;
 
   constructor(
     private readonly query: QueryFn,
@@ -147,6 +151,10 @@ class ClaudeSession implements AdapterSession {
 
   nativeSessionId(): string | undefined {
     return this.sessionId;
+  }
+
+  lastTurnCostUsd(): number | undefined {
+    return this.costUsd;
   }
 
   /**
@@ -186,6 +194,7 @@ class ClaudeSession implements AdapterSession {
 
   async runTurn(text: string, signal: AbortSignal, images: readonly string[] = []): Promise<string> {
     if (signal.aborted) throw abortError();
+    this.costUsd = undefined;
     const prompt = await buildPrompt(text, images);
     if (signal.aborted) throw abortError();
     const controller = new AbortController();
@@ -271,6 +280,9 @@ class ClaudeSession implements AdapterSession {
             break;
           case "result":
             if (message.session_id) this.sessionId = message.session_id;
+            if (typeof message.total_cost_usd === "number" && Number.isFinite(message.total_cost_usd)) {
+              this.costUsd = message.total_cost_usd;
+            }
             if (message.subtype !== "success") {
               const details = message.errors?.length ? `: ${message.errors.join("; ")}` : "";
               throw new Error(`CLAUDE_FAILED: ${message.subtype ?? "unknown"}${details}`);
