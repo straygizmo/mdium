@@ -12,6 +12,11 @@
       "type": "object",
       "required": true
     },
+    "baselineParams": {
+      "type": "object",
+      "required": false,
+      "default": {}
+    },
     "worktreePath": {
       "type": "string",
       "required": true
@@ -30,6 +35,7 @@
       "id": "verify",
       "kind": "subflow",
       "flow": "project:main",
+      "paramsFrom": "${{ params.baselineParams }}",
       "projectRoot": "${{ params.worktreePath }}",
       "timeout": "24h"
     },
@@ -42,10 +48,12 @@
           "costUsd": "${{ params.baselineCostUsd }}",
           "outputs": "${{ params.baselineOutputs }}"
         },
+        "baselineParams": "${{ params.baselineParams }}",
         "candidate": {
           "costUsd": "${{ nodes.verify.costUsd }}",
           "outputs": "${{ nodes.verify.outputs }}"
-        }
+        },
+        "candidateParams": "${{ nodes.verify.params }}"
       }
     }
   ],

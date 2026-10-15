@@ -40,10 +40,11 @@ nodes:
       worktreePath: "${{ nodes.develop.outputs.worktreePath }}"
       baselineOutputs: "${{ nodes.propose.outputs.baselineOutputs }}"
       baselineCostUsd: "${{ nodes.propose.outputs.baselineCostUsd }}"
+      baselineParams: "${{ nodes.propose.outputs.baselineParams }}"
     timeout: 24h
   - id: adopt_gate
     kind: approval
-    message: Adopt the change? The report compares the latest completed run of the main flow with the verification run in the worktree. Make the baseline run with the same reduced parameters as the verification, and after a merge run the main flow once more before the next iteration so the next proposal starts from the new baseline.
+    message: Adopt the change? The report compares the latest completed run of the main flow with the verification run in the worktree, which starts from the baseline run's arguments; arguments that still differ are listed at the top of the report. After a merge, run the main flow once more before the next iteration so the next proposal starts from the new baseline.
     show: [nodes.verify.outputs.report, nodes.verify.outputs.improved, nodes.develop.outputs.branch]
     options: [merge, discard]
   - { id: merge, kind: action, uses: mdium/git-merge-local, with: { worktree: "${{ nodes.develop.outputs.worktree }}" } }

@@ -95,6 +95,8 @@ Check at least:
 - Security: injection (shell, SQL, path, HTML), hardcoded secrets, unsafe file or process use, missing validation of untrusted input.
 - Maintainability: clarity, naming, duplication, and consistency with the existing code.
 
+When the input has `testRan: true`, the project's test steps (`test` in its `.mdium/project.yaml`) were run in the working directory right before this review: `testOk` says whether they all passed, `testExitCode` is the failing step's exit code, `testTail` the end of its output and `testLogDir` the directory with the full logs. Read those instead of running the tests yourself, and treat `testOk: false` as a Critical finding unless the logs show the failure is unrelated to the change. With `testRan: false` no test steps are declared; then say so and judge the tests by reading them.
+
 Report each finding with its location as file:line, a severity, what is wrong, and how to fix it. Use these severities:
 - Critical: incorrect behavior, data loss, a security problem, or a failing build or test.
 - Important: a missing requirement, missing tests for new behavior, poor error handling, or a significant maintainability problem.

@@ -298,6 +298,7 @@ impl RefChecker<'_> {
                         &node_path,
                         &node.id,
                         true,
+                        sub.params_from.is_some(),
                     );
                 }
                 NodeKind::Loop(lp) => match &lp.body {
@@ -309,6 +310,7 @@ impl RefChecker<'_> {
                             &node_path,
                             &node.id,
                             // The callee's outputs become `results[]` items, not node outputs.
+                            false,
                             false,
                         );
                     }
@@ -328,6 +330,7 @@ impl RefChecker<'_> {
         node_path: &str,
         node_id: &str,
         record_outputs: bool,
+        inherits: bool,
     ) {
         if reference.trim().is_empty() || crate::template::has_template(reference) {
             return; // already reported by the validator
@@ -484,8 +487,11 @@ impl RefChecker<'_> {
                 );
             }
         }
+        // With `paramsFrom` a required argument may arrive at run time
+        // (`FLOW_PARAM_MISSING` then), so only explicit arguments are checked here.
         for (name, def) in &child.params {
-            if def.required
+            if !inherits
+                && def.required
                 && def.default.is_none()
                 && !args.get(name).is_some_and(|v| !v.is_null())
             {

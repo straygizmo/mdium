@@ -37,3 +37,4 @@ outputs:
   choice: "${{ nodes.approve_proposal.outputs.choice }}"
   baselineOutputs: "${{ nodes.baseline.outputs.outputs }}"
   baselineCostUsd: "${{ nodes.baseline.outputs.costUsd }}"
+  baselineParams: "${{ nodes.baseline.outputs.params }}"

@@ -138,6 +138,8 @@ export interface FlowSubflowNode extends FlowNodeCommon {
   kind: "subflow";
   flow: string;
   params?: Record<string, unknown>;
+  /** Template of an object passed as arguments under `params` (entries the callee does not declare are dropped). */
+  paramsFrom?: string;
   /** Project root of the sub-flow scope (templated). */
   projectRoot?: string;
 }
@@ -324,6 +326,8 @@ export interface ProjectDef {
   description?: string;
   runtimes?: Record<string, RuntimeDef>;
   setup?: SetupStep[];
+  /** How to test a copy (`mdium/project-test`), same shape as `setup`. */
+  test?: SetupStep[];
   secrets?: string[];
   flows?: Record<string, string>;
   metrics?: MetricDef[];

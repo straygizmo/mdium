@@ -278,6 +278,9 @@ pub struct TemplateContext<'a> {
     pub artifacts: ArtifactsLookup<'a>,
     /// Actual + estimated cost (USD) of a node and everything under it.
     pub costs: &'a dyn Fn(&str) -> Option<f64>,
+    /// Resolved arguments of a sub-flow node's child scope (`NotRun` until
+    /// the scope opened, or for a node that opens none).
+    pub scope_params: OutputsLookup<'a>,
     /// Loop variables of the enclosing inline loops, innermost last.
     pub vars: &'a [LoopVar],
     /// Outputs of the iteration that just ended (`while` loop `until` only).
@@ -338,6 +341,10 @@ impl TemplateContext<'_> {
                     .map(|a| Value::String(a.path))
             }
             Reference::NodeCost { node } => Some(Value::from((self.costs)(node).unwrap_or(0.0))),
+            Reference::NodeParams { node } => match (self.scope_params)(node)? {
+                NodeOutputs::Ran(map) => Some(Value::Object(map.into_iter().collect())),
+                NodeOutputs::NotRun => not_run(Value::Object(Default::default())),
+            },
             Reference::RunId => Some(Value::String(self.run_id.to_string())),
             Reference::RunDir => Some(path(self.run_dir)),
             Reference::NodeDir => self.node_dir.map(path),
@@ -588,6 +595,7 @@ nodes:
             outputs: &outputs,
             artifacts: &|_| None,
             costs: &|id| (id == "a").then_some(1.5),
+            scope_params: &|_| None,
             vars: &vars,
             iteration: Some(&iteration),
             run_id: "r1",
@@ -641,6 +649,7 @@ nodes:
             outputs: &outputs,
             artifacts: &|_| None,
             costs: &|id| (id == "a").then_some(1.5),
+            scope_params: &|_| None,
             vars: &[],
             iteration: None,
             run_id: "r",

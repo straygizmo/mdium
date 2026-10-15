@@ -22,6 +22,8 @@ pub const FLOW_ACTION_UNKNOWN: &str = "FLOW_ACTION_UNKNOWN";
 pub const FLOW_TEMPLATE_UNKNOWN: &str = "FLOW_TEMPLATE_UNKNOWN";
 /// A sub-flow's `projectRoot` does not resolve to a usable directory.
 pub const FLOW_SUBFLOW_ROOT_INVALID: &str = "FLOW_SUBFLOW_ROOT_INVALID";
+/// A sub-flow's `paramsFrom` did not render to an object.
+pub const FLOW_SUBFLOW_PARAMS_INVALID: &str = "FLOW_SUBFLOW_PARAMS_INVALID";
 /// Checked at run start once agent nodes run (PR 5); defined so the code list is complete.
 #[allow(dead_code)]
 pub const FLOW_PROVIDER_UNAVAILABLE: &str = "FLOW_PROVIDER_UNAVAILABLE";

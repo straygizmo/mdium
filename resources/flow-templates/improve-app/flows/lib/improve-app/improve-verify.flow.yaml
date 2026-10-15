@@ -6,12 +6,16 @@ params:
   worktreePath: { type: string, required: true }
   baselineOutputs: { type: object, required: true }
   baselineCostUsd: { type: number, required: true }
+  # The baseline run's arguments: the verification starts from them (see `paramsFrom`).
+  baselineParams: { type: object, default: {} }
 nodes:
   - { id: setup, kind: action, uses: mdium/project-setup, with: { projectRoot: "${{ params.worktreePath }}" } }
   - id: verify
     kind: subflow
     flow: project:main
     projectRoot: "${{ params.worktreePath }}"
+    # The baseline's arguments, so the two runs compare like with like; `params` overrides them.
+    paramsFrom: "${{ params.baselineParams }}"
     # The project's copy narrows the scale here (for example one story, one chapter, no review).
     params: {}
     timeout: 24h
@@ -21,6 +25,9 @@ nodes:
     with:
       baseline: { outputs: "${{ params.baselineOutputs }}", costUsd: "${{ params.baselineCostUsd }}" }
       candidate: { outputs: "${{ nodes.verify.outputs }}", costUsd: "${{ nodes.verify.costUsd }}" }
+      # Arguments that still differ are listed at the top of the report.
+      baselineParams: "${{ params.baselineParams }}"
+      candidateParams: "${{ nodes.verify.params }}"
 edges:
   - { from: setup, to: verify }
   - { from: verify, to: compare }

@@ -1,6 +1,19 @@
-//! Driver: composite.
+//! Driver: `subflow` and `loop` nodes, i.e. the scopes a run opens (file
+//! and inline bodies, worktree children) and their outputs.
 
 use super::*;
+
+/// The JSON kind of a value, for error details.
+fn value_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
 
 impl Driver {
     /// Starts a sub-flow node: renders its params and `projectRoot`, then
@@ -22,6 +35,29 @@ impl Driver {
             Ok(Value::Object(given)) => given.into_iter().collect(),
             Ok(_) => return,
             Err(reason) => return self.fail_node(key, attempt, reason),
+        };
+        // Strict as well: inheriting nothing because the source has not run
+        // yet would silently run the child with its defaults.
+        let inherited: BTreeMap<String, Value> = match &sub.params_from {
+            Some(text) => {
+                let rendered = self.with_ctx(prefix, None, None, None, |ctx| {
+                    ctx.render_value_strict(text)
+                });
+                match rendered {
+                    Ok(Value::Object(map)) => map.into_iter().collect(),
+                    Ok(other) => {
+                        return self.fail_node(
+                            key,
+                            attempt,
+                            Reason::new(FLOW_SUBFLOW_PARAMS_INVALID)
+                                .with("paramsFrom", text.as_str())
+                                .with("found", value_kind(&other)),
+                        )
+                    }
+                    Err(reason) => return self.fail_node(key, attempt, reason),
+                }
+            }
+            None => BTreeMap::new(),
         };
         // Strict: a skipped or not-yet-run node must not render to "" and
         // silently run the child in the project root.
@@ -51,6 +87,7 @@ impl Driver {
                 &sub.flow,
                 &subflow_prefix(key),
                 &given,
+                &inherited,
                 None,
                 None,
             ),
@@ -60,6 +97,7 @@ impl Driver {
                 attempt,
                 &sub.flow,
                 &given,
+                &inherited,
                 root.trim(),
                 acknowledged,
             ),
@@ -103,7 +141,7 @@ impl Driver {
     /// root nor the main checkout. The project must be its repository's
     /// top level (a subdirectory project cannot map into a worktree).
     /// Checked before anything there is read; `reason` says which rule failed.
-    pub(super) fn resolve_scope_root(&self, raw: &str) -> Result<PathBuf, Reason> {
+    fn resolve_scope_root(&self, raw: &str) -> Result<PathBuf, Reason> {
         let invalid = |why: &str| {
             Reason::new(FLOW_SUBFLOW_ROOT_INVALID)
                 .with("root", raw)
@@ -143,7 +181,7 @@ impl Driver {
 
     /// Loads the child flow `display` (and everything it references) from
     /// the worktree `root`, as a start would load it from the project.
-    pub(super) fn load_worktree_child(
+    fn load_worktree_child(
         &self,
         root: &Path,
         reference: &str,
@@ -192,7 +230,7 @@ impl Driver {
     /// definitions of snapshot file `file` (and the files it references):
     /// commands, python stages, and the manifest's runtimes and setup.
     /// `None` when they match, else the worktree's side to show.
-    pub(super) fn confirmed_differences(&self, file: &str, child: &Bundle) -> Option<BTreeMap<String, Value>> {
+    fn confirmed_differences(&self, file: &str, child: &Bundle) -> Option<BTreeMap<String, Value>> {
         let mut confirmed: BTreeMap<String, &FlowDef> = BTreeMap::new();
         let mut queue = vec![file.to_string()];
         while let Some(current) = queue.pop() {
@@ -246,13 +284,14 @@ impl Driver {
     /// shows exactly that difference). Opening records the child's
     /// definitions in `run.json` under `<root>::<path>`.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn open_worktree_scope(
+    fn open_worktree_scope(
         &mut self,
         prefix: &str,
         key: &str,
         attempt: u32,
         reference: &str,
         given: &BTreeMap<String, Value>,
+        inherited: &BTreeMap<String, Value>,
         raw_root: &str,
         acknowledged: Option<&BTreeMap<String, ShowValue>>,
     ) -> Result<(), Reason> {
@@ -324,6 +363,7 @@ impl Driver {
             reference,
             &subflow_prefix(key),
             given,
+            inherited,
             None,
             Some((root_text.clone(), file)),
         )
@@ -334,13 +374,14 @@ impl Driver {
     /// worktree (see [`Self::open_worktree_scope`]); otherwise the reference
     /// resolves through the snapshot.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn open_file_scope(
+    fn open_file_scope(
         &mut self,
         prefix: &str,
         owner: &str,
         reference: &str,
         child: &str,
         given: &BTreeMap<String, Value>,
+        inherited: &BTreeMap<String, Value>,
         iteration: Option<(Value, usize)>,
         worktree: Option<(String, String)>,
     ) -> Result<(), Reason> {
@@ -363,7 +404,14 @@ impl Driver {
         let flow = scope::flow_of(&self.meta, &resolved)
             .cloned()
             .ok_or_else(|| Reason::new(FLOW_SUBFLOW_MISSING).with("ref", reference))?;
-        let params = prepare_params(&flow, given).map_err(|problems| {
+        // `paramsFrom` entries the child declares, under the explicit ones.
+        let mut merged: BTreeMap<String, Value> = inherited
+            .iter()
+            .filter(|(name, _)| flow.params.contains_key(name.as_str()))
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect();
+        merged.extend(given.iter().map(|(k, v)| (k.clone(), v.clone())));
+        let params = prepare_params(&flow, &merged).map_err(|problems| {
             problems
                 .into_iter()
                 .next()
@@ -420,7 +468,7 @@ impl Driver {
         }
     }
 
-    pub(super) fn progress_subflow(&mut self, key: &str) {
+    fn progress_subflow(&mut self, key: &str) {
         let child = subflow_prefix(key);
         let Some(scope) = self.state.scopes.get(&child).cloned() else {
             return;
@@ -453,7 +501,7 @@ impl Driver {
         out
     }
 
-    pub(super) fn progress_loop(&mut self, prefix: &str, key: &str, node: &FlowNode, lp: &LoopNode) {
+    fn progress_loop(&mut self, prefix: &str, key: &str, node: &FlowNode, lp: &LoopNode) {
         let attempt = self.node(key).attempt;
         let children = self.iterations(key);
         let active = children
@@ -513,7 +561,7 @@ impl Driver {
         }
     }
 
-    pub(super) fn start_iteration(
+    fn start_iteration(
         &mut self,
         prefix: &str,
         key: &str,
@@ -574,6 +622,7 @@ impl Driver {
                             file,
                             &child,
                             &given,
+                            &BTreeMap::new(),
                             Some((item, index)),
                             None,
                         ) {
@@ -587,7 +636,7 @@ impl Driver {
         }
     }
 
-    pub(super) fn finish_loop(
+    fn finish_loop(
         &mut self,
         key: &str,
         attempt: u32,

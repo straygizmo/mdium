@@ -111,7 +111,7 @@ pub struct ActionSpec {
 }
 
 /// Every built-in action. `model::KNOWN_ACTIONS` is derived from this list.
-pub const ACTION_SPECS: [ActionSpec; 10] = [
+pub const ACTION_SPECS: [ActionSpec; 11] = [
     ActionSpec {
         uses: "mdium/screen-input",
         inputs: &[("text", true)],
@@ -153,14 +153,24 @@ pub const ACTION_SPECS: [ActionSpec; 10] = [
         outputs: &["ok"],
     },
     ActionSpec {
+        uses: "mdium/project-test",
+        inputs: &[("projectRoot", false)],
+        outputs: &["ran", "ok", "exitCode", "logDir", "tail"],
+    },
+    ActionSpec {
         uses: "mdium/flow-run-latest",
         inputs: &[("flow", true)],
-        outputs: &["runId", "runDir", "status", "outputs", "costUsd", "failedNodes"],
+        outputs: &["runId", "runDir", "status", "outputs", "params", "costUsd", "failedNodes"],
     },
     ActionSpec {
         uses: "mdium/metrics-compare",
-        inputs: &[("baseline", true), ("candidate", true)],
-        outputs: &["improved", "report", "reportPath"],
+        inputs: &[
+            ("baseline", true),
+            ("candidate", true),
+            ("baselineParams", false),
+            ("candidateParams", false),
+        ],
+        outputs: &["improved", "report", "reportPath", "differingParams"],
     },
 ];
 
@@ -183,6 +193,7 @@ pub fn run_action(uses: &str, with: &BTreeMap<String, Value>, ctx: &ActionContex
         "mdium/issue-entry" => forge::issue_entry(with, ctx),
         "mdium/issue-close" => forge::issue_close(with, ctx),
         "mdium/project-setup" => project::project_setup(with, ctx),
+        "mdium/project-test" => project::project_test(with, ctx),
         "mdium/flow-run-latest" => project::flow_run_latest(with, ctx),
         "mdium/metrics-compare" => project::metrics_compare(with, ctx),
         _ => Err(Reason::new(FLOW_ACTION_UNKNOWN).with("uses", uses)),

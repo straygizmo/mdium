@@ -75,15 +75,29 @@ pub fn run_setup(
     progress: &dyn Fn(&SetupProgress),
     cancel: Option<&AtomicBool>,
 ) -> SetupResult {
+    run_steps(project_root, &project.setup, launcher, poll, progress, cancel)
+}
+
+/// Runs `steps` in order (the manifest's `setup` or `test` list), logging
+/// under `.mdium/setup-runs/<id>`; see [`run_setup`].
+pub fn run_steps(
+    project_root: &Path,
+    steps: &[crate::project::SetupStep],
+    launcher: &dyn Launcher,
+    poll: Duration,
+    progress: &dyn Fn(&SetupProgress),
+    cancel: Option<&AtomicBool>,
+) -> SetupResult {
     let is_cancelled = || cancel.is_some_and(|flag| flag.load(Ordering::SeqCst));
     let mut cancelled = false;
     let setup_id = fsutil::new_id();
     let log_rel = format!(".mdium/setup-runs/{setup_id}");
     let log_dir: PathBuf = project_root.join(&log_rel);
-    let total = project.setup.len();
+    let total = steps.len();
+    let all = steps;
     let mut steps = Vec::new();
     let mut ok = true;
-    for (i, step) in project.setup.iter().enumerate() {
+    for (i, step) in all.iter().enumerate() {
         if is_cancelled() {
             cancelled = true;
             ok = false;

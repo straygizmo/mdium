@@ -362,6 +362,9 @@ impl Validator {
                 if let Some(root) = &sub.project_root {
                     self.template(root, &join(path, "projectRoot"), ctx);
                 }
+                if let Some(from) = &sub.params_from {
+                    self.template(from, &join(path, "paramsFrom"), ctx);
+                }
             }
             NodeKind::Action(action) => {
                 match crate::run::actions::spec_of(&action.uses) {
@@ -752,6 +755,7 @@ impl Validator {
             | Reference::NodeArtifacts { node }
             | Reference::NodeArtifact { node, .. }
             | Reference::NodeCost { node }
+            | Reference::NodeParams { node }
                 if !ctx.visible.iter().any(|ids| ids.contains(node)) =>
             {
                 self.issues.error(
