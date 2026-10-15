@@ -722,3 +722,36 @@
 @keyframes slidev-spin {
   to { transform: rotate(360deg); }
 }
+
+.preview-panel__macro-split {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.preview-panel__macro-left {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 50%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.preview-panel__macro-divider {
+  flex: 0 0 4px;
+  cursor: col-resize;
+  background: var(--border);
+}
+
+.preview-panel__macro-divider:hover {
+  background: var(--primary);
+}
+
+.preview-panel__macro-right {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}

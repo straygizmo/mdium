@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PreviewPanel } from "./PreviewPanel";
 import { useTabStore, type Tab } from "@/stores/tab-store";
 import { useUiStore } from "@/stores/ui-store";
+import { useMacroChatStore } from "@/stores/macro-chat-store";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -41,6 +42,7 @@ describe("PreviewPanel macro buttons", () => {
     });
     useTabStore.setState({ tabs: [tab], activeTabId: tab.id, activeFolderPath: tab.folderPath });
     useUiStore.setState({ activeViewTab: "preview" });
+    useMacroChatStore.setState({ splitRatio: 50, lockedByWorkbook: {} });
   });
 
   afterEach(() => {
@@ -66,5 +68,41 @@ describe("PreviewPanel macro buttons", () => {
     expect(pushCall[1]).toEqual({ xlsmPath: tab.filePath });
     expect(container.querySelector(".preview-panel__convert-success")?.textContent).toContain("1");
     await act(async () => root.unmount());
+  });
+
+  it("splits an xlsm tab into sheet preview and macro chat", async () => {
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    await act(async () => root.render(<PreviewPanel previewRef={{ current: null }} />));
+    expect(container.querySelector(".preview-panel__macro-split")).not.toBeNull();
+    expect(container.querySelector('[data-testid="macro-chat"]')).not.toBeNull();
+    const left = container.querySelector<HTMLElement>(".preview-panel__macro-left")!;
+    expect(left.style.flexBasis).toBe("50%");
+    await act(async () => root.unmount());
+  });
+
+  it("does not split a plain xlsx tab", async () => {
+    useTabStore.setState({ tabs: [{ ...tab, id: "x", filePath: "C:/project/plain.xlsx", fileName: "plain.xlsx", officeFileType: ".xlsx" }], activeTabId: "x" });
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    await act(async () => root.render(<PreviewPanel previewRef={{ current: null }} />));
+    expect(container.querySelector(".preview-panel__macro-split")).toBeNull();
+    expect(container.querySelector('[data-testid="macro-chat"]')).toBeNull();
+    await act(async () => root.unmount());
+  });
+
+  it("disables the import button while Excel holds the workbook", async () => {
+    useMacroChatStore.getState().setLocked(tab.filePath, true);
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    await act(async () => root.render(<PreviewPanel previewRef={{ current: null }} />));
+    // Let the dynamic fs import and macros-dir existence check settle.
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    const buttons = [...container.querySelectorAll<HTMLButtonElement>(".preview-panel__convert-bar button")];
+    const importBtn = buttons.find((b) => b.textContent?.includes("取り込み") || b.textContent?.includes("Load"))!;
+    expect(importBtn.disabled).toBe(true);
+    expect(importBtn.title.length).toBeGreaterThan(0);
+    await act(async () => root.unmount());
+    useMacroChatStore.getState().setLocked(tab.filePath, false);
   });
 });

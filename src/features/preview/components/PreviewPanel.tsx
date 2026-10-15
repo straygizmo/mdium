@@ -14,6 +14,7 @@ import { resolveSourceLine } from "@/features/preview/lib/resolve-source-line";
 
 import { usePreviewTableEdit } from "../hooks/usePreviewTableEdit";
 import { OfficePreview } from "./OfficePreview";
+import { MacroChatPane } from "./MacroChatPane";
 import { PdfPreviewPanel } from "./PdfPreviewPanel";
 import { DocxPreviewPanel } from "./DocxPreviewPanel";
 import { HtmlPreviewPanel } from "./HtmlPreviewPanel";
@@ -24,6 +25,8 @@ import { ZennFrontmatterForm } from "@/features/zenn/components/ZennFrontmatterF
 import { VideoPanel } from "@/features/video/components/VideoPanel";
 import { VideoScenarioDialog, type VideoScenarioParams } from "@/features/video/components/VideoScenarioDialog";
 import { useVideoStore } from "@/stores/video-store";
+import { useMacroChatStore } from "@/stores/macro-chat-store";
+import { useDividerDrag } from "@/shared/hooks/useDividerDrag";
 import { DEFAULT_META, DEFAULT_TTS_CONFIG, DEFAULT_TRANSITION, type NarrationSegment } from "@/features/video/types";
 import { splitNarration } from "@/features/video/lib/narration-splitter";
 import { videoFilePrefix } from "@/features/video/lib/audio-filename";
@@ -247,6 +250,12 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree, onJump
   const setActiveViewTab = useUiStore((s) => s.setActiveViewTab);
   const isZennMode = useUiStore((s) => s.isZennMode);
   const contentRef = useRef<HTMLDivElement>(null);
+  // Macro chat split state (hooks must precede the early-return branches below)
+  const macroSplitRatio = useMacroChatStore((s) => s.splitRatio);
+  const setMacroSplitRatio = useMacroChatStore((s) => s.setSplitRatio);
+  const workbookLocked = useMacroChatStore((s) => (activeTab?.filePath ? s.isLocked(activeTab.filePath) : false));
+  const macroSplitRef = useRef<HTMLDivElement>(null);
+  const handleMacroDividerDown = useDividerDrag(macroSplitRef, macroSplitRatio, setMacroSplitRatio, 20, 80);
   const [converting, setConverting] = useState(false);
   const [convertError, setConvertError] = useState<string | null>(null);
   const [macroExporting, setMacroExporting] = useState(false);
@@ -1268,55 +1277,73 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree, onJump
 
   // Show OfficePreview for Office files
   if (isOfficeFile) {
-    return (
-      <div className="preview-panel">
-        {(isDocx || isPdf || isXlsx) && (
-          <div className="preview-panel__convert-bar">
-            <button
-              onClick={handleConvertToMarkdown}
-              disabled={converting}
-            >
-              {converting ? t("converting") : t("convertToMarkdown")}
-            </button>
-            {isMacroEnabled && (
+    const officeBody = (
+      <>
+          {(isDocx || isPdf || isXlsx) && (
+            <div className="preview-panel__convert-bar">
               <button
-                onClick={handleExportMacros}
-                disabled={macroExporting || macroImporting}
-                title={t("exportMacrosHint") ?? ""}
+                onClick={handleConvertToMarkdown}
+                disabled={converting}
               >
-                {macroExporting ? t("exportingMacros") : t("exportMacros")}
+                {converting ? t("converting") : t("convertToMarkdown")}
               </button>
-            )}
-            {isMacroEnabled && macrosDirExists && (
-              <button
-                onClick={handleImportMacros}
-                disabled={macroImporting || macroExporting}
-                title={t("importMacrosHint") ?? ""}
-              >
-                {macroImporting ? t("importingMacros") : t("importMacros")}
-              </button>
-            )}
-            {convertError && (
-              <span className="preview-panel__convert-error">{convertError}</span>
-            )}
-            {macroError && (
-              <span className="preview-panel__convert-error">{macroError}</span>
-            )}
-            {macroSuccess && (
-              <span className="preview-panel__convert-success">{macroSuccess}</span>
-            )}
+              {isMacroEnabled && (
+                <button
+                  onClick={handleExportMacros}
+                  disabled={macroExporting || macroImporting}
+                  title={t("exportMacrosHint") ?? ""}
+                >
+                  {macroExporting ? t("exportingMacros") : t("exportMacros")}
+                </button>
+              )}
+              {isMacroEnabled && macrosDirExists && (
+                <button
+                  onClick={handleImportMacros}
+                  disabled={macroImporting || macroExporting || workbookLocked}
+                  title={workbookLocked ? t("workbookLocked") : (t("importMacrosHint") ?? "")}
+                >
+                  {macroImporting ? t("importingMacros") : t("importMacros")}
+                </button>
+              )}
+              {convertError && (
+                <span className="preview-panel__convert-error">{convertError}</span>
+              )}
+              {macroError && (
+                <span className="preview-panel__convert-error">{macroError}</span>
+              )}
+              {macroSuccess && (
+                <span className="preview-panel__convert-success">{macroSuccess}</span>
+              )}
+            </div>
+          )}
+          <div className="preview-panel__office-wrap" ref={previewRef}>
+            <OfficePreview
+              key={activeTab!.filePath}
+              fileData={activeTab!.binaryData!}
+              fileType={activeTab!.officeFileType!}
+              themeType={themeType}
+            />
           </div>
-        )}
-        <div className="preview-panel__office-wrap" ref={previewRef}>
-          <OfficePreview
-            key={activeTab!.filePath}
-            fileData={activeTab!.binaryData!}
-            fileType={activeTab!.officeFileType!}
-            themeType={themeType}
-          />
-        </div>
-      </div>
+      </>
     );
+
+    if (isMacroEnabled && activeTab?.filePath) {
+      return (
+        <div className="preview-panel">
+          <div className="preview-panel__macro-split" ref={macroSplitRef}>
+            <div className="preview-panel__macro-left" style={{ flexBasis: `${macroSplitRatio}%` }}>
+              {officeBody}
+            </div>
+            <div className="preview-panel__macro-divider" onMouseDown={handleMacroDividerDown} />
+            <div className="preview-panel__macro-right">
+              <MacroChatPane filePath={activeTab.filePath} fileName={activeTab.fileName} folderPath={activeTab.folderPath || null} />
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    return <div className="preview-panel">{officeBody}</div>;
   }
 
   return (
