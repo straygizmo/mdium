@@ -141,6 +141,7 @@ struct XlsmRequest {
 #[derive(Deserialize)]
 struct InjectRequest {
     xlsm_path: String,
+    #[allow(dead_code)] // Kept for wire compatibility; Task 6 rewrites this route.
     macros_dir: String,
 }
 
@@ -425,16 +426,11 @@ fn handle_request(app: &AppHandle, expected_token: &str, mut request: tiny_http:
                     return;
                 }
             };
-            match vba::inject_vba_modules(req.xlsm_path.clone(), req.macros_dir.clone()) {
+            match vba::push_vba_modules_impl(&req.xlsm_path) {
                 Ok(result) => {
-                    let _ = request.respond(json_response(
-                        200,
-                        json!({
-                            "activeFile": active,
-                            "backupPath": result.backup_path,
-                            "updatedModules": result.updated_modules,
-                        }),
-                    ));
+                    let mut body = serde_json::to_value(&result).unwrap_or_else(|_| json!({}));
+                    body["activeFile"] = json!(active);
+                    let _ = request.respond(json_response(200, body));
                 }
                 Err(e) => {
                     // If the error string is already structured JSON (module_set_changed),

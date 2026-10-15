@@ -248,6 +248,7 @@ impl DirStream {
             .unwrap_or(1252)
     }
 
+    #[allow(dead_code)] // Part of the DirStream API; exercised by tests.
     pub fn module_count(&self) -> Option<u16> {
         self.records
             .iter()

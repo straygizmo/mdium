@@ -18,9 +18,7 @@ pub mod rag;
 pub mod slidev;
 pub mod speech;
 pub mod vba;
-#[allow(dead_code)] // normalize_source / validate_module_name are consumed by later tasks.
 pub mod vba_source;
-#[allow(dead_code)] // Used by the VBA path tools once later tasks wire them in.
 pub mod vba_streams;
 pub mod video;
 pub mod workflow;

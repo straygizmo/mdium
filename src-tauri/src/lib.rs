@@ -332,7 +332,7 @@ pub fn run() {
             // VBA macro operations
             commands::vba::pull_vba_modules,
             commands::vba::check_workbook_lock,
-            commands::vba::inject_vba_modules,
+            commands::vba::push_vba_modules,
             commands::vba::list_vba_modules,
             // Active xlsm state
             commands::active_xlsm::set_active_xlsm_path,
