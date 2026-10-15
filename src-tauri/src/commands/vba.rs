@@ -736,10 +736,10 @@ pub fn push_vba_modules_impl(xlsm_path: &str) -> Result<PushResult, String> {
     let xlsm_data = fs::read(file_path).map_err(|e| vba_error("push_failed", e.to_string()))?;
     let vba_bin = read_vba_project_bin(xlsm_path).map_err(|e| vba_error("no_vba_project", e))?;
     let mut loaded = load_project(vba_bin).map_err(|e| vba_error("push_failed", e))?;
-    let code_page = match fs::read_to_string(macros_dir.join(".codepage")) {
-        Ok(s) => s.trim().parse::<u16>().unwrap_or(loaded.code_page),
-        Err(_) => loaded.code_page,
-    };
+    // Always encode with the project's own code page: Excel decodes every module
+    // with PROJECTCODEPAGE, so a .codepage override could only corrupt text.
+    // The .codepage file written by pull is informational only.
+    let code_page = loaded.code_page;
 
     // ---- plan (nothing written yet) ----
     let existing_names: Vec<String> = loaded.modules.iter().map(|m| m.name.clone()).collect();
@@ -782,12 +782,25 @@ pub fn push_vba_modules_impl(xlsm_path: &str) -> Result<PushResult, String> {
         .map(|(_, v)| v)
         .collect();
     new_files.sort_by(|a, b| a.0.cmp(&b.0));
+    // Stream names already used directly under /VBA (module streams of any
+    // name, caches, dir); a new module stream must not collide with them.
+    let reserved_streams: std::collections::HashSet<String> = loaded
+        .comp
+        .walk()
+        .filter(|e| e.is_stream() && e.path().parent().map(|p| p.to_string_lossy() == "/VBA").unwrap_or(false))
+        .map(|e| e.name().to_ascii_lowercase())
+        .chain(loaded.modules.iter().map(|m| m.stream_name.to_ascii_lowercase()))
+        .collect();
     let mut taken = existing_names.clone();
     for (name, kind, path) in new_files {
         if name.eq_ignore_ascii_case("ThisWorkbook")
             || loaded.modules.iter().any(|m| m.kind == ModuleKind::Form && m.name.eq_ignore_ascii_case(name))
         {
             return Err(vba_error("invalid_module_name", format!("'{}' is a document or form module and cannot be created from a file", name)));
+        }
+        let lower = name.to_ascii_lowercase();
+        if lower == "dir" || lower == "_vba_project" || lower.starts_with("__srp_") || reserved_streams.contains(&lower) {
+            return Err(vba_error("invalid_module_name", format!("'{}' collides with an existing stream in the VBA storage", name)));
         }
         validate_module_name(name, &taken).map_err(|msg| vba_error("invalid_module_name", msg))?;
         taken.push(name.clone());
@@ -1569,5 +1582,72 @@ mod tests {
         let err = push_vba_modules_impl(&xlsm_s).unwrap_err();
         assert_eq!(err_code(&err), "workbook_locked");
         assert!(!tmp.path().join("Book1.xlsm.bak").exists());
+    }
+
+    #[test]
+    fn push_refuses_new_module_named_like_a_vba_stream() {
+        let tmp = tempfile::tempdir().unwrap();
+        let xlsm = three_module_workbook(tmp.path());
+        let xlsm_s = xlsm.to_string_lossy().to_string();
+        let macros = PathBuf::from(pull_vba_modules(xlsm_s.clone()).unwrap().macros_dir);
+        fs::write(macros.join("Dir.bas"), "Sub X()\r\nEnd Sub\r\n").unwrap();
+        let err = push_vba_modules_impl(&xlsm_s).unwrap_err();
+        assert_eq!(err_code(&err), "invalid_module_name");
+        assert!(!tmp.path().join("Book1.xlsm.bak").exists());
+    }
+
+    #[test]
+    fn push_refuses_new_module_named_like_a_renamed_modules_stream() {
+        // Module "Renamed" lives in stream "Old"; a new Old.bas must not clobber it.
+        let tmp = tempfile::tempdir().unwrap();
+        let cursor = Cursor::new(Vec::new());
+        let mut comp = cfb::CompoundFile::create(cursor).unwrap();
+        comp.create_storage("/VBA").unwrap();
+        let mut project = ProjectStream { lines: vec!["ID=\"{1}\"".into(), "".into()] };
+        project.add_module("Renamed", ModuleKind::Standard);
+        let wm = ProjectWm { names: vec!["Renamed".into()] };
+        let mut dir = DirStream::parse(&{
+            let mut v = Vec::new();
+            v.extend_from_slice(&make_record(0x0001, &3u32.to_le_bytes()));
+            v.extend_from_slice(&make_record(0x0003, &1252u16.to_le_bytes()));
+            v.extend_from_slice(&make_record(0x000F, &0u16.to_le_bytes()));
+            v.extend_from_slice(&make_record(0x0013, &0xFFFFu16.to_le_bytes()));
+            v.extend_from_slice(&make_record(0x0010, &[]));
+            v
+        })
+        .unwrap();
+        dir.append_module("Renamed", "Old", ModuleKind::Standard, 0, 1252).unwrap();
+        let src = vba_compress(b"Attribute VB_Name = \"Renamed\"\r\nSub A()\r\nEnd Sub\r\n");
+        comp.create_stream("/VBA/Old").unwrap().write_all(&src).unwrap();
+        comp.create_stream("/PROJECT").unwrap().write_all(&project.serialize(1252).unwrap()).unwrap();
+        comp.create_stream("/PROJECTwm").unwrap().write_all(&wm.serialize(1252).unwrap()).unwrap();
+        comp.create_stream("/VBA/dir").unwrap().write_all(&vba_compress(&dir.serialize())).unwrap();
+        comp.create_stream("/VBA/_VBA_PROJECT").unwrap().write_all(&[0xCC, 0x61, 0xFF, 0xFF, 0x00, 0x00, 0x00]).unwrap();
+        comp.flush().unwrap();
+        let bin = comp.into_inner().into_inner();
+        let xlsm = build_workbook(tmp.path(), "Ren.xlsm", &bin);
+        let xlsm_s = xlsm.to_string_lossy().to_string();
+        let macros = PathBuf::from(pull_vba_modules(xlsm_s.clone()).unwrap().macros_dir);
+        fs::write(macros.join("Old.bas"), "Sub X()\r\nEnd Sub\r\n").unwrap();
+        let err = push_vba_modules_impl(&xlsm_s).unwrap_err();
+        assert_eq!(err_code(&err), "invalid_module_name");
+        assert!(!tmp.path().join("Ren.xlsm.bak").exists());
+    }
+
+    #[test]
+    fn push_ignores_the_codepage_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let xlsm = three_module_workbook(tmp.path());
+        let xlsm_s = xlsm.to_string_lossy().to_string();
+        let macros = PathBuf::from(pull_vba_modules(xlsm_s.clone()).unwrap().macros_dir);
+        fs::write(macros.join(".codepage"), "932").unwrap();
+        fs::write(macros.join("Module1.bas"), "Attribute VB_Name = \"Module1\"\r\nSub Edited()\r\nEnd Sub\r\n").unwrap();
+        let res = push_vba_modules_impl(&xlsm_s).unwrap();
+        assert_eq!(res.updated, vec!["Module1"]);
+        fs::remove_dir_all(&macros).unwrap();
+        pull_vba_modules(xlsm_s).unwrap();
+        let m1 = fs::read_to_string(macros.join("Module1.bas")).unwrap();
+        assert!(m1.contains("Sub Edited()"));
+        assert_eq!(fs::read_to_string(macros.join(".codepage")).unwrap(), "1252");
     }
 }
