@@ -1,7 +1,8 @@
 import { useState, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { invoke } from "@tauri-apps/api/core";
 import type { ConvertibleFile } from "../lib/collectConvertibleFiles";
+import { convertFileToMarkdown, WordUnavailableError } from "../lib/convertFileToMarkdown";
+import type { PptxLabels } from "../lib/convertFileToMarkdown";
 
 export interface BatchConvertProgress {
   current: number;
@@ -40,6 +41,11 @@ export function useBatchConvert() {
       setSummary(null);
       abortRef.current = false;
 
+      const pptxLabels: PptxLabels = {
+        slideFallback: (n: number) => t("pptxSlideLabel", { n }),
+        notes: t("pptxNotesLabel"),
+      };
+
       const isExisting = (f: ConvertibleFile) =>
         saveToMdium ? f.hasExistingMdInMdium : f.hasExistingMdSibling;
 
@@ -68,36 +74,18 @@ export function useBatchConvert() {
         });
 
         try {
-          const bytes = await invoke<number[]>("read_binary_file", {
-            path: file.path,
-          });
-          const data = new Uint8Array(bytes);
-
-          if (file.type === "docx") {
-            const { docxToMarkdown } = await import("../lib/docxToMarkdown");
-            const result = await docxToMarkdown(data, file.path, saveToMdium);
-            results.push({ file, status: "success", mdPath: result.mdPath });
-          } else if (file.type === "xlsx") {
-            const { xlsxToMarkdown } = await import("../lib/xlsxToMarkdown");
-            const result = await xlsxToMarkdown(data, file.path, saveToMdium);
-            results.push({ file, status: "success", mdPath: result.mdPath });
-          } else if (file.type === "pptx") {
-            const { pptxToMarkdown } = await import("../lib/pptxToMarkdown");
-            const result = await pptxToMarkdown(data, file.path, saveToMdium, {
-              slideFallback: (n: number) => t("pptxSlideLabel", { n }),
-              notes: t("pptxNotesLabel"),
-            });
-            results.push({ file, status: "success", mdPath: result.mdPath });
-          } else {
-            const { pdfToMarkdown } = await import("../lib/pdfToMarkdown");
-            const result = await pdfToMarkdown(data, file.path, saveToMdium);
-            results.push({ file, status: "success", mdPath: result.mdPath });
-          }
+          const result = await convertFileToMarkdown(file, saveToMdium, pptxLabels);
+          results.push({ file, status: "success", mdPath: result.mdPath });
         } catch (e) {
           results.push({
             file,
             status: "failed",
-            error: e instanceof Error ? e.message : String(e),
+            error:
+              e instanceof WordUnavailableError
+                ? t("batchConvertWordNotAvailable")
+                : e instanceof Error
+                  ? e.message
+                  : String(e),
           });
         }
       }

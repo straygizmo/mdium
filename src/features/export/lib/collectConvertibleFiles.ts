@@ -1,17 +1,45 @@
 import type { FileEntry } from "@/shared/types";
 
+/**
+ * File kinds the batch converter understands. `doc` is the legacy Word binary
+ * format; it is only convertible when the user opts into the Word-based
+ * .doc → .docx step, so callers prune it with `pruneTreeByDoc` otherwise.
+ */
+export type ConvertibleFileType = "docx" | "doc" | "pdf" | "xlsx" | "pptx";
+
+/** Filter tabs shown in the batch dialog. `.doc` files live under `docx`. */
+export type ConvertibleFilter = "all" | "docx" | "pdf" | "xlsx" | "pptx";
+
 export interface ConvertibleFile {
   name: string;
   path: string;
-  type: "docx" | "pdf" | "xlsx" | "pptx";
+  type: ConvertibleFileType;
   hasExistingMdSibling: boolean;
   hasExistingMdInMdium: boolean;
 }
 
+/** Map a file name to its convertible type, or null when it is not convertible. */
+export function detectConvertibleType(name: string): ConvertibleFileType | null {
+  const lower = name.toLowerCase();
+  if (lower.endsWith(".docx")) return "docx";
+  if (lower.endsWith(".doc")) return "doc";
+  if (lower.endsWith(".pdf")) return "pdf";
+  if (lower.endsWith(".xlsx") || lower.endsWith(".xlsm") || lower.endsWith(".xls")) return "xlsx";
+  if (lower.endsWith(".pptx")) return "pptx";
+  return null;
+}
+
+/** True when a file of `type` belongs under the given filter tab. */
+function matchesFilter(type: ConvertibleFileType, filter: ConvertibleFilter): boolean {
+  if (filter === "all") return true;
+  if (filter === "docx") return type === "docx" || type === "doc";
+  return type === filter;
+}
+
 /**
- * Recursively collect convertible files (.docx, .pdf, .xlsx/.xls/.xlsm, .pptx)
- * from a FileEntry tree. Also checks whether a corresponding .md file already
- * exists in the same directory.
+ * Recursively collect convertible files (.docx, .doc, .pdf, .xlsx/.xls/.xlsm,
+ * .pptx) from a FileEntry tree. Also checks whether a corresponding .md file
+ * already exists in the same directory.
  */
 export function collectConvertibleFiles(tree: FileEntry[]): ConvertibleFile[] {
   const results: ConvertibleFile[] = [];
@@ -33,13 +61,7 @@ function walkTree(entries: FileEntry[], results: ConvertibleFile[]): void {
       continue;
     }
 
-    const lower = entry.name.toLowerCase();
-    let type: "docx" | "pdf" | "xlsx" | "pptx" | null = null;
-    if (lower.endsWith(".docx")) type = "docx";
-    else if (lower.endsWith(".pdf")) type = "pdf";
-    else if (lower.endsWith(".xlsx") || lower.endsWith(".xlsm") || lower.endsWith(".xls")) type = "xlsx";
-    else if (lower.endsWith(".pptx")) type = "pptx";
-
+    const type = detectConvertibleType(entry.name);
     if (!type) continue;
 
     const baseName = entry.name.replace(/\.\w+$/i, "");
@@ -60,7 +82,7 @@ export interface ConvertibleTreeNode {
   path: string;
   isDir: boolean;
   children: ConvertibleTreeNode[] | null;
-  fileType?: "docx" | "pdf" | "xlsx" | "pptx";
+  fileType?: ConvertibleFileType;
   hasExistingMdSibling?: boolean;
   hasExistingMdInMdium?: boolean;
 }
@@ -91,18 +113,7 @@ export function buildConvertibleTree(tree: FileEntry[]): ConvertibleTreeNode[] {
       continue;
     }
 
-    const lower = entry.name.toLowerCase();
-    let fileType: "docx" | "pdf" | "xlsx" | "pptx" | null = null;
-    if (lower.endsWith(".docx")) fileType = "docx";
-    else if (lower.endsWith(".pdf")) fileType = "pdf";
-    else if (
-      lower.endsWith(".xlsx") ||
-      lower.endsWith(".xlsm") ||
-      lower.endsWith(".xls")
-    )
-      fileType = "xlsx";
-    else if (lower.endsWith(".pptx")) fileType = "pptx";
-
+    const fileType = detectConvertibleType(entry.name);
     if (!fileType) continue;
 
     const baseName = entry.name.replace(/\.\w+$/i, "");
@@ -128,7 +139,7 @@ export function buildConvertibleTree(tree: FileEntry[]): ConvertibleTreeNode[] {
  */
 export function pruneTreeByFilter(
   tree: ConvertibleTreeNode[],
-  filter: "all" | "docx" | "pdf" | "xlsx" | "pptx"
+  filter: ConvertibleFilter
 ): ConvertibleTreeNode[] {
   if (filter === "all") return tree;
   const result: ConvertibleTreeNode[] = [];
@@ -138,7 +149,31 @@ export function pruneTreeByFilter(
       if (children.length > 0) {
         result.push({ ...node, children });
       }
-    } else if (node.fileType === filter) {
+    } else if (node.fileType && matchesFilter(node.fileType, filter)) {
+      result.push(node);
+    }
+  }
+  return result;
+}
+
+/**
+ * Drop legacy `.doc` files (and folders left empty by that) unless the user
+ * opted into converting them through Word. Returns the input tree as-is when
+ * `includeDoc` is true.
+ */
+export function pruneTreeByDoc(
+  tree: ConvertibleTreeNode[],
+  includeDoc: boolean
+): ConvertibleTreeNode[] {
+  if (includeDoc) return tree;
+  const result: ConvertibleTreeNode[] = [];
+  for (const node of tree) {
+    if (node.isDir) {
+      const children = pruneTreeByDoc(node.children ?? [], includeDoc);
+      if (children.length > 0) {
+        result.push({ ...node, children });
+      }
+    } else if (node.fileType !== "doc") {
       result.push(node);
     }
   }

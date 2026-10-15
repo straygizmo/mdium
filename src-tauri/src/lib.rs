@@ -204,6 +204,7 @@ pub fn run() {
             commands::file::read_text_file,
             commands::file::read_text_file_auto_encoding,
             commands::file::read_binary_file,
+            commands::doc_convert::convert_doc_to_docx,
             commands::file::write_text_file,
             commands::file::write_text_file_with_dirs,
             commands::file::get_file_tree,
