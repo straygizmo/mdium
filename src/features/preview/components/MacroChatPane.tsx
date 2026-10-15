@@ -176,6 +176,9 @@ export function MacroChatPane({ filePath, fileName, folderPath }: MacroChatPaneP
   const handleNewChat = useCallback(async () => {
     useMacroChatStore.getState().setSession(filePath, null);
     await doCreateNewSession();
+    // Apply the fresh-session recording rule again after a loaded bind.
+    expectedSessionRef.current = null;
+    previousSessionRef.current = useChatUIStore.getState().currentSessionId;
   }, [filePath]);
 
   if (!folderPath) {

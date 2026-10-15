@@ -120,6 +120,16 @@ describe("MacroChatPane", () => {
     await unmount();
   });
 
+  it("records the session started by new chat after a loaded bind", async () => {
+    useMacroChatStore.getState().setSession(props.filePath, "ses_old");
+    const { container, unmount } = await render(<MacroChatPane {...props} />);
+    const btn = container.querySelector<HTMLButtonElement>(".macro-chat__new-chat")!;
+    await act(async () => btn.click());
+    await act(async () => useChatUIStore.setState({ currentSessionId: "ses_new" }));
+    expect(useMacroChatStore.getState().getSession(props.filePath)).toBe("ses_new");
+    await unmount();
+  });
+
   it("does not bind a late-loading session of one workbook to another", async () => {
     const other = { filePath: "C:/project/other.xlsm", fileName: "other.xlsm", folderPath: "C:/project" };
     useMacroChatStore.getState().setSession(props.filePath, "ses_A");
