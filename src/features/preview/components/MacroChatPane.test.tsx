@@ -240,7 +240,7 @@ describe("MacroChatPane", () => {
     expect(signal.aborted).toBe(true);
   });
 
-  it("re-checks the lock before sending and blocks the send while locked", async () => {
+  it("re-checks the lock before sending and still sends while locked", async () => {
     let locked = false;
     invoke.mockImplementation(async (cmd: string) => {
       if (cmd === "list_vba_modules") return listOk;
@@ -253,7 +253,7 @@ describe("MacroChatPane", () => {
     locked = true;
     let allowed: boolean | undefined;
     await act(async () => { allowed = await chatProps.onBeforeSend!(); });
-    expect(allowed).toBe(false);
+    expect(allowed).toBe(true);
     expect(container.querySelector(".macro-chat__lock")).not.toBeNull();
 
     locked = false;

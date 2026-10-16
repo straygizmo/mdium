@@ -99,9 +99,13 @@ export function MacroChatPane({ filePath, fileName, folderPath }: MacroChatPaneP
     }
   }, [filePath, setLocked]);
 
-  // Re-check right before each send; a locked workbook keeps the message in
-  // the input and shows the banner instead.
-  const handleBeforeSend = useCallback(async () => !(await checkLock()), [checkLock]);
+  // Re-check right before each send so the banner is current (spec 6.4).
+  // Sending stays allowed while locked: the LLM can still pull and edit, and
+  // only vba_push stops with workbook_locked.
+  const handleBeforeSend = useCallback(async () => {
+    await checkLock();
+    return true;
+  }, [checkLock]);
 
   // Bind the shared chat to this workbook's session.
   useEffect(() => {
