@@ -1,4 +1,4 @@
-// mdium-tool-version: 1
+// mdium-tool-version: 2
 // .opencode/tools/vba_pull.ts
 //
 // Extracts the VBA modules of an .xlsm/.xlam workbook into <stem>_assets/macros/
@@ -50,7 +50,7 @@ async function callVbaBridge(xlsmPath: string): Promise<string> {
 
 export default tool({
   description:
-    "Extract every VBA module of the workbook into <stem>_assets/macros/ as .bas (standard) and .cls (class/document) files, overwriting existing files there. Call before editing when the folder does not exist yet or the workbook is newer than the files.",
+    "Extract every VBA module of the workbook into <stem>_assets/macros/ as .bas (standard) and .cls (class/document) files, overwriting existing files there and deleting .bas/.cls files that match no module (listed in removedFiles), including new files not pushed yet. Call before editing when the folder does not exist yet or the workbook is newer than the files.",
   args: {
     xlsm_path: tool.schema
       .string()

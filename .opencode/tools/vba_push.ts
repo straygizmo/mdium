@@ -1,4 +1,4 @@
-// mdium-tool-version: 1
+// mdium-tool-version: 2
 // .opencode/tools/vba_push.ts
 //
 // Writes the edited .bas/.cls files back into an .xlsm/.xlam workbook by asking
@@ -50,7 +50,7 @@ async function callVbaBridge(xlsmPath: string): Promise<string> {
 
 export default tool({
   description:
-    "Write the .bas/.cls files in <stem>_assets/macros/ back into the workbook: changed files update their module, new files add standard (.bas) or class (.cls) modules, and missing files remove standard/class modules. Document modules (ThisWorkbook, sheets) are never removed. Makes a <workbook>.bak first. Refuses with workbook_locked while Excel has the file open.",
+    "Write the .bas/.cls files in <stem>_assets/macros/ back into the workbook: changed files update their module, new files add standard (.bas) or class (.cls) modules, and missing files remove standard/class modules. Document modules (ThisWorkbook, sheets) are never removed. Makes a <workbook>.bak first; when nothing changed the workbook is not rewritten and backupPath is null. Refuses with workbook_locked while Excel has the file open.",
   args: {
     xlsm_path: tool.schema
       .string()

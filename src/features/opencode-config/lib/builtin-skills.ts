@@ -211,7 +211,7 @@ Before outputting VBA code, verify:
   },
   "vba-mdium-flow": {
     name: "vba-mdium-flow",
-    version: 2,
+    version: 3,
     description:
       "Use when editing VBA macros of an .xlsm/.xlam workbook opened in MDium — pull the modules with vba_pull, edit the .bas/.cls files, write them back with vba_push, and report the result.",
     content: `# MDium Macro Editing Flow
@@ -230,10 +230,10 @@ Pass that path as \`xlsm_path\` to every tool call.
 ## Standard flow
 
 1. \`vba_list\` — see the modules, whether \`<stem>_assets/macros/\` is already extracted, and whether the workbook is locked.
-2. If \`extracted\` is false, call \`vba_pull\`. If it is true, the folder may hold edits from an earlier session; ask the user before overwriting it with \`vba_pull\` when the workbook might be newer.
+2. If \`extracted\` is false, call \`vba_pull\`. If it is true, the folder may hold edits from an earlier session; ask the user before overwriting it with \`vba_pull\` when the workbook might be newer. \`vba_pull\` also deletes \`.bas\` / \`.cls\` files that match no module (reported as \`removedFiles\`), so push new modules before pulling again.
 3. Edit the \`.bas\` / \`.cls\` files in the macros folder with Read / Edit.
 4. **When editing is done, you MUST call \`vba_push\`.** Nothing reaches the workbook until then.
-5. Report \`updated\`, \`added\`, \`removed\`, \`skipped\` and \`backupPath\` to the user, and ask them to verify in Excel. MDium does not run macros.
+5. Report \`updated\`, \`added\`, \`removed\`, \`skipped\` and \`backupPath\` to the user, and ask them to verify in Excel. MDium does not run macros. When nothing changed, \`backupPath\` is null and the workbook was left as it was.
 
 ## Workbook locked by Excel
 
@@ -245,7 +245,7 @@ Pass that path as \`xlsm_path\` to every tool call.
 - New standard module: create \`<Name>.bas\`. New class module: create \`<Name>.cls\`. \`vba_push\` adds them.
 - Remove a standard or class module by deleting its file — but only when the user explicitly asked for the removal. \`vba_push\` reports it under \`removed\`.
 - Never delete \`ThisWorkbook.cls\` or sheet \`.cls\` files. Document modules are never removed; a missing file is reported under \`skipped\` and the module keeps its old code.
-- Module names: start with a letter, ASCII letters/digits/underscore only, at most 31 characters, unique ignoring case, not a VBA keyword. \`vba_push\` rejects the whole push (\`invalid_module_name\`) otherwise.
+- Module names: no path separators or \`..\`; start with a letter, ASCII letters/digits/underscore only, at most 31 characters, unique ignoring case, not a VBA keyword. \`vba_push\` rejects the whole push (\`invalid_module_name\`) otherwise.
 
 ## File format rules
 

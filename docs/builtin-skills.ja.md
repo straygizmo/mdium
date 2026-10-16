@@ -231,10 +231,10 @@ MDium はブックのパスを受け取る 3 つのツール `vba_list` / `vba_p
 ### 標準フロー
 
 1. `vba_list` でモジュール一覧、`<stem>_assets/macros/` が展開済みか、ブックがロックされているかを確認
-2. `extracted` が false なら `vba_pull` を呼ぶ。true の場合、フォルダに前回セッションの編集が残っている可能性があるため、ブックのほうが新しそうなときは `vba_pull` で上書きする前にユーザーに確認する
+2. `extracted` が false なら `vba_pull` を呼ぶ。true の場合、フォルダに前回セッションの編集が残っている可能性があるため、ブックのほうが新しそうなときは `vba_pull` で上書きする前にユーザーに確認する。`vba_pull` はどのモジュールにも対応しない `.bas` / `.cls` を削除する（`removedFiles` に報告）ので、新しいモジュールは pull し直す前に push しておく
 3. マクロフォルダ内の `.bas` / `.cls` を Read / Edit で編集
 4. **編集が完了したら必ず `vba_push` を呼ぶ**（呼ぶまでブックには何も反映されない）
-5. `updated` / `added` / `removed` / `skipped` / `backupPath` をユーザーに報告し、Excel で動作確認を依頼する（MDium はマクロを実行しない）
+5. `updated` / `added` / `removed` / `skipped` / `backupPath` をユーザーに報告し、Excel で動作確認を依頼する（MDium はマクロを実行しない）。何も変わらなかったときは `backupPath` が null で、ブックはそのまま
 
 ### Excel で開かれているとき
 
@@ -246,7 +246,7 @@ MDium はブックのパスを受け取る 3 つのツール `vba_list` / `vba_p
 - 標準モジュールの追加は `<Name>.bas`、クラスモジュールの追加は `<Name>.cls` を作成する。`vba_push` が追加する
 - 標準・クラスモジュールの削除はファイルを削除して行う。ただしユーザーが明示的に削除を依頼したときだけ。`vba_push` は `removed` に報告する
 - `ThisWorkbook.cls` やシートの `.cls` は削除しない。ドキュメントモジュールは削除されず、ファイルが無い場合は `skipped` に報告され、既存コードが残る
-- モジュール名は、英字で始まり、ASCII の英数字とアンダースコアのみ、31 文字以内、大文字小文字を区別せず一意、VBA の予約語でないこと。満たさない場合 `vba_push` は全体を `invalid_module_name` で拒否する
+- モジュール名は、パス区切りや `..` を含まず、英字で始まり、ASCII の英数字とアンダースコアのみ、31 文字以内、大文字小文字を区別せず一意、VBA の予約語でないこと。満たさない場合 `vba_push` は全体を `invalid_module_name` で拒否する
 
 ### ファイル形式
 
