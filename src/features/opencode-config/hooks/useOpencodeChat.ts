@@ -1142,6 +1142,28 @@ export async function doConnect(folderPath?: string) {
   }
 }
 
+/**
+ * Resolve once the client for `folderPath` is connected. doConnect returns
+ * early while another connect is in flight, so callers that need the client
+ * (e.g. loading a session) wait here instead of treating "no client yet" as a
+ * failure. Aborting the signal stops waiting and resolves.
+ */
+export function waitForConnection(folderPath: string | undefined, signal?: AbortSignal): Promise<void> {
+  const ready = () => !!_client && _connectedFolder === folderPath && useChatUIStore.getState().connected;
+  if (ready() || signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const finish = () => {
+      unsubscribe();
+      signal?.removeEventListener("abort", finish);
+      resolve();
+    };
+    const unsubscribe = useChatUIStore.subscribe(() => {
+      if (ready()) finish();
+    });
+    signal?.addEventListener("abort", finish);
+  });
+}
+
 async function ensureSessionId(title: string): Promise<string | null> {
   if (_currentSessionId) return _currentSessionId;
   if (!_client) return null;
@@ -1455,12 +1477,19 @@ export async function doExecuteCommand(commandName: string, args?: string) {
 export async function doCreateNewSession() {
   _currentSessionId = null;
   _pendingQuestionRequestId = null;
+  // A turn of the previous session may still be running; its spinner, stall
+  // notice and watchdog must not carry over into the fresh session (the
+  // generation bump also invalidates an in-flight stall give-up).
+  stopWatchdog();
+  _watchdogGeneration++;
   useChatUIStore.setState({
     messages: [],
     currentSessionId: null,
     error: null,
     pendingQuestions: null,
     azureAutoRetryCount: 0,
+    loading: false,
+    stallNotice: false,
   });
 }
 

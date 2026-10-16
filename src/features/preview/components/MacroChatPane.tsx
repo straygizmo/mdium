@@ -8,11 +8,19 @@ import {
   doCreateNewSession,
   doLoadSession,
   useChatUIStore,
+  waitForConnection,
 } from "@/features/opencode-config/hooks/useOpencodeChat";
 import { useMacroChatStore, workbookKey } from "@/stores/macro-chat-store";
 import "./MacroChatPane.css";
 
 const LOCK_RECHECK_MS = 5000;
+
+/** i18n keys for the module kinds list_vba_modules reports. */
+const MODULE_TYPE_KEYS: Record<string, string> = {
+  standard: "macroChatModuleTypeStandard",
+  class: "macroChatModuleTypeClass",
+  document: "macroChatModuleTypeDocument",
+};
 
 interface VbaModule {
   name: string;
@@ -78,25 +86,36 @@ export function MacroChatPane({ filePath, fileName, folderPath }: MacroChatPaneP
     }
   }, [filePath]);
 
-  const checkLock = useCallback(async () => {
+  /** Refresh the lock banner; resolves to whether the workbook is locked. */
+  const checkLock = useCallback(async (): Promise<boolean> => {
     try {
       const res = await invoke<WorkbookLock>("check_workbook_lock", { xlsmPath: filePath });
       setLock(res);
       setLocked(filePath, res.locked);
+      return res.locked;
     } catch {
       // Leave the push-side check to decide; no banner on probe failure.
+      return false;
     }
   }, [filePath, setLocked]);
+
+  // Re-check right before each send; a locked workbook keeps the message in
+  // the input and shows the banner instead.
+  const handleBeforeSend = useCallback(async () => !(await checkLock()), [checkLock]);
 
   // Bind the shared chat to this workbook's session.
   useEffect(() => {
     if (!folderPath) return;
     let cancelled = false;
+    const connection = new AbortController();
     boundRef.current = false;
     expectedSessionRef.current = null;
     previousSessionRef.current = useChatUIStore.getState().currentSessionId;
     (async () => {
       await doConnect(folderPath);
+      // doConnect returns early while another connect is in flight; loading
+      // the bound session before the client exists would look like a failure.
+      await waitForConnection(folderPath, connection.signal);
       if (cancelled) return;
       const store = useMacroChatStore.getState();
       const bound = store.getSession(filePath);
@@ -125,6 +144,7 @@ export function MacroChatPane({ filePath, fileName, folderPath }: MacroChatPaneP
     })();
     return () => {
       cancelled = true;
+      connection.abort();
       boundRef.current = false;
     };
   }, [filePath, folderPath]);
@@ -201,7 +221,7 @@ export function MacroChatPane({ filePath, fileName, folderPath }: MacroChatPaneP
       {lock.locked && (
         <div className="macro-chat__lock" role="alert">
           <span>{t("workbookLocked")}</span>
-          <button type="button" onClick={checkLock}>{t("workbookLockRecheck")}</button>
+          <button type="button" onClick={() => { void checkLock(); }}>{t("workbookLockRecheck")}</button>
         </div>
       )}
       {noMacros && <div className="macro-chat__no-macros">{t("macroChatNoMacros")}</div>}
@@ -215,7 +235,7 @@ export function MacroChatPane({ filePath, fileName, folderPath }: MacroChatPaneP
               className={`macro-chat__module${m.path ? " macro-chat__module--extracted" : ""}`}
               title={m.path ? t("macroChatExtracted") : undefined}
             >
-              {m.name} <small>{m.moduleType}</small>
+              {m.name} <small>{MODULE_TYPE_KEYS[m.moduleType] ? t(MODULE_TYPE_KEYS[m.moduleType]) : m.moduleType}</small>
             </span>
           ))}
         </div>
@@ -225,7 +245,12 @@ export function MacroChatPane({ filePath, fileName, folderPath }: MacroChatPaneP
 
   return (
     <div className="macro-chat">
-      <OpencodeChat variant="macro" header={header} placeholder={t("macroChatPlaceholder")} />
+      <OpencodeChat
+        variant="macro"
+        header={header}
+        placeholder={t("macroChatPlaceholder")}
+        onBeforeSend={handleBeforeSend}
+      />
     </div>
   );
 }

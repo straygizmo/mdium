@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MacroChatPane } from "./MacroChatPane";
 import { useMacroChatStore } from "@/stores/macro-chat-store";
+import i18n from "@/shared/i18n";
 import { useChatUIStore } from "@/features/opencode-config/hooks/useOpencodeChat";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -19,6 +20,7 @@ vi.mock("@tauri-apps/plugin-fs", () => ({ readFile: vi.fn(), exists: vi.fn() }))
 const doConnect = vi.fn().mockResolvedValue(undefined);
 const doLoadSession = vi.fn().mockResolvedValue(undefined);
 const doCreateNewSession = vi.fn().mockResolvedValue(undefined);
+const waitForConnection = vi.fn().mockResolvedValue(undefined);
 vi.mock("@/features/opencode-config/hooks/useOpencodeChat", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/features/opencode-config/hooks/useOpencodeChat")>();
   return {
@@ -26,10 +28,16 @@ vi.mock("@/features/opencode-config/hooks/useOpencodeChat", async (importOrigina
     doConnect: (...a: unknown[]) => doConnect(...a),
     doLoadSession: (...a: unknown[]) => doLoadSession(...a),
     doCreateNewSession: (...a: unknown[]) => doCreateNewSession(...a),
+    waitForConnection: (...a: unknown[]) => waitForConnection(...a),
   };
 });
+// Props of the last rendered OpencodeChat, so tests can drive onBeforeSend.
+let chatProps: { onBeforeSend?: () => Promise<boolean> } = {};
 vi.mock("@/features/opencode-config/components/OpencodeChat", () => ({
-  OpencodeChat: ({ header }: { header: React.ReactNode }) => <div data-testid="chat">{header}</div>,
+  OpencodeChat: (props: { header: React.ReactNode; onBeforeSend?: () => Promise<boolean> }) => {
+    chatProps = props;
+    return <div data-testid="chat">{props.header}</div>;
+  },
 }));
 
 const props = { filePath: "C:/project/book.xlsm", fileName: "book.xlsm", folderPath: "C:/project" };
@@ -62,6 +70,9 @@ describe("MacroChatPane", () => {
       useChatUIStore.setState({ currentSessionId: id });
     });
     doCreateNewSession.mockClear();
+    waitForConnection.mockReset();
+    waitForConnection.mockResolvedValue(undefined);
+    chatProps = {};
     invoke.mockImplementation(async (cmd: string) => {
       if (cmd === "list_vba_modules") return listOk;
       if (cmd === "check_workbook_lock") return { locked: false, reason: null };
@@ -78,7 +89,6 @@ describe("MacroChatPane", () => {
     const { container, unmount } = await render(<MacroChatPane {...props} />);
     const items = [...container.querySelectorAll(".macro-chat__module")].map((n) => n.textContent);
     expect(items[0]).toContain("Module1");
-    expect(items[0]).toContain("standard");
     expect(container.querySelectorAll(".macro-chat__module--extracted").length).toBe(1);
     await unmount();
   });
@@ -203,6 +213,63 @@ describe("MacroChatPane", () => {
     const { container, unmount } = await render(<MacroChatPane {...props} />);
     expect(container.querySelector(".macro-chat__no-macros")).not.toBeNull();
     expect(container.querySelectorAll(".macro-chat__module").length).toBe(0);
+    await unmount();
+  });
+
+  it("waits for the connection before loading the bound session", async () => {
+    useMacroChatStore.getState().setSession(props.filePath, "ses_old");
+    let connect!: () => void;
+    waitForConnection.mockImplementationOnce(() => new Promise<void>((r) => { connect = r; }));
+    const { unmount } = await render(<MacroChatPane {...props} />);
+    expect(waitForConnection).toHaveBeenCalledWith("C:/project", expect.any(AbortSignal));
+    expect(doLoadSession).not.toHaveBeenCalled();
+    expect(doCreateNewSession).not.toHaveBeenCalled();
+    await act(async () => connect());
+    expect(doLoadSession).toHaveBeenCalledWith("ses_old");
+    expect(doCreateNewSession).not.toHaveBeenCalled();
+    expect(useMacroChatStore.getState().getSession(props.filePath)).toBe("ses_old");
+    await unmount();
+  });
+
+  it("stops waiting for the connection on unmount", async () => {
+    waitForConnection.mockImplementationOnce(() => new Promise<void>(() => {}));
+    const { unmount } = await render(<MacroChatPane {...props} />);
+    const signal = waitForConnection.mock.calls[0][1] as AbortSignal;
+    expect(signal.aborted).toBe(false);
+    await unmount();
+    expect(signal.aborted).toBe(true);
+  });
+
+  it("re-checks the lock before sending and blocks the send while locked", async () => {
+    let locked = false;
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "list_vba_modules") return listOk;
+      if (cmd === "check_workbook_lock") return { locked, reason: locked ? "write_denied" : null };
+      return null;
+    });
+    const { container, unmount } = await render(<MacroChatPane {...props} />);
+    expect(container.querySelector(".macro-chat__lock")).toBeNull();
+
+    locked = true;
+    let allowed: boolean | undefined;
+    await act(async () => { allowed = await chatProps.onBeforeSend!(); });
+    expect(allowed).toBe(false);
+    expect(container.querySelector(".macro-chat__lock")).not.toBeNull();
+
+    locked = false;
+    await act(async () => { allowed = await chatProps.onBeforeSend!(); });
+    expect(allowed).toBe(true);
+    expect(container.querySelector(".macro-chat__lock")).toBeNull();
+    await unmount();
+  });
+
+  it("shows translated module kinds", async () => {
+    const { container, unmount } = await render(<MacroChatPane {...props} />);
+    const kinds = [...container.querySelectorAll(".macro-chat__module small")].map((n) => n.textContent);
+    const standard = i18n.t("macroChatModuleTypeStandard", { ns: "editor" });
+    const document = i18n.t("macroChatModuleTypeDocument", { ns: "editor" });
+    expect(standard).not.toBe("macroChatModuleTypeStandard");
+    expect(kinds).toEqual([standard, document]);
     await unmount();
   });
 });
