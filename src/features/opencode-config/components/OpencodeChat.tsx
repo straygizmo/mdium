@@ -30,9 +30,15 @@ export interface OpencodeChatProps {
   variant?: "panel" | "macro";
   header?: React.ReactNode;
   placeholder?: string;
+  /** Runs right before a message is sent; resolving to false cancels the
+   * send and keeps the typed input. */
+  onBeforeSend?: () => Promise<boolean>;
 }
 
-export function OpencodeChat({ variant = "panel", header, placeholder }: OpencodeChatProps = {}) {
+/** The macro chat always talks to the build agent (it edits and pushes files). */
+const MACRO_AGENT = "build";
+
+export function OpencodeChat({ variant = "panel", header, placeholder, onBeforeSend }: OpencodeChatProps = {}) {
   const isMacro = variant === "macro";
   const { t } = useTranslation("opencode-config");
   const activeFolderPath = useTabStore((s) => s.activeFolderPath);
@@ -175,9 +181,10 @@ export function OpencodeChat({ variant = "panel", header, placeholder }: Opencod
     setAttachedImages((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
-  const handleSubmit = useCallback(() => {
+  const handleSubmit = useCallback(async () => {
     if (!input.trim() && attachedImages.length === 0) return;
     if (loading) return;
+    if (onBeforeSend && !(await onBeforeSend())) return;
 
     let textToSend = input.trim();
     let agent: string | undefined;
@@ -189,6 +196,7 @@ export function OpencodeChat({ variant = "panel", header, placeholder }: Opencod
     }
 
     agentOverrideRef.current = null;
+    if (isMacro) agent = MACRO_AGENT;
     if (!textToSend && attachedImages.length === 0) return;
 
     // Save to input history
@@ -223,7 +231,7 @@ export function OpencodeChat({ variant = "panel", header, placeholder }: Opencod
     sendMessage(textToSend, agent, imagesToSend);
     setInput("");
     setAttachedImages([]);
-  }, [input, loading, sendMessage, mdContextActive, activeTabFilePath, resetHistoryNav, attachedImages, t]);
+  }, [input, loading, sendMessage, mdContextActive, activeTabFilePath, resetHistoryNav, attachedImages, t, onBeforeSend, isMacro]);
 
   const handleQuestionsSubmit = useCallback(
     (answers: string[][]) => {
