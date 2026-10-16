@@ -230,6 +230,25 @@ interface PreviewPanelProps {
 }
 
 /** Rust vba commands fail with `{"error","message"}` JSON; show the message. */
+interface PullResult {
+  xlsmPath: string;
+  macrosDir: string;
+  modules: { name: string; moduleType: string; path: string }[];
+  /** Module files deleted because no module matches them any more. */
+  removedFiles: string[];
+}
+
+interface PushResult {
+  xlsmPath: string;
+  /** null when nothing changed and the workbook was left untouched. */
+  backupPath: string | null;
+  updated: string[];
+  unchanged: string[];
+  added: string[];
+  removed: string[];
+  skipped: { name: string; reason: string }[];
+}
+
 function vbaErrorMessage(e: unknown): string {
   const raw = e instanceof Error ? e.message : String(e);
   try {
@@ -1142,18 +1161,26 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree, onJump
     activeTab?.filePath?.toLowerCase().endsWith(".xlsm") ||
     activeTab?.filePath?.toLowerCase().endsWith(".xlam");
 
-  // Check if macros directory exists (for showing Import button)
+  // Whether the workbook's macros folder is extracted (shows the Import
+  // button). Rust owns the folder location, so ask list_vba_modules.
+  const refreshMacroList = useCallback(async (path: string) => {
+    let extracted = false;
+    try {
+      extracted = (await invoke<{ extracted: boolean }>("list_vba_modules", { xlsmPath: path })).extracted;
+    } catch {
+      // No VBA project or unreadable workbook: nothing to import.
+    }
+    // Ignore a late answer for a tab that is no longer active.
+    if (useTabStore.getState().getActiveTab()?.filePath === path) setMacrosDirExists(extracted);
+  }, []);
+
   useEffect(() => {
     if (!isMacroEnabled || !activeTab?.filePath) {
       setMacrosDirExists(false);
       return;
     }
-    const lastDot = activeTab.filePath.lastIndexOf(".");
-    const macrosDir = activeTab.filePath.substring(0, lastDot) + "_assets/macros";
-    import("@tauri-apps/plugin-fs").then(({ exists }) =>
-      exists(macrosDir).then(setMacrosDirExists)
-    );
-  }, [isMacroEnabled, activeTab?.filePath]);
+    refreshMacroList(activeTab.filePath);
+  }, [isMacroEnabled, activeTab?.filePath, refreshMacroList]);
 
   const handleConvertToMarkdown = useCallback(async () => {
     if (!activeTab?.binaryData || !activeTab?.filePath) return;
@@ -1195,19 +1222,21 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree, onJump
     setMacroError(null);
     setMacroSuccess(null);
     try {
-      const result = await invoke<{ macrosDir: string; modules: { name: string; moduleType: string; path: string }[] }>(
-        "pull_vba_modules",
-        { xlsmPath: activeTab.filePath }
+      const filePath = activeTab.filePath;
+      const result = await invoke<PullResult>("pull_vba_modules", { xlsmPath: filePath });
+      setMacroSuccess(
+        result.removedFiles.length > 0
+          ? t("macroExportSuccessRemoved", { count: result.modules.length, removed: result.removedFiles.length })
+          : t("macroExportSuccess", { count: result.modules.length }),
       );
-      setMacroSuccess(t("macroExportSuccess", { count: result.modules.length }));
-      setMacrosDirExists(true);
+      await refreshMacroList(filePath);
       onRefreshFileTree?.();
     } catch (e) {
       setMacroError(vbaErrorMessage(e));
     } finally {
       setMacroExporting(false);
     }
-  }, [activeTab?.filePath, onRefreshFileTree, t]);
+  }, [activeTab?.filePath, onRefreshFileTree, refreshMacroList, t]);
 
   const reloadWorkbookTab = useCallback(async (path: string) => {
     const bytes = await invoke<number[]>("read_binary_file", { path });
@@ -1226,10 +1255,13 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree, onJump
     setMacroSuccess(null);
     try {
       const filePath = activeTab.filePath;
-      const result = await invoke<{ updated: string[]; added: string[]; removed: string[] }>(
-        "push_vba_modules",
-        { xlsmPath: filePath },
-      );
+      const result = await invoke<PushResult>("push_vba_modules", { xlsmPath: filePath });
+      await refreshMacroList(filePath);
+      if (result.backupPath === null) {
+        // Nothing changed: the workbook was not rewritten.
+        setMacroSuccess(t("macroPushNoChanges"));
+        return;
+      }
       setMacroSuccess(
         t("macroPushSuccess", { updated: result.updated.length, added: result.added.length, removed: result.removed.length }),
       );
@@ -1243,19 +1275,28 @@ export function PreviewPanel({ previewRef, onOpenFile, onRefreshFileTree, onJump
     } finally {
       setMacroImporting(false);
     }
-  }, [activeTab?.filePath, reloadWorkbookTab, t]);
+  }, [activeTab?.filePath, reloadWorkbookTab, refreshMacroList, t]);
 
   // Refresh the preview when a push done through the bridge (LLM tool) lands.
   useEffect(() => {
     let unlisten: (() => void) | null = null;
+    let disposed = false;
     listen<{ path: string }>("vba-pushed", (ev) => {
       const current = useTabStore.getState().getActiveTab()?.filePath;
       if (current && current === ev.payload.path) {
         reloadWorkbookTab(current).catch(() => {});
+        refreshMacroList(current);
       }
-    }).then((fn) => { unlisten = fn; });
-    return () => { unlisten?.(); };
-  }, [reloadWorkbookTab]);
+    }).then((fn) => {
+      // Cleanup may run before listen() resolves; drop the listener then.
+      if (disposed) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [reloadWorkbookTab, refreshMacroList]);
 
   // Show VideoPanel for .video.json files
   if (isVideoJson) {

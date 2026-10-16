@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { act } from "react";
 import { createRoot } from "react-dom/client";
+import { listen } from "@tauri-apps/api/event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PreviewPanel } from "./PreviewPanel";
 import { useTabStore, type Tab } from "@/stores/tab-store";
@@ -13,7 +14,7 @@ const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() => {}) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ save: vi.fn(), open: vi.fn() }));
-vi.mock("@tauri-apps/plugin-fs", () => ({ readFile: vi.fn(), exists: vi.fn().mockResolvedValue(true) }));
+vi.mock("@tauri-apps/plugin-fs", () => ({ readFile: vi.fn(), exists: vi.fn() }));
 vi.mock("@tauri-apps/plugin-http", () => ({ fetch: vi.fn() }));
 vi.mock("./OfficePreview", () => ({ OfficePreview: () => null }));
 vi.mock("./MacroChatPane", () => ({ MacroChatPane: () => <div data-testid="macro-chat" /> }));
@@ -31,10 +32,44 @@ const tab: Tab = {
   officeFileType: ".xlsm",
 };
 
+const listResult = (extracted: boolean) => ({
+  xlsmPath: tab.filePath,
+  macrosDir: "C:/project/book_assets/macros",
+  extracted,
+  locked: false,
+  modules: [],
+});
+
+async function renderPanel() {
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  await act(async () => root.render(<PreviewPanel previewRef={{ current: null }} />));
+  // Let the list_vba_modules check settle.
+  await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  return { container, unmount: () => act(async () => root.unmount()) };
+}
+
+function convertButton(container: HTMLElement, ...labels: string[]) {
+  return [...container.querySelectorAll<HTMLButtonElement>(".preview-panel__convert-bar button")].find((b) =>
+    labels.some((l) => b.textContent?.includes(l)),
+  );
+}
+
+async function clickAndSettle(btn: HTMLButtonElement) {
+  await act(async () => {
+    btn.click();
+    await new Promise((r) => setTimeout(r, 0));
+  });
+}
+
+const listCalls = () => invoke.mock.calls.filter((c) => c[0] === "list_vba_modules").length;
+
 describe("PreviewPanel macro buttons", () => {
   beforeEach(() => {
     invoke.mockReset();
+    vi.mocked(listen).mockClear();
     invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "list_vba_modules") return listResult(true);
       if (cmd === "check_workbook_lock") return { locked: false, reason: null };
       if (cmd === "push_vba_modules") return { xlsmPath: tab.filePath, backupPath: "b", updated: ["Module1"], unchanged: [], added: ["Helpers"], removed: [], skipped: [] };
       if (cmd === "read_binary_file") return [1];
@@ -96,7 +131,7 @@ describe("PreviewPanel macro buttons", () => {
     const container = document.createElement("div");
     const root = createRoot(container);
     await act(async () => root.render(<PreviewPanel previewRef={{ current: null }} />));
-    // Let the dynamic fs import and macros-dir existence check settle.
+    // Let the list_vba_modules check settle.
     await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
     const buttons = [...container.querySelectorAll<HTMLButtonElement>(".preview-panel__convert-bar button")];
     const importBtn = buttons.find((b) => b.textContent?.includes("取り込み") || b.textContent?.includes("Load"))!;
@@ -104,5 +139,73 @@ describe("PreviewPanel macro buttons", () => {
     expect(importBtn.title.length).toBeGreaterThan(0);
     await act(async () => root.unmount());
     useMacroChatStore.getState().setLocked(tab.filePath, false);
+  });
+
+  it("derives the import button from list_vba_modules", async () => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "list_vba_modules") return listResult(false);
+      if (cmd === "check_workbook_lock") return { locked: false, reason: null };
+      return null;
+    });
+    const { container, unmount } = await renderPanel();
+    expect(invoke).toHaveBeenCalledWith("list_vba_modules", { xlsmPath: tab.filePath });
+    expect(convertButton(container, "取り込み", "Load")).toBeUndefined();
+    await unmount();
+  });
+
+  it("refreshes the macro list after pull and reports removed files", async () => {
+    let extracted = false;
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "list_vba_modules") return listResult(extracted);
+      if (cmd === "check_workbook_lock") return { locked: false, reason: null };
+      if (cmd === "pull_vba_modules") {
+        extracted = true;
+        return {
+          xlsmPath: tab.filePath,
+          macrosDir: "C:/project/book_assets/macros",
+          modules: [{ name: "Module1", moduleType: "standard", path: "C:/project/book_assets/macros/Module1.bas" }],
+          removedFiles: ["C:/project/book_assets/macros/Old.bas", "C:/project/book_assets/macros/Gone.cls"],
+        };
+      }
+      return null;
+    });
+    const { container, unmount } = await renderPanel();
+    expect(convertButton(container, "取り込み", "Load")).toBeUndefined();
+    const before = listCalls();
+    await clickAndSettle(convertButton(container, "書き出し", "Extract", "Export")!);
+    expect(listCalls()).toBe(before + 1);
+    expect(convertButton(container, "取り込み", "Load")).toBeDefined();
+    expect(container.querySelector(".preview-panel__convert-success")?.textContent).toContain("2");
+    await unmount();
+  });
+
+  it("refreshes the macro list after push and reports a no-op push", async () => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "list_vba_modules") return listResult(true);
+      if (cmd === "check_workbook_lock") return { locked: false, reason: null };
+      if (cmd === "push_vba_modules") return { xlsmPath: tab.filePath, backupPath: null, updated: [], unchanged: ["Module1"], added: [], removed: [], skipped: [] };
+      return null;
+    });
+    const { container, unmount } = await renderPanel();
+    const before = listCalls();
+    await clickAndSettle(convertButton(container, "取り込み", "Load")!);
+    expect(listCalls()).toBe(before + 1);
+    // The workbook was not rewritten, so it is not reloaded.
+    expect(invoke.mock.calls.some((c) => c[0] === "read_binary_file")).toBe(false);
+    const msg = container.querySelector(".preview-panel__convert-success")?.textContent ?? "";
+    expect(msg.length).toBeGreaterThan(0);
+    expect(msg).not.toContain(".bak");
+    await unmount();
+  });
+
+  it("removes the vba-pushed listener when it resolves after unmount", async () => {
+    const unlisten = vi.fn();
+    let resolveListen!: (fn: () => void) => void;
+    vi.mocked(listen).mockImplementationOnce(() => new Promise((r) => { resolveListen = r; }));
+    const { unmount } = await renderPanel();
+    await unmount();
+    expect(unlisten).not.toHaveBeenCalled();
+    await act(async () => resolveListen(unlisten));
+    expect(unlisten).toHaveBeenCalledTimes(1);
   });
 });
