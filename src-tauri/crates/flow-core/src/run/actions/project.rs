@@ -1,15 +1,15 @@
-//! The project actions: `mdium/project-setup`, `mdium/flow-run-latest` and
-//! `mdium/metrics-compare`. Thin adapters over `setup`, the run store and
-//! the project manifest.
+//! The project actions: `mdium/project-setup`, `mdium/project-test`,
+//! `mdium/flow-run-latest` and `mdium/metrics-compare`. Thin adapters over
+//! `setup`, the run store and the project manifest.
 
 use super::{
     input_invalid, required_obj, required_str, ActionContext, ActionEnd, FLOW_ACTION_FAILED,
 };
 use crate::fsutil;
-use crate::project::{self, Better, MetricDef};
+use crate::project::{self, Better, MetricDef, ProjectDef, SetupStep};
 use crate::run::engine::sha256_hex;
 use crate::run::model::{NodeStatus, Reason, RunState, RunStatus};
-use crate::run::store::RunStore;
+use crate::run::store::{RunMeta, RunStore};
 use crate::setup;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -33,12 +33,8 @@ fn failed(code: &str, message: impl Into<String>) -> Reason {
         .with("message", message.into())
 }
 
-/// `mdium/project-setup` `{ projectRoot? }` -> `{ ok: true }`: runs the setup
-/// steps of the manifest. A manifest other than the confirmed one asks first.
-pub(super) fn project_setup(
-    with: &BTreeMap<String, Value>,
-    ctx: &ActionContext,
-) -> Result<ActionEnd, Reason> {
+/// `with.projectRoot` (default: the run's project) as an existing directory.
+fn root_of(with: &BTreeMap<String, Value>, ctx: &ActionContext) -> Result<PathBuf, Reason> {
     let root = match with.get("projectRoot") {
         None | Some(Value::Null) => ctx.project_root.clone(),
         Some(Value::String(text)) => ctx.project_root.join(text),
@@ -47,8 +43,13 @@ pub(super) fn project_setup(
     if !root.is_dir() {
         return Err(input_invalid("projectRoot", "not-a-directory"));
     }
-    let Some((bytes, report)) = project::load_project_bytes(&root) else {
-        return Err(Reason::new(FLOW_PROJECT_REQUIRED).with("projectRoot", root.to_string_lossy()));
+    Ok(root)
+}
+
+/// The manifest at `root`: its definition and content hash; `None` without one.
+fn manifest_at(root: &std::path::Path) -> Result<Option<(ProjectDef, String)>, Reason> {
+    let Some((bytes, report)) = project::load_project_bytes(root) else {
+        return Ok(None);
     };
     let project = match report.project {
         Some(project) if report.errors.is_empty() => project,
@@ -58,35 +59,62 @@ pub(super) fn project_setup(
                 .with("errors", report.errors.len()))
         }
     };
-    let sha256 = sha256_hex(&bytes);
-    let steps: Vec<Value> = project.setup.iter().map(|step| json!(step.run)).collect();
+    Ok(Some((project, sha256_hex(&bytes))))
+}
+
+/// The approval a manifest other than the confirmed one needs before its
+/// `list` (`setup` / `test`) steps run: `None` when they may run now.
+fn unconfirmed(ctx: &ActionContext, list: &str, steps: &[SetupStep], sha256: &str) -> Option<ActionEnd> {
+    // Shown as the run-start review lists them: argv and working directory.
+    let runs: Vec<Value> = steps
+        .iter()
+        .map(|step| json!({ "run": step.run, "workingDir": step.working_dir }))
+        .collect();
     let show = BTreeMap::from([
-        ("setup".to_string(), Value::Array(steps)),
-        ("sha256".to_string(), Value::String(sha256.clone())),
+        (list.to_string(), Value::Array(runs)),
+        ("sha256".to_string(), Value::String(sha256.to_string())),
     ]);
     // The confirmed manifest runs as is; any other needs the user's go-ahead
     // for exactly what is shown now.
-    if ctx.project_sha256.as_deref() != Some(sha256.as_str())
-        && ctx.acknowledged.as_ref() != Some(&show)
-    {
-        return Ok(ActionEnd::NeedsApproval {
-            show,
-            outputs: BTreeMap::new(),
-        });
+    if ctx.project_sha256 == Some(sha256.to_string()) || ctx.acknowledged.as_ref() == Some(&show) {
+        return None;
     }
-    let result = setup::run_setup(
-        &root,
-        &project,
+    Some(ActionEnd::NeedsApproval {
+        show,
+        outputs: BTreeMap::new(),
+    })
+}
+
+/// Runs `steps` of the manifest at `root` with the action's progress and cancel.
+fn run_steps(ctx: &ActionContext, root: &std::path::Path, label: &str, steps: &[SetupStep]) -> setup::SetupResult {
+    setup::run_steps(
+        root,
+        steps,
         &*ctx.launcher,
         ctx.poll,
         &|progress| {
             (ctx.progress)(format!(
-                "setup {}/{}: {:?}",
+                "{label} {}/{}: {:?}",
                 progress.step, progress.total, progress.status
             ))
         },
         Some(&ctx.cancel),
-    );
+    )
+}
+
+/// `mdium/project-setup` `{ projectRoot? }` -> `{ ok: true }`: runs the setup
+/// steps of the manifest. A manifest other than the confirmed one asks first.
+pub(super) fn project_setup(
+    with: &BTreeMap<String, Value>,
+    ctx: &ActionContext,
+) -> Result<ActionEnd, Reason> {
+    let root = root_of(with, ctx)?;
+    let (project, sha256) = manifest_at(&root)?
+        .ok_or_else(|| Reason::new(FLOW_PROJECT_REQUIRED).with("projectRoot", root.to_string_lossy()))?;
+    if let Some(ask) = unconfirmed(ctx, "setup", &project.setup, &sha256) {
+        return Ok(ask);
+    }
+    let result = run_steps(ctx, &root, "setup", &project.setup);
     if result.cancelled {
         return Ok(ActionEnd::Cancelled);
     }
@@ -106,8 +134,68 @@ pub(super) fn project_setup(
         .with("exitCode", step.and_then(|s| s.exit_code)))
 }
 
+/// `mdium/project-test` `{ projectRoot? }` -> `{ ran, ok, exitCode, logDir, tail }`:
+/// runs the manifest's `test` steps. Unlike setup, a failing step is a result
+/// (`ok: false`, that step's exit code and output tail; both `null` / `""`
+/// when every step passed), not a failed node, so a review stage can read
+/// it. No manifest or no steps: `ran: false, ok: true`. A manifest other
+/// than the confirmed one asks first. The steps run code the worktree holds,
+/// including what an agent changed there (the point of testing it): the
+/// confirmation covers the commands, not the files they run.
+pub(super) fn project_test(
+    with: &BTreeMap<String, Value>,
+    ctx: &ActionContext,
+) -> Result<ActionEnd, Reason> {
+    let root = root_of(with, ctx)?;
+    let Some((project, sha256)) = manifest_at(&root)?.filter(|(project, _)| !project.test.is_empty()) else {
+        return Ok(ActionEnd::done(BTreeMap::from([
+            ("ran".to_string(), Value::Bool(false)),
+            ("ok".to_string(), Value::Bool(true)),
+            ("exitCode".to_string(), Value::Null),
+            ("logDir".to_string(), Value::String(String::new())),
+            ("tail".to_string(), Value::String(String::new())),
+        ])));
+    };
+    if let Some(ask) = unconfirmed(ctx, "test", &project.test, &sha256) {
+        return Ok(ask);
+    }
+    let result = run_steps(ctx, &root, "test", &project.test);
+    if result.cancelled {
+        return Ok(ActionEnd::Cancelled);
+    }
+    // The failing step, if any; a passed run reports no code and no tail.
+    let step = result.steps.iter().find(|step| step.exit_code != Some(0));
+    let tail = step.map_or(String::new(), |s| {
+        let mut tail = s.stdout_tail.clone();
+        if !s.stderr_tail.is_empty() {
+            if !tail.is_empty() {
+                tail.push('\n');
+            }
+            tail.push_str(&s.stderr_tail);
+        }
+        if let Some(err) = &s.error {
+            if !tail.is_empty() {
+                tail.push('\n');
+            }
+            tail.push_str(err);
+        }
+        tail
+    });
+    Ok(ActionEnd::done(BTreeMap::from([
+        ("ran".to_string(), Value::Bool(true)),
+        ("ok".to_string(), Value::Bool(result.ok)),
+        ("exitCode".to_string(), step.and_then(|s| s.exit_code).map_or(Value::Null, Value::from)),
+        (
+            "logDir".to_string(),
+            Value::String(root.join(&result.log_dir).to_string_lossy().into_owned()),
+        ),
+        ("tail".to_string(), Value::String(tail)),
+    ])))
+}
+
 /// `mdium/flow-run-latest` `{ flow }` -> the newest completed run of that flow
-/// file: `{ runId, runDir, status, outputs, costUsd, failedNodes }`.
+/// file: `{ runId, runDir, status, outputs, params, costUsd, failedNodes }`
+/// (`params`: the run's arguments with defaults applied).
 pub(super) fn flow_run_latest(
     with: &BTreeMap<String, Value>,
     ctx: &ActionContext,
@@ -126,7 +214,7 @@ pub(super) fn flow_run_latest(
     let ids = store
         .list_ids()
         .map_err(|err| failed("RUN_STORE_FAILED", err.to_string()))?;
-    let mut best: Option<(String, String, RunState)> = None;
+    let mut best: Option<(String, RunMeta, RunState)> = None;
     for id in ids {
         let Ok(meta) = store.load_meta(&id) else {
             continue;
@@ -140,11 +228,14 @@ pub(super) fn flow_run_latest(
         if state.status != RunStatus::Completed {
             continue;
         }
-        if best.as_ref().map_or(true, |(_, at, _)| meta.created_at > *at) {
-            best = Some((id, meta.created_at, state));
+        if best
+            .as_ref()
+            .map_or(true, |(_, best_meta, _)| meta.created_at > best_meta.created_at)
+        {
+            best = Some((id, meta, state));
         }
     }
-    let Some((run_id, _, state)) = best else {
+    let Some((run_id, meta, state)) = best else {
         return Err(failed(
             FLOW_RUN_NOT_FOUND,
             format!("no completed run of {flow}"),
@@ -172,6 +263,10 @@ pub(super) fn flow_run_latest(
         ),
         ("status".to_string(), json!("completed")),
         ("outputs".to_string(), Value::Object(outputs)),
+        (
+            "params".to_string(),
+            Value::Object(meta.params.into_iter().collect()),
+        ),
         ("costUsd".to_string(), json!(state.cost.total())),
         ("failedNodes".to_string(), Value::Array(failed_nodes)),
     ])))
@@ -196,13 +291,31 @@ pub(super) fn metrics_compare(
             "the project declares no metrics",
         ));
     }
-    let (improved, report) = compare_metrics(metrics, &baseline, &candidate);
+    let (improved, mut report) = compare_metrics(metrics, &baseline, &candidate);
+    // Both sides' run arguments, when given: a comparison across different
+    // arguments is reported as such instead of looking like a regression.
+    let differing = match (with.get("baselineParams"), with.get("candidateParams")) {
+        (Some(Value::Object(base)), Some(Value::Object(cand))) => differing_params(base, cand),
+        _ => Vec::new(),
+    };
+    if !differing.is_empty() {
+        let mut note = String::from("Parameters differ between the baseline and the candidate run:\n\n");
+        for (name, base, cand) in &differing {
+            note.push_str(&format!("- `{name}`: {base} -> {cand}\n"));
+        }
+        note.push('\n');
+        report.insert_str(0, &note);
+    }
     let path: PathBuf = ctx.node_dir.join("report.md");
     fsutil::atomic_write(&path, report.as_bytes())
         .map_err(|err| failed("IO_ERROR", err.to_string()))?;
     let outputs = BTreeMap::from([
         ("improved".to_string(), Value::Bool(improved)),
         ("report".to_string(), Value::String(report)),
+        (
+            "differingParams".to_string(),
+            Value::Array(differing.iter().map(|(name, _, _)| Value::String(name.clone())).collect()),
+        ),
         (
             "reportPath".to_string(),
             Value::String(path.to_string_lossy().into_owned()),
@@ -212,6 +325,21 @@ pub(super) fn metrics_compare(
         outputs,
         artifacts: vec![(path, "report".to_string())],
     })
+}
+
+/// The arguments whose values differ between two runs, by name: `(name,
+/// baseline, candidate)` with a missing side shown as `-`.
+pub fn differing_params(
+    base: &serde_json::Map<String, Value>,
+    cand: &serde_json::Map<String, Value>,
+) -> Vec<(String, String, String)> {
+    let names: std::collections::BTreeSet<&String> = base.keys().chain(cand.keys()).collect();
+    let show = |value: Option<&Value>| value.map_or("-".to_string(), Value::to_string);
+    names
+        .into_iter()
+        .filter(|name| base.get(*name) != cand.get(*name))
+        .map(|name| (name.clone(), show(base.get(name)), show(cand.get(name))))
+        .collect()
 }
 
 /// The number at a dotted path (`outputs.score`, `costUsd`) of `side`.

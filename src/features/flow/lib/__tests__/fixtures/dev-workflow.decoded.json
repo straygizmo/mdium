@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "dev-workflow",
   "name": "Standard development workflow",
-  "description": "screen -> worktree -> design -> plan -> approve -> implement -> review -> merge gate -> merge or discard (no push, no PR).",
+  "description": "screen -> worktree -> (setup) -> design -> plan -> approve -> implement -> (test) -> review -> merge gate -> merge or discard (no push, no PR).",
   "params": {
     "designDocPath": {
       "type": "string",
@@ -33,6 +33,11 @@
       "required": false,
       "default": true
     },
+    "setup": {
+      "type": "bool",
+      "required": false,
+      "default": false
+    },
     "title": {
       "type": "string",
       "required": true
@@ -56,6 +61,19 @@
       "uses": "mdium/git-worktree-create",
       "with": {
         "title": "${{ params.title }}"
+      }
+    },
+    {
+      "id": "setup",
+      "kind": "action",
+      "uses": "mdium/project-setup",
+      "with": {
+        "projectRoot": "${{ nodes.worktree.outputs.path }}"
+      },
+      "when": {
+        "op": "==",
+        "ref": "params.setup",
+        "value": true
       }
     },
     {
@@ -162,6 +180,15 @@
       "timeout": "120m"
     },
     {
+      "id": "test",
+      "kind": "action",
+      "uses": "mdium/project-test",
+      "with": {
+        "projectRoot": "${{ nodes.worktree.outputs.path }}"
+      },
+      "timeout": "60m"
+    },
+    {
       "id": "issue_impl",
       "kind": "action",
       "uses": "mdium/issue-entry",
@@ -191,6 +218,11 @@
         "design": "${{ nodes.design.outputs.body }}",
         "requirement": "${{ params.requirement }}",
         "summary": "${{ nodes.implement.outputs.body }}",
+        "testExitCode": "${{ nodes.test.outputs.exitCode }}",
+        "testLogDir": "${{ nodes.test.outputs.logDir }}",
+        "testOk": "${{ nodes.test.outputs.ok }}",
+        "testRan": "${{ nodes.test.outputs.ran }}",
+        "testTail": "${{ nodes.test.outputs.tail }}",
         "title": "${{ params.title }}"
       },
       "timeout": "60m"
@@ -286,6 +318,10 @@
     },
     {
       "from": "worktree",
+      "to": "setup"
+    },
+    {
+      "from": "setup",
       "to": "design"
     },
     {
@@ -321,6 +357,10 @@
     },
     {
       "from": "issue_impl",
+      "to": "test"
+    },
+    {
+      "from": "test",
       "to": "review"
     },
     {

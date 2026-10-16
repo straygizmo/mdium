@@ -80,6 +80,16 @@ describe("RunnerCore", () => {
     expect(t.sent).toContainEqual({ type: "turn_completed", sessionId: "s1", finalResponse: "yo", nativeSessionId: "native-1" });
   });
 
+  it("forwards the session's reported cost on turn_completed", async () => {
+    const t = setup();
+    (t.session as { lastTurnCostUsd?: () => number | undefined }).lastTurnCostUsd = () => 0.3;
+    await t.start();
+    await t.line({ type: "send", sessionId: "s1", text: "hi" });
+    t.finishTurn("yo");
+    await flush();
+    expect(t.sent).toContainEqual({ type: "turn_completed", sessionId: "s1", finalResponse: "yo", nativeSessionId: "native-1", costUsd: 0.3 });
+  });
+
   it("rejects a second send while a turn is running", async () => {
     const t = setup();
     await t.start();

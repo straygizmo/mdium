@@ -125,6 +125,9 @@ pub struct CommandReview {
     pub commands: Vec<CommandSummary>,
     pub runtimes: Vec<RuntimeSummary>,
     pub setup: Vec<SetupSummary>,
+    /// The manifest's `test` steps (`mdium/project-test`).
+    #[serde(default)]
+    pub test: Vec<SetupSummary>,
     pub stages: Vec<StageSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project_path: Option<String>,
@@ -340,11 +343,22 @@ impl Bundle {
     }
 
     fn setup_summaries(&self) -> Vec<SetupSummary> {
+        self.step_summaries(|p| &p.setup)
+    }
+
+    fn test_summaries(&self) -> Vec<SetupSummary> {
+        self.step_summaries(|p| &p.test)
+    }
+
+    fn step_summaries(
+        &self,
+        list: impl Fn(&crate::project::ProjectDef) -> &Vec<crate::project::SetupStep>,
+    ) -> Vec<SetupSummary> {
         self.project
             .as_ref()
             .and_then(|p| p.project.as_ref())
             .map(|p| {
-                p.setup
+                list(p)
                     .iter()
                     .map(|s| SetupSummary {
                         run: s.run.clone(),
@@ -360,6 +374,7 @@ impl Bundle {
         !command_summaries(&self.files()).is_empty()
             || !self.runtime_summaries().is_empty()
             || !self.setup_summaries().is_empty()
+            || !self.test_summaries().is_empty()
             || !stage_summaries(&self.files()).is_empty()
     }
 
@@ -692,7 +707,7 @@ impl FlowEngine {
             || meta
                 .project
                 .as_ref()
-                .is_some_and(|p| !p.runtimes.is_empty() || !p.setup.is_empty());
+                .is_some_and(|p| !p.runtimes.is_empty() || !p.setup.is_empty() || !p.test.is_empty());
         if needs && !self.is_confirmed(root, &meta.flow_path, &meta.flow_sha256) {
             return Err(EngineError::new(
                 FLOW_COMMANDS_UNCONFIRMED,
@@ -716,6 +731,7 @@ impl FlowEngine {
             commands,
             runtimes: bundle.runtime_summaries(),
             setup: bundle.setup_summaries(),
+            test: bundle.test_summaries(),
             stages: stage_summaries(&bundle.files()),
             project_path: bundle.project.as_ref().map(|p| p.display.clone()),
             templates: bundle

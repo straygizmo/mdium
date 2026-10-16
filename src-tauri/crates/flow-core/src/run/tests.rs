@@ -3577,6 +3577,27 @@ fn free_contract_builtin_prompt_estimate_and_timeout() {
 }
 
 #[test]
+fn agent_reported_cost_is_actual_and_replaces_the_estimate() {
+    let (f, _) = fixture_with_agent(vec![FakeTurn::RespondPriced("plain answer".into(), 0.75)]);
+    let rel = write_flow(
+        &f.root,
+        "priced",
+        json!({}),
+        vec![agent(
+            "a",
+            json!({ "outputContract": "free", "prompt": "p", "cost": { "estimateUsd": 0.5 } }),
+        )],
+        vec![],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    let a = node(&snap, "a");
+    assert!((a.cost.actual - 0.75).abs() < 1e-9, "reported cost is actual");
+    assert_eq!(a.cost.estimated, 0.0, "the estimate is not added on top");
+    assert!((snap.state.cost.actual - 0.75).abs() < 1e-9);
+}
+
+#[test]
 fn agent_turn_failure_guard_and_runner_exit_fail_the_node_and_cancel_kills_the_turn() {
     for (turn, code) in [
         (
@@ -4261,7 +4282,7 @@ fn flow_run_latest_and_metrics_compare_read_finished_runs() {
     let f = fixture();
     std::fs::create_dir_all(f.root.join(".mdium")).unwrap();
     std::fs::write(f.root.join(".mdium/project.yaml"), "schemaVersion: 1\nid: p\nname: P\nmetrics:\n  - { ref: outputs.score, better: higher }\n  - { ref: costUsd, better: lower }\n").unwrap();
-    let main = write_flow(&f.root, "main", json!({ "outputs": { "score": "${{ nodes.a.outputs.score }}" } }),
+    let main = write_flow(&f.root, "main", json!({ "params": { "n": { "type": "number", "default": 1 } }, "outputs": { "score": "${{ nodes.a.outputs.score }}" } }),
         vec![cmd("a", json!([ev(json!({ "v": 1, "type": "output", "key": "score", "value": 5 })), ev(json!({ "v": 1, "type": "cost", "usd": 1.0 }))]))], vec![]);
     let first = f.confirm_and_start(&main, json!({}));
     f.wait_settled(&first, RunStatus::Completed);
@@ -4269,14 +4290,20 @@ fn flow_run_latest_and_metrics_compare_read_finished_runs() {
         vec![json!({ "id": "base", "kind": "action", "uses": "mdium/flow-run-latest", "with": { "flow": main } }),
              json!({ "id": "cmp", "kind": "action", "uses": "mdium/metrics-compare", "with": {
                  "baseline": { "outputs": "${{ nodes.base.outputs.outputs }}", "costUsd": "${{ nodes.base.outputs.costUsd }}" },
-                 "candidate": { "outputs": { "score": 7 }, "costUsd": 0.5 } } })],
+                 "candidate": { "outputs": { "score": 7 }, "costUsd": 0.5 },
+                 "baselineParams": "${{ nodes.base.outputs.params }}", "candidateParams": { "n": 2, "extra": true } } })],
         vec![json!({ "from": "base", "to": "cmp" })]);
     let run_id = f.confirm_and_start(&outer, json!({}));
     let snap = f.wait_settled(&run_id, RunStatus::Completed);
     assert_eq!(node(&snap, "base").outputs["runId"], json!(first));
     assert_eq!(node(&snap, "base").outputs["outputs"]["score"], json!(5));
     assert_eq!(node(&snap, "base").outputs["costUsd"], json!(1.0));
+    assert_eq!(node(&snap, "base").outputs["params"], json!({ "n": 1 }));
     assert_eq!(node(&snap, "cmp").outputs["improved"], json!(true));
+    assert_eq!(node(&snap, "cmp").outputs["differingParams"], json!(["extra", "n"]));
+    let report = node(&snap, "cmp").outputs["report"].as_str().unwrap().to_string();
+    assert!(report.starts_with("Parameters differ between the baseline and the candidate run:"), "{report}");
+    assert!(report.contains("- `n`: 1 -> 2\n") && report.contains("- `extra`: - -> true\n"), "{report}");
     assert!(f.events(&run_id).iter().any(|e| matches!(&e.body, EventBody::NodeArtifact { label: Some(l), .. } if l == "report")));
 }
 
@@ -4372,6 +4399,100 @@ fn a_hanging_project_setup_can_be_stopped_and_cancelled() {
 }
 
 #[test]
+fn subflow_params_from_inherits_declared_keys_under_the_explicit_params() {
+    let f = fixture();
+    write_child(&f, "child", None);
+    // `unknown` is not a child param: dropped, not an error.
+    let src = json!({ "params": { "src": { "type": "object", "default": { "x": "inherited", "unknown": 1 } } } });
+    let mut use_it = cmd("use", json!([{ "emit_arg_as": "got" }]));
+    use_it["run"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("${{ nodes.sub.params }}"));
+    let rel = write_flow(
+        &f.root,
+        "parent",
+        src.clone(),
+        vec![
+            json!({ "id": "sub", "kind": "subflow", "flow": "./child.flow.json", "paramsFrom": "${{ params.src }}" }),
+            use_it.clone(),
+        ],
+        vec![json!({ "from": "sub", "to": "use" })],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(node(&snap, "sub/echo").outputs["arg"], json!("inherited"));
+    // `nodes.sub.params` is the child's resolved argument object.
+    assert_eq!(node(&snap, "use").outputs["got"], json!(r#"{"x":"inherited"}"#));
+
+    // An explicit entry wins over the inherited one.
+    let rel = write_flow(
+        &f.root,
+        "explicit",
+        src.clone(),
+        vec![json!({ "id": "sub", "kind": "subflow", "flow": "./child.flow.json", "paramsFrom": "${{ params.src }}", "params": { "x": "explicit" } })],
+        vec![],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(node(&snap, "sub/echo").outputs["arg"], json!("explicit"));
+
+    // Not an object: the node fails before the child starts.
+    let rel = write_flow(
+        &f.root,
+        "scalar",
+        json!({}),
+        vec![json!({ "id": "sub", "kind": "subflow", "flow": "./child.flow.json", "paramsFrom": "text", "params": { "x": "1" } })],
+        vec![],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Failed);
+    let reason = node(&snap, "sub").reason.unwrap();
+    assert_eq!(reason.code, "FLOW_SUBFLOW_PARAMS_INVALID");
+    assert_eq!(reason.params["found"], json!("string"));
+
+    // A not-yet-run source is unresolved (strict), not an empty inheritance.
+    let rel = write_flow(
+        &f.root,
+        "unresolved",
+        json!({}),
+        vec![
+            json!({ "id": "sub", "kind": "subflow", "flow": "./child.flow.json", "paramsFrom": "${{ nodes.later.outputs }}", "params": { "x": "1" } }),
+            cmd("later", json!([])),
+        ],
+        vec![json!({ "from": "sub", "to": "later" })],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Failed);
+    assert_eq!(node(&snap, "sub").reason.unwrap().code, "FLOW_TEMPLATE_UNRESOLVED");
+}
+
+#[test]
+fn node_params_reference_is_empty_before_the_subflow_opened_its_scope() {
+    let f = fixture();
+    write_child(&f, "child", None);
+    // Lenient rendering (a command argument) reads `{}` before the sub-flow ran.
+    let mut before = cmd("before", json!([{ "emit_arg_as": "got" }]));
+    before["run"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("${{ nodes.sub.params }}"));
+    let rel = write_flow(
+        &f.root,
+        "parent",
+        json!({}),
+        vec![
+            before,
+            json!({ "id": "sub", "kind": "subflow", "flow": "./child.flow.json", "params": { "x": "1" } }),
+        ],
+        vec![json!({ "from": "before", "to": "sub" })],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(node(&snap, "before").outputs["got"], json!("{}"));
+}
+
+#[test]
 fn project_setup_reports_the_failing_step() {
     let f = fixture();
     std::fs::create_dir_all(f.root.join(".mdium")).unwrap();
@@ -4388,6 +4509,83 @@ fn project_setup_reports_the_failing_step() {
     assert_eq!(reason.code, "FLOW_SETUP_FAILED");
     assert_eq!(reason.params["step"], json!(2));
     assert!(reason.params["exitCode"].as_i64().is_some_and(|code| code != 0), "{:?}", reason.params);
+}
+
+#[test]
+fn test_steps_alone_need_confirmation_before_a_run_starts() {
+    let f = fixture();
+    std::fs::create_dir_all(f.root.join(".mdium")).unwrap();
+    let ok = serde_json::to_string(&helper_argv()).unwrap();
+    std::fs::write(f.root.join(".mdium/project.yaml"), format!("schemaVersion: 1\nid: p\nname: P\ntest:\n  - {{ run: {ok} }}\n")).unwrap();
+    let rel = write_flow(&f.root, "t", json!({}), vec![json!({ "id": "t", "kind": "action", "uses": "mdium/project-test" })], vec![]);
+    let review = f.engine.review_commands(&f.root, &rel).unwrap();
+    assert!(!review.confirmed, "test steps are commands the user must confirm");
+    assert_eq!(review.test.len(), 1);
+    assert!(review.setup.is_empty() && review.commands.is_empty());
+    let err = f.engine.start(&f.root, &rel, &BTreeMap::new(), &review.sha256).unwrap_err();
+    assert_eq!(err.code, FLOW_COMMANDS_UNCONFIRMED);
+}
+
+#[test]
+fn project_test_reports_the_result_and_asks_when_the_manifest_differs() {
+    let f = fixture();
+    std::fs::create_dir_all(f.root.join(".mdium")).unwrap();
+    let ok = serde_json::to_string(&helper_argv()).unwrap();
+    let mut bad_argv = helper_argv();
+    bad_argv.push("--no-such-flag".into());
+    let bad = serde_json::to_string(&bad_argv).unwrap();
+    // A failing test step is a result, not a failed node.
+    std::fs::write(f.root.join(".mdium/project.yaml"), format!("schemaVersion: 1\nid: p\nname: P\ntest:\n  - {{ run: {ok} }}\n  - {{ run: {bad} }}\n")).unwrap();
+    let rel = write_flow(&f.root, "t", json!({}), vec![json!({ "id": "t", "kind": "action", "uses": "mdium/project-test" })], vec![]);
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    let t = node(&snap, "t");
+    assert_eq!(t.status, NodeStatus::Succeeded);
+    assert_eq!(t.outputs["ran"], json!(true));
+    assert_eq!(t.outputs["ok"], json!(false));
+    assert!(t.outputs["exitCode"].as_i64().is_some_and(|code| code != 0), "{:?}", t.outputs);
+    let log_dir = std::path::Path::new(t.outputs["logDir"].as_str().unwrap());
+    assert!(log_dir.join("step-2.stderr.log").is_file(), "{:?}", t.outputs);
+    // The failing step's output tail (libtest rejects the unknown flag on stderr).
+    assert!(t.outputs["tail"].as_str().unwrap().contains("no-such-flag"), "{:?}", t.outputs);
+    // Passing steps: ok.
+    std::fs::write(f.root.join(".mdium/project.yaml"), format!("schemaVersion: 1\nid: p\nname: P\ntest:\n  - {{ run: {ok} }}\n")).unwrap();
+    let rel = write_flow(&f.root, "t2", json!({}), vec![json!({ "id": "t", "kind": "action", "uses": "mdium/project-test" })], vec![]);
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(node(&snap, "t").outputs["ok"], json!(true));
+    assert_eq!(node(&snap, "t").outputs["exitCode"], Value::Null);
+    assert_eq!(node(&snap, "t").outputs["tail"], json!(""));
+    // No steps, and no manifest at all: nothing ran.
+    let bare = f.root.join("bare");
+    std::fs::create_dir_all(&bare).unwrap();
+    std::fs::write(f.root.join(".mdium/project.yaml"), "schemaVersion: 1\nid: p\nname: P\n").unwrap();
+    let rel = write_flow(&f.root, "t3", json!({}), vec![
+        json!({ "id": "here", "kind": "action", "uses": "mdium/project-test" }),
+        json!({ "id": "there", "kind": "action", "uses": "mdium/project-test", "with": { "projectRoot": bare.to_string_lossy() } }),
+    ], vec![json!({ "from": "here", "to": "there" })]);
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    for id in ["here", "there"] {
+        assert_eq!(node(&snap, id).outputs["ran"], json!(false), "{id}");
+        assert_eq!(node(&snap, id).outputs["ok"], json!(true), "{id}");
+    }
+    // A worktree-like copy whose manifest differs from the confirmed one asks first.
+    let other = f.root.join("other");
+    std::fs::create_dir_all(other.join(".mdium")).unwrap();
+    std::fs::write(other.join(".mdium/project.yaml"), format!("schemaVersion: 1\nid: p\nname: P\ntest:\n  - {{ run: {ok} }}\n")).unwrap();
+    let rel = write_flow(&f.root, "t4", json!({}), vec![json!({ "id": "t", "kind": "action", "uses": "mdium/project-test", "with": { "projectRoot": other.to_string_lossy() } })], vec![]);
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_for(&run_id, "approval", |s| s.state.status == RunStatus::AwaitingApproval);
+    let request = &snap.state.approvals[0];
+    assert_eq!(request.reason.code, crate::run::actions::FLOW_ACTION_APPROVAL);
+    assert!(request.show.contains_key("test") && request.show.contains_key("sha256"), "{:?}", request.show);
+    let shown = serde_json::to_value(&request.show["test"]).unwrap();
+    assert_eq!(shown[0]["run"], serde_json::from_str::<Value>(&ok).unwrap(), "{shown}");
+    assert!(shown[0].get("workingDir").is_some(), "{shown}");
+    f.engine.approve(&f.root, &run_id, Some("t"), "approve", None).unwrap();
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(node(&snap, "t").outputs["ok"], json!(true));
 }
 
 #[test]
@@ -4615,6 +4813,75 @@ fn the_dev_workflow_template_runs_without_the_plan_approval() {
     assert_eq!(node(&snap, "dev/approve_plan").status, NodeStatus::Skipped);
     assert!(node(&snap, "dev").outputs["worktreePath"].as_str().is_some());
     assert!(node(&snap, "dev").outputs["worktree"]["baseBranch"].as_str().is_some());
+}
+
+#[test]
+fn the_dev_workflow_sets_up_and_tests_the_worktree_and_tells_the_review() {
+    use crate::gitops::test_support::Fixture as GitFixture;
+    crate::templates::test_templates();
+    let repo = GitFixture::new();
+    let ok = serde_json::to_string(&helper_argv()).unwrap();
+    let mut bad_argv = helper_argv();
+    bad_argv.push("--no-such-flag".into());
+    let bad = serde_json::to_string(&bad_argv).unwrap();
+    // The manifest is committed, so the worktree created from HEAD carries it unchanged
+    // (byte for byte: with autocrlf the checkout would differ and ask for approval).
+    repo.run(&["config", "core.autocrlf", "false"]);
+    repo.write(".gitignore", ".mdium/flow-runs/\n.mdium/flows/\n.mdium/setup-runs/\n");
+    repo.write(".mdium/project.yaml", &format!("schemaVersion: 1\nid: p\nname: P\nsetup:\n  - {{ run: {ok} }}\ntest:\n  - {{ run: {ok} }}\n  - {{ run: {bad} }}\n"));
+    repo.run(&["add", "."]);
+    repo.run(&["commit", "-qm", "manifest"]);
+    let runner = Arc::new(FakeAgentRunner::new(vec![
+        FakeTurn::Respond("---\noutcome: completed\n---\n# Design".into()), // design
+        FakeTurn::Respond("---\noutcome: completed\n---\n# Done".into()),   // implement
+        FakeTurn::Respond("---\noutcome: completed\n---\nLGTM".into()),     // review
+    ]));
+    let f = fixture_at_with_agent(repo.root(), runner.clone());
+    let rel = write_flow(
+        &f.root,
+        "outer",
+        json!({}),
+        vec![json!({ "id": "dev", "kind": "subflow", "flow": "mdium:dev-workflow", "params": { "title": "T", "requirement": "Add a README line", "mergeGate": false, "requiresApproval": false, "setup": true } })],
+        vec![],
+    );
+    let run_id = f.confirm_and_start(&rel, json!({}));
+    let snap = f.wait_settled(&run_id, RunStatus::Completed);
+    // setup ran in the worktree before the design; the failing test is a result, not a failure.
+    assert_eq!(node(&snap, "dev/setup").status, NodeStatus::Succeeded);
+    assert!(node(&snap, "dev/setup").finished_at < node(&snap, "dev/design").started_at);
+    let test = node(&snap, "dev/test");
+    assert_eq!(test.status, NodeStatus::Succeeded);
+    assert_eq!(test.outputs["ran"], json!(true));
+    assert_eq!(test.outputs["ok"], json!(false));
+    assert!(test.finished_at < node(&snap, "dev/review").started_at);
+    // The review's inputs carry the result with the right types.
+    let dir = f.engine_store().node_attempt_dir(&run_id, "dev/review", 1).unwrap();
+    let inputs: Value = serde_json::from_str(&fs::read_to_string(dir.join("inputs.json")).unwrap()).unwrap();
+    assert_eq!(inputs["testRan"], json!(true));
+    assert_eq!(inputs["testOk"], json!(false));
+    assert!(inputs["testExitCode"].as_i64().is_some_and(|code| code != 0), "{inputs}");
+    assert!(inputs["testTail"].as_str().is_some_and(|t| t.contains("no-such-flag")), "{inputs}");
+    assert!(std::path::Path::new(inputs["testLogDir"].as_str().unwrap()).is_dir(), "{inputs}");
+    assert!(runner.prompts()[2].contains("testOk"), "the review prompt carries the inputs block");
+    // Without `setup` the stage is skipped and the design still runs.
+    let runner2 = Arc::new(FakeAgentRunner::new(vec![
+        FakeTurn::Respond("---\noutcome: completed\n---\n# Design".into()),
+        FakeTurn::Respond("---\noutcome: completed\n---\n# Done".into()),
+        FakeTurn::Respond("---\noutcome: completed\n---\nLGTM".into()),
+    ]));
+    let f2 = fixture_at_with_agent(repo.root(), runner2);
+    let rel2 = write_flow(
+        &f2.root,
+        "outer2",
+        json!({}),
+        vec![json!({ "id": "dev", "kind": "subflow", "flow": "mdium:dev-workflow", "params": { "title": "T", "requirement": "Add a README line", "mergeGate": false, "requiresApproval": false } })],
+        vec![],
+    );
+    let run_id = f2.confirm_and_start(&rel2, json!({}));
+    let snap = f2.wait_settled(&run_id, RunStatus::Completed);
+    assert_eq!(node(&snap, "dev/setup").status, NodeStatus::Skipped);
+    assert_eq!(node(&snap, "dev/design").status, NodeStatus::Succeeded);
+    assert_eq!(node(&snap, "dev/test").outputs["ran"], json!(true));
 }
 
 #[test]

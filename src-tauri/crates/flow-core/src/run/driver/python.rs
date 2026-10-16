@@ -1,4 +1,5 @@
-//! Driver: python.
+//! Driver: `python` nodes and the resident workers they run on, one per
+//! (runtime, root), including the worker protocol.
 
 use super::*;
 
@@ -55,7 +56,7 @@ impl RunningCall {
         (self.runtime.clone(), self.root.clone())
     }
 
-    pub(super) fn is_on(&self, worker_key: &WorkerKey) -> bool {
+    fn is_on(&self, worker_key: &WorkerKey) -> bool {
         self.runtime == worker_key.0 && self.root == worker_key.1
     }
 }
@@ -72,7 +73,7 @@ pub(super) enum WorkerStartError {
 /// an `error` the worker answered with. Other worker codes than the input
 /// and entry ones become `FLOW_PYTHON_PROTOCOL` with the worker's code in
 /// `code`, so every reason has a translation.
-pub(super) fn call_failure_reason(error_code: Option<&str>, detail: Option<String>, entry: &str) -> Reason {
+fn call_failure_reason(error_code: Option<&str>, detail: Option<String>, entry: &str) -> Reason {
     let mut reason = match error_code {
         None => Reason::new(FLOW_NODE_FAILED),
         Some(code @ (FLOW_PYTHON_INPUT_INVALID | FLOW_PYTHON_ENTRY_UNKNOWN)) => {
@@ -265,7 +266,7 @@ impl Driver {
     /// The node is still `running` at `attempt` after a worker start. While
     /// a worker starts, `await_manifest` applies controls (an approval may
     /// open a new pass and retire this instance); then the call is dropped.
-    pub(super) fn still_starting(&self, key: &str, attempt: u32) -> bool {
+    fn still_starting(&self, key: &str, attempt: u32) -> bool {
         let node = self.node(key);
         node.status == NodeStatus::Running && node.attempt == attempt
     }
@@ -273,7 +274,7 @@ impl Driver {
     /// Ends a node whose worker did not start: failed, or (when a cancel or
     /// app exit interrupted the start) cancelled / interrupted like a
     /// running node.
-    pub(super) fn worker_start_error(&mut self, key: &str, attempt: u32, err: WorkerStartError) {
+    fn worker_start_error(&mut self, key: &str, attempt: u32, err: WorkerStartError) {
         if !self.still_starting(key, attempt) {
             return;
         }
@@ -305,7 +306,7 @@ impl Driver {
     /// Starts the worker of a runtime and working root unless it runs, and
     /// waits (blocking, but watching for cancel and app exit) for its
     /// manifest. The runtime's `python` and `cwd` resolve against the root.
-    pub(super) fn ensure_worker(&mut self, worker_key: &WorkerKey, def: &RuntimeDef) -> Result<(), WorkerStartError> {
+    fn ensure_worker(&mut self, worker_key: &WorkerKey, def: &RuntimeDef) -> Result<(), WorkerStartError> {
         let (runtime, root) = (worker_key.0.as_str(), worker_key.1.as_path());
         match self.workers.get(worker_key) {
             Some(w) if !w.eof && w.exit_code.is_none() => return Ok(()),
@@ -392,7 +393,7 @@ impl Driver {
     /// output meanwhile goes to the worker's stdout log. `Err(None)` when a
     /// cancel or app exit arrived meanwhile (M5), `Err(Some(message))` when
     /// the worker failed to start.
-    pub(super) fn await_manifest(
+    fn await_manifest(
         &mut self,
         handle: &mut dyn WorkerHandle,
         stdout_log: &Path,
@@ -570,7 +571,7 @@ impl Driver {
     }
 
     /// The worker the call was sent to still runs.
-    pub(super) fn worker_alive(&self, call: &RunningCall) -> bool {
+    fn worker_alive(&self, call: &RunningCall) -> bool {
         self.workers
             .get(&call.worker_key())
             .is_some_and(|w| w.id == call.worker)
@@ -578,7 +579,7 @@ impl Driver {
 
     /// Handles a worker's pending output. Returns `Some(exit code)` once the
     /// worker is gone (it is then removed).
-    pub(super) fn poll_worker(&mut self, worker_key: &WorkerKey) -> Option<Option<i32>> {
+    fn poll_worker(&mut self, worker_key: &WorkerKey) -> Option<Option<i32>> {
         let mut events = Vec::new();
         {
             let worker = self.workers.get_mut(worker_key)?;
@@ -630,7 +631,7 @@ impl Driver {
     }
 
     /// One line of a worker's stdout (spec 3.3).
-    pub(super) fn worker_line(&mut self, worker_key: &WorkerKey, line: &str) {
+    fn worker_line(&mut self, worker_key: &WorkerKey, line: &str) {
         if line.trim().is_empty() {
             return;
         }
@@ -723,7 +724,7 @@ impl Driver {
     }
 
     /// The call in flight on the runtime's current worker (no outcome yet).
-    pub(super) fn active_call(&self, worker_key: &WorkerKey) -> Option<usize> {
+    fn active_call(&self, worker_key: &WorkerKey) -> Option<usize> {
         let worker = self.workers.get(worker_key)?.id;
         self.calls.iter().position(|c| {
             c.is_on(worker_key) && c.worker == worker && c.items.outcome.is_none()
@@ -733,7 +734,7 @@ impl Driver {
     /// A dropped line: over `MAX_LINE_BYTES_HARD` (the reader discarded it),
     /// or over `MAX_LINE_BYTES` without ending a call. A counted warning
     /// inside a call, ignored outside.
-    pub(super) fn worker_line_too_long(&mut self, worker_key: &WorkerKey) {
+    fn worker_line_too_long(&mut self, worker_key: &WorkerKey) {
         if let Some(idx) = self.active_call(worker_key) {
             if let Some(line) = self.count_line(idx) {
                 let key = self.calls[idx].key.clone();
@@ -744,7 +745,7 @@ impl Driver {
 
     /// Counts one line of a call against `MAX_LINES`: `Some(line number)`
     /// while within the limit; past it, one `too-many-lines` warning and `None`.
-    pub(super) fn count_line(&mut self, idx: usize) -> Option<usize> {
+    fn count_line(&mut self, idx: usize) -> Option<usize> {
         let call = &mut self.calls[idx];
         call.lines += 1;
         let line = call.lines;
@@ -763,7 +764,7 @@ impl Driver {
     /// is applied even past `MAX_LINES` (only its record is dropped), so the
     /// call always ends. Of the over-long lines only a call-ending `outcome`
     /// gets here, in its bounded form (`bound_over_long_line`).
-    pub(super) fn call_item(&mut self, idx: usize, item: ProtocolItem, clean: &str) {
+    fn call_item(&mut self, idx: usize, item: ProtocolItem, clean: &str) {
         let key = self.calls[idx].key.clone();
         let is_outcome = matches!(item, ProtocolItem::Outcome(_));
         let Some(line) = self.count_line(idx) else {
@@ -799,7 +800,7 @@ impl Driver {
     }
 
     /// Settles a call like a command (spec 3.5).
-    pub(super) fn finish_call(&mut self, mut call: RunningCall, finish: Finish) {
+    fn finish_call(&mut self, mut call: RunningCall, finish: Finish) {
         let key = call.key.clone();
         let attempt = call.attempt;
         self.flush_progress(&key, &mut call.items);

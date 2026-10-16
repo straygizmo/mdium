@@ -30,11 +30,14 @@ pub fn validate_with_outputs(
 ) -> Issues {
     let mut known = declared.clone();
     collect_loop_outputs(&flow.nodes, &mut known);
+    let mut subflows = BTreeSet::new();
+    collect_subflow_ids(&flow.nodes, &mut subflows);
     let mut v = Validator {
         issues: Issues::default(),
         params: flow.params.keys().cloned().collect(),
         env_passthrough: flow.env_passthrough.iter().cloned().collect(),
         known_outputs: known,
+        subflows,
     };
     v.flow_level(flow);
     v.check_ids(flow);
@@ -87,6 +90,8 @@ struct Validator {
     env_passthrough: BTreeSet<String>,
     /// Node id -> output keys, for nodes whose outputs are known.
     known_outputs: BTreeMap<String, BTreeSet<String>>,
+    /// Ids of `subflow` nodes at any depth: the only nodes with `params`.
+    subflows: BTreeSet<String>,
 }
 
 /// What references may see at a given place.
@@ -98,6 +103,23 @@ struct Ctx {
     loop_vars: Vec<String>,
     /// Inside a `while` loop's `until` (may read `iteration.outputs`).
     iteration: bool,
+}
+
+/// Ids of the `subflow` nodes of `nodes` and of every inline loop body under them.
+fn collect_subflow_ids(nodes: &[FlowNode], out: &mut BTreeSet<String>) {
+    for node in nodes {
+        match &node.kind {
+            NodeKind::Subflow(_) => {
+                out.insert(node.id.clone());
+            }
+            NodeKind::Loop(lp) => {
+                if let LoopBody::Inline(body) = &lp.body {
+                    collect_subflow_ids(&body.nodes, out);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn is_flow_id(id: &str) -> bool {
@@ -361,6 +383,9 @@ impl Validator {
                 }
                 if let Some(root) = &sub.project_root {
                     self.template(root, &join(path, "projectRoot"), ctx);
+                }
+                if let Some(from) = &sub.params_from {
+                    self.template(from, &join(path, "paramsFrom"), ctx);
                 }
             }
             NodeKind::Action(action) => {
@@ -752,6 +777,7 @@ impl Validator {
             | Reference::NodeArtifacts { node }
             | Reference::NodeArtifact { node, .. }
             | Reference::NodeCost { node }
+            | Reference::NodeParams { node }
                 if !ctx.visible.iter().any(|ids| ids.contains(node)) =>
             {
                 self.issues.error(
@@ -772,6 +798,9 @@ impl Validator {
                         .with("key", key.clone())
                         .with("ref", reference.to_string()),
                 );
+            }
+            Reference::NodeParams { node } if !self.subflows.contains(node) => {
+                self.issues.error(bad("params-not-subflow"));
             }
             Reference::IterationOutput(_) if !ctx.iteration => {
                 self.issues.error(bad("iteration-outside-until"));

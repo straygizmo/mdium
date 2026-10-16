@@ -85,7 +85,9 @@ export function RunStartDialog({ projectRoot, flowPath, flow, onClose, onStarted
     };
   }, [projectRoot, flowPath]);
 
-  const reviewItems = review ? review.commands.length + review.runtimes.length + review.setup.length + review.stages.length : 0;
+  const reviewItems = review
+    ? review.commands.length + review.runtimes.length + review.setup.length + review.test.length + review.stages.length
+    : 0;
   const needsConfirmation = !!review && !review.confirmed && reviewItems > 0;
   const invalidParams = invalidJsonParams(flow, values);
   const canStart = !!review && !busy && (!needsConfirmation || accepted) && invalidParams.length === 0;
@@ -148,7 +150,7 @@ export function RunStartDialog({ projectRoot, flowPath, flow, onClose, onStarted
       </section>
       <section className="flow-dialog__section">
         <h3 className="flow-dialog__heading">{t("run.commandsTitle")}</h3>
-        {review && review.commands.length === 0 && review.runtimes.length === 0 && review.setup.length === 0 && review.stages.length === 0 && <div className="flow-dialog__muted">{t("run.noCommands")}</div>}
+        {review && reviewItems === 0 && <div className="flow-dialog__muted">{t("run.noCommands")}</div>}
         {review && review.commands.length > 0 && (
           <>
             <div className="flow-dialog__muted">{t("run.commandsHint")}</div>
@@ -232,6 +234,19 @@ export function RunStartDialog({ projectRoot, flowPath, flow, onClose, onStarted
           <h3 className="flow-dialog__heading">{t("run.setupTitle")}</h3>
           <ul className="flow-dialog__commands">
             {review.setup.map((step, i) => (
+              <li key={i} className="flow-dialog__command">
+                <code className="flow-dialog__code">{step.run.map((a) => (/\s/.test(a) ? JSON.stringify(a) : a)).join(" ")}</code>
+                {step.workingDir && <div className="flow-dialog__muted">{t("run.workingDir", { dir: step.workingDir })}</div>}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {review && review.test.length > 0 && (
+        <section className="flow-dialog__section">
+          <h3 className="flow-dialog__heading">{t("run.testTitle")}</h3>
+          <ul className="flow-dialog__commands">
+            {review.test.map((step, i) => (
               <li key={i} className="flow-dialog__command">
                 <code className="flow-dialog__code">{step.run.map((a) => (/\s/.test(a) ? JSON.stringify(a) : a)).join(" ")}</code>
                 {step.workingDir && <div className="flow-dialog__muted">{t("run.workingDir", { dir: step.workingDir })}</div>}

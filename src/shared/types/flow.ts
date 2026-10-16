@@ -138,6 +138,8 @@ export interface FlowSubflowNode extends FlowNodeCommon {
   kind: "subflow";
   flow: string;
   params?: Record<string, unknown>;
+  /** Template of an object passed as arguments under `params` (entries the callee does not declare are dropped). */
+  paramsFrom?: string;
   /** Project root of the sub-flow scope (templated). */
   projectRoot?: string;
 }
@@ -210,6 +212,7 @@ export const FLOW_ERROR_CODES = [
   "FLOW_ACTION_UNKNOWN",
   "FLOW_TEMPLATE_UNKNOWN",
   "FLOW_SUBFLOW_ROOT_INVALID",
+  "FLOW_SUBFLOW_PARAMS_INVALID",
   "FLOW_PROVIDER_UNAVAILABLE",
   "FLOW_UNKNOWN_FIELD",
   "FLOW_UNKNOWN_NODE_KIND",
@@ -324,6 +327,8 @@ export interface ProjectDef {
   description?: string;
   runtimes?: Record<string, RuntimeDef>;
   setup?: SetupStep[];
+  /** How to test a copy (`mdium/project-test`), same shape as `setup`. */
+  test?: SetupStep[];
   secrets?: string[];
   flows?: Record<string, string>;
   metrics?: MetricDef[];

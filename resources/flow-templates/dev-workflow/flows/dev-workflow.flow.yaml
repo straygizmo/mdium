@@ -1,7 +1,7 @@
 schemaVersion: 1
 id: dev-workflow
 name: Standard development workflow
-description: screen -> worktree -> design -> plan -> approve -> implement -> review -> merge gate -> merge or discard (no push, no PR).
+description: screen -> worktree -> (setup) -> design -> plan -> approve -> implement -> (test) -> review -> merge gate -> merge or discard (no push, no PR).
 params:
   title: { type: string, required: true }
   requirement: { type: string, required: true }
@@ -10,10 +10,17 @@ params:
   requiresApproval: { type: bool, default: true }
   mergeGate: { type: bool, default: true }
   provider: { type: string, default: codex }
+  # Run the project's setup (project.yaml) in the worktree before the design stage.
+  setup: { type: bool, default: false }
 limits: { maxConcurrentNodes: 1 }
 nodes:
   - { id: screen, kind: action, uses: mdium/screen-input, with: { text: "${{ params.requirement }}" } }
   - { id: worktree, kind: action, uses: mdium/git-worktree-create, with: { title: "${{ params.title }}" } }
+  - id: setup
+    kind: action
+    uses: mdium/project-setup
+    when: { ref: params.setup, op: "==", value: true }
+    with: { projectRoot: "${{ nodes.worktree.outputs.path }}" }
   - id: design
     kind: agent
     provider: "${{ params.provider }}"
@@ -58,6 +65,13 @@ nodes:
     workingDir: "${{ nodes.worktree.outputs.path }}"
     with: { title: "${{ params.title }}", requirement: "${{ params.requirement }}", design: "${{ nodes.design.outputs.body }}", plan: "${{ nodes.plan.outputs.body }}" }
     timeout: 120m
+  # The project's `test` steps (project.yaml) run in the worktree; a failure is a result the
+  # review reads (ok, exit code, output tail, log dir), not the end of the workflow.
+  - id: test
+    kind: action
+    uses: mdium/project-test
+    with: { projectRoot: "${{ nodes.worktree.outputs.path }}" }
+    timeout: 60m
   - id: issue_impl
     kind: action
     uses: mdium/issue-entry
@@ -70,7 +84,18 @@ nodes:
     promptRef: builtin:review
     outputContract: outcome
     workingDir: "${{ nodes.worktree.outputs.path }}"
-    with: { title: "${{ params.title }}", requirement: "${{ params.requirement }}", design: "${{ nodes.design.outputs.body }}", summary: "${{ nodes.implement.outputs.body }}", branch: "${{ nodes.worktree.outputs.branch }}", baseBranch: "${{ nodes.worktree.outputs.baseBranch }}" }
+    with:
+      title: "${{ params.title }}"
+      requirement: "${{ params.requirement }}"
+      design: "${{ nodes.design.outputs.body }}"
+      summary: "${{ nodes.implement.outputs.body }}"
+      branch: "${{ nodes.worktree.outputs.branch }}"
+      baseBranch: "${{ nodes.worktree.outputs.baseBranch }}"
+      testRan: "${{ nodes.test.outputs.ran }}"
+      testOk: "${{ nodes.test.outputs.ok }}"
+      testExitCode: "${{ nodes.test.outputs.exitCode }}"
+      testTail: "${{ nodes.test.outputs.tail }}"
+      testLogDir: "${{ nodes.test.outputs.logDir }}"
     timeout: 60m
   - id: issue_review
     kind: action
@@ -103,7 +128,8 @@ nodes:
   - { id: discard, kind: action, uses: mdium/git-worktree-discard, with: { worktree: "${{ nodes.worktree.outputs }}" } }
 edges:
   - { from: screen, to: worktree }
-  - { from: worktree, to: design }
+  - { from: worktree, to: setup }
+  - { from: setup, to: design }
   - { from: design, to: design_doc }
   - { from: design_doc, to: issue_design }
   - { from: issue_design, to: plan }
@@ -111,7 +137,8 @@ edges:
   - { from: approve_plan, to: implement, port: approve }
   - { from: approve_plan, to: plan, port: revise, maxTraversals: 10 }
   - { from: implement, to: issue_impl }
-  - { from: issue_impl, to: review }
+  - { from: issue_impl, to: test }
+  - { from: test, to: review }
   - { from: review, to: issue_review }
   - { from: review, to: issue_review_return, port: attention }
   - { from: issue_review_return, to: design, maxTraversals: 5 }

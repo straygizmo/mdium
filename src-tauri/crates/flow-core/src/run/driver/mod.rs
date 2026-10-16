@@ -26,7 +26,7 @@ use crate::gitops;
 use crate::integrity::{self, IntegritySnapshot};
 use crate::issues::{
     FLOW_PROVIDER_UNAVAILABLE, FLOW_RUNTIME_UNKNOWN, FLOW_SUBFLOW_INVALID,
-    FLOW_SUBFLOW_ROOT_INVALID,
+    FLOW_SUBFLOW_PARAMS_INVALID, FLOW_SUBFLOW_ROOT_INVALID,
 };
 use crate::load;
 use crate::model::{
@@ -611,6 +611,30 @@ impl Driver {
         }
     }
 
+    /// The resolved params of the child scope that the sub-flow node `id`
+    /// (visible from `prefix`, current pass) opened; `NotRun` before it
+    /// opened one, `None` when no such node is visible.
+    fn scope_params_seen(&self, prefix: &str, id: &str) -> Option<NodeOutputs> {
+        let mut current = prefix.to_string();
+        loop {
+            if self.graph_of(&current)?.node(id).is_some() {
+                let child = self
+                    .template_instance(&current, id)
+                    .map(|key| scope::subflow_prefix(&key))
+                    .and_then(|child| self.state.scopes.get(&child));
+                return Some(match child {
+                    Some(scope) => NodeOutputs::Ran(scope.init.params.clone()),
+                    None => NodeOutputs::NotRun,
+                });
+            }
+            let init = self.scope_init(&current)?;
+            match (init.inherits, init.parent) {
+                (true, Some(parent)) => current = parent,
+                _ => return None,
+            }
+        }
+    }
+
     /// Actual + estimated cost of node `id` of `prefix` and of everything
     /// under it (loop iterations, sub-flow scopes).
     fn cost_seen(&self, prefix: &str, id: &str) -> Option<f64> {
@@ -704,11 +728,13 @@ impl Driver {
         let lookup = |id: &str| self.outputs_seen(prefix, id);
         let artifacts = |id: &str| self.artifacts_seen(prefix, id);
         let costs = |id: &str| self.cost_seen(prefix, id);
+        let scope_params = |id: &str| self.scope_params_seen(prefix, id);
         let ctx = TemplateContext {
             params: &params,
             outputs: &lookup,
             artifacts: &artifacts,
             costs: &costs,
+            scope_params: &scope_params,
             vars: &vars,
             iteration,
             run_id: &self.run_id,

@@ -8,6 +8,7 @@ export const KNOWN_ACTIONS = [
   "mdium/issue-close",
   "mdium/git-worktree-discard",
   "mdium/project-setup",
+  "mdium/project-test",
   "mdium/flow-run-latest",
   "mdium/metrics-compare",
 ];
@@ -36,9 +37,12 @@ export const ACTION_INPUTS: Record<string, { name: string; required: boolean }[]
   "mdium/issue-close": [{ name: "issue", required: true }],
   "mdium/git-worktree-discard": [{ name: "worktree", required: true }],
   "mdium/project-setup": [{ name: "projectRoot", required: false }],
+  "mdium/project-test": [{ name: "projectRoot", required: false }],
   "mdium/flow-run-latest": [{ name: "flow", required: true }],
   "mdium/metrics-compare": [
     { name: "baseline", required: true },
     { name: "candidate", required: true },
+    { name: "baselineParams", required: false },
+    { name: "candidateParams", required: false },
   ],
 };

@@ -63,6 +63,8 @@ pub enum AgentTurnEvent {
     },
     Completed {
         final_response: String,
+        /// The turn's cost in USD when the provider reports it.
+        cost_usd: Option<f64>,
     },
     Failed {
         code: String,
@@ -312,9 +314,14 @@ fn drive_turn(
             return AgentTurnEvent::Cancelled;
         }
         return match event {
-            RunnerEvent::TurnCompleted { final_response, .. } => {
-                AgentTurnEvent::Completed { final_response }
-            }
+            RunnerEvent::TurnCompleted {
+                final_response,
+                cost_usd,
+                ..
+            } => AgentTurnEvent::Completed {
+                final_response,
+                cost_usd,
+            },
             RunnerEvent::TurnFailed { message } => {
                 forward(AgentTurnEvent::Log(
                     json!({ "type": "turn_failed", "message": message }).to_string(),
@@ -494,6 +501,7 @@ mod tests {
                 RunnerEvent::TurnCompleted {
                     final_response: "done".into(),
                     native_session_id: None,
+                    cost_usd: Some(0.25),
                 },
             ],
             false,
@@ -506,7 +514,8 @@ mod tests {
         assert_eq!(
             events.last().unwrap(),
             &AgentTurnEvent::Completed {
-                final_response: "done".into()
+                final_response: "done".into(),
+                cost_usd: Some(0.25),
             }
         );
         wait_closed(&api);

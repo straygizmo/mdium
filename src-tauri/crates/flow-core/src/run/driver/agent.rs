@@ -1,4 +1,5 @@
-//! Driver: agent.
+//! Driver: `agent` nodes, from the prepared prompt through the runner turn
+//! (guards, integrity, cost) to the outcome contract.
 
 use super::*;
 
@@ -52,7 +53,7 @@ pub(super) enum AgentFinish {
 
 /// The text screened before a `full-access` turn: every string in the
 /// rendered inputs, then the instructions (when not built in).
-pub(super) fn screening_text(inputs: &BTreeMap<String, Value>, instructions: Option<&str>) -> String {
+fn screening_text(inputs: &BTreeMap<String, Value>, instructions: Option<&str>) -> String {
     fn strings<'v>(value: &'v Value, out: &mut Vec<&'v str>) {
         match value {
             Value::String(s) => out.push(s),
@@ -70,7 +71,7 @@ pub(super) fn screening_text(inputs: &BTreeMap<String, Value>, instructions: Opt
 }
 
 /// An integrity snapshot failed: the turn cannot be verified.
-pub(super) fn integrity_snapshot_failed(err: &integrity::IntegrityError) -> Reason {
+fn integrity_snapshot_failed(err: &integrity::IntegrityError) -> Reason {
     Reason::new(FLOW_AGENT_INTEGRITY_CHANGED)
         .with(
             "changes",
@@ -80,7 +81,7 @@ pub(super) fn integrity_snapshot_failed(err: &integrity::IntegrityError) -> Reas
 }
 
 /// The question and answer saved in an attempt dir's `answer.json`.
-pub(super) fn read_answer(dir: &Path) -> Option<PreviousTurn> {
+fn read_answer(dir: &Path) -> Option<PreviousTurn> {
     let saved: Value = serde_json::from_slice(&std::fs::read(dir.join("answer.json")).ok()?).ok()?;
     let field = |name: &str| saved.get(name).and_then(Value::as_str).map(str::to_string);
     Some(PreviousTurn {
@@ -122,7 +123,7 @@ impl Driver {
     /// Asks the user before a `full-access` turn whose inputs look suspicious.
     /// The reason carries the screened text's SHA-256 (`screenedSha256`), so
     /// the approval covers exactly that text.
-    pub(super) fn request_agent_screening(
+    fn request_agent_screening(
         &mut self,
         key: &str,
         attempt: u32,
@@ -204,7 +205,7 @@ impl Driver {
     /// `answer.json` of an earlier attempt that no started turn consumed yet.
     /// A started turn leaves `stdout.log` in its attempt dir (attempts that
     /// were only prepared, screened or never started have none).
-    pub(super) fn previous_turn(&self, key: &str, attempt: u32) -> Option<PreviousTurn> {
+    fn previous_turn(&self, key: &str, attempt: u32) -> Option<PreviousTurn> {
         for earlier in (1..attempt).rev() {
             let dir = self.store.node_attempt_dir(&self.run_id, key, earlier).ok()?;
             if let Some(turn) = read_answer(&dir) {
@@ -218,7 +219,7 @@ impl Driver {
     }
 
     /// An agent answered `awaiting_user`: ask the user its question.
-    pub(super) fn request_agent_question(&mut self, key: &str, attempt: u32, question: String, body: String) {
+    fn request_agent_question(&mut self, key: &str, attempt: u32, question: String, body: String) {
         self.agent_questions
             .insert(key.to_string(), (question.clone(), body));
         self.set_node(key, NodeStatus::AwaitingApproval, attempt, None, None);
@@ -298,7 +299,7 @@ impl Driver {
 
     /// Renders the inputs and the prompt of an attempt and writes
     /// `inputs.json` and `prompt.md` to its node dir.
-    pub(super) fn prepare_agent(
+    fn prepare_agent(
         &self,
         prefix: &str,
         key: &str,
@@ -412,7 +413,7 @@ impl Driver {
     }
 
     /// Starts the turn of a prepared attempt and tracks it.
-    pub(super) fn start_agent_turn(
+    fn start_agent_turn(
         &mut self,
         prefix: &str,
         key: &str,
@@ -480,7 +481,7 @@ impl Driver {
     /// Snapshots the project repo before a `full-access` turn. Not a git
     /// repo: warns and skips the check. A failed snapshot fails the node,
     /// since the turn could not be verified afterwards (`Err`).
-    pub(super) fn take_integrity_baseline(
+    fn take_integrity_baseline(
         &mut self,
         key: &str,
         attempt: u32,
@@ -509,7 +510,7 @@ impl Driver {
     /// Compares the repo with the turn's baseline: the
     /// `FLOW_AGENT_INTEGRITY_CHANGED` reason on any change (or a failed
     /// snapshot), `None` when nothing changed or nothing was snapshotted.
-    pub(super) fn integrity_violation(&self, agent: &RunningAgent) -> Option<Reason> {
+    fn integrity_violation(&self, agent: &RunningAgent) -> Option<Reason> {
         let before = agent.baseline.as_ref()?;
         Some(match integrity::snapshot(self.store.project_root(), None) {
             Ok(after) => {
@@ -558,7 +559,7 @@ impl Driver {
         }
     }
 
-    pub(super) fn poll_agent(&mut self, agent: &mut RunningAgent) -> Option<AgentFinish> {
+    fn poll_agent(&mut self, agent: &mut RunningAgent) -> Option<AgentFinish> {
         while let Some(event) = agent.handle.try_recv() {
             match event {
                 AgentTurnEvent::Log(line) => {
@@ -607,12 +608,12 @@ impl Driver {
     }
 
     /// Settles an agent node from how its turn ended.
-    pub(super) fn finish_agent(&mut self, mut agent: RunningAgent, finish: AgentFinish) {
+    fn finish_agent(&mut self, mut agent: RunningAgent, finish: AgentFinish) {
         let key = agent.key.clone();
         let attempt = agent.attempt;
         self.flush_progress(&key, &mut agent.items);
         agent.log = None;
-        if let AgentFinish::Turn(AgentTurnEvent::Completed { final_response }) = &finish {
+        if let AgentFinish::Turn(AgentTurnEvent::Completed { final_response, .. }) = &finish {
             if let Err(err) = std::fs::write(agent.dir.join("response.md"), final_response) {
                 append_line(
                     &agent.dir.join("stdout.log"),
@@ -620,12 +621,22 @@ impl Driver {
                 );
             }
         }
-        if let Some(usd) = agent.estimate_usd {
+        // A reported cost replaces the node's estimate; without one the
+        // estimate stands in for every end of the turn.
+        let reported = match &finish {
+            AgentFinish::Turn(AgentTurnEvent::Completed { cost_usd, .. }) => *cost_usd,
+            _ => None,
+        };
+        let cost = match reported {
+            Some(usd) => Some((usd, CostKind::Actual)),
+            None => agent.estimate_usd.map(|usd| (usd, CostKind::Estimated)),
+        };
+        if let Some((usd, kind)) = cost {
             self.emit(
                 Some(&key),
                 EventBody::Cost {
                     usd,
-                    kind: CostKind::Estimated,
+                    kind,
                     provider: None,
                     model: None,
                     units: None,
@@ -663,7 +674,7 @@ impl Driver {
             return self.after_failure(&key, attempt, Reason::new(FLOW_NODE_TIMEOUT), true);
         }
         match end {
-            AgentTurnEvent::Completed { final_response } => {
+            AgentTurnEvent::Completed { final_response, .. } => {
                 self.agent_completed(&agent, final_response)
             }
             AgentTurnEvent::Failed { code, message } => match agent.violation.take() {
@@ -720,7 +731,7 @@ impl Driver {
     }
 
     /// Maps a completed turn's response to outputs, artifacts and a port.
-    pub(super) fn agent_completed(&mut self, agent: &RunningAgent, response: String) {
+    fn agent_completed(&mut self, agent: &RunningAgent, response: String) {
         let key = agent.key.as_str();
         let attempt = agent.attempt;
         if agent.contract == OutputContract::Free {

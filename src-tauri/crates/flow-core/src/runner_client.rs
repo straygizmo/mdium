@@ -37,6 +37,8 @@ pub enum RunnerEvent {
     TurnCompleted {
         final_response: String,
         native_session_id: Option<String>,
+        /// The turn's cost in USD when the provider reports it.
+        cost_usd: Option<f64>,
     },
     /// The turn ended with an error. Also produced for a session-scoped
     /// `error` without a `requestId` other than `TURN_IN_PROGRESS` (e.g.
@@ -255,6 +257,7 @@ impl RunnerClient {
             "turn_completed" => RunnerEvent::TurnCompleted {
                 final_response: str_field(&msg, "finalResponse").unwrap_or_default(),
                 native_session_id: str_field(&msg, "nativeSessionId"),
+                cost_usd: msg.get("costUsd").and_then(Value::as_f64),
             },
             "error" if msg.get("message").and_then(Value::as_str) == Some("TURN_IN_PROGRESS") => {
                 RunnerEvent::Rejected {
@@ -834,7 +837,7 @@ mod tests {
         client.handle_line(r#"{"type":"guard_violation","sessionId":"s","rule":"git-remote","summary":"git push"}"#);
         client.handle_line(r#"{"type":"turn_failed","sessionId":"s","message":"GUARD_BLOCKED"}"#);
         client.handle_line(r#"{"type":"turn_completed","sessionId":"s","finalResponse":"done","nativeSessionId":"n"}"#);
-        client.handle_line(r#"{"type":"turn_completed","sessionId":"s","finalResponse":"again"}"#);
+        client.handle_line(r#"{"type":"turn_completed","sessionId":"s","finalResponse":"again","costUsd":0.3}"#);
         client.handle_line(r#"{"type":"error","sessionId":"s","message":"TURN_IN_PROGRESS"}"#);
         client.handle_line(r#"{"type":"error","sessionId":"s","message":"NO_SESSION"}"#);
         let got: Vec<RunnerEvent> = (0..6).map(|_| s.recv_timeout(WAIT).unwrap()).collect();
@@ -850,11 +853,13 @@ mod tests {
                 },
                 RunnerEvent::TurnCompleted {
                     final_response: "done".to_string(),
-                    native_session_id: Some("n".to_string())
+                    native_session_id: Some("n".to_string()),
+                    cost_usd: None,
                 },
                 RunnerEvent::TurnCompleted {
                     final_response: "again".to_string(),
-                    native_session_id: None
+                    native_session_id: None,
+                    cost_usd: Some(0.3),
                 },
                 RunnerEvent::Rejected {
                     message: "TURN_IN_PROGRESS".to_string()

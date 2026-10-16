@@ -213,6 +213,7 @@ function inboundParam(
     if (field === "outputs" && seg.length === 3) return { name: `${node}_outputs`, type: "string" };
     if (field === "artifacts" && seg.length === 3) return { name: `${node}_artifacts`, type: "string" };
     if (field === "artifacts" && seg.length === 4) return { name: key, type: "string" };
+    if (field === "params" && seg.length === 3) return { name: `${node}_params`, type: "object" };
     return null;
   }
   if (seg[0] === "iteration" && seg[1] === "outputs" && seg.length === 3 && !ctx.iteration) {

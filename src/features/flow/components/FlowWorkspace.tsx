@@ -257,7 +257,10 @@ export function FlowWorkspace() {
     // Keep the previous layout on screen until the new one is ready (no flicker while editing).
     layoutFlowGraph(graph, savedPositions(def.ui)).then(
       (next) => !cancelled && setLayout(next),
-      () => !cancelled && setLayoutFailed(true),
+      (err) => {
+        console.error("[flow] graph layout failed", err);
+        if (!cancelled) setLayoutFailed(true);
+      },
     );
     return () => {
       cancelled = true;

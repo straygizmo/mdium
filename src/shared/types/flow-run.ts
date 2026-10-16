@@ -220,6 +220,8 @@ export interface CommandReview {
   commands: CommandSummary[];
   runtimes: RuntimeSummary[];
   setup: SetupSummary[];
+  /** The manifest's `test` steps (`mdium/project-test`). */
+  test: SetupSummary[];
   stages: StageSummary[];
   projectPath?: string;
   /** Built-in templates (`mdium:<name>`) the flow uses, hashed into `sha256`. */

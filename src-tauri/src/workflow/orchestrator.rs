@@ -1102,6 +1102,7 @@ mod tests {
                     let _ = tx.send(RunnerEvent::TurnCompleted {
                         final_response: response,
                         native_session_id: None,
+                        cost_usd: None,
                     });
                 }
                 Some(Script::WaitForCancel { on_cancel }) => {
@@ -1667,6 +1668,7 @@ mod tests {
             on_cancel: RunnerEvent::TurnCompleted {
                 final_response: completed("# Design"),
                 native_session_id: None,
+                cost_usd: None,
             },
         });
         let root = env.root_task("Feature", "Build it.");

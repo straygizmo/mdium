@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { FlowDef, FlowNode } from "@/shared/types/flow";
+import { parse } from "yaml";
 import { mergeFlowIntoText, parseFlowText, stringifyFlow, stringifyFlowAs } from "../flow-yaml";
 
 const def: FlowDef = {
@@ -227,6 +228,25 @@ edges:
     expect(out).toContain("  - { to: b, from: a }   # main path\n");
     expect(out).toContain("  # loop\n");
     expect(defOf(out)).toEqual(defOf(stringifyFlow(d)));
+  });
+
+  it("keeps the line breaks of a folded block scalar whose value is unchanged", () => {
+    const text =
+      "schemaVersion: 1\nid: d\nname: D\nnodes:\n  - id: a\n    kind: agent\n    prompt: >-\n      first line of the prompt\n      second line of the prompt\n    outputContract: outcome\n";
+    const def = { ...(parse(text) as FlowDef), name: "Renamed" };
+    const out = mergeFlowIntoText(text, def);
+    expect(out).toContain("name: Renamed");
+    expect(out).toContain("    prompt: >-\n      first line of the prompt\n      second line of the prompt\n");
+    expect((parse(out) as FlowDef).nodes[0]).toEqual(def.nodes[0]);
+  });
+
+  it("rewrites a folded block scalar whose value changed", () => {
+    const text = "schemaVersion: 1\nid: d\nname: D\nnodes:\n  - id: a\n    kind: agent\n    prompt: >-\n      first line\n      second line\n";
+    const def = parse(text) as FlowDef;
+    (def.nodes[0] as { prompt?: string }).prompt = "new text";
+    const out = mergeFlowIntoText(text, def);
+    expect((parse(out) as FlowDef).nodes[0]).toEqual(def.nodes[0]);
+    expect(out).not.toContain("first line");
   });
 
   it("does not revert an edit to a quoted value that looks like a spaced comment", () => {

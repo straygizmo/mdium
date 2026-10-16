@@ -31,6 +31,7 @@ const TOP_LEVEL_KEYS: &[&str] = &[
     "description",
     "runtimes",
     "setup",
+    "test",
     "secrets",
     "flows",
     "metrics",
@@ -51,6 +52,9 @@ pub struct ProjectDef {
     pub runtimes: BTreeMap<String, RuntimeDef>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub setup: Vec<SetupStep>,
+    /// How to test a copy (`mdium/project-test`); run on demand like `setup`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub test: Vec<SetupStep>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub secrets: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -178,9 +182,11 @@ pub fn check_project_text(text: &str) -> ProjectReport {
             check_keys(def, &format!("runtimes.{name}"), RUNTIME_KEYS, &mut issues);
         }
     }
-    if let Some(steps) = root.get("setup").and_then(Value::as_array) {
-        for (i, step) in steps.iter().enumerate() {
-            check_keys(step, &format!("setup[{i}]"), SETUP_KEYS, &mut issues);
+    for list in ["setup", "test"] {
+        if let Some(steps) = root.get(list).and_then(Value::as_array) {
+            for (i, step) in steps.iter().enumerate() {
+                check_keys(step, &format!("{list}[{i}]"), SETUP_KEYS, &mut issues);
+            }
         }
     }
     if let Some(metrics) = root.get("metrics").and_then(Value::as_array) {
@@ -314,8 +320,13 @@ pub fn validate_project(project: &ProjectDef) -> Issues {
             }
         }
     }
-    for (i, step) in project.setup.iter().enumerate() {
-        let path = format!("setup[{i}]");
+    let steps = project
+        .setup
+        .iter()
+        .enumerate()
+        .map(|(i, step)| (format!("setup[{i}]"), step))
+        .chain(project.test.iter().enumerate().map(|(i, step)| (format!("test[{i}]"), step)));
+    for (path, step) in steps {
         if step.run.is_empty() {
             issues.error(invalid(format!("{path}.run"), "empty"));
         }
@@ -530,6 +541,26 @@ mod tests {
             seen += 1;
         }
         assert_eq!(seen, cases.len());
+    }
+
+    #[test]
+    fn test_steps_parse_and_validate_like_setup_steps() {
+        let report = check_project_text(
+            "schemaVersion: 1\nid: x\nname: X\ntest:\n  - { run: [uv, run, pytest, -q], workingDir: . }\n",
+        );
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        let project = report.project.unwrap();
+        assert_eq!(project.test[0].run, vec!["uv", "run", "pytest", "-q"]);
+        assert!(project.setup.is_empty());
+        // Unknown step fields and empty commands are rejected like setup's.
+        let report = check_project_text(
+            "schemaVersion: 1\nid: x\nname: X\ntest:\n  - { run: [x], extra: 1 }\n",
+        );
+        assert_eq!(codes(&report.errors), vec![FLOW_UNKNOWN_FIELD.to_string()]);
+        assert_eq!(report.errors[0].path, "test[0].extra");
+        let report = check_project_text("schemaVersion: 1\nid: x\nname: X\ntest:\n  - { run: [] }\n");
+        assert_eq!(codes(&report.errors), vec![FLOW_INVALID_VALUE.to_string()]);
+        assert_eq!(report.errors[0].path, "test[0].run");
     }
 
     #[test]

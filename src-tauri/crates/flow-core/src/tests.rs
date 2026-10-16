@@ -563,7 +563,7 @@ fn reference_scoping() {
          \x20     nodes:\n\
          \x20       - { id: inner, kind: command, run: [x, '${{ doc }}', '${{ nodes.collect.outputs.list }}'] }\n\
          \x20     outputs: { last: '${{ nodes.inner.outputs.v }}' }\n\
-         \x20 - { id: after, kind: command, run: [x, '${{ nodes.inner.outputs.v }}', '${{ doc }}', '${{ index }}', '${{ iteration.outputs.v }}', '${{ env.HOME }}'] }\n\
+         \x20 - { id: after, kind: command, run: [x, '${{ nodes.inner.outputs.v }}', '${{ doc }}', '${{ index }}', '${{ iteration.outputs.v }}', '${{ env.HOME }}', '${{ nodes.collect.params }}'] }\n\
          edges:\n\
          \x20 - { from: collect, to: l }\n\
          \x20 - { from: l, to: after }\n",
@@ -576,6 +576,7 @@ fn reference_scoping() {
         (FLOW_TEMPLATE_INVALID, at(3), "index-outside-loop"),
         (FLOW_TEMPLATE_INVALID, at(4), "iteration-outside-until"),
         (FLOW_TEMPLATE_INVALID, at(5), "env-not-passed"),
+        (FLOW_TEMPLATE_INVALID, at(6), "params-not-subflow"),
     ];
     assert_eq!(found.len(), expect.len(), "{found:#?}");
     for (code, path, reason) in expect {

@@ -134,7 +134,7 @@ fn kind_keys(kind: &str) -> Option<&'static [&'static str]> {
             "params",
         ],
         "branch" => &["cases", "default"],
-        "subflow" => &["flow", "params", "projectRoot"],
+        "subflow" => &["flow", "params", "paramsFrom", "projectRoot"],
         "action" => &["uses", "with"],
         _ => return None,
     })

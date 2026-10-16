@@ -61,6 +61,7 @@ const review: CommandReview = {
   ],
   runtimes: [],
   setup: [],
+  test: [],
   stages: [],
   templates: [],
 };
@@ -388,6 +389,7 @@ describe("run views", () => {
         commands: [],
         runtimes: [{ name: "r", python: [".venv/bin/python"], module: "m", cwd: "." }],
         setup: [],
+        test: [],
         stages: [],
         confirmed: false,
       }),
@@ -410,6 +412,7 @@ describe("run views", () => {
         commands: [],
         runtimes: [],
         setup: [],
+        test: [],
         stages: [{ file: PATH, nodeId: "r", runtime: "video_gen", entry: "video.render" }],
         confirmed: false,
       }),

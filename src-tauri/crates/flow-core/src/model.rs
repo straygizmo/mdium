@@ -478,6 +478,11 @@ pub struct SubflowNode {
     pub flow: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub params: BTreeMap<String, Value>,
+    /// Template of an object whose entries are passed as arguments under
+    /// `params` (explicit entries win); entries the child does not declare
+    /// are dropped, so a run's recorded `params` can be handed on as is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params_from: Option<String>,
     /// Project root of the sub-flow's scope (templated); defaults to the caller's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_root: Option<String>,
