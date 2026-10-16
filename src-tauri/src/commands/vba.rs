@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use tauri::{AppHandle, Emitter};
 use crate::commands::vba_source::{fix_vb_name, normalize_source, validate_module_name};
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct VbaModule {
     pub name: String,
@@ -18,15 +18,17 @@ pub struct VbaModule {
     pub path: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct PullResult {
     pub xlsm_path: String,
     pub macros_dir: String,
     pub modules: Vec<VbaModule>,
+    /// Paths of `.bas` / `.cls` files deleted because no module matches them.
+    pub removed_files: Vec<String>,
 }
-#[derive(Serialize)]
 
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListResult {
     pub xlsm_path: String,
@@ -71,6 +73,18 @@ pub fn is_macro_workbook(path: &Path) -> bool {
             .as_deref(),
         Some("xlsm") | Some("xlam")
     )
+}
+
+/// Module names become file names in the macros folder, so a name that could
+/// escape it (path separators or `..`) is refused.
+fn ensure_safe_module_name(name: &str) -> Result<(), String> {
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err(vba_error(
+            "invalid_module_name",
+            format!("'{}': module names must not contain path separators or '..'", name),
+        ));
+    }
+    Ok(())
 }
 
 /// Validate path + extension; returns the structured error used by all commands.
@@ -560,21 +574,47 @@ pub fn pull_vba_modules(xlsm_path: String) -> Result<PullResult, String> {
     if editable.is_empty() {
         return Err(vba_error("no_vba_project", "No VBA modules found in this file"));
     }
+    for m in &editable {
+        ensure_safe_module_name(&m.name)?;
+    }
     let macros_dir = macros_dir_for(file_path)?;
     fs::create_dir_all(&macros_dir).map_err(|e| vba_error("pull_failed", e.to_string()))?;
     fs::write(macros_dir.join(".codepage"), loaded.code_page.to_string()).map_err(|e| vba_error("pull_failed", e.to_string()))?;
     let mut modules = Vec::new();
+    let mut written: std::collections::HashSet<String> = std::collections::HashSet::new();
     for m in &editable {
         let source = fix_vb_name(&module_source(&mut loaded, m).map_err(|e| vba_error("pull_failed", e))?, &m.name);
-        let module_path = macros_dir.join(format!("{}.{}", m.name, file_ext_for(m.kind)));
+        let file_name = format!("{}.{}", m.name, file_ext_for(m.kind));
+        let module_path = macros_dir.join(&file_name);
         fs::write(&module_path, &source).map_err(|e| vba_error("pull_failed", e.to_string()))?;
+        written.insert(file_name.to_ascii_lowercase());
         modules.push(VbaModule { name: m.name.clone(), module_type: m.kind.as_str().to_string(), path: Some(module_path.to_string_lossy().into_owned()) });
     }
+
+    // Module files left over from modules the workbook no longer has would be
+    // pushed back as new modules, so the folder must mirror the workbook.
+    let mut removed_files = Vec::new();
+    for entry in fs::read_dir(&macros_dir).map_err(|e| vba_error("pull_failed", e.to_string()))? {
+        let path = entry.map_err(|e| vba_error("pull_failed", e.to_string()))?.path();
+        let is_module_file = path.is_file()
+            && matches!(
+                path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref(),
+                Some("bas") | Some("cls")
+            );
+        let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_ascii_lowercase();
+        if !is_module_file || written.contains(&file_name) {
+            continue;
+        }
+        fs::remove_file(&path).map_err(|e| vba_error("pull_failed", format!("{}: {}", path.display(), e)))?;
+        removed_files.push(path.to_string_lossy().into_owned());
+    }
+    removed_files.sort();
 
     Ok(PullResult {
         xlsm_path: xlsm_path.clone(),
         macros_dir: macros_dir.to_string_lossy().into_owned(),
         modules,
+        removed_files,
     })
 }
 
@@ -589,7 +629,8 @@ pub struct SkippedModule {
 #[serde(rename_all = "camelCase")]
 pub struct PushResult {
     pub xlsm_path: String,
-    pub backup_path: String,
+    /// None when nothing changed: the workbook is not rewritten and no backup is made.
+    pub backup_path: Option<String>,
     pub updated: Vec<String>,
     pub unchanged: Vec<String>,
     pub added: Vec<String>,
@@ -728,6 +769,7 @@ pub fn push_vba_modules_impl(xlsm_path: &str) -> Result<PushResult, String> {
             _ => continue,
         };
         let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+        ensure_safe_module_name(&name)?;
         if files.insert(name.to_ascii_lowercase(), (name.clone(), kind, path)).is_some() {
             return Err(vba_error("duplicate_module_file", format!("Both {}.bas and {}.cls exist; keep one", name, name)));
         }
@@ -760,7 +802,14 @@ pub fn push_vba_modules_impl(xlsm_path: &str) -> Result<PushResult, String> {
                 }
                 let raw = fs::read_to_string(path).map_err(|e| vba_error("push_failed", format!("{}: {}", path.display(), e)))?;
                 let normalized = normalize_source(&raw, &m.name, m.kind);
-                let current = module_source(&mut loaded, &m).map_err(|e| vba_error("push_failed", e))?;
+                // Normalize the stored source the same way, so a file that was
+                // just pulled compares equal even when VBE stored it slightly
+                // differently (missing trailing CRLF, class attributes, ...).
+                let current = normalize_source(
+                    &module_source(&mut loaded, &m).map_err(|e| vba_error("push_failed", e))?,
+                    &m.name,
+                    m.kind,
+                );
                 if current == normalized {
                     unchanged.push(m.name.clone());
                 } else {
@@ -807,6 +856,19 @@ pub fn push_vba_modules_impl(xlsm_path: &str) -> Result<PushResult, String> {
         let raw = fs::read_to_string(path).map_err(|e| vba_error("push_failed", format!("{}: {}", path.display(), e)))?;
         let encoded = encode_module(&normalize_source(&raw, name, *kind), name, code_page)?;
         added.push((name.clone(), *kind, encoded));
+    }
+
+    // Nothing to write: leave the workbook and any previous backup untouched.
+    if updated.is_empty() && added.is_empty() && removed.is_empty() {
+        return Ok(PushResult {
+            xlsm_path: xlsm_path.to_string(),
+            backup_path: None,
+            updated: Vec::new(),
+            unchanged,
+            added: Vec::new(),
+            removed: Vec::new(),
+            skipped,
+        });
     }
 
     // ---- write ----
@@ -860,7 +922,7 @@ pub fn push_vba_modules_impl(xlsm_path: &str) -> Result<PushResult, String> {
 
     Ok(PushResult {
         xlsm_path: xlsm_path.to_string(),
-        backup_path,
+        backup_path: Some(backup_path),
         updated: updated.into_iter().map(|(m, _)| m.name).collect(),
         unchanged,
         added: added.into_iter().map(|(n, _, _)| n).collect(),
@@ -1414,7 +1476,7 @@ mod tests {
         assert_eq!(res.removed, vec!["Class1"]);
         assert_eq!(res.skipped.len(), 1);
         assert_eq!(res.skipped[0].name, "ThisWorkbook");
-        assert!(Path::new(&res.backup_path).exists());
+        assert!(Path::new(res.backup_path.as_deref().unwrap()).exists());
 
         // Document module stream (including its fake cache prefix) is untouched.
         let tw = stream_bytes(&xlsm, "/VBA/ThisWorkbook");
@@ -1457,6 +1519,125 @@ mod tests {
         assert_eq!(first.unchanged.len(), 3);
         let second = push_vba_modules_impl(&xlsm_s).unwrap();
         assert!(second.updated.is_empty() && second.added.is_empty() && second.removed.is_empty());
+        assert!(second.backup_path.is_none());
+    }
+
+    #[test]
+    fn push_right_after_pull_is_a_noop_without_backup() {
+        // Stored sources VBE could plausibly leave in non-normalized shape: no
+        // trailing CRLF and a class without the four standard attributes.
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = build_vba_bin(
+            1252,
+            &[
+                std_module("Module1", "Attribute VB_Name = \"Module1\"\r\nSub Hello()\r\nEnd Sub"),
+                TestModule { name: "Class1", kind: ModuleKind::Class, source: "Attribute VB_Name = \"Class1\"\r\nPublic Sub Hi()\r\nEnd Sub\r\n", cache: &[] },
+                TestModule { name: "ThisWorkbook", kind: ModuleKind::Document, source: "Attribute VB_Name = \"ThisWorkbook\"\r\n", cache: &[9, 9, 9, 9, 9] },
+            ],
+        );
+        let xlsm = build_workbook(tmp.path(), "Book1.xlsm", &bin);
+        let xlsm_s = xlsm.to_string_lossy().to_string();
+        pull_vba_modules(xlsm_s.clone()).unwrap();
+        let before = fs::read(&xlsm).unwrap();
+
+        let res = push_vba_modules_impl(&xlsm_s).unwrap();
+        assert!(res.updated.is_empty() && res.added.is_empty() && res.removed.is_empty());
+        let mut unchanged = res.unchanged.clone();
+        unchanged.sort();
+        assert_eq!(unchanged, vec!["Class1", "Module1", "ThisWorkbook"]);
+        assert!(res.backup_path.is_none());
+        assert!(!tmp.path().join("Book1.xlsm.bak").exists());
+        assert_eq!(fs::read(&xlsm).unwrap(), before);
+    }
+
+    #[test]
+    fn pull_removes_module_files_that_match_no_module() {
+        let tmp = tempfile::tempdir().unwrap();
+        let xlsm = three_module_workbook(tmp.path());
+        let xlsm_s = xlsm.to_string_lossy().to_string();
+        let macros = PathBuf::from(pull_vba_modules(xlsm_s.clone()).unwrap().macros_dir);
+        fs::write(macros.join("Stale.bas"), "Sub X()\r\nEnd Sub\r\n").unwrap();
+        // Right name, wrong extension: would collide with Module1.bas on push.
+        fs::write(macros.join("Module1.cls"), "Sub X()\r\nEnd Sub\r\n").unwrap();
+        fs::write(macros.join("notes.txt"), "keep me").unwrap();
+
+        let again = pull_vba_modules(xlsm_s).unwrap();
+        let mut removed: Vec<String> = again
+            .removed_files
+            .iter()
+            .map(|p| Path::new(p).file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        removed.sort();
+        assert_eq!(removed, vec!["Module1.cls", "Stale.bas"]);
+        assert!(again.removed_files.iter().all(|p| Path::new(p).starts_with(&macros)));
+        assert!(!macros.join("Stale.bas").exists());
+        assert!(!macros.join("Module1.cls").exists());
+        assert!(macros.join("notes.txt").exists());
+        assert!(macros.join("Module1.bas").exists());
+        assert!(macros.join("Class1.cls").exists());
+        assert!(macros.join("ThisWorkbook.cls").exists());
+    }
+
+    #[test]
+    fn pull_reports_no_removed_files_on_a_clean_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let xlsm = three_module_workbook(tmp.path());
+        let pulled = pull_vba_modules(xlsm.to_string_lossy().to_string()).unwrap();
+        assert!(pulled.removed_files.is_empty());
+    }
+
+    /// Workbook with one standard module whose name differs from its stream name.
+    fn workbook_with_module_name(dir: &Path, file_name: &str, module_name: &str) -> PathBuf {
+        let cursor = Cursor::new(Vec::new());
+        let mut comp = cfb::CompoundFile::create(cursor).unwrap();
+        comp.create_storage("/VBA").unwrap();
+        let mut project = ProjectStream { lines: vec!["ID=\"{1}\"".into(), "".into()] };
+        project.add_module(module_name, ModuleKind::Standard);
+        let wm = ProjectWm { names: vec![module_name.into()] };
+        let mut dir_stream = DirStream::parse(&{
+            let mut v = Vec::new();
+            v.extend_from_slice(&make_record(0x0001, &3u32.to_le_bytes()));
+            v.extend_from_slice(&make_record(0x0003, &1252u16.to_le_bytes()));
+            v.extend_from_slice(&make_record(0x000F, &0u16.to_le_bytes()));
+            v.extend_from_slice(&make_record(0x0013, &0xFFFFu16.to_le_bytes()));
+            v.extend_from_slice(&make_record(0x0010, &[]));
+            v
+        })
+        .unwrap();
+        dir_stream.append_module(module_name, "Mod", ModuleKind::Standard, 0, 1252).unwrap();
+        comp.create_stream("/VBA/Mod").unwrap().write_all(&vba_compress(b"Sub A()\r\nEnd Sub\r\n")).unwrap();
+        comp.create_stream("/PROJECT").unwrap().write_all(&project.serialize(1252).unwrap()).unwrap();
+        comp.create_stream("/PROJECTwm").unwrap().write_all(&wm.serialize(1252).unwrap()).unwrap();
+        comp.create_stream("/VBA/dir").unwrap().write_all(&vba_compress(&dir_stream.serialize())).unwrap();
+        comp.create_stream("/VBA/_VBA_PROJECT").unwrap().write_all(&[0xCC, 0x61, 0xFF, 0xFF, 0x00, 0x00, 0x00]).unwrap();
+        comp.flush().unwrap();
+        let bin = comp.into_inner().into_inner();
+        build_workbook(dir, file_name, &bin)
+    }
+
+    #[test]
+    fn pull_refuses_module_names_that_could_escape_the_macros_folder() {
+        for (i, bad) in [r"..\Evil","sub/Evil", "a..b"].iter().enumerate() {
+            let tmp = tempfile::tempdir().unwrap();
+            let xlsm = workbook_with_module_name(tmp.path(), &format!("B{}.xlsm", i), bad);
+            let err = pull_vba_modules(xlsm.to_string_lossy().to_string()).unwrap_err();
+            assert_eq!(err_code(&err), "invalid_module_name", "{}", bad);
+            assert!(!tmp.path().join(format!("B{}_assets", i)).exists(), "{}", bad);
+        }
+    }
+
+    #[test]
+    fn push_refuses_file_names_with_dot_dot() {
+        let tmp = tempfile::tempdir().unwrap();
+        let xlsm = three_module_workbook(tmp.path());
+        let xlsm_s = xlsm.to_string_lossy().to_string();
+        let macros = PathBuf::from(pull_vba_modules(xlsm_s.clone()).unwrap().macros_dir);
+        fs::write(macros.join("a..b.bas"), "Sub X()\r\nEnd Sub\r\n").unwrap();
+        let original = fs::read(&xlsm).unwrap();
+        let err = push_vba_modules_impl(&xlsm_s).unwrap_err();
+        assert_eq!(err_code(&err), "invalid_module_name");
+        assert_eq!(fs::read(&xlsm).unwrap(), original);
+        assert!(!tmp.path().join("Book1.xlsm.bak").exists());
     }
 
     #[test]
