@@ -20,6 +20,28 @@ export function shouldWriteBuiltinFile(
   return current !== wanted;
 }
 
+/**
+ * Name of the removed `mdium-vba` MCP server. The marker-less builtin skill
+ * shipped before version markers referenced it, which tells that old builtin
+ * apart from a skill the user wrote.
+ */
+export const LEGACY_VBA_MCP_NAME = "mdium-vba";
+
+/**
+ * Like shouldWriteBuiltinFile for SKILL.md, but also upgrades the old
+ * marker-less builtin skill (recognized by its `mdium-vba` reference).
+ */
+export function shouldWriteBuiltinSkill(existing: string | null, wanted: string): boolean {
+  if (
+    existing !== null &&
+    builtinVersion(existing, SKILL_VERSION_RE) === null &&
+    existing.includes(LEGACY_VBA_MCP_NAME)
+  ) {
+    return true;
+  }
+  return shouldWriteBuiltinFile(existing, wanted, SKILL_VERSION_RE);
+}
+
 /** SKILL.md with frontmatter (name, optional description, optional version). */
 export function buildSkillMd(
   name: string,

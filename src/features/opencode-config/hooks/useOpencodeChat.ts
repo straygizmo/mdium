@@ -20,7 +20,8 @@ import { useSettingsStore } from "@/stores/settings-store";
 import { useTabStore } from "@/stores/tab-store";
 import { wrapWithMdiumContext } from "../lib/mdium-context";
 import { BUILTIN_AGENTS, BUILTIN_CUSTOM_TOOLS } from "../lib/builtin-registry";
-import { SKILL_VERSION_RE, TOOL_VERSION_RE, buildSkillMd, builtinVersion, shouldWriteBuiltinFile } from "../lib/builtin-install";
+import { TOOL_VERSION_RE, buildSkillMd, builtinVersion, shouldWriteBuiltinFile, shouldWriteBuiltinSkill } from "../lib/builtin-install";
+import { removeLegacyVbaMcpServer } from "../lib/legacy-cleanup";
 import { BUILTIN_SKILLS } from "../lib/builtin-skills";
 import { isAzureRefusal, isAzureProviderActive } from "../lib/provider-detection";
 import { evaluateStall, STALL_TICK_MS } from "./stall-watchdog";
@@ -149,6 +150,8 @@ let _pendingVideoOutput: string | null = null;
 let _lastEventAt = 0;
 let _watchdogTimer: ReturnType<typeof setInterval> | null = null;
 let _watchdogGeneration = 0;
+// The legacy mdium-vba MCP entry is removed once per app run, on the first connect.
+let _legacyMcpCleanupDone = false;
 
 // ─── Zustand store for UI state (persists across mount/unmount) ───
 interface OpencodeChatUIState {
@@ -978,6 +981,17 @@ async function ensureBuiltinFiles(): Promise<void> {
   const configDir = `${home}${sep}.config${sep}opencode`;
   const toolsDir = `${configDir}${sep}tools`;
 
+  // Older versions registered an `mdium-vba` MCP server whose files are gone;
+  // drop the entry before the server starts so opencode does not try to run it.
+  if (!_legacyMcpCleanupDone) {
+    _legacyMcpCleanupDone = true;
+    try {
+      if (await removeLegacyVbaMcpServer()) console.log("[opencode] removed legacy mdium-vba MCP entry");
+    } catch (e) {
+      console.warn("[opencode] failed to remove legacy mdium-vba MCP entry:", e);
+    }
+  }
+
   // Builtin tools carry a `mdium-tool-version` marker; files without one are
   // user-authored and never touched.
   for (const entry of Object.values(BUILTIN_CUSTOM_TOOLS)) {
@@ -993,14 +1007,15 @@ async function ensureBuiltinFiles(): Promise<void> {
     }
   }
 
-  // Builtin skills: same marker rule, and a user-disabled skill
-  // (SKILL.md.disabled) is left alone entirely.
+  // Builtin skills: same marker rule (plus the old marker-less vba skill,
+  // which is upgraded), and a user-disabled skill (SKILL.md.disabled) is
+  // left alone entirely.
   for (const skill of Object.values(BUILTIN_SKILLS)) {
     const skillPath = `${configDir}${sep}skills${sep}${skill.name}${sep}SKILL.md`;
     const disabled = await invoke<string>("read_text_file", { path: `${skillPath}.disabled` }).catch(() => null);
     if (disabled !== null) continue;
     const existing = await invoke<string>("read_text_file", { path: skillPath }).catch(() => null);
-    if (!shouldWriteBuiltinFile(existing, String(skill.version), SKILL_VERSION_RE)) continue;
+    if (!shouldWriteBuiltinSkill(existing, String(skill.version))) continue;
     try {
       await invoke("write_skill", {
         baseDir: configDir,

@@ -5,6 +5,7 @@ import {
   buildSkillMd,
   builtinVersion,
   shouldWriteBuiltinFile,
+  shouldWriteBuiltinSkill,
 } from "../builtin-install";
 
 describe("builtinVersion", () => {
@@ -41,5 +42,21 @@ describe("buildSkillMd", () => {
   });
   it("omits description and version when absent", () => {
     expect(buildSkillMd("s", "", "B")).toBe("---\nname: s\n---\n\nB");
+  });
+});
+
+describe("shouldWriteBuiltinSkill", () => {
+  const oldBuiltin =
+    "---\nname: vba-mdium-flow\n---\n\nThe MDium `mdium-vba` MCP server is available in this session.";
+  it("upgrades the old marker-less builtin that references mdium-vba", () => {
+    expect(shouldWriteBuiltinSkill(oldBuiltin, "3")).toBe(true);
+  });
+  it("leaves a marker-less user skill without mdium-vba alone", () => {
+    expect(shouldWriteBuiltinSkill("---\nname: vba-mdium-flow\n---\n\nMy own flow", "3")).toBe(false);
+  });
+  it("follows the version marker otherwise", () => {
+    expect(shouldWriteBuiltinSkill(null, "3")).toBe(true);
+    expect(shouldWriteBuiltinSkill("---\nmdium-skill-version: 2\n---\n", "3")).toBe(true);
+    expect(shouldWriteBuiltinSkill("---\nmdium-skill-version: 3\n---\nmdium-vba", "3")).toBe(false);
   });
 });
