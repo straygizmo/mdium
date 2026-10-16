@@ -7,7 +7,6 @@ use std::time::Duration;
 use tauri::AppHandle;
 use tiny_http::{Header, Response, Server};
 
-use crate::commands::active_xlsm::ActiveXlsmState;
 use crate::commands::fs_search::{fs_glob, fs_grep, ActiveFolderState};
 use crate::commands::vba;
 use serde::Deserialize;
@@ -139,12 +138,6 @@ struct XlsmRequest {
 }
 
 #[derive(Deserialize)]
-struct InjectRequest {
-    xlsm_path: String,
-    macros_dir: String,
-}
-
-#[derive(Deserialize)]
 struct RagSearchRequest {
     folder_path: String,
     query: String,
@@ -223,38 +216,73 @@ fn extract_bearer_token(request: &tiny_http::Request) -> Option<String> {
     None
 }
 
-fn check_active_tab(
-    app: &AppHandle,
-    sent_path: &str,
-) -> Result<String, serde_json::Value> {
-    let state = app.state::<ActiveXlsmState>();
-    let guard = state.lock().map_err(|e| {
-        json!({ "error": "lock_failed", "message": e.to_string() })
-    })?;
-    let active = guard
-        .as_ref()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_default();
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpBridgeClientInfo {
+    pub port: u16,
+    pub token: String,
+}
 
-    let same = {
-        #[cfg(target_os = "windows")]
-        {
-            active.to_lowercase() == sent_path.to_lowercase()
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            active == sent_path
-        }
-    };
-    if !same {
-        return Err(json!({
-            "error": "active_tab_changed",
-            "sentPath": sent_path,
-            "activeFile": active,
-            "message": "Active tab changed between resolution and operation. Retry."
-        }));
+#[tauri::command]
+pub fn get_http_bridge_info(state: tauri::State<'_, HttpBridgeState>) -> Result<Option<HttpBridgeClientInfo>, String> {
+    let guard = state.lock().map_err(|e| format!("Failed to lock HTTP bridge state: {}", e))?;
+    Ok(guard.as_ref().map(|i| HttpBridgeClientInfo { port: i.port, token: i.token.clone() }))
+}
+
+/// Absolute paths pass through; relative ones resolve against the open folder.
+pub fn resolve_xlsm_path(raw: &str, active_folder: Option<&str>) -> Result<String, String> {
+    let p = std::path::Path::new(raw);
+    if p.is_absolute() {
+        return Ok(raw.to_string());
     }
-    Ok(active)
+    match active_folder {
+        Some(folder) if !folder.is_empty() => Ok(std::path::Path::new(folder).join(p).to_string_lossy().into_owned()),
+        _ => Err(vba::vba_error("no_active_folder", "Relative xlsm_path given but no folder is open in mdium. Pass an absolute path.")),
+    }
+}
+
+pub fn status_for_vba_error(code: &str) -> u16 {
+    match code {
+        "workbook_locked" => 409,
+        c if c.ends_with("_failed") => 500,
+        _ => 400,
+    }
+}
+
+/// Turn a command error string into (status, json body). Command errors are
+/// `vba_error` JSON; anything else is wrapped as `<route>_failed`.
+pub fn vba_error_response(route: &str, err: String) -> (u16, serde_json::Value) {
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&err) {
+        if let Some(code) = v.get("error").and_then(|c| c.as_str()) {
+            return (status_for_vba_error(code), v.clone());
+        }
+    }
+    (500, json!({ "error": format!("{}_failed", route), "message": err }))
+}
+
+fn handle_vba_route(app: &AppHandle, route: &str, body_str: &str) -> (u16, serde_json::Value) {
+    let req: XlsmRequest = match serde_json::from_str(body_str) {
+        Ok(r) => r,
+        Err(e) => return (400, json!({ "error": "invalid_json", "message": e.to_string() })),
+    };
+    let folder = app.state::<ActiveFolderState>().lock().ok().and_then(|g| g.clone());
+    let path = match resolve_xlsm_path(&req.xlsm_path, folder.as_deref()) {
+        Ok(p) => p,
+        Err(e) => return vba_error_response(route, e),
+    };
+    let result: Result<serde_json::Value, String> = match route {
+        "list" => vba::list_vba_modules(path.clone()).map(|r| serde_json::to_value(r).unwrap_or_default()),
+        "pull" => vba::pull_vba_modules(path.clone()).map(|r| serde_json::to_value(r).unwrap_or_default()),
+        "push" => vba::push_vba_modules_impl(&path).map(|r| {
+            let _ = app.emit("vba-pushed", json!({ "path": path }));
+            serde_json::to_value(r).unwrap_or_default()
+        }),
+        _ => Err("unknown route".to_string()),
+    };
+    match result {
+        Ok(v) => (200, v),
+        Err(e) => vba_error_response(route, e),
+    }
 }
 
 fn read_body(request: &mut tiny_http::Request) -> Result<String, String> {
@@ -317,144 +345,10 @@ fn handle_request(app: &AppHandle, expected_token: &str, mut request: tiny_http:
     };
 
     match url.as_str() {
-        "/active-xlsm" => {
-            let state = app.state::<ActiveXlsmState>();
-            let guard = match state.lock() {
-                Ok(g) => g,
-                Err(e) => {
-                    let _ = request.respond(json_response(
-                        500,
-                        json!({ "error": "lock_failed", "message": e.to_string() }),
-                    ));
-                    return;
-                }
-            };
-            let path = guard.as_ref().map(|p| p.to_string_lossy().into_owned());
-            let _ = request.respond(json_response(200, json!({ "path": path })));
-        }
-        "/vba/list" => {
-            let req: XlsmRequest = match serde_json::from_str(&body_str) {
-                Ok(r) => r,
-                Err(e) => {
-                    let _ = request.respond(json_response(
-                        400,
-                        json!({ "error": "invalid_json", "message": e.to_string() }),
-                    ));
-                    return;
-                }
-            };
-            let active = match check_active_tab(app, &req.xlsm_path) {
-                Ok(p) => p,
-                Err(err_json) => {
-                    let _ = request.respond(json_response(409, err_json));
-                    return;
-                }
-            };
-            match vba::list_vba_modules(req.xlsm_path.clone()) {
-                Ok(result) => {
-                    let _ = request.respond(json_response(
-                        200,
-                        json!({
-                            "activeFile": active,
-                            "macrosDir": result.macros_dir,
-                            "exists": result.exists,
-                            "modules": result.modules,
-                        }),
-                    ));
-                }
-                Err(e) => {
-                    let _ = request.respond(json_response(
-                        500,
-                        json!({ "error": "list_failed", "message": e }),
-                    ));
-                }
-            }
-        }
-        "/vba/extract" => {
-            let req: XlsmRequest = match serde_json::from_str(&body_str) {
-                Ok(r) => r,
-                Err(e) => {
-                    let _ = request.respond(json_response(
-                        400,
-                        json!({ "error": "invalid_json", "message": e.to_string() }),
-                    ));
-                    return;
-                }
-            };
-            let active = match check_active_tab(app, &req.xlsm_path) {
-                Ok(p) => p,
-                Err(err_json) => {
-                    let _ = request.respond(json_response(409, err_json));
-                    return;
-                }
-            };
-            match vba::extract_vba_modules(req.xlsm_path.clone()) {
-                Ok(result) => {
-                    let _ = request.respond(json_response(
-                        200,
-                        json!({
-                            "activeFile": active,
-                            "macrosDir": result.macros_dir,
-                            "modules": result.modules,
-                        }),
-                    ));
-                }
-                Err(e) => {
-                    let _ = request.respond(json_response(
-                        500,
-                        json!({ "error": "extract_failed", "message": e }),
-                    ));
-                }
-            }
-        }
-        "/vba/inject" => {
-            let req: InjectRequest = match serde_json::from_str(&body_str) {
-                Ok(r) => r,
-                Err(e) => {
-                    let _ = request.respond(json_response(
-                        400,
-                        json!({ "error": "invalid_json", "message": e.to_string() }),
-                    ));
-                    return;
-                }
-            };
-            let active = match check_active_tab(app, &req.xlsm_path) {
-                Ok(p) => p,
-                Err(err_json) => {
-                    let _ = request.respond(json_response(409, err_json));
-                    return;
-                }
-            };
-            match vba::inject_vba_modules(req.xlsm_path.clone(), req.macros_dir.clone()) {
-                Ok(result) => {
-                    let _ = request.respond(json_response(
-                        200,
-                        json!({
-                            "activeFile": active,
-                            "backupPath": result.backup_path,
-                            "updatedModules": result.updated_modules,
-                        }),
-                    ));
-                }
-                Err(e) => {
-                    // If the error string is already structured JSON (module_set_changed),
-                    // propagate with 409 so MCP clients see it distinctly.
-                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&e) {
-                        if parsed.get("error").and_then(|v| v.as_str())
-                            == Some("module_set_changed")
-                        {
-                            let mut augmented = parsed;
-                            augmented["activeFile"] = json!(active);
-                            let _ = request.respond(json_response(409, augmented));
-                            return;
-                        }
-                    }
-                    let _ = request.respond(json_response(
-                        500,
-                        json!({ "error": "inject_failed", "message": e }),
-                    ));
-                }
-            }
+        "/vba/list" | "/vba/pull" | "/vba/push" => {
+            let route = url.trim_start_matches("/vba/");
+            let (status, body) = handle_vba_route(app, route, &body_str);
+            let _ = request.respond(json_response(status, body));
         }
         "/rag/search" => {
             let req: RagSearchRequest = match serde_json::from_str(&body_str) {
@@ -607,5 +501,52 @@ fn handle_request(app: &AppHandle, expected_token: &str, mut request: tiny_http:
                 json!({ "error": "not_found" }),
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn absolute_paths_pass_through() {
+        assert_eq!(resolve_xlsm_path("C:/w/Book.xlsm", None).unwrap(), "C:/w/Book.xlsm");
+        assert_eq!(resolve_xlsm_path("C:\\w\\Book.xlsm", Some("D:/x")).unwrap(), "C:\\w\\Book.xlsm");
+    }
+
+    #[test]
+    fn relative_paths_resolve_against_the_active_folder() {
+        let p = resolve_xlsm_path("sub/Book.xlsm", Some("C:/w")).unwrap();
+        assert_eq!(std::path::Path::new(&p), std::path::Path::new("C:/w").join("sub/Book.xlsm"));
+    }
+
+    #[test]
+    fn relative_path_without_folder_is_an_error() {
+        let err = resolve_xlsm_path("Book.xlsm", None).unwrap_err();
+        assert!(err.contains("no_active_folder"));
+    }
+
+    #[test]
+    fn status_codes_follow_error_code() {
+        assert_eq!(status_for_vba_error("workbook_locked"), 409);
+        assert_eq!(status_for_vba_error("push_failed"), 500);
+        assert_eq!(status_for_vba_error("list_failed"), 500);
+        assert_eq!(status_for_vba_error("invalid_module_name"), 400);
+        assert_eq!(status_for_vba_error("no_vba_project"), 400);
+    }
+
+    #[test]
+    fn non_json_errors_become_500_with_route_code() {
+        let (status, body) = vba_error_response("push", "boom".to_string());
+        assert_eq!(status, 500);
+        assert_eq!(body["error"], "push_failed");
+        assert_eq!(body["message"], "boom");
+    }
+
+    #[test]
+    fn json_errors_keep_their_code() {
+        let (status, body) = vba_error_response("push", vba::vba_error("workbook_locked", "open"));
+        assert_eq!(status, 409);
+        assert_eq!(body["error"], "workbook_locked");
     }
 }

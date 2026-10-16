@@ -12,7 +12,6 @@ const targetStylesheets: string[] = [
   "src/features/opencode-config/components/OpencodeChat.css",
   "src/features/claude-config/components/PluginsTab.css",
   "src/features/video/components/VideoPanel.css",
-  "src/features/preview/components/PreviewPanel.css",
   "src/features/workflow/components/WorkflowPanel.css",
   "src/features/workflow/components/RetryDialog.css",
   "src/features/workflow/components/MergeSection.css",
@@ -24,7 +23,6 @@ const targetStylesheets: string[] = [
 const keyboardSwitchComponents: string[] = [
   "src/features/video/components/SceneEditForm.tsx",
   "src/features/video/components/VideoSettingsBar.tsx",
-  "src/features/preview/components/PreviewPanel.tsx",
 ];
 
 // Components whose every checkbox is a switch.

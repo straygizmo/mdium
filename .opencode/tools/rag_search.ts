@@ -1,3 +1,4 @@
+// mdium-tool-version: 1
 // .opencode/tools/rag_search.ts
 //
 // Thin client for mdium's RAG search. Instead of embedding the query itself

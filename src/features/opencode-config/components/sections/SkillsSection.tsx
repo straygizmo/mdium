@@ -12,6 +12,8 @@ import {
   getMissingBuiltinSkills,
   isBuiltinSkill,
 } from "../../lib/builtin-registry";
+import { buildSkillMd } from "../../lib/builtin-install";
+import { BUILTIN_SKILLS as SRC_SKILLS } from "../../lib/builtin-skills";
 import { ScopeToggle, type Scope } from "../shared/ScopeToggle";
 import { ScopeFormWrapper } from "../shared/ScopeFormWrapper";
 import { useScopeItems } from "../../hooks/useScopeItems";
@@ -30,15 +32,6 @@ interface SkillEntry {
 }
 
 const SKILL_NAME_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-
-/** Front matter + content → SKILL.md string */
-function buildSkillMd(name: string, description: string, body: string): string {
-  const lines = ["---", `name: ${name}`];
-  if (description) lines.push(`description: ${description}`);
-  lines.push("---", "");
-  if (body) lines.push(body);
-  return lines.join("\n");
-}
 
 /** SKILL.md string → { name, description, body } */
 function parseSkillMd(raw: string): { name: string; description: string; body: string } {
@@ -287,7 +280,7 @@ export function SkillsSection() {
     if (!entry) return;
     const base = await getSkillsDir("global");
     if (!base) return;
-    const md = buildSkillMd(name, entry.description ?? "", entry.content);
+    const md = buildSkillMd(name, entry.description ?? "", entry.content, SRC_SKILLS[name]?.version);
     await invoke("write_skill", { baseDir: base, dirName: name, content: md });
     setShowBuiltinMenu(false);
     await loadAllSkills();

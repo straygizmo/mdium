@@ -3,6 +3,7 @@ import type { BuiltinSkill } from "@/shared/types";
 export const BUILTIN_SKILLS: Record<string, BuiltinSkill> = {
   "vba-coding-conventions": {
     name: "vba-coding-conventions",
+    version: 1,
     description:
       "Use when writing, editing, or generating VBA (Visual Basic for Applications) code — prevents common LLM mistakes including reserved-word variable collisions, missing line continuation, incorrect operators, and syntax from other languages",
     content: `# VBA Coding Conventions
@@ -210,38 +211,52 @@ Before outputting VBA code, verify:
   },
   "vba-mdium-flow": {
     name: "vba-mdium-flow",
+    version: 3,
     description:
-      "Use when the MDium mdium-vba MCP server is available — guides the LLM through the extract / edit / import workflow and warns about module-set constraints.",
+      "Use when editing VBA macros of an .xlsm/.xlam workbook opened in MDium — pull the modules with vba_pull, edit the .bas/.cls files, write them back with vba_push, and report the result.",
     content: `# MDium Macro Editing Flow
 
-The MDium \`mdium-vba\` MCP server is available in this session.
+MDium exposes three tools that operate on a workbook path: \`vba_list\`, \`vba_pull\`, \`vba_push\`.
+Also read the \`vba-coding-conventions\` skill before writing VBA.
 
-## Standard Flow
+## Which workbook
 
-1. Call \`list_vba_modules\` to check the current state of \`_macros/\`
-2. If \`_macros/\` has not been exported yet, call \`extract_vba_modules\`
-3. Use Read/Edit tools to modify \`.bas\` / \`.cls\` files
-4. **When editing is complete, you MUST call \`import_vba_macros\`**
-5. Report the \`updatedModules\` from the response back to the user
+1. Use the \`active_file\` from the \`<mdium_context>\` block at the top of the latest user message. MDium adds it whenever the user is looking at an .xlsm/.xlam, so the user never has to type a path.
+2. If there is no \`<mdium_context>\`, use a path the user wrote.
+3. If neither exists, ask the user which workbook to edit. Do not guess.
 
-## Important Constraints
+Pass that path as \`xlsm_path\` to every tool call.
 
-- This tool operates on the **tab that is active at the moment the tool is invoked**
-- Every turn, the user message begins with a \`<mdium_context>\` tag that tells you the currently active file
-- Verify that the \`activeFile\` in the tool response matches the \`active_file\` inside \`<mdium_context>\`
-- If the user switches tabs during the conversation, \`active_file\` changes. Always confirm the user's intent:
-  "The active tab changed from {old} to {new}. Do you want to continue?"
-- If you receive \`error: "active_tab_changed"\`, that is a race condition — retry exactly once
+## Standard flow
 
-## Do Not Change the Module Set
+1. \`vba_list\` — see the modules, whether \`<stem>_assets/macros/\` is already extracted, and whether the workbook is locked.
+2. If \`extracted\` is false, call \`vba_pull\`. If it is true, the folder may hold edits from an earlier session; ask the user before overwriting it with \`vba_pull\` when the workbook might be newer. \`vba_pull\` also deletes \`.bas\` / \`.cls\` files that match no module (reported as \`removedFiles\`), so push new modules before pulling again.
+3. Edit the \`.bas\` / \`.cls\` files in the macros folder with Read / Edit.
+4. **When editing is done, you MUST call \`vba_push\`.** Nothing reaches the workbook until then.
+5. Report \`updated\`, \`added\`, \`removed\`, \`skipped\` and \`backupPath\` to the user, and ask them to verify in Excel. MDium does not run macros. When nothing changed, \`backupPath\` is null and the workbook was left as it was.
 
-**Do NOT create, delete, or rename \`.bas\` / \`.cls\` files.** MDium's import only supports **replacing the contents of existing modules**.
+## Workbook locked by Excel
 
-- To add a new module → ask the user to add it manually in Excel's VBE, then call \`extract_vba_modules\` again to pick it up
-- To delete a module → ask the user to delete it manually in Excel's VBE
-- To rename a module → ask the user to rename it in the VBE the same way
+- \`vba_list\` returns \`locked: true\` and \`vba_push\` fails with \`workbook_locked\` while Excel has the file open.
+- You may still pull and edit. Tell the user to close the workbook in Excel, wait for them to confirm, then call \`vba_push\` again.
 
-If \`import_vba_macros\` returns \`error: "module_set_changed"\`, inspect \`newInFiles\` and \`missingInFiles\` and ask the user which side of the discrepancy should be reverted.
+## Adding and removing modules
+
+- New standard module: create \`<Name>.bas\`. New class module: create \`<Name>.cls\`. \`vba_push\` adds them.
+- Remove a standard or class module by deleting its file — but only when the user explicitly asked for the removal. \`vba_push\` reports it under \`removed\`.
+- Never delete \`ThisWorkbook.cls\` or sheet \`.cls\` files. Document modules are never removed; a missing file is reported under \`skipped\` and the module keeps its old code.
+- Module names: no path separators or \`..\`; start with a letter, ASCII letters/digits/underscore only, at most 31 characters, unique ignoring case, not a VBA keyword. \`vba_push\` rejects the whole push (\`invalid_module_name\`) otherwise.
+
+## File format rules
+
+- Files are UTF-8. Keep \`Attribute VB_Name = "<file name without extension>"\` as the first line.
+- Do not write a \`VERSION 1.0 CLASS\` / \`BEGIN\` / \`END\` header in \`.cls\` files; MDium strips it on push.
+- If \`vba_push\` fails with \`unencodable_character\`, the workbook's code page cannot store that character. Replace it (for example with an ASCII equivalent or \`ChrW\`) and push again.
+
+## Recovery
+
+\`vba_push\` writes \`<workbook>.bak\` before changing the workbook. If the user reports a broken workbook, tell them to close Excel, delete the workbook, and rename the \`.bak\` back.
 `,
   },
+
 };

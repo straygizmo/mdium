@@ -17,11 +17,12 @@ import { useOpencodeUsageStore } from "@/stores/opencode-usage-store";
 import { sessionTotalsFromMessageInfos } from "@/stores/opencode-usage-core";
 import { ensureCommand, OPENCODE_INSTALL_URL } from "@/shared/lib/ensureCommand";
 import { useSettingsStore } from "@/stores/settings-store";
-import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 import { useTabStore } from "@/stores/tab-store";
-import { resolveMdiumVbaMcpServer } from "../lib/builtin-mcp-servers";
-import type { OpencodeMcpServer } from "@/shared/types";
+import { wrapWithMdiumContext } from "../lib/mdium-context";
 import { BUILTIN_AGENTS, BUILTIN_CUSTOM_TOOLS } from "../lib/builtin-registry";
+import { TOOL_VERSION_RE, buildSkillMd, builtinVersion, shouldWriteBuiltinFile, shouldWriteBuiltinSkill } from "../lib/builtin-install";
+import { removeLegacyVbaMcpServer } from "../lib/legacy-cleanup";
+import { BUILTIN_SKILLS } from "../lib/builtin-skills";
 import { isAzureRefusal, isAzureProviderActive } from "../lib/provider-detection";
 import { evaluateStall, STALL_TICK_MS } from "./stall-watchdog";
 import { applyForward, applyReverse } from "@/shared/lib/replacement";
@@ -95,90 +96,9 @@ export function getOpencodeClient(): OpencodeClient | null {
   return _client;
 }
 
-/**
- * Prefix every user message sent to opencode with the active xlsm/xlam file
- * path so the LLM can reason about which file the user is looking at.
- */
-async function wrapWithMdiumContext(userMessage: string): Promise<string> {
-  try {
-    const active = await invoke<string | null>("get_active_xlsm_path");
-    if (!active) return userMessage;
-    return `<mdium_context>\nactive_file="${active.replace(/"/g, '\\"')}"\n</mdium_context>\n\n${userMessage}`;
-  } catch {
-    return userMessage;
-  }
-}
-
 /** Current replacement (masking) settings, read at call time. */
 function replacementSettings() {
   return useSettingsStore.getState().replacement;
-}
-
-/**
- * Sync the mdium-vba MCP server entry to opencode config based on the
- * current allowLlmVbaImport toggle. Call at app startup and on toggle change.
- * Port/token change each MDium run, so this must be called on every startup
- * while the toggle is ON.
- */
-export async function syncMdiumVbaMcpConfig(): Promise<void> {
-  const enabled = useSettingsStore.getState().allowLlmVbaImport;
-  const mcpServersPath = await invoke<string>("resolve_mcp_servers_path").catch(
-    () => null
-  );
-  if (!mcpServersPath) return;
-
-  const store = useOpencodeConfigStore.getState();
-  const name = "mdium-vba";
-
-  if (enabled) {
-    const entry = await resolveMdiumVbaMcpServer(mcpServersPath);
-    if (!entry) return;
-    const server: OpencodeMcpServer = {
-      type: entry.type,
-      command: entry.command,
-      enabled: entry.enabled,
-      environment: entry.environment,
-    };
-    try {
-      await store.saveMcpServer(name, server);
-    } catch (e) {
-      console.warn("[mdium-vba] saveMcpServer failed:", e);
-      return;
-    }
-    // Also sync to running opencode instance (if connected).
-    const client = getOpencodeClient();
-    if (client) {
-      try {
-        await client.mcp.add({
-          body: {
-            name,
-            config: {
-              type: "local",
-              command: entry.command,
-              environment: entry.environment,
-              enabled: true,
-            },
-          },
-        });
-      } catch (e) {
-        console.warn("[mdium-vba] client.mcp.add failed:", e);
-      }
-    }
-  } else {
-    try {
-      await store.deleteMcpServer(name);
-    } catch (e) {
-      console.warn("[mdium-vba] deleteMcpServer failed:", e);
-    }
-    const client = getOpencodeClient();
-    if (client) {
-      try {
-        await client.mcp.disconnect({ path: { name } });
-      } catch (e) {
-        console.warn("[mdium-vba] client.mcp.disconnect failed:", e);
-      }
-    }
-  }
 }
 
 /**
@@ -230,6 +150,8 @@ let _pendingVideoOutput: string | null = null;
 let _lastEventAt = 0;
 let _watchdogTimer: ReturnType<typeof setInterval> | null = null;
 let _watchdogGeneration = 0;
+// The legacy mdium-vba MCP entry is removed once per app run, on the first connect.
+let _legacyMcpCleanupDone = false;
 
 // ─── Zustand store for UI state (persists across mount/unmount) ───
 interface OpencodeChatUIState {
@@ -1052,32 +974,57 @@ function doDisconnect() {
   });
 }
 
-// ─── Auto-register builtin agents as markdown files ───
-async function ensureBuiltinAgents(): Promise<void> {
+// ─── Auto-install builtin tools, skills and agents ───
+async function ensureBuiltinFiles(): Promise<void> {
   const home = await invoke<string>("get_home_dir");
   const sep = home.includes("\\") ? "\\" : "/";
   const configDir = `${home}${sep}.config${sep}opencode`;
   const toolsDir = `${configDir}${sep}tools`;
 
-  // The rag agent depends on these custom tools to stay confined to the open
-  // folder, so (unlike opt-in tools) install them automatically when missing.
-  for (const toolName of ["rag_search", "folder_glob", "folder_grep"] as const) {
-    const entry = BUILTIN_CUSTOM_TOOLS[toolName];
-    if (!entry) continue;
-    const toolPath = `${toolsDir}${sep}${entry.fileName}`;
+  // Older versions registered an `mdium-vba` MCP server whose files are gone;
+  // drop the entry before the server starts so opencode does not try to run it.
+  if (!_legacyMcpCleanupDone) {
+    _legacyMcpCleanupDone = true;
     try {
-      await invoke<string>("read_text_file", { path: toolPath });
-    } catch {
-      try {
-        await invoke("write_tool_file", {
-          baseDir: toolsDir,
-          fileName: entry.fileName,
-          content: entry.content,
-        });
-        console.log(`[opencode] installed builtin tool: ${toolPath}`);
-      } catch (e) {
-        console.warn(`[opencode] failed to install tool ${entry.fileName}:`, e);
-      }
+      if (await removeLegacyVbaMcpServer()) console.log("[opencode] removed legacy mdium-vba MCP entry");
+    } catch (e) {
+      console.warn("[opencode] failed to remove legacy mdium-vba MCP entry:", e);
+    }
+  }
+
+  // Builtin tools carry a `mdium-tool-version` marker; files without one are
+  // user-authored and never touched.
+  for (const entry of Object.values(BUILTIN_CUSTOM_TOOLS)) {
+    const toolPath = `${toolsDir}${sep}${entry.fileName}`;
+    const wanted = builtinVersion(entry.content, TOOL_VERSION_RE) ?? "0";
+    const existing = await invoke<string>("read_text_file", { path: toolPath }).catch(() => null);
+    if (!shouldWriteBuiltinFile(existing, wanted, TOOL_VERSION_RE)) continue;
+    try {
+      await invoke("write_tool_file", { baseDir: toolsDir, fileName: entry.fileName, content: entry.content });
+      console.log(`[opencode] installed builtin tool: ${toolPath}`);
+    } catch (e) {
+      console.warn(`[opencode] failed to install tool ${entry.fileName}:`, e);
+    }
+  }
+
+  // Builtin skills: same marker rule (plus the old marker-less vba skill,
+  // which is upgraded), and a user-disabled skill (SKILL.md.disabled) is
+  // left alone entirely.
+  for (const skill of Object.values(BUILTIN_SKILLS)) {
+    const skillPath = `${configDir}${sep}skills${sep}${skill.name}${sep}SKILL.md`;
+    const disabled = await invoke<string>("read_text_file", { path: `${skillPath}.disabled` }).catch(() => null);
+    if (disabled !== null) continue;
+    const existing = await invoke<string>("read_text_file", { path: skillPath }).catch(() => null);
+    if (!shouldWriteBuiltinSkill(existing, String(skill.version))) continue;
+    try {
+      await invoke("write_skill", {
+        baseDir: configDir,
+        dirName: skill.name,
+        content: buildSkillMd(skill.name, skill.description, skill.content, skill.version),
+      });
+      console.log(`[opencode] installed builtin skill: ${skillPath}`);
+    } catch (e) {
+      console.warn(`[opencode] failed to install skill ${skill.name}:`, e);
     }
   }
 
@@ -1129,7 +1076,7 @@ export async function doConnect(folderPath?: string) {
   try {
     // Auto-register builtin agents before starting the server
     if (folderPath) {
-      await ensureBuiltinAgents();
+      await ensureBuiltinFiles();
     }
 
     const baseUrl = await ensureOpencodeServer(folderPath);
@@ -1165,11 +1112,6 @@ export async function doConnect(folderPath?: string) {
 
     console.log("[opencode] connected to", baseUrl, "for folder:", folderPath);
 
-    // Sync mdium-vba MCP config on every successful connection (port/token may change per run)
-    syncMdiumVbaMcpConfig().catch((e) => {
-      console.warn("[mdium-vba] initial sync failed:", e);
-    });
-
     // Write the HTTP bridge sidecar so the rag_search tool can call back into mdium.
     syncRagBridgeSidecar().catch((e) => {
       console.warn("[rag-bridge] sidecar write failed:", e);
@@ -1198,6 +1140,28 @@ export async function doConnect(folderPath?: string) {
       doConnect(pending.path);
     }
   }
+}
+
+/**
+ * Resolve once the client for `folderPath` is connected. doConnect returns
+ * early while another connect is in flight, so callers that need the client
+ * (e.g. loading a session) wait here instead of treating "no client yet" as a
+ * failure. Aborting the signal stops waiting and resolves.
+ */
+export function waitForConnection(folderPath: string | undefined, signal?: AbortSignal): Promise<void> {
+  const ready = () => !!_client && _connectedFolder === folderPath && useChatUIStore.getState().connected;
+  if (ready() || signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const finish = () => {
+      unsubscribe();
+      signal?.removeEventListener("abort", finish);
+      resolve();
+    };
+    const unsubscribe = useChatUIStore.subscribe(() => {
+      if (ready()) finish();
+    });
+    signal?.addEventListener("abort", finish);
+  });
 }
 
 async function ensureSessionId(title: string): Promise<string | null> {
@@ -1278,7 +1242,7 @@ export async function doSendMessage(
   _pendingQuestionRequestId = null;
 
   // L1: inject active tab context into every user message payload (SDK call only)
-  const wrappedText = applyForward(await wrapWithMdiumContext(text), replacementSettings());
+  const wrappedText = applyForward(wrapWithMdiumContext(text, useTabStore.getState().getActiveTab()?.filePath), replacementSettings());
 
   useChatUIStore.setState({ error: null });
   const sessionId = await ensureSessionId(text || "image");
@@ -1513,16 +1477,23 @@ export async function doExecuteCommand(commandName: string, args?: string) {
 export async function doCreateNewSession() {
   _currentSessionId = null;
   _pendingQuestionRequestId = null;
+  // A turn of the previous session may still be running; its spinner, stall
+  // notice and watchdog must not carry over into the fresh session (the
+  // generation bump also invalidates an in-flight stall give-up).
+  stopWatchdog();
+  _watchdogGeneration++;
   useChatUIStore.setState({
     messages: [],
     currentSessionId: null,
     error: null,
     pendingQuestions: null,
     azureAutoRetryCount: 0,
+    loading: false,
+    stallNotice: false,
   });
 }
 
-async function doLoadSession(sessionId: string) {
+export async function doLoadSession(sessionId: string) {
   if (!_client) return;
   useChatUIStore.setState({ error: null, loading: true });
   try {

@@ -1,4 +1,3 @@
-pub mod active_xlsm;
 pub mod agent_runner;
 pub mod ai;
 pub mod claude_config;
@@ -19,5 +18,7 @@ pub mod rag;
 pub mod slidev;
 pub mod speech;
 pub mod vba;
+pub mod vba_source;
+pub mod vba_streams;
 pub mod video;
 pub mod workflow;

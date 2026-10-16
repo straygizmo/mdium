@@ -216,35 +216,44 @@ VBA コードを出力する前に確認:
 ## vba-mdium-flow
 
 **説明:**
-MDium の `mdium-vba` MCP サーバーが利用可能なときに使用するスキル。エクスポート → 編集 → インポートというワークフローを LLM に案内し、モジュール構成に関する制約を明示する。
+MDium で開いている .xlsm / .xlam ブックの VBA マクロを編集するときに使うスキル。`vba_pull` でモジュールを取り出し、`.bas` / `.cls` を編集して `vba_push` でブックに書き戻し、結果を報告するまでの流れを LLM に案内する。
 
-### 概要
+MDium はブックのパスを受け取る 3 つのツール `vba_list` / `vba_pull` / `vba_push` を提供します。VBA を書く前に `vba-coding-conventions` スキルも読みます。
 
-このセッションでは MDium の `mdium-vba` MCP サーバーが利用可能です。
+### 対象ブックの決め方
+
+1. 最新のユーザーメッセージ先頭の `<mdium_context>` にある `active_file` を使う（.xlsm / .xlam を表示しているとき MDium が自動で付与するため、ユーザーがパスを入力する必要はない）
+2. `<mdium_context>` がなければ、ユーザーが書いたパスを使う
+3. どちらもなければ、どのブックを編集するかユーザーに尋ねる。推測しない
+
+決まったパスを、すべてのツール呼び出しの `xlsm_path` に渡します。
 
 ### 標準フロー
 
-1. `list_vba_modules` で既存の `_macros/` の状態を確認
-2. `_macros/` が未エクスポートなら `extract_vba_modules` を呼ぶ
-3. Read / Edit ツールで `.bas` / `.cls` を編集
-4. **編集が完了したら必ず `import_vba_macros` を呼ぶ**
-5. レスポンスの `updatedModules` をユーザーに報告
+1. `vba_list` でモジュール一覧、`<stem>_assets/macros/` が展開済みか、ブックがロックされているかを確認
+2. `extracted` が false なら `vba_pull` を呼ぶ。true の場合、フォルダに前回セッションの編集が残っている可能性があるため、ブックのほうが新しそうなときは `vba_pull` で上書きする前にユーザーに確認する。`vba_pull` はどのモジュールにも対応しない `.bas` / `.cls` を削除する（`removedFiles` に報告）ので、新しいモジュールは pull し直す前に push しておく
+3. マクロフォルダ内の `.bas` / `.cls` を Read / Edit で編集
+4. **編集が完了したら必ず `vba_push` を呼ぶ**（呼ぶまでブックには何も反映されない）
+5. `updated` / `added` / `removed` / `skipped` / `backupPath` をユーザーに報告し、Excel で動作確認を依頼する（MDium はマクロを実行しない）。何も変わらなかったときは `backupPath` が null で、ブックはそのまま
 
-### 重要な制約
+### Excel で開かれているとき
 
-- このツールは **ツール呼び出しの瞬間のアクティブタブ** に対して動作します
-- 毎ターン、ユーザーメッセージ先頭の `<mdium_context>` タグで現在のアクティブファイルが分かります
-- ツール応答の `activeFile` と `<mdium_context>` の `active_file` が一致しているか必ず確認してください
-- 会話の途中でユーザーがタブを切り替えると `active_file` が変わります。ユーザーの意図を必ず確認してください:
-  「アクティブタブが {old} から {new} に変わりましたが、このまま続けますか？」
-- `error: "active_tab_changed"` が返ってきた場合は race condition です。**1 回だけ** retry してください
+- Excel がブックを開いている間は、`vba_list` が `locked: true` を返し、`vba_push` は `workbook_locked` で失敗します
+- 取り出しと編集は続けられます。ユーザーに Excel でブックを閉じてもらい、確認を待ってから `vba_push` を再度呼びます
 
-### モジュール構成を変えてはいけない
+### モジュールの追加と削除
 
-**`.bas` / `.cls` ファイルの新規作成・削除・リネームをしないでください。** MDium のインポートは **既存モジュールの内容差し替えのみ** をサポートします。
+- 標準モジュールの追加は `<Name>.bas`、クラスモジュールの追加は `<Name>.cls` を作成する。`vba_push` が追加する
+- 標準・クラスモジュールの削除はファイルを削除して行う。ただしユーザーが明示的に削除を依頼したときだけ。`vba_push` は `removed` に報告する
+- `ThisWorkbook.cls` やシートの `.cls` は削除しない。ドキュメントモジュールは削除されず、ファイルが無い場合は `skipped` に報告され、既存コードが残る
+- モジュール名は、パス区切りや `..` を含まず、英字で始まり、ASCII の英数字とアンダースコアのみ、31 文字以内、大文字小文字を区別せず一意、VBA の予約語でないこと。満たさない場合 `vba_push` は全体を `invalid_module_name` で拒否する
 
-- 新規モジュールを作りたい → ユーザーに Excel の VBE で手動追加してもらい、再度 `extract_vba_modules` を呼んで取得する
-- モジュールを削除したい → ユーザーに Excel の VBE で手動削除してもらう
-- リネームしたい → 同様に VBE で行ってもらう
+### ファイル形式
 
-`import_vba_macros` が `error: "module_set_changed"` を返した場合は、`newInFiles` と `missingInFiles` の内容を確認し、どちらの差分を戻すべきかをユーザーに確認してください。
+- ファイルは UTF-8。先頭行は `Attribute VB_Name = "<拡張子を除いたファイル名>"` を維持する
+- `.cls` に `VERSION 1.0 CLASS` / `BEGIN` / `END` のヘッダーは書かない（push 時に MDium が取り除く）
+- `vba_push` が `unencodable_character` で失敗した場合、ブックのコードページでは保存できない文字が含まれている。ASCII の代替表現や `ChrW` に置き換えて再度 push する
+
+### 復元
+
+`vba_push` はブックを変更する前に `<ブック名>.bak` を書き出します。ブックが壊れたとユーザーが報告したら、Excel を閉じてブックを削除し、`.bak` を元の名前に戻すよう案内します。

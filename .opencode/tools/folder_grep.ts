@@ -1,3 +1,4 @@
+// mdium-tool-version: 1
 // .opencode/tools/folder_grep.ts
 //
 // Folder-scoped grep for the built-in `rag` agent. Delegates to the running

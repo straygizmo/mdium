@@ -44,7 +44,6 @@ interface SettingsState {
   speechEnabled: boolean;
   speechModel: SpeechModel;
   mediumSettings: MediumSettings;
-  allowLlmVbaImport: boolean;
   replacement: ReplacementSettings;
   /** Shows the experimental generic flow engine UI (off by default). */
   experimentalFlows: boolean;
@@ -64,7 +63,6 @@ interface SettingsState {
   setSpeechEnabled: (enabled: boolean) => void;
   setSpeechModel: (model: SpeechModel) => void;
   setMediumSettings: (settings: MediumSettings) => void;
-  setAllowLlmVbaImport: (enabled: boolean) => void;
   setReplacement: (settings: ReplacementSettings) => void;
   setExperimentalFlows: (enabled: boolean) => void;
   initializeTheme: () => void;
@@ -88,7 +86,6 @@ export const useSettingsStore = create<SettingsState>()(
       speechEnabled: false,
       speechModel: "Xenova/whisper-small" as SpeechModel,
       mediumSettings: DEFAULT_MEDIUM_SETTINGS,
-      allowLlmVbaImport: false,
       replacement: DEFAULT_REPLACEMENT_SETTINGS,
       experimentalFlows: false,
 
@@ -130,7 +127,6 @@ export const useSettingsStore = create<SettingsState>()(
       setSpeechEnabled: (enabled) => set({ speechEnabled: enabled }),
       setSpeechModel: (model) => set({ speechModel: model }),
       setMediumSettings: (settings) => set({ mediumSettings: settings }),
-      setAllowLlmVbaImport: (enabled) => set({ allowLlmVbaImport: enabled }),
       setReplacement: (settings) => set({ replacement: settings }),
       setExperimentalFlows: (enabled) => set({ experimentalFlows: enabled }),
 
@@ -156,7 +152,6 @@ export const useSettingsStore = create<SettingsState>()(
         speechEnabled: state.speechEnabled,
         speechModel: state.speechModel,
         mediumSettings: state.mediumSettings,
-        allowLlmVbaImport: state.allowLlmVbaImport,
         replacement: state.replacement,
         experimentalFlows: state.experimentalFlows,
       }),
