@@ -175,6 +175,13 @@ export function parseInbound(line: string): ParsedInbound {
         provider: provider(m.provider),
         workingDirectory: str(m.workingDirectory, "workingDirectory"),
       };
+    case "list_models":
+      return {
+        type: "list_models",
+        requestId: str(m.requestId, "requestId"),
+        provider: provider(m.provider),
+        workingDirectory: str(m.workingDirectory, "workingDirectory"),
+      };
     case "close_session":
       return { type: "close_session", sessionId: str(m.sessionId, "sessionId") };
     case "convert_document": {

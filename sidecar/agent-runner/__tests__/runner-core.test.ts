@@ -31,6 +31,7 @@ function setup() {
     probe: vi.fn(async () => ({ kind: "available" as const, version: "1.0.0" })),
     startSession: vi.fn(async (_o, cb) => { callbacks = cb; return session; }),
     listSessions: vi.fn(async () => [{ nativeSessionId: "a" }]),
+    listModels: vi.fn(async () => [{ id: "m1", name: "Model 1" }]),
   };
   let n = 0;
   const core = new RunnerCore({ adapters: { codex: adapter, copilot: adapter }, send: (m) => sent.push(m), newId: () => `p${++n}` });
@@ -508,6 +509,15 @@ describe("RunnerCore", () => {
     expect(t.sent).toContainEqual({ type: "error", requestId: "r1", sessionId: "s1", message: "PROVIDER_UNAVAILABLE" });
     await t.start();
     expect(t.sent).toContainEqual({ type: "session_started", requestId: "r1", sessionId: "s1", nativeSessionId: "native-1" });
+  });
+
+  it("lists models, and reports LIST_UNSUPPORTED when the adapter has none", async () => {
+    const t = setup();
+    await t.line({ type: "list_models", requestId: "r4", provider: "copilot", workingDirectory: "C:/w" });
+    expect(t.sent).toContainEqual({ type: "model_list", requestId: "r4", models: [{ id: "m1", name: "Model 1" }] });
+    delete (t.adapter as { listModels?: unknown }).listModels;
+    await t.line({ type: "list_models", requestId: "r5", provider: "codex", workingDirectory: "C:/w" });
+    expect(t.sent).toContainEqual({ type: "error", requestId: "r5", message: "LIST_UNSUPPORTED" });
   });
 
   it("replies PROVIDER_UNAVAILABLE to list_sessions without an adapter", async () => {

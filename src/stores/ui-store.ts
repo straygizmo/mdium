@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { OpencodeConfigTab, OpencodeTopTab, ClaudeTopTab, ClaudeSettingsTab, CodexTopTab, CodexSettingsTab } from "@/shared/types";
+import type { OpencodeConfigTab, OpencodeTopTab, ClaudeTopTab, ClaudeSettingsTab, CodexTopTab, CodexSettingsTab, CopilotTopTab, CopilotSettingsTab } from "@/shared/types";
 import type { TerminalKind, TerminalSession } from "@/features/terminal/terminal-session";
 
 export type LeftPanel = "folder" | "outline" | "rag" | "opencode-config" | "git" | "replacement" | "workflow" | "flow";
@@ -55,6 +55,8 @@ interface UiState {
   claudeSettingsTab: ClaudeSettingsTab;
   codexTopTab: CodexTopTab;
   codexSettingsTab: CodexSettingsTab;
+  copilotTopTab: CopilotTopTab;
+  copilotSettingsTab: CopilotSettingsTab;
   isZennMode: boolean;
   gitGraphRatio: number;
   setGitGraphRatio: (ratio: number) => void;
@@ -86,6 +88,8 @@ interface UiState {
   setClaudeSettingsTab: (tab: ClaudeSettingsTab) => void;
   setCodexTopTab: (tab: CodexTopTab) => void;
   setCodexSettingsTab: (tab: CodexSettingsTab) => void;
+  setCopilotTopTab: (tab: CopilotTopTab) => void;
+  setCopilotSettingsTab: (tab: CopilotSettingsTab) => void;
   setZennMode: (mode: boolean) => void;
 }
 
@@ -111,6 +115,8 @@ export const useUiStore = create<UiState>()((set, get) => ({
   claudeSettingsTab: "general" as ClaudeSettingsTab,
   codexTopTab: "chat" as CodexTopTab,
   codexSettingsTab: "general" as CodexSettingsTab,
+  copilotTopTab: "chat" as CopilotTopTab,
+  copilotSettingsTab: "general" as CopilotSettingsTab,
   isZennMode: false,
   gitGraphRatio: 0.5,
 
@@ -214,6 +220,8 @@ export const useUiStore = create<UiState>()((set, get) => ({
   setClaudeSettingsTab: (tab) => set({ claudeSettingsTab: tab }),
   setCodexTopTab: (tab) => set({ codexTopTab: tab }),
   setCodexSettingsTab: (tab) => set({ codexSettingsTab: tab }),
+  setCopilotTopTab: (tab) => set({ copilotTopTab: tab }),
+  setCopilotSettingsTab: (tab) => set({ copilotSettingsTab: tab }),
   setZennMode: (mode) => set({ isZennMode: mode }),
   setGitGraphRatio: (ratio) => set({ gitGraphRatio: ratio }),
 }));

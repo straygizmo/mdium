@@ -1,6 +1,6 @@
 import { basename } from "node:path";
 import { CopilotClient, RuntimeConnection } from "@github/copilot-sdk";
-import type { AgentSessionSummary, Availability, ToolRequest } from "../../src/shared/types/agent-runner";
+import type { AgentModelInfo, AgentSessionSummary, Availability, ToolRequest } from "../../src/shared/types/agent-runner";
 import type { AdapterSession, ProviderAdapter, SessionCallbacks, SessionOptions } from "./adapter";
 import { copilotDecision, toolRequestFromCopilot } from "./permissions";
 import { resolveCopilotPath } from "./resolve-cli";
@@ -44,6 +44,7 @@ export interface CopilotClientLike {
   createSession(config: CopilotSessionConfigLike): Promise<CopilotSessionLike>;
   resumeSession(id: string, config: CopilotSessionConfigLike): Promise<CopilotSessionLike>;
   listSessions(filter?: { workingDirectory?: string }): Promise<Array<{ sessionId: string; summary?: string; modifiedTime?: Date }>>;
+  listModels(): Promise<Array<{ id: string; name?: string }>>;
 }
 
 export interface CopilotAdapterDeps {
@@ -287,6 +288,19 @@ export class CopilotAdapter implements ProviderAdapter {
         ...(s.summary ? { title: s.summary } : {}),
         ...(s.modifiedTime ? { updatedAt: new Date(s.modifiedTime).toISOString() } : {}),
       }));
+    } finally {
+      await client.stop().catch(() => undefined);
+    }
+  }
+
+  async listModels(workingDirectory: string): Promise<AgentModelInfo[]> {
+    const cliPath = await this.deps.resolvePath();
+    if (!cliPath) throw new Error("COPILOT_NOT_FOUND");
+    const client = this.deps.createClient({ cliPath, workingDirectory });
+    try {
+      await client.start();
+      const models = await client.listModels();
+      return models.map((m) => ({ id: m.id, name: m.name || m.id }));
     } finally {
       await client.stop().catch(() => undefined);
     }

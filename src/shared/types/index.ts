@@ -200,6 +200,31 @@ export type CodexTopTab = "chat" | "settings";
 /** Codex settings sub-tab */
 export type CodexSettingsTab = "general" | "rules" | "mcp" | "skills";
 
+/** Copilot panel top-level tab */
+export type CopilotTopTab = "chat" | "settings";
+
+/** Copilot settings sub-tab */
+export type CopilotSettingsTab = "general" | "rules" | "mcp" | "skills";
+
+/** MCP server entry in Copilot CLI mcp-config.json / .github/mcp.json (`mcpServers.<name>`) */
+export interface CopilotMcpServer {
+  name: string;
+  type: "local" | "http" | "sse";
+  /** Local (stdio) server command */
+  command?: string;
+  args: string[];
+  env: Record<string, string>;
+  /** Remote (http / sse) server URL */
+  url?: string;
+  headers: Record<string, string>;
+  /** Tool filter: undefined or ["*"] means all tools */
+  tools?: string[];
+  /** Tool call timeout in milliseconds */
+  timeout?: number;
+  /** False when the name is listed in settings.json `disabledMcpServers` */
+  enabled: boolean;
+}
+
 /** MCP server entry in Codex config.toml (`[mcp_servers.<name>]`) */
 export interface CodexMcpServer {
   name: string;

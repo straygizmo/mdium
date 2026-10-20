@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { useCodexSessionStore } from "@/stores/codex-session-store";
+import { useRunnerSessionStore } from "@/stores/runner-session-store";
 import { useCodexConfigStore } from "@/stores/codex-config-store";
 import type { AgentPermission } from "@/shared/types/agent-runner";
 
@@ -16,9 +16,9 @@ interface GeneralSectionProps {
 
 export function GeneralSection({ folder }: GeneralSectionProps) {
   const { t } = useTranslation("codex-config");
-  const settings = useCodexSessionStore((s) => s.getFolderSettings(folder));
-  const setModel = useCodexSessionStore((s) => s.setModel);
-  const setPermission = useCodexSessionStore((s) => s.setPermission);
+  const settings = useRunnerSessionStore((s) => s.getFolderSettings("codex", folder));
+  const setModel = useRunnerSessionStore((s) => s.setModel);
+  const setPermission = useRunnerSessionStore((s) => s.setPermission);
   const models = useCodexConfigStore((s) => s.models);
   const loadModels = useCodexConfigStore((s) => s.loadModels);
 
@@ -39,7 +39,7 @@ export function GeneralSection({ folder }: GeneralSectionProps) {
       <select
         className="claude-settings__select"
         value={settings.model}
-        onChange={(e) => setModel(folder, e.target.value)}
+        onChange={(e) => setModel("codex", folder, e.target.value)}
       >
         <option value="">{t("modelDefault")}</option>
         {options.map((m) => (
@@ -51,7 +51,7 @@ export function GeneralSection({ folder }: GeneralSectionProps) {
       <select
         className="claude-settings__select"
         value={settings.permission}
-        onChange={(e) => setPermission(folder, e.target.value as AgentPermission)}
+        onChange={(e) => setPermission("codex", folder, e.target.value as AgentPermission)}
       >
         {PERMISSIONS.map(({ value, labelKey }) => (
           <option key={value} value={value}>{t(labelKey)}</option>

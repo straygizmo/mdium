@@ -20,7 +20,7 @@ const client = vi.hoisted(() => {
 vi.mock("../lib/agent-runner-client", () => client);
 
 import { chatKey, emptyChat, useAgentChatStore } from "../agent-chat-store";
-import { useCodexSessionStore } from "@/stores/codex-session-store";
+import { useRunnerSessionStore } from "@/stores/runner-session-store";
 
 const key = chatKey("C:/w", "codex");
 const chat = () => useAgentChatStore.getState().chats[key] ?? emptyChat;
@@ -28,7 +28,7 @@ const chat = () => useAgentChatStore.getState().chats[key] ?? emptyChat;
 describe("agent chat store", () => {
   beforeEach(() => {
     useAgentChatStore.setState({ chats: {}, availability: {}, selectedTab: "opencode" });
-    useCodexSessionStore.setState({ folders: {} });
+    useRunnerSessionStore.setState({ folders: {} });
     client.sendToRunner.mockClear();
     client.requestRunner.mockClear();
   });
@@ -48,11 +48,11 @@ describe("agent chat store", () => {
     expect(chat().entries.map((e) => [e.role, e.text])).toEqual([["user", "hello"]]);
   });
 
-  it("starts Codex sessions with the folder's model and sandbox from the settings tab", async () => {
-    useCodexSessionStore.setState({ folders: { "C:/w": { model: "gpt-test", permission: "read-only" } } });
+  it("starts sessions with the provider's per-folder model and permission from its settings tab", async () => {
+    useRunnerSessionStore.setState({ folders: { "codex::C:/w": { model: "gpt-test", permission: "read-only" } } });
     await useAgentChatStore.getState().send("C:/w", "codex", "hello");
     expect(client.requestRunner.mock.calls[0][0]).toMatchObject({ type: "start_session", provider: "codex", model: "gpt-test", permission: "read-only" });
-    // Other providers never pick up the Codex settings.
+    // Settings are per provider: Copilot in the same folder keeps the defaults.
     client.requestRunner.mockClear();
     await useAgentChatStore.getState().send("C:/w", "copilot", "hi");
     const start = client.requestRunner.mock.calls[0][0];
