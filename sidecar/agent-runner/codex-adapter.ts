@@ -157,10 +157,12 @@ export class CodexAdapter implements ProviderAdapter {
       ? { ...(Object.fromEntries(Object.entries(process.env).filter(([, v]) => v !== undefined)) as Record<string, string>), ...options.env }
       : undefined;
     // The Codex SDK flattens `config` into `--config key=value` TOML overrides.
+    // `codex exec` runs with approval_policy=never, so MCP tool calls must be
+    // pre-approved per server; mdium enforces read-only and in-app consent itself.
     const config = options.mcpServers
       ? {
           mcp_servers: Object.fromEntries(
-            Object.entries(options.mcpServers).map(([name, spec]) => [name, { command: spec.command, args: spec.args, env: spec.env, tool_timeout_sec: 180 }]),
+            Object.entries(options.mcpServers).map(([name, spec]) => [name, { command: spec.command, args: spec.args, env: spec.env, tool_timeout_sec: 180, default_tools_approval_mode: "approve" }]),
           ),
         }
       : undefined;
