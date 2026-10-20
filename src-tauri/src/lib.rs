@@ -246,6 +246,7 @@ pub fn run() {
             commands::git::git_diff_staged,
             commands::git::git_diff_unstaged,
             commands::git::git_fetch,
+            commands::git::git_pull,
             commands::git::git_log_oneline,
             commands::git::git_log_graph,
             commands::git::git_diff_commit,
@@ -256,6 +257,7 @@ pub fn run() {
             commands::git::git_remove_untracked,
             commands::git::git_push_upstream,
             commands::git::git_commits_ahead,
+            commands::git::git_commits_behind,
             commands::git::git_show_file,
             commands::git::git_clone,
             // PTY operations

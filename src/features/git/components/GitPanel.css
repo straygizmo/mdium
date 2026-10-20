@@ -301,6 +301,11 @@
   border-bottom: 1px solid var(--border);
 }
 
+/* Non-blocking warning (e.g. background fetch failed) */
+.git-panel__error--warning {
+  color: var(--git-modified, #e2a438);
+}
+
 /* ── File lists ── */
 .git-panel__file-lists {
   flex: 1;
