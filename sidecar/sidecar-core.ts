@@ -97,13 +97,19 @@ export class SidecarCore {
   /** Original tool inputs kept so an "allow" can echo them back as updatedInput. */
   private permInputs = new Map<string, Record<string, unknown>>();
 
-  private canUseTool: CanUseToolFn = (toolName, input) =>
-    new Promise<PermissionResultLike>((resolve) => {
+  private canUseTool: CanUseToolFn = (toolName, input) => {
+    // The mdium-rag MCP server enforces its own read-only mode and the webview
+    // shows the approval dialog, so prompting here would be a duplicate.
+    if (toolName.startsWith("mcp__mdium-rag__")) {
+      return Promise.resolve({ behavior: "allow", updatedInput: input });
+    }
+    return new Promise<PermissionResultLike>((resolve) => {
       const id = `perm-${++this.permSeq}`;
       this.pendingPermissions.set(id, resolve);
       this.permInputs.set(id, input);
       this.deps.send({ type: "permission_request", id, toolName, input });
     });
+  };
 
   private async *inputStream(): AsyncGenerator<SdkUserMessageLike> {
     while (!this.stopped) {

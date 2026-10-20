@@ -22,6 +22,10 @@ import {
   emptyChatModel,
   type ChatModelState,
 } from "../lib/claude-message-mapper";
+import {
+  mdiumRagServerFor,
+  mdiumRagPermissionForClaude,
+} from "@/features/agent-chat/lib/mdium-rag-mcp";
 import type {
   SidecarOutbound,
   SidecarPermissionRequest,
@@ -87,13 +91,19 @@ function handleSidecarMessage(msg: SidecarOutbound): void {
       if (_sidecarId === null || _folder === null) return;
       const folder = _folder;
       const settings = useClaudeSessionStore.getState().getFolderSettings(folder);
-      void sendToSidecar(_sidecarId, {
-        type: "start_session",
-        cwd: folder,
-        model: settings.model || undefined,
-        permissionMode: settings.permissionMode,
-        resumeSessionId: settings.lastSessionId ?? undefined,
-      }).catch((e) => setState({ error: String(e) }));
+      const sidecarId = _sidecarId;
+      void mdiumRagServerFor("claude", mdiumRagPermissionForClaude(settings.permissionMode))
+        .then((mcpServers) =>
+          sendToSidecar(sidecarId, {
+            type: "start_session",
+            cwd: folder,
+            model: settings.model || undefined,
+            permissionMode: settings.permissionMode,
+            resumeSessionId: settings.lastSessionId ?? undefined,
+            mcpServers,
+          }),
+        )
+        .catch((e) => setState({ error: String(e) }));
       setState({ connected: true, connecting: false, error: null });
       break;
     }
