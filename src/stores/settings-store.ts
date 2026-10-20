@@ -47,6 +47,8 @@ interface SettingsState {
   replacement: ReplacementSettings;
   /** Shows the experimental generic flow engine UI (off by default). */
   experimentalFlows: boolean;
+  /** Per-provider toggle for exposing the mdium-rag MCP tools to agent chats. */
+  mdiumRagTools: Record<MdiumRagProvider, boolean>;
 
   setThemeId: (id: string) => void;
   setLanguage: (lang: Language) => void;
@@ -65,8 +67,17 @@ interface SettingsState {
   setMediumSettings: (settings: MediumSettings) => void;
   setReplacement: (settings: ReplacementSettings) => void;
   setExperimentalFlows: (enabled: boolean) => void;
+  setMdiumRagTool: (provider: MdiumRagProvider, enabled: boolean) => void;
   initializeTheme: () => void;
 }
+
+export type MdiumRagProvider = "claude" | "codex" | "copilot";
+
+const DEFAULT_MDIUM_RAG_TOOLS: Record<MdiumRagProvider, boolean> = {
+  claude: true,
+  codex: true,
+  copilot: true,
+};
 
 export const useSettingsStore = create<SettingsState>()(
   persist(
@@ -88,6 +99,7 @@ export const useSettingsStore = create<SettingsState>()(
       mediumSettings: DEFAULT_MEDIUM_SETTINGS,
       replacement: DEFAULT_REPLACEMENT_SETTINGS,
       experimentalFlows: false,
+      mdiumRagTools: { ...DEFAULT_MDIUM_RAG_TOOLS },
 
       setThemeId: (id) => {
         const theme = getThemeById(id);
@@ -129,6 +141,8 @@ export const useSettingsStore = create<SettingsState>()(
       setMediumSettings: (settings) => set({ mediumSettings: settings }),
       setReplacement: (settings) => set({ replacement: settings }),
       setExperimentalFlows: (enabled) => set({ experimentalFlows: enabled }),
+      setMdiumRagTool: (provider, enabled) =>
+        set({ mdiumRagTools: { ...get().mdiumRagTools, [provider]: enabled } }),
 
       initializeTheme: () => {
         const theme = getThemeById(get().themeId);
@@ -154,6 +168,7 @@ export const useSettingsStore = create<SettingsState>()(
         mediumSettings: state.mediumSettings,
         replacement: state.replacement,
         experimentalFlows: state.experimentalFlows,
+        mdiumRagTools: state.mdiumRagTools,
       }),
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<SettingsState>;
@@ -164,6 +179,8 @@ export const useSettingsStore = create<SettingsState>()(
           // pick the language-appropriate embedding model (ja → ruri-v3-30m); a
           // persisted embeddingModel is preserved so existing indexes still match.
           ragSettings: normalizeRagSettings(p.ragSettings, p.language ?? current.language),
+          // Fill missing providers with the default (enabled).
+          mdiumRagTools: { ...DEFAULT_MDIUM_RAG_TOOLS, ...(p.mdiumRagTools ?? {}) },
         };
       },
     }
