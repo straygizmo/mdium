@@ -27,6 +27,7 @@ vi.mock("@/features/agent-chat/lib/mdium-rag-mcp", async (orig) => {
   };
 });
 
+import { mdiumRagServerFor } from "@/features/agent-chat/lib/mdium-rag-mcp";
 import { doClaudeConnect, killClaudeSidecar } from "../useClaudeChat";
 import { useClaudeSessionStore } from "@/stores/claude-session-store";
 
@@ -64,5 +65,17 @@ describe("useClaudeChat start_session", () => {
   it("passes mdium-rag with read-only permission in plan mode", async () => {
     const msg = await startMessageFor("C:/b", "plan");
     expect(msg.mcpServers!["mdium-rag"].env.MDIUM_RAG_PERMISSION).toBe("read-only");
+  });
+
+  it("still starts the session without mcpServers when the helper rejects", async () => {
+    vi.mocked(mdiumRagServerFor).mockRejectedValueOnce(new Error("boom"));
+    const msg = await startMessageFor("C:/c", "default");
+    expect(msg).not.toHaveProperty("mcpServers");
+  });
+
+  it("still starts the session without mcpServers when the helper returns undefined", async () => {
+    vi.mocked(mdiumRagServerFor).mockResolvedValueOnce(undefined);
+    const msg = await startMessageFor("C:/d", "default");
+    expect(msg).not.toHaveProperty("mcpServers");
   });
 });
