@@ -68,7 +68,7 @@ export function useRagBridge() {
 
       const work = handleRagBridgeRequest(req, useTabStore.getState().activeFolderPath, {
         embedding: { load, embed },
-        confirm: (m) => showConfirm(m, { kind: "warning" }),
+        confirm: (m, signal) => showConfirm(m, { kind: "warning", signal }),
       });
 
       let timer: ReturnType<typeof setTimeout> | undefined;

@@ -47,7 +47,6 @@
   "indexError": "Index error",
   "indexFiles": "{{count}} files",
   "indexConverting": "Converting {{done}}/{{total}}",
-  "indexUpdate": "Update",
   "indexSettings": "Index settings",
   "indexDelete": "Delete index",
   "indexToolsHeading": "Agent tools (mdium-rag)",

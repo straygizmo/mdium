@@ -56,6 +56,8 @@ function runningStateFor(folder: string): RagIndexState | null {
 }
 
 export async function refreshIndexStatus(folder: string): Promise<void> {
+  // Drop per-folder state (error, progress, counts) left over from another folder.
+  if (store().folder !== folder) store().resetFor(folder);
   const counts = await fetchCounts(folder);
   const running = runningStateFor(folder);
   store().patch({
@@ -107,6 +109,7 @@ async function runUpdate(id: string, folder: string, embedding: EmbeddingApi): P
       const name = fileNameOf(file);
       // Once the final file is reached the scan still has to serialize the
       // chunk array over IPC with no events; show a transitional phase.
+      if (store().folder !== folder) return;
       store().patch({
         progress:
           current >= total
@@ -130,12 +133,16 @@ async function runUpdate(id: string, folder: string, embedding: EmbeddingApi): P
       const embeddings: number[][] = [];
       for (let i = 0; i < chunks.length; i++) {
         const name = fileNameOf(chunks[i].file as string);
-        store().patch({ progress: { phase: "embedding", current: i + 1, total: chunks.length, currentFile: name } });
+        if (store().folder === folder) {
+          store().patch({ progress: { phase: "embedding", current: i + 1, total: chunks.length, currentFile: name } });
+        }
         patchJob(id, { current_file: name });
         embeddings.push(await embedding.embed(chunks[i].text, "passage"));
         patchJob(id, { done: i + 1 });
       }
-      store().patch({ progress: { phase: "saving", current: chunks.length, total: chunks.length, currentFile: "" } });
+      if (store().folder === folder) {
+        store().patch({ progress: { phase: "saving", current: chunks.length, total: chunks.length, currentFile: "" } });
+      }
       const withEmbed = chunks.map((c, i) => ({ ...c, embedding: embeddings[i] }));
       await invoke<number>("rag_save_chunks", { folderPath: folder, chunks: withEmbed, modelName: embeddingModel });
     }

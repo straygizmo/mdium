@@ -160,7 +160,7 @@ export class CodexAdapter implements ProviderAdapter {
     const config = options.mcpServers
       ? {
           mcp_servers: Object.fromEntries(
-            Object.entries(options.mcpServers).map(([name, spec]) => [name, { command: spec.command, args: spec.args, env: spec.env }]),
+            Object.entries(options.mcpServers).map(([name, spec]) => [name, { command: spec.command, args: spec.args, env: spec.env, tool_timeout_sec: 180 }]),
           ),
         }
       : undefined;

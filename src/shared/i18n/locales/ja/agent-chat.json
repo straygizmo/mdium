@@ -47,7 +47,6 @@
   "indexError": "索引エラー",
   "indexFiles": "{{count}} ファイル",
   "indexConverting": "変換中 {{done}}/{{total}}",
-  "indexUpdate": "更新",
   "indexSettings": "索引の設定",
   "indexDelete": "索引を削除",
   "indexToolsHeading": "エージェントツール (mdium-rag)",

@@ -72,6 +72,16 @@ describe("CodexAdapter", () => {
     expect(fake.resumeThread).toHaveBeenCalledWith("t-9", { workingDirectory: "C:/work", skipGitRepoCheck: true });
   });
 
+  it("gives each MCP server a tool timeout longer than the approval wait", async () => {
+    const fake = fakeCodex([]);
+    await adapter(fake.createCodex).startSession(
+      { workingDirectory: "C:/work", permission: "full-access", guarded: false, mcpServers: { "mdium-rag": { command: "node", args: ["x.js"] } } } as any,
+      callbacks([]),
+    );
+    const arg = fake.createCodex.mock.calls[0][0] as { config?: { mcp_servers?: Record<string, Record<string, unknown>> } };
+    expect(arg.config?.mcp_servers?.["mdium-rag"]).toMatchObject({ tool_timeout_sec: 180 });
+  });
+
   it("merges env over process.env when env is given", async () => {
     const fake = fakeCodex([]);
     await adapter(fake.createCodex).startSession(
@@ -291,6 +301,6 @@ describe("CodexAdapter images", () => {
     );
     const arg = fake.createCodex.mock.calls[0][0] as { config?: { mcp_servers: Record<string, { command: string }> } };
     expect(arg.config?.mcp_servers["mdium-rag"].command).toBe("node");
-    expect(arg.config?.mcp_servers["mdium-rag"]).toEqual({ command: "node", args: ["i.js"], env: { A: "b" } });
+    expect(arg.config?.mcp_servers["mdium-rag"]).toEqual({ command: "node", args: ["i.js"], env: { A: "b" }, tool_timeout_sec: 180 });
   });
 });

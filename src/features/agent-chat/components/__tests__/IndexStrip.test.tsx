@@ -63,7 +63,26 @@ describe("IndexStrip", () => {
     expect(container.querySelector(".index-strip__pill")?.textContent).toBe("No index");
     const btn = container.querySelector<HTMLButtonElement>(".index-strip__update")!;
     expect(btn.title).toBe(i18n.t("common:ragBuildIndex"));
+    expect(btn.textContent).toBe(i18n.t("common:ragBuildIndex"));
     expect(btn.disabled).toBe(false);
+  });
+
+  it("labels the button as rebuild once an index is ready", async () => {
+    useRagIndexStore.setState({ state: "ready", totalChunks: 5, totalFiles: 1 });
+    await act(async () => root.render(<IndexStrip />));
+    const btn = container.querySelector<HTMLButtonElement>(".index-strip__update")!;
+    expect(btn.textContent).toBe(i18n.t("common:ragRebuildIndex"));
+  });
+
+  it("re-reads status when the embedding model changes", async () => {
+    await act(async () => root.render(<IndexStrip />));
+    vi.mocked(refreshIndexStatus).mockClear();
+    await act(async () => {
+      useSettingsStore.setState({
+        ragSettings: { ...useSettingsStore.getState().ragSettings, embeddingModel: useSettingsStore.getState().ragSettings.embeddingModel === "Xenova/multilingual-e5-small" ? "Xenova/multilingual-e5-base" : "Xenova/multilingual-e5-small" },
+      });
+    });
+    expect(refreshIndexStatus).toHaveBeenCalledWith("C:/w");
   });
 
   it("shows chunk count and ready state", async () => {

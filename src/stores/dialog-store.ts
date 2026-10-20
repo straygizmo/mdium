@@ -60,12 +60,31 @@ export function showMessage(
   });
 }
 
-/** Show a confirm dialog (OK / Cancel). Resolves to true if confirmed. */
+/**
+ * Show a confirm dialog (OK / Cancel). Resolves to true if confirmed.
+ * If `options.signal` aborts while the dialog is open, it is dismissed and resolves false.
+ */
 export function showConfirm(
   text: string,
-  options?: { title?: string; kind?: DialogKind; closeOnOverlayClick?: boolean },
+  options?: { title?: string; kind?: DialogKind; closeOnOverlayClick?: boolean; signal?: AbortSignal },
 ): Promise<boolean> {
   return new Promise((resolve) => {
+    const signal = options?.signal;
+    if (signal?.aborted) {
+      resolve(false);
+      return;
+    }
+    const id = useDialogStore.getState()._nextId;
+    signal?.addEventListener(
+      "abort",
+      () => {
+        const state = useDialogStore.getState();
+        if (!state.dialogs.some((d) => d.id === id)) return;
+        state._remove(id);
+        resolve(false);
+      },
+      { once: true },
+    );
     useDialogStore.getState()._push({
       type: "confirm",
       text,

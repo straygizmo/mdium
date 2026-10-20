@@ -20,11 +20,15 @@ export function IndexStrip() {
 
   useEffect(() => {
     if (folder) void refreshIndexStatus(folder);
-  }, [folder]);
+    // The index DB is per embedding model, so a model change must re-read status.
+  }, [folder, embeddingModel]);
 
   if (!folder) return null;
 
   const busy = store.state === "updating" || store.state === "converting" || store.job?.state === "running";
+
+  // Build for a missing/unknown index, rebuild once one exists (or failed).
+  const rebuild = store.state !== "empty" && store.state !== "unknown";
 
   const update = () => {
     try {
@@ -75,9 +79,9 @@ export function IndexStrip() {
           className="index-strip__update"
           onClick={update}
           disabled={busy}
-          title={store.state === "ready" ? t("common:ragRebuildIndex") : t("common:ragBuildIndex")}
+          title={rebuild ? t("common:ragRebuildIndex") : t("common:ragBuildIndex")}
         >
-          {t("indexUpdate")}
+          {rebuild ? t("common:ragRebuildIndex") : t("common:ragBuildIndex")}
         </button>
         <button
           type="button"

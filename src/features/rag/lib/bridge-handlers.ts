@@ -9,6 +9,7 @@ import type {
   RagStatusPayload,
   RagUpdateAccepted,
 } from "@/shared/types/rag-bridge";
+import type { ConvertibleFile } from "@/features/export/lib/collectConvertibleFiles";
 import { useRagIndexStore } from "../stores/rag-index-store";
 import {
   errorCodeFor,
@@ -23,7 +24,8 @@ import {
 
 export interface BridgeDeps {
   embedding: EmbeddingApi;
-  confirm: (message: string) => Promise<boolean>;
+  /** Shows the approval dialog; must resolve false and dismiss it when `signal` aborts. */
+  confirm: (message: string, signal: AbortSignal) => Promise<boolean>;
   /** How long to wait for the user to answer the approval dialog (default 120000). */
   approvalTimeoutMs?: number;
 }
@@ -56,12 +58,17 @@ type Approval = "granted" | "approval_denied" | "approval_timeout";
 
 async function requestApproval(message: string, deps: BridgeDeps): Promise<Approval> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const controller = new AbortController();
   const timeout = new Promise<"timeout">((resolve) => {
     timer = setTimeout(() => resolve("timeout"), deps.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS);
   });
   try {
-    const answer = await Promise.race([deps.confirm(message), timeout]);
-    if (answer === "timeout") return "approval_timeout";
+    const answer = await Promise.race([deps.confirm(message, controller.signal), timeout]);
+    if (answer === "timeout") {
+      // Dismiss the still-open dialog so a late click cannot be mistaken for consent.
+      controller.abort();
+      return "approval_timeout";
+    }
     return answer ? "granted" : "approval_denied";
   } finally {
     clearTimeout(timer);
@@ -147,13 +154,38 @@ async function handleStatus(folder: string): Promise<BridgeResponse> {
 
 async function handleConvert(req: RagBridgeRequest, folder: string, deps: BridgeDeps): Promise<BridgeResponse> {
   const all = await listUnconvertedOfficeDocs(folder);
-  const { accepted, rejected } = resolveConvertPaths(folder, req.paths ?? [], all);
+  const repl = useSettingsStore.getState().replacement;
+  // The agent only sees masked names (rag_status), so map them back to the real files.
+  const slashed = (p: string) => p.replace(/\\/g, "/");
+  const matchKey = (p: string) => slashed(p).replace(/\/+$/, "").toLowerCase();
+  const toAbs = (p: string) => {
+    const u = slashed(p);
+    return /^[A-Za-z]:\//.test(u) || u.startsWith("/") ? u : `${slashed(folder).replace(/\/+$/, "")}/${u}`;
+  };
+  const realKeys = new Set(all.map((f) => matchKey(f.path)));
+  const maskedToReal = new Map<string, ConvertibleFile>();
+  for (const f of all) {
+    const key = matchKey(maskFileName(f.path, repl));
+    if (!maskedToReal.has(key)) maskedToReal.set(key, f);
+  }
+  const inputPaths = req.paths ?? [];
+  const translated = inputPaths.map((raw) => {
+    const key = matchKey(toAbs(raw));
+    return realKeys.has(key) ? raw : (maskedToReal.get(key)?.path ?? raw);
+  });
+  const resolved = resolveConvertPaths(folder, translated, all);
+  const accepted = resolved.accepted;
+  // Rejections echo the path the agent sent, not the translated one.
+  const rejected = resolved.rejected.map((r) => {
+    const i = translated.indexOf(r.path);
+    return i >= 0 ? { ...r, path: inputPaths[i] } : r;
+  });
   // Check before asking so the user is never prompted for a request that cannot run.
   if (isJobRunning()) return fail("job_running");
   if (accepted.length === 0) return fail("nothing_to_convert", JSON.stringify(rejected));
   if (req.approval !== "auto") {
-    const repl = useSettingsStore.getState().replacement;
-    const files = accepted.map((f) => applyForward(f.name, repl)).join("\n");
+    // The dialog is local and the human owns the files, so show real names.
+    const files = accepted.map((f) => f.name).join("\n");
     const outcome = await requestApproval(
       i18n.t("agent-chat:indexApproveConvert", { count: accepted.length, files }),
       deps,
@@ -161,7 +193,7 @@ async function handleConvert(req: RagBridgeRequest, folder: string, deps: Bridge
     if (outcome !== "granted") return fail(outcome);
   }
   const job = startConvertDocs(folder, accepted);
-  return { ok: true, job_id: job.id, accepted: accepted.map((f) => f.path), rejected };
+  return { ok: true, job_id: job.id, accepted: accepted.map((f) => maskFileName(f.path, repl)), rejected };
 }
 
 async function handleUpdate(req: RagBridgeRequest, folder: string, deps: BridgeDeps): Promise<BridgeResponse> {
@@ -182,6 +214,8 @@ export async function handleRagBridgeRequest(
 ): Promise<BridgeResponse> {
   // Use the folder mdium has open as the root. opencode's worktree
   // (req.folderPath) is unreliable — it can be "/".
+  // Job-related kinds act on the folder mdium shows; only search may fall back.
+  if (req.kind !== "search" && !activeFolder) return fail("no_folder");
   const folder = activeFolder || req.folderPath;
   if (isRootOrEmpty(folder)) return fail("no_folder");
   try {

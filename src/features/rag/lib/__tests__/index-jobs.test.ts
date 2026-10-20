@@ -55,6 +55,32 @@ describe("rag index jobs", () => {
     expect(store().state).toBe("empty");
   });
 
+  it("refreshIndexStatus for another folder drops the previous folder's error and progress", async () => {
+    mockInvoke({});
+    startUpdateIndex("C:/w", fakeEmbedding({ load: vi.fn(async () => { throw new Error("boom"); }) }));
+    await vi.waitFor(() => expect(store().state).toBe("error"));
+    store().patch({ progress: { phase: "scanning", current: 1, total: 2, currentFile: "a" } });
+    mockInvoke({ rag_get_status: () => noCounts });
+    await refreshIndexStatus("C:/other");
+    expect(store()).toMatchObject({ folder: "C:/other", error: null, progress: null, state: "empty" });
+  });
+
+  it("a running job does not write progress after the store moved to another folder", async () => {
+    let finishScan!: (v: unknown) => void;
+    mockInvoke({
+      rag_scan_folder: () => new Promise((r) => (finishScan = r)),
+      rag_save_chunks: () => 1,
+      rag_get_status: () => noCounts,
+    });
+    startUpdateIndex("C:/w", fakeEmbedding());
+    await vi.waitFor(() => expect(finishScan).toBeTypeOf("function"));
+    await refreshIndexStatus("C:/other");
+    finishScan([{ file: "C:/w/a.md", text: "a" }]);
+    await vi.waitFor(() => expect(store().job?.state).toBe("done"));
+    expect(store().folder).toBe("C:/other");
+    expect(store().progress).toBeNull();
+  });
+
   it("startUpdateIndex embeds chunks, saves them and finishes done/ready", async () => {
     const chunks = [
       { file: "C:/w/a.md", text: "a" },

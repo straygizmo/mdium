@@ -83,15 +83,55 @@ describe("handleRagBridgeRequest", () => {
     const d = deps();
     const r = await handleRagBridgeRequest(req({ approval: "auto", paths: ["a"] }), "C:/w", d);
     expect(d.confirm).not.toHaveBeenCalled();
-    expect(r).toEqual({ ok: true, job_id: "job1", accepted: ["C:/w/Secret.docx"], rejected: [] });
+    expect(r).toEqual({ ok: true, job_id: "job1", accepted: ["C:/w/XXX.docx"], rejected: [] });
   });
 
-  it("convert asks with the masked file list", async () => {
+  it("convert asks with the real file list (the dialog is local)", async () => {
     const d = deps();
     await handleRagBridgeRequest(req({ approval: "ask", paths: ["a"] }), "C:/w", d);
     const msg = (d.confirm as any).mock.calls[0][0] as string;
-    expect(msg).toContain("XXX.docx");
-    expect(msg).not.toContain("Secret");
+    expect(msg).toContain("Secret.docx");
+  });
+
+  it("convert accepts a masked path, converts the real file and reports masked accepted", async () => {
+    jobs.resolveConvertPaths.mockImplementation((_f: string, paths: string[], all: any[]) => ({
+      accepted: all.filter((f) => paths.includes(f.path)),
+      rejected: paths.filter((p) => !all.some((f) => f.path === p)).map((p) => ({ path: p, reason: "not_found" })),
+    }));
+    const d = deps();
+    const r: any = await handleRagBridgeRequest(req({ approval: "ask", paths: ["XXX.docx", "nope.docx"] }), "C:/w", d);
+    expect(jobs.startConvertDocs).toHaveBeenCalledWith("C:/w", [file("C:/w/Secret.docx")]);
+    expect(r.accepted).toEqual(["C:/w/XXX.docx"]);
+    expect(r.rejected).toEqual([{ path: "nope.docx", reason: "not_found" }]);
+    expect((d.confirm as any).mock.calls[0][0]).toContain("Secret.docx");
+  });
+
+  it.each(["status", "convert", "update"] as const)("%s without an active folder returns no_folder", async (kind) => {
+    const d = deps();
+    const r = await handleRagBridgeRequest(req({ kind, approval: "ask", paths: ["a"] }), null, d);
+    expect(r).toMatchObject({ ok: false, error: "no_folder" });
+    expect(d.confirm).not.toHaveBeenCalled();
+    expect(jobs.startConvertDocs).not.toHaveBeenCalled();
+    expect(jobs.startUpdateIndex).not.toHaveBeenCalled();
+  });
+
+  it("search still falls back to req.folderPath without an active folder", async () => {
+    tauri.invoke.mockImplementation(async (cmd: string) => (cmd === "rag_check_model" ? true : []));
+    const r = await handleRagBridgeRequest(req({ kind: "search", query: "q", searchMode: "hybrid" }), null, deps());
+    expect(r).toEqual({ ok: true, results: [] });
+  });
+
+  it("aborts the confirm signal when the approval times out", async () => {
+    let seen: AbortSignal | undefined;
+    const d = deps({
+      confirm: vi.fn((_m: string, signal: AbortSignal) => {
+        seen = signal;
+        return new Promise<boolean>(() => {});
+      }),
+      approvalTimeoutMs: 10,
+    });
+    await handleRagBridgeRequest(req({ approval: "ask", paths: ["a"] }), "C:/w", d);
+    expect(seen?.aborted).toBe(true);
   });
 
   it("convert with everything rejected returns nothing_to_convert", async () => {
