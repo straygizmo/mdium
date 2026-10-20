@@ -15,3 +15,12 @@ export function wrapWithMdiumContext(text: string, activeFilePath: string | null
   const escaped = activeFilePath.replace(/"/g, '\\"');
   return `<mdium_context>\nactive_file="${escaped}"\n</mdium_context>\n\n${text}`;
 }
+
+/**
+ * Drop the wrapper `wrapWithMdiumContext` prepends. opencode stores and echoes
+ * the wrapped prompt, so anything shown to the user goes through this first.
+ */
+export function stripMdiumContext(text: string): string {
+  const m = text.match(/^\s*<mdium_context>[\s\S]*?<\/mdium_context>\s*/);
+  return m ? text.slice(m[0].length) : text;
+}
