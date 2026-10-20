@@ -41,5 +41,18 @@
   "errorSessionUnavailable": "セッションを利用できません。新しいセッションを開始してください。",
   "errorGeneric": "エラー: {{message}}",
   "indexApproveConvert": "エージェントが Office 文書 {{count}} 件を Markdown に変換しようとしています:\n{{files}}\n許可しますか？",
-  "indexApproveUpdate": "エージェントが文書索引の更新を求めています。許可しますか？"
+  "indexApproveUpdate": "エージェントが文書索引の更新を求めています。許可しますか？",
+  "indexReady": "索引: {{count}} チャンク",
+  "indexEmpty": "索引がありません",
+  "indexError": "索引エラー",
+  "indexFiles": "{{count}} ファイル",
+  "indexConverting": "変換中 {{done}}/{{total}}",
+  "indexUpdate": "更新",
+  "indexSettings": "索引の設定",
+  "indexDelete": "索引を削除",
+  "indexToolsHeading": "エージェントツール (mdium-rag)",
+  "indexToolsClaude": "Claude",
+  "indexToolsCodex": "Codex",
+  "indexToolsCopilot": "Copilot",
+  "indexToolsHint": "このプロバイダのエージェントに文書索引を公開する"
 }

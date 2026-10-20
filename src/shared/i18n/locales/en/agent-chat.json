@@ -41,5 +41,18 @@
   "errorSessionUnavailable": "The session is not available. Start a new session.",
   "errorGeneric": "Error: {{message}}",
   "indexApproveConvert": "The agent wants to convert {{count}} Office document(s) to Markdown:\n{{files}}\nAllow?",
-  "indexApproveUpdate": "The agent wants to update the document index. Allow?"
+  "indexApproveUpdate": "The agent wants to update the document index. Allow?",
+  "indexReady": "Index: {{count}} chunks",
+  "indexEmpty": "No index",
+  "indexError": "Index error",
+  "indexFiles": "{{count}} files",
+  "indexConverting": "Converting {{done}}/{{total}}",
+  "indexUpdate": "Update",
+  "indexSettings": "Index settings",
+  "indexDelete": "Delete index",
+  "indexToolsHeading": "Agent tools (mdium-rag)",
+  "indexToolsClaude": "Claude",
+  "indexToolsCodex": "Codex",
+  "indexToolsCopilot": "Copilot",
+  "indexToolsHint": "Expose the document index to this provider's agent"
 }

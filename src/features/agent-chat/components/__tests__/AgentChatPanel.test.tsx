@@ -10,6 +10,9 @@ vi.mock("@/features/opencode-config/components/OpencodeConfigPanel", () => ({
 vi.mock("@/features/claude-config/components/ClaudePanel", () => ({
   ClaudePanel: () => <div data-testid="claude-panel" />,
 }));
+vi.mock("../IndexStrip", () => ({
+  IndexStrip: () => <div data-testid="index-strip" />,
+}));
 vi.mock("../../lib/agent-runner-client", () => ({
   sendToRunner: vi.fn(async () => {}),
   requestRunner: vi.fn(async () => ({ availability: { kind: "missing", detail: "codex" } })),
@@ -51,6 +54,7 @@ describe("AgentChatPanel", () => {
 
   it("shows the opencode panel by default and switches to an available native tab", async () => {
     await act(async () => root.render(<AgentChatPanel />));
+    expect(container.querySelector('[data-testid="index-strip"]')).not.toBeNull();
     expect(container.querySelector('[data-testid="opencode-panel"]')).not.toBeNull();
     const tabs = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
     expect(tabs.map((t) => t.textContent)).toEqual(["opencode", "Claude", "Codex", "Copilot"]);
