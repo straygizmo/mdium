@@ -38,7 +38,6 @@ import { SettingsDialog } from "@/features/settings/components/SettingsDialog";
 import { Terminal } from "@/features/terminal/components/Terminal";
 import { TerminalAddMenu } from "@/features/terminal/components/TerminalAddMenu";
 import { TERMINAL_KIND_LABEL_KEYS, getTerminalCommand, getTerminalThemeType } from "@/features/terminal/terminal-session";
-import { RagPanel } from "@/features/rag/components/RagPanel";
 import MindmapEditor from "@/features/mindmap/components/MindmapEditor";
 import { ImageCanvas } from "@/features/image/components/ImageCanvas";
 import { CodeEditorPanel } from "@/features/code-editor/components/CodeEditorPanel";
@@ -123,7 +122,7 @@ export function App() {
   const removeTerminalSession = useUiStore((s) => s.removeTerminalSession);
   const pruneTerminalSessions = useUiStore((s) => s.pruneTerminalSessions);
   const isZennMode = useUiStore((s) => s.isZennMode);
-  const { autoSave, themeId, aiSettings } = useSettingsStore();
+  const { autoSave, themeId } = useSettingsStore();
   const themeType = getThemeById(themeId).type;
 
   const activeFolderTerminalSessions = terminalSessions.filter(
@@ -1153,15 +1152,9 @@ export function App() {
         ui.setBottomTerminalVisible(!ui.bottomTerminalVisible);
       } else if (e.ctrlKey && e.shiftKey && e.key === "R") {
         e.preventDefault();
-        const ui = useUiStore.getState();
-        if (!ui.folderPanelVisible) {
-          ui.setFolderPanelVisible(true);
-          ui.setFolderPanelTab("rag");
-        } else if (ui.folderPanelTab !== "rag") {
-          ui.setFolderPanelTab("rag");
-        } else {
-          ui.setFolderPanelVisible(false);
-        }
+        // Open AGENT CHAT without changing the selected provider tab.
+        useUiStore.getState().setLeftPanel("opencode-config");
+        useTabStore.getState().setFolderLeftPanel("opencode-config");
       } else if (e.ctrlKey && e.key === "w") {
         e.preventDefault();
         if (activeTab) {
@@ -1421,15 +1414,6 @@ export function App() {
             >
               <div className="app__folder-panel-tabs">
                 <button
-                  className={`app__folder-panel-tab${folderPanelTab === "rag" ? " active" : ""}`}
-                  onClick={() => setFolderPanelTab("rag")}
-                >
-                  RAG
-                  <span className="app__folder-panel-tab-model">
-                    ({aiSettings.provider} / {aiSettings.model})
-                  </span>
-                </button>
-                <button
                   className={`app__folder-panel-tab${folderPanelTab === "terminal" ? " active" : ""}`}
                   onClick={() => setFolderPanelTab("terminal")}
                 >
@@ -1461,16 +1445,6 @@ export function App() {
                     </div>
                   );
                 })}
-              </div>
-              <div
-                className="app__folder-panel-body"
-                style={{ display: folderPanelTab === "rag" ? "flex" : "none" }}
-              >
-                <RagPanel
-                  folderPath={activeFolderPath}
-                  aiSettings={aiSettings}
-                  onOpenFile={handleFileSelect}
-                />
               </div>
             </div>
           </>

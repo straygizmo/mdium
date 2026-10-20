@@ -1,3 +1,5 @@
+import type { StdioMcpServerSpec } from "./rag-bridge";
+
 /** Permission modes accepted by the Claude Agent SDK. */
 export type ClaudePermissionMode =
   | "default"
@@ -14,6 +16,8 @@ export interface StartSessionMessage {
   permissionMode: ClaudePermissionMode;
   resumeSessionId?: string;
   systemPromptAppend?: string;
+  /** MCP servers (stdio) made available to the session, keyed by server name. */
+  mcpServers?: Record<string, StdioMcpServerSpec>;
 }
 export interface UserMessageMessage {
   type: "user_message";

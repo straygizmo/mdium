@@ -7,6 +7,7 @@ import { OpencodeConfigPanel } from "@/features/opencode-config/components/Openc
 import { ClaudePanel } from "@/features/claude-config/components/ClaudePanel";
 import { CodexPanel } from "@/features/codex-config/components/CodexPanel";
 import { CopilotPanel } from "@/features/copilot-config/components/CopilotPanel";
+import { IndexStrip } from "./IndexStrip";
 import { useAgentChatStore, type ChatProviderTab } from "../agent-chat-store";
 import "@/features/opencode-config/components/OpencodeConfigPanel.css";
 import "./AgentChatPanel.css";
@@ -73,6 +74,7 @@ export function AgentChatPanel() {
 
   return (
     <div className="agent-chat">
+      <IndexStrip />
       <div className="agent-chat__tabs oc-panel__top-tabs" role="tablist" aria-label={t("tabList")}>
         {TABS.map((tab) => {
           const why = tab === "opencode" || tab === "claude" ? null : reason(tab, availability[tab]);

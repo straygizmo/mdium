@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentPermission, RunnerInbound, RunnerProvider } from "../../src/shared/types/agent-runner";
+import type { StdioMcpServerSpec } from "../../src/shared/types/rag-bridge";
 
 const PROVIDERS: readonly RunnerProvider[] = ["codex", "copilot", "opencode", "claude"];
 const PERMISSIONS: readonly AgentPermission[] = ["cli-default", "read-only", "full-access"];
@@ -111,6 +112,25 @@ export function imagesWithinRoot(files: readonly string[], root: string): string
   return resolved;
 }
 
+/** Keep only well-formed stdio MCP server specs; undefined when none remain. */
+function mcpServers(value: unknown): Record<string, StdioMcpServerSpec> | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const out: Record<string, StdioMcpServerSpec> = {};
+  for (const [name, raw] of Object.entries(value)) {
+    if (!raw || typeof raw !== "object") continue;
+    const spec = raw as Record<string, unknown>;
+    if (typeof spec.command !== "string" || !spec.command) continue;
+    if (spec.args !== undefined && (!Array.isArray(spec.args) || spec.args.some((a) => typeof a !== "string"))) continue;
+    if (spec.env !== undefined && (!spec.env || typeof spec.env !== "object" || Object.values(spec.env).some((v) => typeof v !== "string"))) continue;
+    out[name] = {
+      command: spec.command,
+      args: (spec.args as string[] | undefined) ?? [],
+      env: (spec.env as Record<string, string> | undefined) ?? {},
+    };
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 /** Parse and validate one inbound JSON line. Throws on any invalid shape. */
 export function parseInbound(line: string): ParsedInbound {
   let parsed: unknown;
@@ -137,6 +157,7 @@ export function parseInbound(line: string): ParsedInbound {
       if (m.model !== undefined && typeof m.model !== "string") throw new Error("Invalid model");
       if (m.resumeNativeId !== undefined) str(m.resumeNativeId, "resumeNativeId");
       const parsedGuard = guard(m.guard);
+      const parsedMcpServers = mcpServers(m.mcpServers);
       return {
         type: "start_session",
         requestId: str(m.requestId, "requestId"),
@@ -149,6 +170,7 @@ export function parseInbound(line: string): ParsedInbound {
         ...(m.env ? { env: m.env as Record<string, string> } : {}),
         ...(m.timeoutMs ? { timeoutMs: m.timeoutMs as number } : {}),
         ...(parsedGuard ? { guard: parsedGuard } : {}),
+        ...(parsedMcpServers ? { mcpServers: parsedMcpServers } : {}),
       };
     }
     case "send": {

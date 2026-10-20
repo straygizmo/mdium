@@ -7,7 +7,7 @@ use serde_json;
 use crate::commands::vba_streams::{DirStream, ModuleKind, ProjectStream, ProjectWm, REC_MODULETYPE_PROCEDURAL};
 use std::collections::HashMap;
 use tauri::{AppHandle, Emitter};
-use crate::commands::vba_source::{fix_vb_name, normalize_source, validate_module_name};
+use crate::commands::vba_source::{fix_vb_name, is_exposed, normalize_source, validate_module_name};
 
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -787,7 +787,9 @@ pub fn push_vba_modules_impl(xlsm_path: &str) -> Result<PushResult, String> {
     let existing_names: Vec<String> = loaded.modules.iter().map(|m| m.name.clone()).collect();
     let mut updated: Vec<(ProjectModule, Vec<u8>)> = Vec::new();
     let mut unchanged = Vec::new();
-    let mut added: Vec<(String, ModuleKind, Vec<u8>)> = Vec::new();
+    // (name, kind, encoded source, private): private marks a class whose
+    // `VB_Exposed = False`, which Excel records as MODULEPRIVATE in `dir`.
+    let mut added: Vec<(String, ModuleKind, Vec<u8>, bool)> = Vec::new();
     let mut removed: Vec<ProjectModule> = Vec::new();
     let mut skipped = Vec::new();
     let mut matched_files: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -854,8 +856,10 @@ pub fn push_vba_modules_impl(xlsm_path: &str) -> Result<PushResult, String> {
         validate_module_name(name, &taken).map_err(|msg| vba_error("invalid_module_name", msg))?;
         taken.push(name.clone());
         let raw = fs::read_to_string(path).map_err(|e| vba_error("push_failed", format!("{}: {}", path.display(), e)))?;
-        let encoded = encode_module(&normalize_source(&raw, name, *kind), name, code_page)?;
-        added.push((name.clone(), *kind, encoded));
+        let normalized = normalize_source(&raw, name, *kind);
+        let private = *kind == ModuleKind::Class && !is_exposed(&normalized);
+        let encoded = encode_module(&normalized, name, code_page)?;
+        added.push((name.clone(), *kind, encoded, private));
     }
 
     // Nothing to write: leave the workbook and any previous backup untouched.
@@ -884,9 +888,9 @@ pub fn push_vba_modules_impl(xlsm_path: &str) -> Result<PushResult, String> {
         data.extend_from_slice(&vba_compress(encoded));
         write_stream(&mut loaded.comp, &path, &data).map_err(write_err)?;
     }
-    for (name, kind, encoded) in &added {
+    for (name, kind, encoded, private) in &added {
         write_stream(&mut loaded.comp, &format!("/VBA/{}", name), &vba_compress(encoded)).map_err(write_err)?;
-        loaded.dir.append_module(name, name, *kind, 0, loaded.code_page).map_err(write_err)?;
+        loaded.dir.append_module(name, name, *kind, 0, *private, loaded.code_page).map_err(write_err)?;
         loaded.project.add_module(name, *kind);
         loaded.wm.add(name);
     }
@@ -925,7 +929,7 @@ pub fn push_vba_modules_impl(xlsm_path: &str) -> Result<PushResult, String> {
         backup_path: Some(backup_path),
         updated: updated.into_iter().map(|(m, _)| m.name).collect(),
         unchanged,
-        added: added.into_iter().map(|(n, _, _)| n).collect(),
+        added: added.into_iter().map(|(n, _, _, _)| n).collect(),
         removed: removed.into_iter().map(|m| m.name).collect(),
         skipped,
     })
@@ -1372,7 +1376,7 @@ mod tests {
         for m in modules {
             project.add_module(m.name, m.kind);
             wm.add(m.name);
-            dir.append_module(m.name, m.name, m.kind, m.cache.len() as u32, code_page).unwrap();
+            dir.append_module(m.name, m.name, m.kind, m.cache.len() as u32, m.kind == ModuleKind::Class, code_page).unwrap();
             let mut data = m.cache.to_vec();
             data.extend_from_slice(&vba_compress(&encode_string(m.source, code_page).unwrap()));
             comp.create_stream(&format!("/VBA/{}", m.name)).unwrap().write_all(&data).unwrap();
@@ -1604,7 +1608,7 @@ mod tests {
             v
         })
         .unwrap();
-        dir_stream.append_module(module_name, "Mod", ModuleKind::Standard, 0, 1252).unwrap();
+        dir_stream.append_module(module_name, "Mod", ModuleKind::Standard, 0, false, 1252).unwrap();
         comp.create_stream("/VBA/Mod").unwrap().write_all(&vba_compress(b"Sub A()\r\nEnd Sub\r\n")).unwrap();
         comp.create_stream("/PROJECT").unwrap().write_all(&project.serialize(1252).unwrap()).unwrap();
         comp.create_stream("/PROJECTwm").unwrap().write_all(&wm.serialize(1252).unwrap()).unwrap();
@@ -1797,7 +1801,7 @@ mod tests {
             v
         })
         .unwrap();
-        dir.append_module("Renamed", "Old", ModuleKind::Standard, 0, 1252).unwrap();
+        dir.append_module("Renamed", "Old", ModuleKind::Standard, 0, false, 1252).unwrap();
         let src = vba_compress(b"Attribute VB_Name = \"Renamed\"\r\nSub A()\r\nEnd Sub\r\n");
         comp.create_stream("/VBA/Old").unwrap().write_all(&src).unwrap();
         comp.create_stream("/PROJECT").unwrap().write_all(&project.serialize(1252).unwrap()).unwrap();

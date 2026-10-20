@@ -80,16 +80,42 @@ pub const VBA_KEYWORDS: &[&str] = &[
     "Wend", "While", "Width", "With", "WithEvents", "Write", "Xor",
 ];
 
-const CLASS_ATTRIBUTES: [&str; 4] = [
-    "Attribute VB_GlobalNameSpace = False",
-    "Attribute VB_Creatable = False",
-    "Attribute VB_PredeclaredId = False",
-    "Attribute VB_Exposed = False",
+/// Header attributes VBA stores for every class module, in the order Excel
+/// writes them (keys are matched case-insensitively). `VB_Base` names the
+/// built-in class base type; Excel cannot compile a class module without it
+/// (the VBE reports runtime error 5 "Invalid procedure call"). A .cls exported
+/// by the VBE only carries the middle four, so push fills in the rest.
+const CLASS_ATTRIBUTES: [(&str, &str); 7] = [
+    ("VB_Base", "\"0{FCFB3D2A-A0FA-1068-A738-08002B3371B5}\""),
+    ("VB_GlobalNameSpace", "False"),
+    ("VB_Creatable", "False"),
+    ("VB_PredeclaredId", "False"),
+    ("VB_Exposed", "False"),
+    ("VB_TemplateDerived", "False"),
+    ("VB_Customizable", "False"),
 ];
+
+/// `Some(key)` when `line` is `Attribute <key> = ...` for one of CLASS_ATTRIBUTES.
+fn class_attribute_key(line: &str) -> Option<&'static str> {
+    let t = line.trim();
+    let rest = t.get(..9).filter(|h| h.eq_ignore_ascii_case("Attribute")).map(|_| t[9..].trim_start())?;
+    let key = rest.split('=').next()?.trim();
+    CLASS_ATTRIBUTES.iter().map(|(k, _)| *k).find(|k| k.eq_ignore_ascii_case(key))
+}
+
+/// True when the source carries `Attribute VB_Exposed = True`. Classes without
+/// it are private to the project and are stored with MODULEPRIVATE in `dir`.
+pub fn is_exposed(source: &str) -> bool {
+    source.lines().any(|l| {
+        let t = l.trim().to_ascii_lowercase();
+        t.starts_with("attribute vb_exposed") && t.split('=').nth(1).map(|v| v.trim() == "true").unwrap_or(false)
+    })
+}
 
 /// Shape a module file the way VBA stores it inside vbaProject.bin:
 /// no BOM, CRLF, no exported-.cls VERSION header, `Attribute VB_Name` equal
-/// to the file name, and the four standard class attributes for classes.
+/// to the file name, and for classes the full attribute header right after
+/// `VB_Name` in Excel's order (values the file already sets are kept).
 pub fn normalize_source(source: &str, module_name: &str, kind: ModuleKind) -> String {
     let text = source.strip_prefix('\u{FEFF}').unwrap_or(source);
     let text = text.replace("\r\n", "\n").replace('\r', "\n");
@@ -119,16 +145,34 @@ pub fn normalize_source(source: &str, module_name: &str, kind: ModuleKind) -> St
     };
 
     if kind == ModuleKind::Class {
-        let has = |attr: &str| {
-            let key = attr.split('=').next().unwrap().trim().to_ascii_lowercase();
-            out.lines().any(|l| l.trim().to_ascii_lowercase().starts_with(&key))
-        };
-        let missing: Vec<&str> = CLASS_ATTRIBUTES.iter().copied().filter(|a| !has(a)).collect();
-        if !missing.is_empty() {
-            let name_line_end = out.find("\r\n").map(|i| i + 2).unwrap_or(out.len());
-            let insert = missing.iter().map(|a| format!("{}\r\n", a)).collect::<String>();
-            out.insert_str(name_line_end, &insert);
+        // Pull the class attributes out wherever they are, then re-emit the
+        // whole header after VB_Name with the file's values or the defaults.
+        let mut values: Vec<Option<String>> = vec![None; CLASS_ATTRIBUTES.len()];
+        let mut body: Vec<&str> = Vec::new();
+        for line in out.split("\r\n") {
+            match class_attribute_key(line) {
+                Some(key) => {
+                    let idx = CLASS_ATTRIBUTES.iter().position(|(k, _)| *k == key).unwrap();
+                    if values[idx].is_none() {
+                        values[idx] = line.split_once('=').map(|(_, v)| v.trim().to_string());
+                    }
+                }
+                None => body.push(line),
+            }
         }
+        let mut rebuilt = String::new();
+        let mut lines = body.into_iter();
+        if let Some(first) = lines.next() {
+            rebuilt.push_str(first);
+            rebuilt.push_str("\r\n");
+        }
+        for (i, (key, default)) in CLASS_ATTRIBUTES.iter().enumerate() {
+            let value = values[i].as_deref().filter(|v| !v.is_empty()).unwrap_or(default);
+            rebuilt.push_str(&format!("Attribute {} = {}\r\n", key, value));
+        }
+        let rest: Vec<&str> = lines.collect();
+        rebuilt.push_str(&rest.join("\r\n"));
+        out = rebuilt;
     }
     out
 }
@@ -157,6 +201,13 @@ pub fn validate_module_name(name: &str, existing: &[String]) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_exposed_reads_the_vb_exposed_attribute() {
+        assert!(!is_exposed("Attribute VB_Name = \"C\"\r\nAttribute VB_Exposed = False\r\n"));
+        assert!(is_exposed("Attribute VB_Name = \"C\"\r\nattribute vb_exposed = TRUE\r\n"));
+        assert!(!is_exposed("Attribute VB_Name = \"C\"\r\n"));
+    }
 
     #[test]
     fn test_fix_vb_name_replaces_old_name() {
@@ -217,7 +268,22 @@ mod tests {
     fn normalize_strips_version_header_from_class_and_adds_attributes() {
         let src = "VERSION 1.0 CLASS\r\nBEGIN\r\n  MultiUse = -1  'True\r\nEND\r\nAttribute VB_Name = \"C\"\r\nPublic Sub Hi()\r\nEnd Sub\r\n";
         let out = normalize_source(src, "C", ModuleKind::Class);
-        let expected = "Attribute VB_Name = \"C\"\r\nAttribute VB_GlobalNameSpace = False\r\nAttribute VB_Creatable = False\r\nAttribute VB_PredeclaredId = False\r\nAttribute VB_Exposed = False\r\nPublic Sub Hi()\r\nEnd Sub\r\n";
+        let expected = "Attribute VB_Name = \"C\"\r\nAttribute VB_Base = \"0{FCFB3D2A-A0FA-1068-A738-08002B3371B5}\"\r\nAttribute VB_GlobalNameSpace = False\r\nAttribute VB_Creatable = False\r\nAttribute VB_PredeclaredId = False\r\nAttribute VB_Exposed = False\r\nAttribute VB_TemplateDerived = False\r\nAttribute VB_Customizable = False\r\nPublic Sub Hi()\r\nEnd Sub\r\n";
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn normalize_keeps_a_native_class_header_unchanged() {
+        // Exactly what Excel stores for a class module (pull output).
+        let src = "Attribute VB_Name = \"Greeter\"\r\nAttribute VB_Base = \"0{FCFB3D2A-A0FA-1068-A738-08002B3371B5}\"\r\nAttribute VB_GlobalNameSpace = False\r\nAttribute VB_Creatable = False\r\nAttribute VB_PredeclaredId = False\r\nAttribute VB_Exposed = False\r\nAttribute VB_TemplateDerived = False\r\nAttribute VB_Customizable = False\r\nOption Explicit\r\n\r\nPublic Function Greet() As String\r\nEnd Function\r\n";
+        assert_eq!(normalize_source(src, "Greeter", ModuleKind::Class), src);
+    }
+
+    #[test]
+    fn normalize_reorders_class_attributes_and_keeps_other_attribute_lines() {
+        let src = "Attribute VB_Name = \"C\"\r\nAttribute VB_Exposed = True\r\nAttribute VB_Description = \"doc\"\r\nattribute vb_base = \"0{FCFB3D2A-A0FA-1068-A738-08002B3371B5}\"\r\nSub X()\r\nEnd Sub\r\n";
+        let out = normalize_source(src, "C", ModuleKind::Class);
+        let expected = "Attribute VB_Name = \"C\"\r\nAttribute VB_Base = \"0{FCFB3D2A-A0FA-1068-A738-08002B3371B5}\"\r\nAttribute VB_GlobalNameSpace = False\r\nAttribute VB_Creatable = False\r\nAttribute VB_PredeclaredId = False\r\nAttribute VB_Exposed = True\r\nAttribute VB_TemplateDerived = False\r\nAttribute VB_Customizable = False\r\nAttribute VB_Description = \"doc\"\r\nSub X()\r\nEnd Sub\r\n";
         assert_eq!(out, expected);
     }
 
@@ -225,8 +291,10 @@ mod tests {
     fn normalize_keeps_existing_class_attributes() {
         let src = "Attribute VB_Name = \"C\"\r\nAttribute VB_GlobalNameSpace = False\r\nAttribute VB_Creatable = False\r\nAttribute VB_PredeclaredId = True\r\nAttribute VB_Exposed = False\r\nSub X()\r\nEnd Sub\r\n";
         let out = normalize_source(src, "C", ModuleKind::Class);
-        assert_eq!(out, src);
+        assert!(out.contains("Attribute VB_PredeclaredId = True\r\n"));
+        assert!(out.contains("Attribute VB_Base = "));
         assert_eq!(out.matches("VB_PredeclaredId").count(), 1);
+        assert!(out.ends_with("Sub X()\r\nEnd Sub\r\n"));
     }
 
     #[test]

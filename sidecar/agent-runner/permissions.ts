@@ -40,7 +40,10 @@ function normalizeCopilot(request: { kind: string; [k: string]: unknown }): Omit
     case "mcp": {
       const server = field(request, "serverName");
       const tool = field(request, "toolName");
-      return { kind: "other", summary: server && tool ? `${server}/${tool}` : (tool ?? server ?? "mcp"), opaque: true };
+      const summary = server && tool ? `${server}/${tool}` : (tool ?? server ?? "mcp");
+      // mdium-rag enforces read-only itself and mdium shows its own approval dialog for writes.
+      if (server === "mdium-rag") return { kind: "read", summary, trusted: true };
+      return { kind: "other", summary, opaque: true };
     }
     default:
       return { kind: "other", summary: request.kind, opaque: true };
@@ -65,6 +68,7 @@ const EXTENSION_KINDS = new Set([
  * custom-tool, and hook requests are always rejected.
  */
 export function copilotDecision(permission: AgentPermission, request: ToolRequest): "approve" | "reject" | "ask" {
+  if (request.trusted) return "approve";
   if (permission === "read-only") return request.kind === "read" ? "approve" : "reject";
   if (permission === "full-access") return request.rawKind && EXTENSION_KINDS.has(request.rawKind) ? "reject" : "approve";
   return "ask";

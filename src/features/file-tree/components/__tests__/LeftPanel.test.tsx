@@ -7,7 +7,6 @@ import i18n from "@/shared/i18n";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => undefined) }));
 vi.mock("../FileTree", () => ({ FileTree: () => <div data-testid="file-tree" /> }));
 vi.mock("../OutlinePanel", () => ({ OutlinePanel: () => <div data-testid="outline" /> }));
-vi.mock("@/features/rag/components/RagPanel", () => ({ RagPanel: () => <div data-testid="rag" /> }));
 vi.mock("@/features/agent-chat/components/AgentChatPanel", () => ({
   AgentChatPanel: () => <div data-testid="agent-chat" />,
 }));
@@ -96,6 +95,32 @@ describe("LeftPanel workflow entry", () => {
     expect(button!.className).toContain("left-panel__activity-btn--active");
     expect(container.querySelector('[data-testid="workflow-panel"]')).not.toBeNull();
     expect(container.querySelector(".left-panel__section-header-title")?.textContent).toBe(title);
+  });
+});
+
+describe("LeftPanel RAG removal", () => {
+  it("renders no RAG activity button and no RAG panel", async () => {
+    await i18n.changeLanguage("en");
+    useTabStore.setState({ activeFolderPath: "C:/w", folderLeftPanel: {} });
+    useUiStore.setState({ leftPanel: "folder" });
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    await act(async () =>
+      root.render(
+        <LeftPanel
+          {...filterProps}
+          onFileSelect={noop}
+          onRefresh={noop}
+          onNewFile={noop}
+          onNewFolder={noop}
+          previewRef={{ current: null }}
+        />,
+      ),
+    );
+    expect(container.querySelector('button[title="RAG"]')).toBeNull();
+    expect(container.querySelector('[data-testid="rag"]')).toBeNull();
+    await act(async () => root.unmount());
+    useTabStore.setState({ activeFolderPath: null, folderLeftPanel: {} });
   });
 });
 

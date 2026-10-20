@@ -13,6 +13,9 @@ import { BUILTIN_SKILLS as SRC_SKILLS } from "./builtin-skills";
 import ragSearchToolSrc from "../../../../.opencode/tools/rag_search.ts?raw";
 import folderGlobToolSrc from "../../../../.opencode/tools/folder_glob.ts?raw";
 import folderGrepToolSrc from "../../../../.opencode/tools/folder_grep.ts?raw";
+import ragStatusToolSrc from "../../../../.opencode/tools/rag_status.ts?raw";
+import convertOfficeDocsToolSrc from "../../../../.opencode/tools/convert_office_docs.ts?raw";
+import ragUpdateIndexToolSrc from "../../../../.opencode/tools/rag_update_index.ts?raw";
 import vbaListToolSrc from "../../../../.opencode/tools/vba_list.ts?raw";
 import vbaPullToolSrc from "../../../../.opencode/tools/vba_pull.ts?raw";
 import vbaPushToolSrc from "../../../../.opencode/tools/vba_push.ts?raw";
@@ -42,13 +45,16 @@ export interface BuiltinCustomToolEntry {
 export const BUILTIN_AGENTS: Record<string, BuiltinAgentEntry> = {
   rag: {
     description: "RAG - Document search agent powered by vector database",
-    requiredBuiltinTools: ["rag_search", "folder_glob", "folder_grep"],
+    requiredBuiltinTools: ["rag_search", "rag_status", "convert_office_docs", "rag_update_index", "folder_glob", "folder_grep"],
     agentMd: `---
-# mdium-agent-version: 2
+# mdium-agent-version: 3
 description: RAG - Document search agent powered by vector database
 mode: all
 tools:
   rag_search: true
+  rag_status: true
+  convert_office_docs: true
+  rag_update_index: true
   folder_glob: true
   folder_grep: true
   glob: false
@@ -62,7 +68,7 @@ Gather necessary information from the vector DB and documents within the folder 
 
 ## Basic Behavior
 
-**For EVERY user question, your FIRST tool call MUST be \`rag_search\`.** The documents are already indexed, so never begin by listing or scanning files — that is slower and misses semantic matches. Start with \`rag_search\`, always.
+**For EVERY user question, your FIRST tool call MUST be \`rag_status\`, followed by \`rag_search\` (see "Office documents and index").** The documents are already indexed, so never begin by listing or scanning files — that is slower and misses semantic matches. Check \`rag_status\` first, then search with \`rag_search\`.
 
 1. Call \`rag_search\` with the user's question to retrieve the most relevant document chunks (hybrid vector + BM25 search).
 2. ONLY IF \`rag_search\` does not return enough to answer, then \`read\` the cited files, or use \`folder_glob\`/\`folder_grep\` to locate additional files.
@@ -71,12 +77,24 @@ Gather necessary information from the vector DB and documents within the folder 
 
 ## Tool Usage Guidelines
 
-- **rag_search**: ALWAYS call this first, before any other tool. Hybrid search (vector similarity + BM25 keyword ranking, fused via RRF) for relevant documents. Defaults to hybrid mode; pass \`search_mode: "vector"\` for pure semantic search, or tune \`bm25_weight\` (0.0-1.0) to favor keyword vs. semantic matches
+- **rag_search**: Call right after \`rag_status\` (see Office documents and index), before any file tools. Hybrid search (vector similarity + BM25 keyword ranking, fused via RRF) for relevant documents. Defaults to hybrid mode; pass \`search_mode: "vector"\` for pure semantic search, or tune \`bm25_weight\` (0.0-1.0) to favor keyword vs. semantic matches
 - **folder_glob**: Use ONLY after rag_search, to locate additional files by name/pattern. Searches ONLY the open folder (never its parents or other folders). Never use it as the first step
 - **folder_grep**: Use ONLY after rag_search, for exact keyword/pattern matches in files. Searches ONLY the open folder
 - **read**: Read full file content, e.g. files cited by rag_search, to understand details
 - **MCP tools (web search, etc.)**: Use when local search doesn't provide sufficient information
 - **write / edit**: Use only when the user explicitly requests it (e.g., creating summaries, generating reports)
+
+## Office documents and index
+
+Before searching, check whether the index is complete. Never start a conversion or an index update without the user's consent.
+
+1. Call \`rag_status\` first for any question about the documents in the folder.
+2. If \`unconverted_office_docs\` is not empty, tell the user how many and which files, and ask whether to convert them before searching.
+3. On consent, call \`convert_office_docs\` with those paths, then poll \`rag_status\` until \`job.state\` is \`done\` or \`failed\`.
+4. Then call \`rag_update_index\` and poll \`rag_status\` the same way, then use \`rag_search\`.
+5. If \`state\` is \`empty\`, ask the user whether to build the index; on consent call \`rag_update_index\` and poll.
+6. A \`job_running\` error means another job is in progress: wait and poll \`rag_status\`.
+7. If the user declines, answer from the existing index and the folder tools.
 
 ## Mode
 
@@ -105,6 +123,24 @@ export const BUILTIN_CUSTOM_TOOLS: Record<string, BuiltinCustomToolEntry> = {
       "RAG hybrid search (vector + BM25) over the project's .mdium indexes. Pairs with the built-in rag agent.",
     fileName: "rag_search.ts",
     content: ragSearchToolSrc,
+  },
+  rag_status: {
+    description:
+      "Report RAG index state, unconverted Office documents and background jobs via mdium. Pairs with the built-in rag agent.",
+    fileName: "rag_status.ts",
+    content: ragStatusToolSrc,
+  },
+  convert_office_docs: {
+    description:
+      "Convert Office documents to Markdown for indexing (asks the user in mdium). Pairs with the built-in rag agent.",
+    fileName: "convert_office_docs.ts",
+    content: convertOfficeDocsToolSrc,
+  },
+  rag_update_index: {
+    description:
+      "Build or update the RAG document index (asks the user in mdium). Pairs with the built-in rag agent.",
+    fileName: "rag_update_index.ts",
+    content: ragUpdateIndexToolSrc,
   },
   folder_glob: {
     description:

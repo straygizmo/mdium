@@ -18,7 +18,7 @@ import { sessionTotalsFromMessageInfos } from "@/stores/opencode-usage-core";
 import { ensureCommand, OPENCODE_INSTALL_URL } from "@/shared/lib/ensureCommand";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useTabStore } from "@/stores/tab-store";
-import { wrapWithMdiumContext } from "../lib/mdium-context";
+import { stripMdiumContext, wrapWithMdiumContext } from "../lib/mdium-context";
 import { BUILTIN_AGENTS, BUILTIN_CUSTOM_TOOLS } from "../lib/builtin-registry";
 import { TOOL_VERSION_RE, buildSkillMd, builtinVersion, shouldWriteBuiltinFile, shouldWriteBuiltinSkill } from "../lib/builtin-install";
 import { removeLegacyVbaMcpServer } from "../lib/legacy-cleanup";
@@ -450,6 +450,10 @@ function processSSEStream(stream: AsyncIterable<unknown>) {
           if (part.sessionID !== _currentSessionId) continue;
 
           if (part.type === "text") {
+            // opencode also streams the prompt back as a text part. Drop our
+            // context wrapper so the echo-strip in OpencodeChat can match it
+            // against the user text (otherwise `active_file="..."` leaks).
+            const textPart = { ...part, text: stripMdiumContext((part as any).text ?? "") };
             useChatUIStore.setState((s) => {
               const last = s.messages[s.messages.length - 1];
               if (last && last.role === "assistant") {
@@ -457,7 +461,7 @@ function processSSEStream(stream: AsyncIterable<unknown>) {
                 const existingParts = (last.parts ?? []).filter(
                   (p) => !(p.type === "text" && (p as any).id === (part as any).id)
                 );
-                const newParts = [...existingParts, part];
+                const newParts = [...existingParts, textPart];
                 const textContent = newParts
                   .filter((p) => p.type === "text")
                   .map((p) => (p as any).text ?? "")
@@ -1528,7 +1532,7 @@ export async function doLoadSession(sessionId: string) {
         const html =
           info.role === "assistant"
             ? await marked(textContent)
-            : textContent;
+            : stripMdiumContext(textContent);
 
         // Merge consecutive assistant messages so tool parts are grouped
         const prev = loaded[loaded.length - 1];

@@ -36,6 +36,16 @@ const deps: SidecarCoreDeps = {
       canUseTool: (toolName, input) => canUseTool(toolName, input),
       pathToClaudeCodeExecutable: resolved.executablePath,
       ...(resolved.executable ? { executable: resolved.executable } : {}),
+      ...(startMsg.mcpServers
+        ? {
+            mcpServers: Object.fromEntries(
+              Object.entries(startMsg.mcpServers).map(([name, spec]) => [
+                name,
+                { type: "stdio" as const, ...spec },
+              ]),
+            ),
+          }
+        : {}),
       ...(startMsg.model ? { model: startMsg.model } : {}),
       ...(startMsg.resumeSessionId ? { resume: startMsg.resumeSessionId } : {}),
       stderr: (data: string) => process.stderr.write(data),

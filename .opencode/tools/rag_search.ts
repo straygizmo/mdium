@@ -1,4 +1,4 @@
-// mdium-tool-version: 1
+// mdium-tool-version: 2
 // .opencode/tools/rag_search.ts
 //
 // Thin client for mdium's RAG search. Instead of embedding the query itself
@@ -113,7 +113,7 @@ export default tool({
     }
 
     if (!res.ok || data?.ok === false) {
-      const msg = data?.error ?? `HTTP ${res.status}`;
+      const msg = data?.message ?? data?.error ?? `HTTP ${res.status}`;
       return `RAG search failed: ${msg}\nFalling back: use glob, grep, read.`;
     }
 

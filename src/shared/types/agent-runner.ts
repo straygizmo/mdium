@@ -1,3 +1,4 @@
+import type { StdioMcpServerSpec } from "./rag-bridge";
 /** Providers driven by the agent runner sidecar. opencode keeps its own server/panel. */
 export type AgentProvider = "codex" | "copilot";
 
@@ -43,6 +44,8 @@ export interface ToolRequest {
    * without command text). The guard blocks such requests; unguarded sessions ignore it.
    */
   opaque?: true;
+  /** Tool whose safety mdium enforces itself; never prompt. */
+  trusted?: true;
 }
 
 export type AgentEvent =
@@ -83,6 +86,8 @@ export type RunnerInbound =
       timeoutMs?: number;
       /** Enable the runtime safety guard; paths outside workspaceRoot are blocked. */
       guard?: { workspaceRoot: string };
+      /** Extra stdio MCP servers to attach to the session, keyed by server name. */
+      mcpServers?: Record<string, StdioMcpServerSpec>;
     }
   | {
       type: "send";

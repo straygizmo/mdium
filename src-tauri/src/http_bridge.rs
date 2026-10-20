@@ -56,22 +56,29 @@ pub fn new_state() -> HttpBridgeState {
     Arc::new(Mutex::new(None))
 }
 
-/// Write `~/.config/opencode/.mdium-bridge.json` with the bridge port/token.
+/// Sidecar files carrying the bridge port/token: the opencode tool reads the
+/// first, and external agents (Claude/Codex/Copilot) read `~/.mdium/bridge.json`.
+fn bridge_sidecar_paths(home: &std::path::Path) -> Vec<std::path::PathBuf> {
+    vec![
+        home.join(".config").join("opencode").join(".mdium-bridge.json"),
+        home.join(".mdium").join("bridge.json"),
+    ]
+}
+
+/// Write the bridge sidecar files with the bridge port/token.
 /// Best-effort: failures are ignored (the frontend also writes it on connect).
 fn write_bridge_sidecar(port: u16, token: &str) {
     let home = match dirs::home_dir() {
         Some(h) => h,
         None => return,
     };
-    let path = home
-        .join(".config")
-        .join("opencode")
-        .join(".mdium-bridge.json");
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
     let body = format!("{{\n  \"port\": {},\n  \"token\": \"{}\"\n}}\n", port, token);
-    let _ = std::fs::write(&path, body);
+    for path in bridge_sidecar_paths(&home) {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(&path, body.as_bytes());
+    }
 }
 
 /// Generate a 32-character alphanumeric bearer token.
@@ -137,16 +144,58 @@ struct XlsmRequest {
     xlsm_path: String,
 }
 
-#[derive(Deserialize)]
-struct RagSearchRequest {
-    folder_path: String,
-    query: String,
-    #[serde(default)]
-    limit: Option<usize>,
-    #[serde(default)]
-    search_mode: Option<String>,
-    #[serde(default)]
-    bm25_weight: Option<f64>,
+/// Build the `rag-bridge-request` event payload (without `id`) for one route.
+fn rag_relay_payload(kind: &str, body: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let folder = body
+        .get("folder_path")
+        .and_then(|v| v.as_str())
+        .ok_or("folder_path (string) is required")?;
+    let approval = body
+        .get("approval")
+        .and_then(|v| v.as_str())
+        .unwrap_or("ask");
+    let mut payload = json!({ "kind": kind, "folderPath": folder });
+    match kind {
+        "search" => {
+            let query = body
+                .get("query")
+                .and_then(|v| v.as_str())
+                .ok_or("query (string) is required")?;
+            payload["query"] = json!(query);
+            payload["limit"] = body.get("limit").cloned().unwrap_or(serde_json::Value::Null);
+            payload["searchMode"] = body.get("search_mode").cloned().unwrap_or(serde_json::Value::Null);
+            payload["bm25Weight"] = body.get("bm25_weight").cloned().unwrap_or(serde_json::Value::Null);
+        }
+        "convert" => {
+            let paths = body
+                .get("paths")
+                .and_then(|v| v.as_array())
+                .filter(|a| a.iter().all(|x| x.is_string()))
+                .ok_or("paths (array of strings) is required")?;
+            payload["paths"] = json!(paths);
+            payload["approval"] = json!(approval);
+        }
+        "update" => {
+            payload["approval"] = json!(approval);
+        }
+        "status" => {}
+        other => return Err(format!("unknown rag kind: {}", other)),
+    }
+    Ok(payload)
+}
+
+/// Map a webview reply to an HTTP status: 200 unless `ok == false`, then by error code.
+pub fn rag_status_for_payload(payload: &serde_json::Value) -> u16 {
+    if payload.get("ok").and_then(|v| v.as_bool()) != Some(false) {
+        return 200;
+    }
+    match payload.get("error").and_then(|v| v.as_str()) {
+        Some("job_running") => 409,
+        Some("no_folder") | Some("invalid_request") => 400,
+        Some("approval_denied") => 403,
+        Some("approval_timeout") => 408,
+        _ => 500,
+    }
 }
 
 #[derive(Deserialize)]
@@ -179,6 +228,78 @@ fn active_folder_or_error(app: &AppHandle) -> Result<String, serde_json::Value> 
             "ok": false,
             "error": "No folder is open in mdium to search. Open a folder first."
         })),
+    }
+}
+
+/// Relay one rag request to the webview (which owns the model and the index
+/// jobs) and answer with its reply, mapping error codes to HTTP statuses.
+fn relay_rag_request(app: &AppHandle, kind: &str, body_str: &str, request: tiny_http::Request) {
+    let body: serde_json::Value = match serde_json::from_str(body_str) {
+        Ok(b) => b,
+        Err(e) => {
+            let _ = request.respond(json_response(
+                400,
+                json!({ "ok": false, "error": "invalid_json", "message": e.to_string() }),
+            ));
+            return;
+        }
+    };
+    let mut payload = match rag_relay_payload(kind, &body) {
+        Ok(p) => p,
+        Err(message) => {
+            let _ = request.respond(json_response(
+                400,
+                json!({ "ok": false, "error": "invalid_request", "message": message }),
+            ));
+            return;
+        }
+    };
+
+    // Register a pending slot, then ask the webview to do the work.
+    let id = generate_token();
+    payload["id"] = json!(id);
+    let (tx, rx) = mpsc::channel::<serde_json::Value>();
+    let pending: RagBridgePending = app.state::<RagBridgePending>().inner().clone();
+    match pending.lock() {
+        Ok(mut g) => {
+            g.insert(id.clone(), tx);
+        }
+        Err(e) => {
+            let _ = request.respond(json_response(
+                500,
+                json!({ "ok": false, "error": format!("lock_failed: {}", e) }),
+            ));
+            return;
+        }
+    }
+
+    if app.emit("rag-bridge-request", payload).is_err() {
+        if let Ok(mut g) = pending.lock() {
+            g.remove(&id);
+        }
+        let _ = request.respond(json_response(
+            500,
+            json!({ "ok": false, "error": "failed to reach mdium webview" }),
+        ));
+        return;
+    }
+
+    // Block this request's thread until the webview replies or times out.
+    // First call loads the embedding model, which can take a while.
+    match rx.recv_timeout(Duration::from_secs(180)) {
+        Ok(value) => {
+            let status = rag_status_for_payload(&value);
+            let _ = request.respond(json_response(status, value));
+        }
+        Err(_) => {
+            if let Ok(mut g) = pending.lock() {
+                g.remove(&id);
+            }
+            let _ = request.respond(json_response(
+                504,
+                json!({ "ok": false, "error": "mdium did not respond (timeout). Is the RAG model available?" }),
+            ));
+        }
     }
 }
 
@@ -350,76 +471,9 @@ fn handle_request(app: &AppHandle, expected_token: &str, mut request: tiny_http:
             let (status, body) = handle_vba_route(app, route, &body_str);
             let _ = request.respond(json_response(status, body));
         }
-        "/rag/search" => {
-            let req: RagSearchRequest = match serde_json::from_str(&body_str) {
-                Ok(r) => r,
-                Err(e) => {
-                    let _ = request.respond(json_response(
-                        400,
-                        json!({ "error": "invalid_json", "message": e.to_string() }),
-                    ));
-                    return;
-                }
-            };
-
-            // Register a pending slot, then ask the webview to do the embedding +
-            // search (it owns the model and the user's configured settings).
-            let id = generate_token();
-            let (tx, rx) = mpsc::channel::<serde_json::Value>();
-            let pending: RagBridgePending = app.state::<RagBridgePending>().inner().clone();
-            {
-                match pending.lock() {
-                    Ok(mut g) => {
-                        g.insert(id.clone(), tx);
-                    }
-                    Err(e) => {
-                        let _ = request.respond(json_response(
-                            500,
-                            json!({ "ok": false, "error": format!("lock_failed: {}", e) }),
-                        ));
-                        return;
-                    }
-                }
-            }
-
-            let emitted = app.emit(
-                "rag-bridge-request",
-                json!({
-                    "id": id,
-                    "folderPath": req.folder_path,
-                    "query": req.query,
-                    "limit": req.limit,
-                    "searchMode": req.search_mode,
-                    "bm25Weight": req.bm25_weight,
-                }),
-            );
-            if emitted.is_err() {
-                if let Ok(mut g) = pending.lock() {
-                    g.remove(&id);
-                }
-                let _ = request.respond(json_response(
-                    500,
-                    json!({ "ok": false, "error": "failed to reach mdium webview" }),
-                ));
-                return;
-            }
-
-            // Block this request's thread until the webview replies or times out.
-            // First call loads the embedding model, which can take a while.
-            match rx.recv_timeout(Duration::from_secs(180)) {
-                Ok(value) => {
-                    let _ = request.respond(json_response(200, value));
-                }
-                Err(_) => {
-                    if let Ok(mut g) = pending.lock() {
-                        g.remove(&id);
-                    }
-                    let _ = request.respond(json_response(
-                        504,
-                        json!({ "ok": false, "error": "mdium did not respond (timeout). Is the RAG model available?" }),
-                    ));
-                }
-            }
+        "/rag/search" | "/rag/status" | "/rag/convert" | "/rag/update" => {
+            let kind = url.trim_start_matches("/rag/");
+            relay_rag_request(app, kind, &body_str, request);
         }
         "/glob" => {
             let req: GlobRequest = match serde_json::from_str(&body_str) {
@@ -548,5 +602,37 @@ mod tests {
         let (status, body) = vba_error_response("push", vba::vba_error("workbook_locked", "open"));
         assert_eq!(status, 409);
         assert_eq!(body["error"], "workbook_locked");
+    }
+
+    #[test]
+    fn rag_status_codes_follow_error_code() {
+        assert_eq!(rag_status_for_payload(&json!({"ok": true, "results": []})), 200);
+        assert_eq!(rag_status_for_payload(&json!({"ok": false, "error": "job_running"})), 409);
+        assert_eq!(rag_status_for_payload(&json!({"ok": false, "error": "no_folder"})), 400);
+        assert_eq!(rag_status_for_payload(&json!({"ok": false, "error": "approval_denied"})), 403);
+        assert_eq!(rag_status_for_payload(&json!({"ok": false, "error": "approval_timeout"})), 408);
+        assert_eq!(rag_status_for_payload(&json!({"ok": false, "error": "boom"})), 500);
+    }
+
+    #[test]
+    fn rag_relay_payload_camel_cases_each_kind() {
+        let p = rag_relay_payload("convert", &json!({"folder_path":"C:/w","paths":["a.docx"],"approval":"ask"})).unwrap();
+        assert_eq!(p["kind"], "convert");
+        assert_eq!(p["folderPath"], "C:/w");
+        assert_eq!(p["paths"][0], "a.docx");
+        assert_eq!(p["approval"], "ask");
+        let p = rag_relay_payload("search", &json!({"folder_path":"C:/w","query":"q","bm25_weight":0.3})).unwrap();
+        assert_eq!(p["query"], "q");
+        assert_eq!(p["bm25Weight"], 0.3);
+        assert!(p["limit"].is_null());
+        assert!(rag_relay_payload("convert", &json!({"folder_path":"C:/w"})).is_err()); // paths required
+        assert!(rag_relay_payload("status", &json!({"folder_path":"C:/w"})).is_ok());
+    }
+
+    #[test]
+    fn bridge_sidecar_paths_include_mdium_home() {
+        let paths = bridge_sidecar_paths(std::path::Path::new("H"));
+        assert!(paths.iter().any(|p| p.ends_with(std::path::Path::new(".mdium/bridge.json"))));
+        assert!(paths.iter().any(|p| p.ends_with(std::path::Path::new(".config/opencode/.mdium-bridge.json"))));
     }
 }

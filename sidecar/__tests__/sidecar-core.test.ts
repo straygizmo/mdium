@@ -50,6 +50,29 @@ describe("SidecarCore", () => {
     expect(b.message.content).toBe("two");
   });
 
+  it("auto-allows mdium-rag MCP tools without a permission_request but still prompts for others", async () => {
+    const { sent, canUseTool } = setup();
+    await expect(canUseTool()("mcp__mdium-rag__rag_status", { a: 1 })).resolves.toEqual({
+      behavior: "allow",
+      updatedInput: { a: 1 },
+    });
+    expect(sent.filter((m) => m.type === "permission_request")).toHaveLength(0);
+    void canUseTool()("mcp__other__x", {});
+    expect(sent.filter((m) => m.type === "permission_request")).toHaveLength(1);
+  });
+
+  it("forwards mcpServers from start_session to startQuery", () => {
+    const { deps, core } = setup();
+    const mcpServers = {
+      "mdium-rag": { command: "node", args: ["i.js"], env: { MDIUM_RAG_PERMISSION: "ask" } },
+    };
+    core.handleLine(
+      JSON.stringify({ type: "start_session", cwd: "C:/x", permissionMode: "default", mcpServers }),
+    );
+    const calls = (deps.startQuery as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[calls.length - 1][1]).toMatchObject({ mcpServers });
+  });
+
   it("emits permission_request with unique ids and resolves the matching response", async () => {
     const { core, sent, canUseTool } = setup();
     const p1 = canUseTool()("Bash", { command: "ls" });

@@ -169,6 +169,7 @@ pub const REC_MODULEDOCSTRING: u16 = 0x001C;
 pub const REC_MODULEHELPCONTEXT: u16 = 0x001E;
 pub const REC_MODULETYPE_PROCEDURAL: u16 = 0x0021;
 pub const REC_MODULETYPE_OTHER: u16 = 0x0022;
+pub const REC_MODULEPRIVATE: u16 = 0x0028;
 pub const REC_MODULETERMINATOR: u16 = 0x002B;
 pub const REC_MODULECOOKIE: u16 = 0x002C;
 pub const REC_MODULEOFFSET: u16 = 0x0031;
@@ -317,12 +318,17 @@ impl DirStream {
             .collect()
     }
 
+    /// Append a MODULE record group (MS-OVBA 2.3.4.2.3.2). `private` emits
+    /// MODULEPRIVATE, which Excel writes for every class whose
+    /// `VB_Exposed = False`; without it VBA fails to compile code that
+    /// references the class (runtime error 5).
     pub fn append_module(
         &mut self,
         name: &str,
         stream_name: &str,
         kind: ModuleKind,
         text_offset: u32,
+        private: bool,
         code_page: u16,
     ) -> Result<(), String> {
         let utf16 = |s: &str| -> Vec<u8> { s.encode_utf16().flat_map(|u| u.to_le_bytes()).collect() };
@@ -330,7 +336,7 @@ impl DirStream {
             ModuleKind::Standard => REC_MODULETYPE_PROCEDURAL,
             _ => REC_MODULETYPE_OTHER,
         };
-        let new_records = vec![
+        let mut new_records = vec![
             DirRecord { id: REC_MODULENAME, data: encode_string(name, code_page)? },
             DirRecord { id: REC_MODULENAMEUNICODE, data: utf16(name) },
             DirRecord { id: REC_MODULESTREAMNAME, data: encode_string(stream_name, code_page)? },
@@ -341,8 +347,11 @@ impl DirStream {
             DirRecord { id: REC_MODULEHELPCONTEXT, data: 0u32.to_le_bytes().to_vec() },
             DirRecord { id: REC_MODULECOOKIE, data: 0xFFFFu16.to_le_bytes().to_vec() },
             DirRecord { id: type_id, data: vec![] },
-            DirRecord { id: REC_MODULETERMINATOR, data: vec![] },
         ];
+        if private {
+            new_records.push(DirRecord { id: REC_MODULEPRIVATE, data: vec![] });
+        }
+        new_records.push(DirRecord { id: REC_MODULETERMINATOR, data: vec![] });
         let at = self
             .records
             .iter()
@@ -545,7 +554,7 @@ mod tests {
     #[test]
     fn dir_stream_append_module_matches_hand_built_records_and_bumps_count() {
         let mut dir = DirStream::parse(&dir_bytes_with_modules(0, &[])).unwrap();
-        dir.append_module("Helpers", "Helpers", ModuleKind::Standard, 0, 1252).unwrap();
+        dir.append_module("Helpers", "Helpers", ModuleKind::Standard, 0, false, 1252).unwrap();
         let expected = dir_bytes_with_modules(1, &module_bytes("Helpers", 0x0021, 0));
         assert_eq!(dir.serialize(), expected);
         assert_eq!(dir.module_count(), Some(1));
@@ -554,8 +563,23 @@ mod tests {
     #[test]
     fn dir_stream_append_class_uses_type_0x22() {
         let mut dir = DirStream::parse(&dir_bytes_with_modules(0, &[])).unwrap();
-        dir.append_module("C", "C", ModuleKind::Class, 0, 1252).unwrap();
+        dir.append_module("C", "C", ModuleKind::Class, 0, true, 1252).unwrap();
         assert_eq!(dir.modules()[0].type_id, 0x0022);
+    }
+
+    #[test]
+    fn dir_stream_append_private_class_emits_moduleprivate_before_terminator() {
+        let mut dir = DirStream::parse(&dir_bytes_with_modules(0, &[])).unwrap();
+        dir.append_module("C", "C", ModuleKind::Class, 0, true, 1252).unwrap();
+        let ids: Vec<u16> = dir.records.iter().map(|r| r.id).collect();
+        let type_at = ids.iter().position(|&id| id == 0x0022).unwrap();
+        assert_eq!(ids[type_at + 1], REC_MODULEPRIVATE);
+        assert_eq!(ids[type_at + 2], REC_MODULETERMINATOR);
+        // An exposed class (VB_Exposed = True) must not carry MODULEPRIVATE.
+        let mut dir = DirStream::parse(&dir_bytes_with_modules(0, &[])).unwrap();
+        dir.append_module("P", "P", ModuleKind::Class, 0, false, 1252).unwrap();
+        assert!(dir.records.iter().all(|r| r.id != REC_MODULEPRIVATE));
+        assert_eq!(dir.serialize(), dir_bytes_with_modules(1, &module_bytes("P", 0x0022, 0)));
     }
 
     #[test]

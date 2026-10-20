@@ -12,6 +12,10 @@ describe("normalizeLeftPanel", () => {
     expect(normalizeLeftPanel("claude")).toBe("opencode-config");
   });
 
+  it("maps the retired RAG panel to AGENT CHAT", () => {
+    expect(normalizeLeftPanel("rag")).toBe("opencode-config");
+  });
+
   it("falls back to the folder panel for unknown values", () => {
     expect(normalizeLeftPanel("nope")).toBe("folder");
     expect(normalizeLeftPanel(undefined)).toBe("folder");

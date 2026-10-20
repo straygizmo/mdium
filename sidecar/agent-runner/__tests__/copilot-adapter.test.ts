@@ -422,6 +422,15 @@ describe("CopilotAdapter", () => {
     expect(client.createSession).toHaveBeenCalledWith(expect.objectContaining({ streaming: true }));
   });
 
+  it("passes mcpServers to createSession as local stdio servers", async () => {
+    const session = fakeSession([]);
+    const { client } = fakeClient(session);
+    await make(client).startSession({ ...opts, mcpServers: { "mdium-rag": { command: "node", args: ["i.js"], env: { A: "b" } } } }, cbs());
+    expect(client.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      mcpServers: { "mdium-rag": { type: "local", command: "node", args: ["i.js"], env: { A: "b" }, tools: ["*"] } },
+    }));
+  });
+
   it("enables streaming when resuming a session", async () => {
     const session = fakeSession([]);
     const { client } = fakeClient(session);

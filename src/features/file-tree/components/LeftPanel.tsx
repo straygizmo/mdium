@@ -7,7 +7,6 @@ import { useTabStore } from "@/stores/tab-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import { FileTree } from "./FileTree";
 import { OutlinePanel } from "./OutlinePanel";
-import { RagPanel } from "@/features/rag/components/RagPanel";
 import { AgentChatPanel } from "@/features/agent-chat/components/AgentChatPanel";
 import { GitPanel } from "@/features/git/components/GitPanel";
 import { ReplacementPanel } from "@/features/replacement/components/ReplacementPanel";
@@ -154,22 +153,13 @@ export function LeftPanel({
             </svg>
           </button>
           <button
-            className={`left-panel__activity-btn ${leftPanel === "rag" ? "left-panel__activity-btn--active" : ""}`}
-            onClick={() => { setLeftPanel("rag"); setFolderLeftPanel("rag"); }}
-            title="RAG"
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-            </svg>
-          </button>
-          <button
             className={`left-panel__activity-btn ${leftPanel === "opencode-config" ? "left-panel__activity-btn--active" : ""}`}
             onClick={() => { setLeftPanel("opencode-config"); setFolderLeftPanel("opencode-config"); }}
             title={t("title", { ns: "agent-chat" })}
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <rect x="4" y="2" width="16" height="20" />
-              <rect x="8" y="6" width="8" height="12" />
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4c0-1.1.9-2 2-2h8a2 2 0 0 1 2 2v5Z" />
+              <path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1" />
             </svg>
           </button>
           <button
@@ -241,14 +231,6 @@ export function LeftPanel({
           <span className="left-panel__section-header-title">
             {leftPanel === "folder" && t("explorer").toUpperCase()}
             {leftPanel === "outline" && t("outline").toUpperCase()}
-            {leftPanel === "rag" && (
-              <>
-                RAG
-                <span className="left-panel__section-header-model">
-                  ({aiSettings.provider} / {aiSettings.model})
-                </span>
-              </>
-            )}
             {leftPanel === "opencode-config" && (
               <>
                 {t("title", { ns: "agent-chat" })}
@@ -409,13 +391,6 @@ export function LeftPanel({
             previewRef={previewRef}
           />
         )}
-        <div style={{ display: leftPanel === "rag" ? "contents" : "none" }}>
-          <RagPanel
-            folderPath={activeFolderPath}
-            aiSettings={aiSettings}
-            onOpenFile={onFileSelect}
-          />
-        </div>
         {agentChatMounted && (
           <div style={{ display: leftPanel === "opencode-config" ? "contents" : "none" }}>
             <AgentChatPanel />
