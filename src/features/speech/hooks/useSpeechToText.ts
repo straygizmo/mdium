@@ -8,7 +8,7 @@ let sharedWorkerModelName: string | null = null;
 
 /**
  * Map of instance ID → callback. Each hook instance registers its own
- * callback so that EditorPanel and RagPanel don't overwrite each other.
+ * callback so that EditorPanel and other consumers don't overwrite each other.
  */
 const listeners = new Map<
   number,

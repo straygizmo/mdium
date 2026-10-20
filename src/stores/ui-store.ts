@@ -2,12 +2,11 @@ import { create } from "zustand";
 import type { OpencodeConfigTab, OpencodeTopTab, ClaudeTopTab, ClaudeSettingsTab, CodexTopTab, CodexSettingsTab, CopilotTopTab, CopilotSettingsTab } from "@/shared/types";
 import type { TerminalKind, TerminalSession } from "@/features/terminal/terminal-session";
 
-export type LeftPanel = "folder" | "outline" | "rag" | "opencode-config" | "git" | "replacement" | "workflow" | "flow";
+export type LeftPanel = "folder" | "outline" | "opencode-config" | "git" | "replacement" | "workflow" | "flow";
 
 const LEFT_PANELS: readonly LeftPanel[] = [
   "folder",
   "outline",
-  "rag",
   "opencode-config",
   "git",
   "replacement",
@@ -16,15 +15,15 @@ const LEFT_PANELS: readonly LeftPanel[] = [
 ];
 
 /**
- * Normalize a persisted left panel id. The standalone Claude panel now lives
- * inside AGENT CHAT, so a saved "claude" maps to the AGENT CHAT panel.
+ * Normalize a persisted left panel id. The standalone Claude and RAG panels now live
+ * inside AGENT CHAT, so a saved "claude" or "rag" maps to the AGENT CHAT panel.
  */
 export function normalizeLeftPanel(value: string | undefined): LeftPanel {
-  if (value === "claude") return "opencode-config";
+  if (value === "claude" || value === "rag") return "opencode-config";
   return LEFT_PANELS.includes(value as LeftPanel) ? (value as LeftPanel) : "folder";
 }
 type ViewTab = "preview" | "table" | "pdf-preview" | "docx-preview" | "html-preview" | "xlsx-preview" | "slidev-preview" | "video";
-type FolderPanelTab = "terminal" | "rag";
+type FolderPanelTab = "terminal";
 export type SearchMode = "search" | "replace";
 
 function newTerminalSession(kind: TerminalKind, folderPath: string): TerminalSession {
@@ -80,8 +79,6 @@ interface UiState {
   removeTerminalSession: (id: string) => void;
   /** Remove sessions whose folder is no longer open. Returns the removed session ids. */
   pruneTerminalSessions: (openFolderPaths: string[]) => string[];
-  ragChatInput: string;
-  setRagChatInput: (text: string) => void;
   setOpencodeConfigTab: (tab: OpencodeConfigTab) => void;
   setOpencodeTopTab: (tab: OpencodeTopTab) => void;
   setClaudeTopTab: (tab: ClaudeTopTab) => void;
@@ -212,8 +209,6 @@ export const useUiStore = create<UiState>()((set, get) => ({
     });
     return [...staleIds];
   },
-  ragChatInput: "",
-  setRagChatInput: (text) => set({ ragChatInput: text }),
   setOpencodeConfigTab: (tab) => set({ opencodeConfigTab: tab }),
   setOpencodeTopTab: (tab) => set({ opencodeTopTab: tab }),
   setClaudeTopTab: (tab) => set({ claudeTopTab: tab }),

@@ -15,8 +15,8 @@ interface UseKeyboardShortcutsParams {
   setShowSearch: React.Dispatch<React.SetStateAction<boolean>>;
   setEditorVisible: React.Dispatch<React.SetStateAction<boolean>>;
   setFolderPanelVisible: React.Dispatch<React.SetStateAction<boolean>>;
-  folderPanelTab: "terminal" | "rag";
-  setFolderPanelTab: React.Dispatch<React.SetStateAction<"terminal" | "rag">>;
+  folderPanelTab: "terminal";
+  setFolderPanelTab: React.Dispatch<React.SetStateAction<"terminal">>;
   tabsRef: React.MutableRefObject<Tab[]>;
   activeTabIdRef: React.MutableRefObject<string>;
 }
@@ -70,13 +70,6 @@ export function useKeyboardShortcuts({
         setFolderPanelVisible((v) => {
           if (v && folderPanelTab === "terminal") return false;
           setFolderPanelTab("terminal");
-          return true;
-        });
-      } else if (e.ctrlKey && e.shiftKey && e.key === "R") {
-        e.preventDefault();
-        setFolderPanelVisible((v) => {
-          if (v && folderPanelTab === "rag") return false;
-          setFolderPanelTab("rag");
           return true;
         });
       } else if (e.ctrlKey && e.key === "t") {

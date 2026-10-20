@@ -7,7 +7,6 @@ import { useTabStore } from "@/stores/tab-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import { FileTree } from "./FileTree";
 import { OutlinePanel } from "./OutlinePanel";
-import { RagPanel } from "@/features/rag/components/RagPanel";
 import { AgentChatPanel } from "@/features/agent-chat/components/AgentChatPanel";
 import { GitPanel } from "@/features/git/components/GitPanel";
 import { ReplacementPanel } from "@/features/replacement/components/ReplacementPanel";
@@ -154,15 +153,6 @@ export function LeftPanel({
             </svg>
           </button>
           <button
-            className={`left-panel__activity-btn ${leftPanel === "rag" ? "left-panel__activity-btn--active" : ""}`}
-            onClick={() => { setLeftPanel("rag"); setFolderLeftPanel("rag"); }}
-            title="RAG"
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-            </svg>
-          </button>
-          <button
             className={`left-panel__activity-btn ${leftPanel === "opencode-config" ? "left-panel__activity-btn--active" : ""}`}
             onClick={() => { setLeftPanel("opencode-config"); setFolderLeftPanel("opencode-config"); }}
             title={t("title", { ns: "agent-chat" })}
@@ -241,14 +231,6 @@ export function LeftPanel({
           <span className="left-panel__section-header-title">
             {leftPanel === "folder" && t("explorer").toUpperCase()}
             {leftPanel === "outline" && t("outline").toUpperCase()}
-            {leftPanel === "rag" && (
-              <>
-                RAG
-                <span className="left-panel__section-header-model">
-                  ({aiSettings.provider} / {aiSettings.model})
-                </span>
-              </>
-            )}
             {leftPanel === "opencode-config" && (
               <>
                 {t("title", { ns: "agent-chat" })}
@@ -409,13 +391,6 @@ export function LeftPanel({
             previewRef={previewRef}
           />
         )}
-        <div style={{ display: leftPanel === "rag" ? "contents" : "none" }}>
-          <RagPanel
-            folderPath={activeFolderPath}
-            aiSettings={aiSettings}
-            onOpenFile={onFileSelect}
-          />
-        </div>
         {agentChatMounted && (
           <div style={{ display: leftPanel === "opencode-config" ? "contents" : "none" }}>
             <AgentChatPanel />
