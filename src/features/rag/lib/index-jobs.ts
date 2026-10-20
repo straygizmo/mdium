@@ -1,11 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useSettingsStore } from "@/stores/settings-store";
+import i18n from "@/shared/i18n";
+import { collectConvertibleFiles, type ConvertibleFile } from "@/features/export/lib/collectConvertibleFiles";
+import { convertFileToMarkdown, type PptxLabels } from "@/features/export/lib/convertFileToMarkdown";
+import type { FileEntry } from "@/shared/types";
 import { useRagIndexStore } from "../stores/rag-index-store";
 import type {
   RagBridgeErrorCode,
   RagIndexState,
   RagJobInfo,
+  RagRejectReason,
   RagStatusPayload,
   RagUnconvertedDoc,
 } from "@/shared/types/rag-bridge";
@@ -138,21 +143,26 @@ async function runUpdate(id: string, folder: string, embedding: EmbeddingApi): P
     // Mark the job done and publish fresh counts in a single update.
     const counts = await fetchCounts(folder);
     const job = store().job;
+    // Only touch the flat fields while the store still points at this job's folder.
+    const sameFolder = store().folder === folder;
     store().patch({
-      progress: null,
-      state: counts.total_chunks > 0 ? "ready" : "empty",
-      totalChunks: counts.total_chunks,
-      totalFiles: counts.total_files,
+      ...(sameFolder
+        ? {
+            progress: null,
+            state: counts.total_chunks > 0 ? ("ready" as const) : ("empty" as const),
+            totalChunks: counts.total_chunks,
+            totalFiles: counts.total_files,
+          }
+        : {}),
       job: job && job.id === id ? { ...job, state: "done", current_file: "" } : job,
     });
   } catch (e) {
     console.error("Build index failed:", e);
     const message = errorMessage(e);
     const job = store().job;
+    const sameFolder = store().folder === folder;
     store().patch({
-      error: message,
-      state: "error",
-      progress: null,
+      ...(sameFolder ? { error: message, state: "error" as const, progress: null } : {}),
       job:
         job && job.id === id
           ? { ...job, state: "failed", current_file: "", errors: [{ path: folder, message }] }
@@ -161,6 +171,121 @@ async function runUpdate(id: string, folder: string, embedding: EmbeddingApi): P
   } finally {
     if (unlisten) unlisten();
   }
+}
+
+export async function listUnconvertedOfficeDocs(folder: string): Promise<ConvertibleFile[]> {
+  const tree = await invoke<FileEntry[]>("get_file_tree", {
+    path: folder,
+    showAll: true,
+    includeDocx: true,
+    includeXls: true,
+    includePptx: true,
+    includeKm: true,
+    includeImages: true,
+    includePdf: true,
+    includeEmptyDirs: false,
+  });
+  return collectConvertibleFiles(tree).filter((f) => f.type !== "doc" && !f.hasExistingMdSibling);
+}
+
+export function toUnconvertedDocs(files: ConvertibleFile[]): RagUnconvertedDoc[] {
+  return files
+    .filter((f): f is ConvertibleFile & { type: RagUnconvertedDoc["type"] } => f.type !== "doc")
+    .map((f) => ({ path: f.path, type: f.type }));
+}
+
+const toSlashes = (p: string) => p.replace(/\\/g, "/");
+const isAbsolutePath = (p: string) => /^[A-Za-z]:\//.test(p) || p.startsWith("/");
+// Windows-style (drive letter) paths compare case-insensitively.
+const pathKey = (p: string) => (/^[A-Za-z]:\//.test(p) ? p.toLowerCase() : p);
+
+/** Normalize separators and collapse "." / ".." segments. */
+function normalizePath(p: string): string {
+  const unified = toSlashes(p);
+  const parts: string[] = [];
+  for (const seg of unified.split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") parts.pop();
+    else parts.push(seg);
+  }
+  const joined = parts.join("/");
+  return unified.startsWith("/") ? `/${joined}` : joined;
+}
+
+export function resolveConvertPaths(
+  folder: string,
+  paths: string[],
+  all: ConvertibleFile[],
+): { accepted: ConvertibleFile[]; rejected: { path: string; reason: RagRejectReason }[] } {
+  const root = normalizePath(folder);
+  const rootPrefix = `${pathKey(root).replace(/\/$/, "")}/`;
+  const byPath = new Map(all.map((f) => [pathKey(normalizePath(f.path)), f]));
+  const accepted: ConvertibleFile[] = [];
+  const rejected: { path: string; reason: RagRejectReason }[] = [];
+  for (const raw of paths) {
+    const unified = toSlashes(raw);
+    const abs = normalizePath(isAbsolutePath(unified) ? unified : `${root}/${unified}`);
+    const reject = (reason: RagRejectReason) => rejected.push({ path: raw, reason });
+    if (!pathKey(abs).startsWith(rootPrefix)) {
+      reject("outside_folder");
+      continue;
+    }
+    const file = byPath.get(pathKey(abs));
+    if (!file) reject("not_found");
+    else if (file.type === "doc") reject("unsupported");
+    else if (file.hasExistingMdSibling) reject("exists");
+    else accepted.push(file);
+  }
+  return { accepted, rejected };
+}
+
+export function startConvertDocs(folder: string, files: ConvertibleFile[]): RagJobInfo {
+  if (isJobRunning()) throw new JobRunningError();
+  const initial: RagJobInfo = {
+    id: crypto.randomUUID(),
+    kind: "convert",
+    folder,
+    state: "running",
+    done: 0,
+    total: files.length,
+    current_file: "",
+    errors: [],
+  };
+  store().patch({ folder, state: "converting", error: null, progress: null, job: initial });
+  void runConvert(initial.id, folder, files);
+  return initial;
+}
+
+async function runConvert(id: string, folder: string, files: ConvertibleFile[]): Promise<void> {
+  const labels: PptxLabels = {
+    slideFallback: (n: number) => i18n.t("common:pptxSlideLabel", { n }),
+    notes: i18n.t("common:pptxNotesLabel"),
+  };
+  const errors: RagJobInfo["errors"] = [];
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    patchJob(id, { current_file: file.name });
+    try {
+      // saveToMdium=false: the .md lands next to the source file.
+      await convertFileToMarkdown(file, false, labels);
+    } catch (e) {
+      errors.push({ path: file.path, message: errorMessage(e) });
+    }
+    patchJob(id, { done: i + 1, errors: [...errors] });
+  }
+  const counts = await fetchCounts(folder);
+  const job = store().job;
+  const sameFolder = store().folder === folder;
+  store().patch({
+    ...(sameFolder
+      ? {
+          state: counts.total_chunks > 0 ? ("ready" as const) : ("empty" as const),
+          totalChunks: counts.total_chunks,
+          totalFiles: counts.total_files,
+        }
+      : {}),
+    job: job && job.id === id ? { ...job, state: "done", current_file: "" } : job,
+  });
 }
 
 export async function deleteIndex(folder: string): Promise<void> {
