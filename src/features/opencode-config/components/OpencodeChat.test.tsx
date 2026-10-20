@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OpencodeChat } from "./OpencodeChat";
 import { useChatUIStore } from "../hooks/useOpencodeChat";
 import { useTabStore } from "@/stores/tab-store";
+import { useOpencodeConfigStore } from "@/stores/opencode-config-store";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -33,6 +34,8 @@ describe("OpencodeChat variants", () => {
   beforeEach(() => {
     useTabStore.setState({ tabs: [], activeTabId: null, activeFolderPath: null });
     useChatUIStore.setState({ connected: true, connecting: false, messages: [], loading: false, chatInput: "" });
+    // Give the badges something to show; they render nothing for an empty config.
+    useOpencodeConfigStore.setState({ projectSkillNames: ["vba-coding-conventions"] });
     sendMessage.mockClear();
   });
   afterEach(() => {
@@ -54,6 +57,27 @@ describe("OpencodeChat variants", () => {
     expect(container.querySelector(".oc-chat__toolbar")).toBeNull();
     expect(container.querySelector(".oc-chat__md-toggle-row")).toBeNull();
     expect(container.querySelector<HTMLTextAreaElement>(".oc-chat__input")?.placeholder).toBe("Describe the change");
+    await unmount();
+  });
+
+  it("macro variant hides the config badges and the status bar while connected", async () => {
+    const { container, unmount } = await render(<OpencodeChat variant="macro" header={null} />);
+    expect(container.querySelector(".oc-config-badges")).toBeNull();
+    expect(container.querySelector(".oc-chat__status")).toBeNull();
+    await unmount();
+  });
+
+  it("macro variant still offers the connect button when disconnected", async () => {
+    useChatUIStore.setState({ connected: false, connecting: false });
+    const { container, unmount } = await render(<OpencodeChat variant="macro" header={null} />);
+    expect(container.querySelector(".oc-config-badges")).toBeNull();
+    expect(container.querySelector(".oc-chat__connect-btn")).not.toBeNull();
+    await unmount();
+  });
+
+  it("panel variant keeps the config badges", async () => {
+    const { container, unmount } = await render(<OpencodeChat />);
+    expect(container.querySelector(".oc-config-badges")).not.toBeNull();
     await unmount();
   });
 

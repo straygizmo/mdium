@@ -484,15 +484,19 @@ export function OpencodeChat({ variant = "panel", header, placeholder, onBeforeS
         </div>
       )}
 
-      {/* Status bar */}
+      {/* Status bar. The config badges describe the panel chat's rules/MCP/skills
+          and mean nothing for the macro chat, so that variant only shows the
+          reconnect button when it is needed. */}
+      {(!isMacro || (!connected && !connecting)) && (
       <div className="oc-chat__status">
-        <OpencodeConfigBadges />
+        {!isMacro && <OpencodeConfigBadges />}
         {!connected && !connecting && (
           <button className="oc-chat__connect-btn" onClick={connect}>
             {t("ocChatConnecting").replace("...", "")}
           </button>
         )}
       </div>
+      )}
 
       {/* Splittable area */}
       <div className="oc-chat__split" ref={chatContainerRef}>

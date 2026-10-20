@@ -31,15 +31,40 @@
   color: var(--text-muted);
 }
 
+/* Buttons follow the opencode chat toolbar look so they match the active theme. */
+.macro-chat__new-chat,
+.macro-chat__lock button {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.macro-chat__new-chat:hover,
+.macro-chat__lock button:hover {
+  background: var(--bg-overlay);
+  border-color: var(--border-hover);
+  color: var(--text);
+}
+
 .macro-chat__lock {
-  background: var(--warning-bg, #fff4e5);
-  color: var(--warning-fg, #8a4b00);
+  background: var(--bg-overlay);
+  color: var(--text);
+  border-left: 3px solid var(--accent-red);
   padding: 6px 8px;
   border-radius: 4px;
   display: flex;
   gap: 8px;
   align-items: center;
   margin-top: 6px;
+}
+
+.macro-chat__lock span {
+  flex: 1;
 }
 
 .macro-chat__modules {
@@ -65,5 +90,5 @@
 
 .macro-chat__error {
   padding: 6px 0;
-  color: var(--danger, #c0392b);
+  color: var(--accent-red);
 }
