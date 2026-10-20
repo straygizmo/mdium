@@ -42,6 +42,8 @@ const checkboxSwitchComponents: string[] = [
   "src/features/claude-config/components/McpServerForm.tsx",
   "src/features/claude-config/components/SkillForm.tsx",
   "src/features/claude-config/components/shared/ScopeToggle.tsx",
+  "src/features/codex-config/components/sections/McpServersTab.tsx",
+  "src/features/codex-config/components/sections/McpServerForm.tsx",
   "src/features/workflow/components/WorkflowPanel.tsx",
   "src/features/workflow/components/RetryDialog.tsx",
   "src/features/workflow/components/MergeSection.tsx",

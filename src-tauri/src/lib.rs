@@ -294,6 +294,11 @@ pub fn run() {
             commands::claude_config::list_agent_files,
             commands::claude_config::write_agent_file,
             commands::claude_config::delete_agent_file,
+            // Codex config operations (config.toml via toml_edit)
+            commands::codex_config::codex_read_mcp_servers,
+            commands::codex_config::codex_write_mcp_server,
+            commands::codex_config::codex_delete_mcp_server,
+            commands::codex_config::codex_set_mcp_server_enabled,
             // RAG operations
             commands::rag::rag_get_status,
             commands::rag::rag_list_files,

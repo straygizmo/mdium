@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { OpencodeConfigTab, OpencodeTopTab, ClaudeTopTab, ClaudeSettingsTab } from "@/shared/types";
+import type { OpencodeConfigTab, OpencodeTopTab, ClaudeTopTab, ClaudeSettingsTab, CodexTopTab, CodexSettingsTab } from "@/shared/types";
 import type { TerminalKind, TerminalSession } from "@/features/terminal/terminal-session";
 
 export type LeftPanel = "folder" | "outline" | "rag" | "opencode-config" | "git" | "replacement" | "workflow" | "flow";
@@ -53,6 +53,8 @@ interface UiState {
   opencodeTopTab: OpencodeTopTab;
   claudeTopTab: ClaudeTopTab;
   claudeSettingsTab: ClaudeSettingsTab;
+  codexTopTab: CodexTopTab;
+  codexSettingsTab: CodexSettingsTab;
   isZennMode: boolean;
   gitGraphRatio: number;
   setGitGraphRatio: (ratio: number) => void;
@@ -82,6 +84,8 @@ interface UiState {
   setOpencodeTopTab: (tab: OpencodeTopTab) => void;
   setClaudeTopTab: (tab: ClaudeTopTab) => void;
   setClaudeSettingsTab: (tab: ClaudeSettingsTab) => void;
+  setCodexTopTab: (tab: CodexTopTab) => void;
+  setCodexSettingsTab: (tab: CodexSettingsTab) => void;
   setZennMode: (mode: boolean) => void;
 }
 
@@ -105,6 +109,8 @@ export const useUiStore = create<UiState>()((set, get) => ({
   opencodeTopTab: "chat" as OpencodeTopTab,
   claudeTopTab: "chat" as ClaudeTopTab,
   claudeSettingsTab: "general" as ClaudeSettingsTab,
+  codexTopTab: "chat" as CodexTopTab,
+  codexSettingsTab: "general" as CodexSettingsTab,
   isZennMode: false,
   gitGraphRatio: 0.5,
 
@@ -206,6 +212,8 @@ export const useUiStore = create<UiState>()((set, get) => ({
   setOpencodeTopTab: (tab) => set({ opencodeTopTab: tab }),
   setClaudeTopTab: (tab) => set({ claudeTopTab: tab }),
   setClaudeSettingsTab: (tab) => set({ claudeSettingsTab: tab }),
+  setCodexTopTab: (tab) => set({ codexTopTab: tab }),
+  setCodexSettingsTab: (tab) => set({ codexSettingsTab: tab }),
   setZennMode: (mode) => set({ isZennMode: mode }),
   setGitGraphRatio: (ratio) => set({ gitGraphRatio: ratio }),
 }));

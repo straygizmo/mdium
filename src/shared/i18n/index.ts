@@ -32,6 +32,9 @@ import enReplacement from "./locales/en/replacement.json";
 import jaClaudeConfig from "./locales/ja/claude-config.json";
 import enClaudeConfig from "./locales/en/claude-config.json";
 
+import jaCodexConfig from "./locales/ja/codex-config.json";
+import enCodexConfig from "./locales/en/codex-config.json";
+
 import jaAgentChat from "./locales/ja/agent-chat.json";
 import enAgentChat from "./locales/en/agent-chat.json";
 
@@ -58,6 +61,7 @@ i18n.use(initReactI18next).init({
       csv: jaCsv,
       replacement: jaReplacement,
       "claude-config": jaClaudeConfig,
+      "codex-config": jaCodexConfig,
       "agent-chat": jaAgentChat,
       workflow: jaWorkflow,
       flow: jaFlow,
@@ -75,6 +79,7 @@ i18n.use(initReactI18next).init({
       csv: enCsv,
       replacement: enReplacement,
       "claude-config": enClaudeConfig,
+      "codex-config": enCodexConfig,
       "agent-chat": enAgentChat,
       workflow: enWorkflow,
       flow: enFlow,
