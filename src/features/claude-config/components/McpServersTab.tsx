@@ -1,101 +1,152 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useClaudeConfigStore } from "@/stores/claude-config-store";
+import { useTabStore } from "@/stores/tab-store";
 import { showConfirm } from "@/stores/dialog-store";
 import type { McpServer } from "@/shared/types";
 import { McpServerForm } from "./McpServerForm";
-import "./McpServersTab.css";
+import { SectionHint } from "./shared/SectionHint";
+import type { Scope } from "./shared/ScopeToggle";
+import { useHomeDir } from "../hooks/useHomeDir";
+import { joinPath, toRelativeProjectPath } from "../lib/config-paths";
+
+interface ScopedServer {
+  scope: Scope;
+  name: string;
+  server: McpServer;
+}
 
 export function McpServersTab() {
-  const { t } = useTranslation("settings");
-  const {
-    globalMcpServers,
-    loadGlobalMcp,
-    saveGlobalMcpServer,
-    deleteGlobalMcpServer,
-    toggleGlobalMcpServer,
-  } = useClaudeConfigStore();
+  const { t } = useTranslation("claude-config");
+  const folder = useTabStore((s) => s.activeFolderPath)!;
+  const home = useHomeDir();
+  const globalMcpServers = useClaudeConfigStore((s) => s.globalMcpServers);
+  const projectMcpServers = useClaudeConfigStore((s) => s.projectMcpServers);
+  const loadGlobalMcp = useClaudeConfigStore((s) => s.loadGlobalMcp);
+  const loadProjectMcp = useClaudeConfigStore((s) => s.loadProjectMcp);
+  const saveGlobalMcpServer = useClaudeConfigStore((s) => s.saveGlobalMcpServer);
+  const saveProjectMcpServer = useClaudeConfigStore((s) => s.saveProjectMcpServer);
+  const deleteGlobalMcpServer = useClaudeConfigStore((s) => s.deleteGlobalMcpServer);
+  const deleteProjectMcpServer = useClaudeConfigStore((s) => s.deleteProjectMcpServer);
+  const toggleGlobalMcpServer = useClaudeConfigStore((s) => s.toggleGlobalMcpServer);
+  const toggleProjectMcpServer = useClaudeConfigStore((s) => s.toggleProjectMcpServer);
 
-  const [editing, setEditing] = useState<string | null>(null);
+  const [editing, setEditing] = useState<ScopedServer | null>(null);
   const [adding, setAdding] = useState(false);
+  const [formScope, setFormScope] = useState<Scope>("global");
 
   useEffect(() => {
-    loadGlobalMcp();
-  }, [loadGlobalMcp]);
+    void loadGlobalMcp();
+    void loadProjectMcp(folder);
+  }, [loadGlobalMcp, loadProjectMcp, folder]);
 
-  const serverEntries = Object.entries(globalMcpServers);
+  const items = useMemo<ScopedServer[]>(
+    () => [
+      ...Object.entries(globalMcpServers).map(([name, server]) => ({ scope: "global" as const, name, server })),
+      ...Object.entries(projectMcpServers).map(([name, server]) => ({ scope: "project" as const, name, server })),
+    ],
+    [globalMcpServers, projectMcpServers],
+  );
+
+  const savePath = formScope === "global"
+    ? (home ? joinPath(home, ".claude.json") : "")
+    : toRelativeProjectPath(folder, joinPath(folder, ".mcp.json"));
+
+  const closeForm = () => {
+    setAdding(false);
+    setEditing(null);
+  };
 
   const handleSave = async (name: string, server: McpServer) => {
     try {
-      await saveGlobalMcpServer(name, server);
+      if (formScope === "global") await saveGlobalMcpServer(name, server);
+      else await saveProjectMcpServer(folder, name, server);
     } catch {
       return; // store already reported the error
     }
-    setEditing(null);
-    setAdding(false);
+    closeForm();
   };
 
-  const handleDelete = async (name: string) => {
-    if (!(await showConfirm(t("mcpDeleteConfirm"), { kind: "warning" }))) return;
+  const handleDelete = async (scope: Scope, name: string) => {
+    if (!(await showConfirm(t("mcpDeleteConfirm", { name }), { kind: "warning" }))) return;
     try {
-      await deleteGlobalMcpServer(name);
+      if (scope === "global") await deleteGlobalMcpServer(name);
+      else await deleteProjectMcpServer(folder, name);
+    } catch {
+      // store already reported the error
+    }
+  };
+
+  const handleToggle = async (scope: Scope, name: string) => {
+    try {
+      if (scope === "global") await toggleGlobalMcpServer(name);
+      else await toggleProjectMcpServer(folder, name);
     } catch {
       // store already reported the error
     }
   };
 
   if (adding || editing !== null) {
-    const editServer = editing ? globalMcpServers[editing] : undefined;
     return (
       <McpServerForm
-        initialName={editing ?? undefined}
-        initialServer={editServer}
+        scope={formScope}
+        onScopeChange={setFormScope}
+        scopeLocked={editing !== null}
+        savePath={savePath}
+        initialName={editing?.name}
+        initialServer={editing?.server}
         onSave={handleSave}
-        onCancel={() => { setAdding(false); setEditing(null); }}
+        onCancel={closeForm}
       />
     );
   }
 
   return (
-    <div className="mcp-servers-tab">
-      <div className="mcp-servers-tab__header">
-        <span className="mcp-servers-tab__title">{t("mcpServers")}</span>
-        <span className="mcp-servers-tab__scope">{t("globalScope")} (~/.claude.json)</span>
-      </div>
-      {serverEntries.length === 0 ? (
-        <div className="mcp-servers-tab__empty">{t("mcpNoServers")}</div>
-      ) : (
-        <div className="mcp-servers-tab__list">
-          {serverEntries.map(([name, server]) => (
-            <div key={name} className="mcp-servers-tab__item">
-              <div className="mcp-servers-tab__item-info">
-                <span className="mcp-servers-tab__item-name">{name}</span>
-                <span className="mcp-servers-tab__item-cmd">{server.command} {server.args?.join(" ")}</span>
-              </div>
-              <div className="mcp-servers-tab__item-actions">
-                <button
-                  className={`mcp-servers-tab__toggle-btn ${server.disabled ? "mcp-servers-tab__toggle-btn--off" : ""}`}
-                  onClick={async () => {
-                    try {
-                      await toggleGlobalMcpServer(name);
-                    } catch {
-                      // store already reported the error
-                    }
-                  }}
-                  title={server.disabled ? t("mcpDisabled") : t("mcpEnabled")}
-                >
-                  {server.disabled ? t("mcpDisabled") : t("mcpEnabled")}
-                </button>
-                <button className="mcp-servers-tab__edit-btn" onClick={() => setEditing(name)}>{t("mcpEditServer")}</button>
-                <button className="mcp-servers-tab__delete-btn" onClick={() => handleDelete(name)}>×</button>
-              </div>
+    <div className="claude-section">
+      <SectionHint docsUrl={t("mcpDocsUrl")}>{t("mcpDescription")}</SectionHint>
+
+      <div className="claude-section__list">
+        {items.length === 0 && <div className="claude-section__empty">{t("mcpEmpty")}</div>}
+        {items.map(({ scope, name, server }) => (
+          <div
+            key={`${scope}-${name}`}
+            className={`claude-section__item claude-section__item--${scope}${server.disabled ? " claude-section__item--disabled" : ""}`}
+          >
+            <div className="claude-section__item-info">
+              <span className="claude-section__item-name">{name}</span>
+              <span className="claude-section__item-detail">
+                {[server.command, ...(server.args ?? [])].join(" ")}
+              </span>
             </div>
-          ))}
-        </div>
-      )}
-      <button className="mcp-servers-tab__add-btn" onClick={() => setAdding(true)}>
-        + {t("mcpAddServer")}
-      </button>
+            <div className="claude-section__item-actions">
+              <label className="claude-section__toggle claude-section__toggle--compact">
+                <input
+                  type="checkbox"
+                  data-switch
+                  role="switch"
+                  aria-label={t("mcpEnabled")}
+                  checked={!server.disabled}
+                  onChange={() => void handleToggle(scope, name)}
+                />
+              </label>
+              <button
+                className="claude-section__edit-btn"
+                onClick={() => { setFormScope(scope); setEditing({ scope, name, server }); }}
+              >
+                {t("edit")}
+              </button>
+              <button className="claude-section__delete-btn" onClick={() => void handleDelete(scope, name)}>
+                ×
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="claude-section__list-actions">
+        <button className="claude-section__add-btn" onClick={() => { setFormScope("global"); setAdding(true); }}>
+          + {t("add")}
+        </button>
+      </div>
     </div>
   );
 }

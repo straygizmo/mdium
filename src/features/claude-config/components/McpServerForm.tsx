@@ -1,110 +1,134 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { McpServer } from "@/shared/types";
+import { ScopeToggle, type Scope } from "./shared/ScopeToggle";
+import { ScopeFormWrapper } from "./shared/ScopeFormWrapper";
 
 interface McpServerFormProps {
+  scope: Scope;
+  onScopeChange: (scope: Scope) => void;
+  /** True while editing an existing server, whose scope cannot change. */
+  scopeLocked: boolean;
+  savePath: string;
   initialName?: string;
   initialServer?: McpServer;
   onSave: (name: string, server: McpServer) => void;
   onCancel: () => void;
 }
 
-export function McpServerForm({ initialName, initialServer, onSave, onCancel }: McpServerFormProps) {
-  const { t } = useTranslation("settings");
+/** "KEY=value" lines → env record. Lines without "=" are ignored. */
+function parseEnv(text: string): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const line of text.split("\n")) {
+    const idx = line.indexOf("=");
+    if (idx <= 0) continue;
+    const key = line.slice(0, idx).trim();
+    if (key) env[key] = line.slice(idx + 1).trim();
+  }
+  return env;
+}
+
+function formatEnv(env: Record<string, string> | undefined): string {
+  return Object.entries(env ?? {}).map(([k, v]) => `${k}=${v}`).join("\n");
+}
+
+export function McpServerForm({
+  scope,
+  onScopeChange,
+  scopeLocked,
+  savePath,
+  initialName,
+  initialServer,
+  onSave,
+  onCancel,
+}: McpServerFormProps) {
+  const { t } = useTranslation("claude-config");
   const [name, setName] = useState(initialName ?? "");
   const [command, setCommand] = useState(initialServer?.command ?? "");
   const [args, setArgs] = useState(initialServer?.args?.join("\n") ?? "");
-  const [envPairs, setEnvPairs] = useState<{ key: string; value: string }[]>(() => {
-    if (!initialServer?.env) return [];
-    return Object.entries(initialServer.env).map(([key, value]) => ({ key, value }));
-  });
+  const [env, setEnv] = useState(formatEnv(initialServer?.env));
+  const [enabled, setEnabled] = useState(!initialServer?.disabled);
+
+  const canSave = name.trim() !== "" && command.trim() !== "";
 
   const handleSave = () => {
-    if (!name.trim() || !command.trim()) return;
-    const env: Record<string, string> = {};
-    for (const pair of envPairs) {
-      if (pair.key.trim()) env[pair.key.trim()] = pair.value;
-    }
+    if (!canSave) return;
     onSave(name.trim(), {
       type: "stdio",
       command: command.trim(),
       args: args.split("\n").map((a) => a.trim()).filter(Boolean),
-      env,
-      disabled: initialServer?.disabled,
+      env: parseEnv(env),
+      ...(enabled ? {} : { disabled: true }),
     });
   };
 
   return (
-    <div className="claude-config-form">
-      <div className="claude-config-form__field">
-        <label className="claude-config-form__label">{t("mcpServerName")}</label>
-        <input
-          className="claude-config-form__input"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          disabled={!!initialName}
-        />
-      </div>
-      <div className="claude-config-form__field">
-        <label className="claude-config-form__label">{t("mcpServerCommand")}</label>
-        <input
-          className="claude-config-form__input"
-          value={command}
-          onChange={(e) => setCommand(e.target.value)}
-          placeholder="npx, node, python..."
-        />
-      </div>
-      <div className="claude-config-form__field">
-        <label className="claude-config-form__label">{t("mcpServerArgs")}</label>
-        <textarea
-          className="claude-config-form__textarea"
-          value={args}
-          onChange={(e) => setArgs(e.target.value)}
-          rows={3}
-        />
-      </div>
-      <div className="claude-config-form__field">
-        <label className="claude-config-form__label">{t("mcpServerEnv")}</label>
-        {envPairs.map((pair, i) => (
-          <div key={i} className="claude-config-form__env-row">
-            <input
-              className="claude-config-form__input claude-config-form__input--half"
-              value={pair.key}
-              onChange={(e) => {
-                const next = [...envPairs];
-                next[i] = { ...next[i], key: e.target.value };
-                setEnvPairs(next);
-              }}
-              placeholder={t("envKey")}
-            />
-            <input
-              className="claude-config-form__input claude-config-form__input--half"
-              value={pair.value}
-              onChange={(e) => {
-                const next = [...envPairs];
-                next[i] = { ...next[i], value: e.target.value };
-                setEnvPairs(next);
-              }}
-              placeholder={t("envValue")}
-            />
-            <button
-              className="claude-config-form__remove-btn"
-              onClick={() => setEnvPairs(envPairs.filter((_, j) => j !== i))}
-            >
-              ×
-            </button>
-          </div>
-        ))}
-        <button
-          className="claude-config-form__add-btn"
-          onClick={() => setEnvPairs([...envPairs, { key: "", value: "" }])}
-        >
-          + {t("envAddVariable")}
+    <div className="claude-section">
+      <ScopeToggle value={scope} onChange={onScopeChange} disabled={scopeLocked} />
+
+      <ScopeFormWrapper scope={scope}>
+        <div className="claude-section__field">
+          <label className="claude-section__label">{t("mcpName")}</label>
+          <input
+            className="claude-section__input"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            disabled={!!initialName}
+          />
+        </div>
+        <div className="claude-section__field">
+          <label className="claude-section__label">{t("mcpCommand")}</label>
+          <input
+            className="claude-section__input"
+            value={command}
+            onChange={(e) => setCommand(e.target.value)}
+            placeholder="npx"
+          />
+        </div>
+        <div className="claude-section__field">
+          <label className="claude-section__label">{t("mcpArgs")}</label>
+          <textarea
+            className="claude-section__textarea"
+            value={args}
+            onChange={(e) => setArgs(e.target.value)}
+            placeholder={"-y\n@modelcontextprotocol/server-github"}
+            spellCheck={false}
+          />
+        </div>
+        <div className="claude-section__field">
+          <label className="claude-section__label">{t("mcpEnv")}</label>
+          <textarea
+            className="claude-section__textarea"
+            value={env}
+            onChange={(e) => setEnv(e.target.value)}
+            placeholder="KEY=value"
+            spellCheck={false}
+          />
+        </div>
+        <label className="claude-section__toggle claude-section__toggle--inline">
+          <span>{t("mcpEnabled")}</span>
+          <input
+            type="checkbox"
+            data-switch
+            role="switch"
+            checked={enabled}
+            onChange={(e) => setEnabled(e.target.checked)}
+          />
+        </label>
+      </ScopeFormWrapper>
+
+      {savePath && (
+        <div className="claude-section__path-hint">
+          {t("mcpSavePath")}: {savePath}
+        </div>
+      )}
+      <div className="claude-section__form-actions">
+        <button className="claude-section__save-btn" onClick={handleSave} disabled={!canSave}>
+          {t("save")}
         </button>
-      </div>
-      <div className="claude-config-form__actions">
-        <button className="claude-config-form__save-btn" onClick={handleSave}>{t("save")}</button>
-        <button className="claude-config-form__cancel-btn" onClick={onCancel}>{t("cancel")}</button>
+        <button className="claude-section__cancel-btn" onClick={onCancel}>
+          {t("cancel")}
+        </button>
       </div>
     </div>
   );
