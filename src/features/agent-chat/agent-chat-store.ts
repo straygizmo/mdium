@@ -1,7 +1,7 @@
 import { create } from "zustand";
-import type { AgentEvent, AgentProvider, AgentSessionSummary, Availability, RunnerOutbound, ToolRequest } from "@/shared/types/agent-runner";
+import type { AgentEvent, AgentModelInfo, AgentProvider, AgentSessionSummary, Availability, RunnerOutbound, ToolRequest } from "@/shared/types/agent-runner";
 import { newRunnerId, onRunnerMessage, requestRunner, sendToRunner } from "./lib/agent-runner-client";
-import { useCodexSessionStore } from "@/stores/codex-session-store";
+import { useRunnerSessionStore } from "@/stores/runner-session-store";
 
 /** AGENT CHAT tabs: opencode and Claude host their existing panels; the rest are runner providers. */
 export type ChatProviderTab = "opencode" | "claude" | AgentProvider;
@@ -41,6 +41,7 @@ interface AgentChatState {
   cancel(folder: string, provider: AgentProvider): Promise<void>;
   respondPermission(folder: string, provider: AgentProvider, allow: boolean): Promise<void>;
   listSessions(folder: string, provider: AgentProvider): Promise<AgentSessionSummary[]>;
+  listModels(folder: string, provider: AgentProvider): Promise<AgentModelInfo[]>;
 }
 
 export const chatKey = (folder: string, provider: AgentProvider) => `${provider}::${folder}`;
@@ -177,8 +178,8 @@ export const useAgentChatStore = create<AgentChatState>()((set, get) => {
         update(key, (c) => ({ ...c, status: "starting", pendingPermissions: [] }));
         await sendToRunner({ type: "close_session", sessionId: previous }).catch(() => undefined);
       }
-      // Codex sessions carry the per-folder model / sandbox choice from the settings tab.
-      const codex = provider === "codex" ? useCodexSessionStore.getState().getFolderSettings(folder) : null;
+      // Runner providers carry the per-folder model / permission choice from their settings tab.
+      const settings = useRunnerSessionStore.getState().getFolderSettings(provider, folder);
       const sessionId = newRunnerId();
       update(key, (c) => {
         // Drop the discarded entries' ids from the streaming set so it
@@ -194,8 +195,8 @@ export const useAgentChatStore = create<AgentChatState>()((set, get) => {
             sessionId,
             provider,
             workingDirectory: folder,
-            permission: codex?.permission ?? "cli-default",
-            ...(codex?.model ? { model: codex.model } : {}),
+            permission: settings.permission,
+            ...(settings.model ? { model: settings.model } : {}),
             ...(resumeNativeId ? { resumeNativeId } : {}),
           },
           "session_started",
@@ -253,6 +254,14 @@ export const useAgentChatStore = create<AgentChatState>()((set, get) => {
         "session_list",
       );
       return res.sessions;
+    },
+
+    listModels: async (folder, provider) => {
+      const res = await requestRunner(
+        { type: "list_models", requestId: newRunnerId(), provider, workingDirectory: folder },
+        "model_list",
+      );
+      return res.models;
     },
   };
 });

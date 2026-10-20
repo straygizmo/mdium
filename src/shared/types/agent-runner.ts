@@ -51,6 +51,12 @@ export type AgentEvent =
   | { type: "tool_started"; toolId: string; title: string }
   | { type: "tool_finished"; toolId: string; ok: boolean };
 
+/** A model the provider can run a session with. */
+export interface AgentModelInfo {
+  id: string;
+  name: string;
+}
+
 export interface AgentSessionSummary {
   nativeSessionId: string;
   title?: string;
@@ -88,6 +94,7 @@ export type RunnerInbound =
   | { type: "cancel"; sessionId: string }
   | { type: "respond_permission"; sessionId: string; permissionId: string; allow: boolean }
   | { type: "list_sessions"; requestId: string; provider: RunnerProvider; workingDirectory: string }
+  | { type: "list_models"; requestId: string; provider: RunnerProvider; workingDirectory: string }
   | { type: "close_session"; sessionId: string }
   | {
       /**
@@ -111,6 +118,7 @@ export type RunnerOutbound =
   | { type: "turn_failed"; sessionId: string; message: string }
   | { type: "turn_cancelled"; sessionId: string }
   | { type: "session_list"; requestId: string; sessions: AgentSessionSummary[] }
+  | { type: "model_list"; requestId: string; models: AgentModelInfo[] }
   | { type: "guard_violation"; sessionId: string; rule: GuardRule; summary: string }
   | { type: "document_converted"; requestId: string; markdownPath: string }
   | { type: "error"; message: string; requestId?: string; sessionId?: string };

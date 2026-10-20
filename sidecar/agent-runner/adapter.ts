@@ -1,5 +1,6 @@
 import type {
   AgentEvent,
+  AgentModelInfo,
   AgentPermission,
   AgentSessionSummary,
   Availability,
@@ -41,6 +42,8 @@ export interface ProviderAdapter {
   probe(): Promise<Availability>;
   startSession(options: SessionOptions, callbacks: SessionCallbacks): Promise<AdapterSession>;
   listSessions?(workingDirectory: string): Promise<AgentSessionSummary[]>;
+  /** Models the provider offers, for the settings UI. */
+  listModels?(workingDirectory: string): Promise<AgentModelInfo[]>;
   /** Release adapter-wide resources (e.g. shared servers) when the runner shuts down. */
   dispose?(): Promise<void>;
 }

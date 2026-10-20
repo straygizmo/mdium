@@ -190,6 +190,24 @@ export class RunnerCore {
         }
         return;
       }
+      case "list_models": {
+        const adapter = this.adapter(msg.provider);
+        if (!adapter) {
+          this.deps.send({ type: "error", requestId: msg.requestId, message: "PROVIDER_UNAVAILABLE" });
+          return;
+        }
+        if (!adapter.listModels) {
+          this.deps.send({ type: "error", requestId: msg.requestId, message: "LIST_UNSUPPORTED" });
+          return;
+        }
+        try {
+          const models = await adapter.listModels(msg.workingDirectory);
+          this.deps.send({ type: "model_list", requestId: msg.requestId, models });
+        } catch (error) {
+          this.deps.send({ type: "error", requestId: msg.requestId, message: message(error) });
+        }
+        return;
+      }
       case "close_session":
         return this.closeSession(msg.sessionId);
     }

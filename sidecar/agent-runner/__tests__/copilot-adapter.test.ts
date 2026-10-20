@@ -28,6 +28,7 @@ function fakeClient(session: CopilotSessionLike, overrides: Partial<CopilotClien
     createSession: vi.fn(async (config) => { permissionHandler = config.onPermissionRequest as typeof permissionHandler; return session; }),
     resumeSession: vi.fn(async (_id, config) => { permissionHandler = config.onPermissionRequest as typeof permissionHandler; return session; }),
     listSessions: vi.fn(async () => [{ sessionId: "a", summary: "Fix bug", modifiedTime: new Date("2026-09-01T00:00:00Z") }]),
+    listModels: vi.fn(async () => [{ id: "claude-x", name: "Claude X" }, { id: "gpt-y" }]),
     ...overrides,
   };
   return { client, permission: (req: { kind: string; [k: string]: unknown }) => permissionHandler!(req) };
@@ -403,6 +404,15 @@ describe("CopilotAdapter", () => {
       { nativeSessionId: "a", title: "Fix bug", updatedAt: "2026-09-01T00:00:00.000Z" },
     ]);
     expect(client.listSessions).toHaveBeenCalledWith({ workingDirectory: "C:/w" });
+  });
+
+  it("lists models with the id as a fallback name", async () => {
+    const { client } = fakeClient(fakeSession([]));
+    await expect(make(client).listModels!("C:/w")).resolves.toEqual([
+      { id: "claude-x", name: "Claude X" },
+      { id: "gpt-y", name: "gpt-y" },
+    ]);
+    expect(client.stop).toHaveBeenCalled();
   });
 
   it("enables streaming when creating a session", async () => {

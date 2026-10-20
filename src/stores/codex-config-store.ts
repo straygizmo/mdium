@@ -4,6 +4,7 @@ import type { CodexMcpServer, SkillInfo } from "@/shared/types";
 import type { Scope } from "@/features/claude-config/components/shared/ScopeToggle";
 import { joinPath } from "@/features/claude-config/lib/config-paths";
 import { parseCodexModels, type CodexModel } from "@/features/codex-config/lib/models-cache";
+import { buildSkillMarkdown } from "@/shared/lib/skill-md";
 import { guardWrite } from "./claude-config-write-guard";
 
 interface CodexConfigState {
@@ -39,16 +40,6 @@ async function codexDir(scope: Scope, folderPath: string): Promise<string> {
 
 async function configPath(scope: Scope, folderPath: string): Promise<string> {
   return joinPath(await codexDir(scope, folderPath), "config.toml");
-}
-
-/** SKILL.md with the frontmatter Codex reads (name, description) followed by the body. */
-export function buildCodexSkillContent(skill: SkillInfo): string {
-  const lines = ["---", `name: ${skill.name}`];
-  if (skill.description) lines.push(`description: ${skill.description}`);
-  lines.push("---");
-  const body = skill.content.trim();
-  if (body) lines.push("", body);
-  return lines.join("\n") + "\n";
 }
 
 function mapSkillEntry(e: { dir_name?: string; dirName?: string; name: string; description: string; content: string }): SkillInfo {
@@ -131,7 +122,7 @@ export const useCodexConfigStore = create<CodexConfigState>()((set, get) => {
         await invoke("write_skill", {
           baseDir: await codexDir(scope, folderPath),
           dirName: skill.dirName,
-          content: buildCodexSkillContent(skill),
+          content: buildSkillMarkdown(skill.name, skill.description, skill.content),
         });
         await reloadSkills(scope, folderPath);
       }),

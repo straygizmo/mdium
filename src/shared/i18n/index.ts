@@ -35,6 +35,9 @@ import enClaudeConfig from "./locales/en/claude-config.json";
 import jaCodexConfig from "./locales/ja/codex-config.json";
 import enCodexConfig from "./locales/en/codex-config.json";
 
+import jaCopilotConfig from "./locales/ja/copilot-config.json";
+import enCopilotConfig from "./locales/en/copilot-config.json";
+
 import jaAgentChat from "./locales/ja/agent-chat.json";
 import enAgentChat from "./locales/en/agent-chat.json";
 
@@ -62,6 +65,7 @@ i18n.use(initReactI18next).init({
       replacement: jaReplacement,
       "claude-config": jaClaudeConfig,
       "codex-config": jaCodexConfig,
+      "copilot-config": jaCopilotConfig,
       "agent-chat": jaAgentChat,
       workflow: jaWorkflow,
       flow: jaFlow,
@@ -80,6 +84,7 @@ i18n.use(initReactI18next).init({
       replacement: enReplacement,
       "claude-config": enClaudeConfig,
       "codex-config": enCodexConfig,
+      "copilot-config": enCopilotConfig,
       "agent-chat": enAgentChat,
       workflow: enWorkflow,
       flow: enFlow,

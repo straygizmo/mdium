@@ -21,6 +21,7 @@ describe("parseInbound", () => {
     expect(parseInbound(JSON.stringify({ type: "cancel", sessionId: "s1" })).type).toBe("cancel");
     expect(parseInbound(JSON.stringify({ type: "respond_permission", sessionId: "s1", permissionId: "p", allow: true })).type).toBe("respond_permission");
     expect(parseInbound(JSON.stringify({ type: "list_sessions", requestId: "r", provider: "copilot", workingDirectory: "C:/w" })).type).toBe("list_sessions");
+    expect(parseInbound(JSON.stringify({ type: "list_models", requestId: "r", provider: "copilot", workingDirectory: "C:/w" })).type).toBe("list_models");
     expect(parseInbound(JSON.stringify({ type: "close_session", sessionId: "s1" })).type).toBe("close_session");
   });
 
