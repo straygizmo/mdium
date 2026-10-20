@@ -5,24 +5,9 @@ import { useLocalEmbedding } from "./useLocalEmbedding";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useTabStore } from "@/stores/tab-store";
 import { useChatUIStore } from "@/features/opencode-config/hooks/useOpencodeChat";
-import { applyForward } from "@/shared/lib/replacement";
-
-interface RagBridgeRequest {
-  id: string;
-  folderPath: string;
-  query: string;
-  limit: number | null;
-  searchMode: string | null;
-  bm25Weight: number | null;
-}
-
-interface BridgeResult {
-  file: string;
-  heading: string;
-  content: string;
-  line_number: number;
-  score: number;
-}
+import { showConfirm } from "@/stores/dialog-store";
+import type { RagBridgeRequest } from "@/shared/types/rag-bridge";
+import { handleRagBridgeRequest } from "../lib/bridge-handlers";
 
 /**
  * Bridges the opencode rag_search tool to the app's embedding + search.
@@ -76,94 +61,39 @@ export function useRagBridge() {
     let disposed = false;
 
     const handle = async (req: RagBridgeRequest) => {
-      // Read settings at request time so the latest configuration is used.
-      const rag = useSettingsStore.getState().ragSettings;
-      const model = rag.embeddingModel;
-      const searchMode = req.searchMode ?? rag.searchMode;
-      const bm25Weight = req.bm25Weight ?? rag.bm25Weight;
-      const limit = req.limit ?? rag.retrieveTopK;
-      // Use the folder mdium has open as the search root. opencode's
-      // context.worktree (req.folderPath) is unreliable — it can be "/", which
-      // makes rag_search recursively scan the entire filesystem for sub-indexes
-      // (tens of seconds). The active folder is where the index actually lives.
-      const folderPath = useTabStore.getState().activeFolderPath || req.folderPath;
-
-      const respond = (payload: any) =>
+      const respond = (payload: unknown) =>
         invoke("rag_bridge_respond", { id: req.id, payload }).catch((e) =>
           console.error("[rag-bridge] respond failed:", e)
         );
 
-      const work = async (): Promise<BridgeResult[]> => {
-        console.info("[rag-bridge] request:", req.query, "| model:", model, "| folder:", folderPath);
-        // Guard against a missing/root folder, which would make rag_search walk
-        // the whole filesystem looking for sub-indexes (tens of seconds).
-        if (!folderPath || folderPath === "/" || folderPath === "\\" || /^[A-Za-z]:[\\/]?$/.test(folderPath)) {
-          throw new Error("No document folder is open in mdium to search. Open the folder first.");
-        }
-        // Never trigger a network download from this invisible path — in a
-        // blocked/offline env that can hang indefinitely. Fail fast instead.
-        const t0 = performance.now();
-        const exists = await invoke<boolean>("rag_check_model", { modelName: model });
-        if (!exists) {
-          throw new Error(
-            `Embedding model "${model}" is not available locally. Open the mdium RAG panel and build the index first.`
-          );
-        }
-        const t1 = performance.now();
-        await load(model);
-        const t2 = performance.now();
-        const embedding = await embed(req.query, "query");
-        const t3 = performance.now();
-        const allResults = await invoke<any[]>("rag_search", {
-          folderPath,
-          embedding,
-          queryText: req.query,
-          limit,
-          modelName: model,
-          searchMode,
-          bm25Weight,
-        });
-        const t4 = performance.now();
-        // Per-phase timing. A large `load` here means the model was cold/reloaded.
-        console.info(
-          `[rag-bridge] timing(ms): check=${(t1 - t0) | 0} load=${(t2 - t1) | 0} embed=${(t3 - t2) | 0} search=${(t4 - t3) | 0}`
-        );
-        // In hybrid mode `score` is an RRF score (different scale from cosine),
-        // so the cosine-based minScore threshold only applies to vector mode.
-        const filtered =
-          searchMode === "hybrid"
-            ? allResults
-            : allResults.filter((r: any) => (r.score ?? 0) >= rag.retrieveMinScore);
+      const work = handleRagBridgeRequest(req, useTabStore.getState().activeFolderPath, {
+        embedding: { load, embed },
+        confirm: (m) => showConfirm(m, { kind: "warning" }),
+      });
 
-        // Mask result text before it reaches the LLM via opencode. File
-        // paths are NOT masked — opencode tools resolve files by this path.
-        const repl = useSettingsStore.getState().replacement;
-        return filtered.map((r: any) => ({
-          file: r.file,
-          heading: applyForward(r.heading ?? "", repl),
-          content: applyForward(r.text ?? "", repl),
-          line_number: r.line ?? 0,
-          score: r.score ?? 0,
-        }));
-      };
-
-      // Always resolve the bridge request: a hard timeout guarantees the agent
-      // gets an answer even if model load or search stalls (shorter than the
-      // Rust-side 180s block so the message reaches the tool).
-      const timeout = new Promise<never>((_, reject) =>
-        setTimeout(
-          () => reject(new Error("RAG search timed out in mdium (model load or search took too long).")),
-          120_000
-        )
-      );
-
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        const results = await Promise.race([work(), timeout]);
-        console.info("[rag-bridge] responding with", results.length, "results");
-        await respond({ ok: true, results });
+        // Only search gets a hard timeout (shorter than the Rust-side 180s
+        // block so the message reaches the tool). Convert/update wait on the
+        // user's approval, which has its own timeout in the handler.
+        const payload =
+          req.kind === "search"
+            ? await Promise.race([
+                work,
+                new Promise<never>((_, reject) => {
+                  timer = setTimeout(
+                    () => reject(new Error("RAG search timed out in mdium (model load or search took too long).")),
+                    120_000
+                  );
+                }),
+              ])
+            : await work;
+        await respond(payload);
       } catch (e: any) {
         console.error("[rag-bridge] failed:", e);
-        await respond({ ok: false, error: e?.message ?? String(e) });
+        await respond({ ok: false, error: "internal", message: e?.message ?? String(e) });
+      } finally {
+        clearTimeout(timer);
       }
     };
 

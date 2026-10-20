@@ -39,5 +39,7 @@
   "errorCopilotDisconnected": "Lost connection to Copilot. Start a new session.",
   "errorRunnerStartTimeout": "The agent runner did not start in time.",
   "errorSessionUnavailable": "The session is not available. Start a new session.",
-  "errorGeneric": "Error: {{message}}"
+  "errorGeneric": "Error: {{message}}",
+  "indexApproveConvert": "The agent wants to convert {{count}} Office document(s) to Markdown:\n{{files}}\nAllow?",
+  "indexApproveUpdate": "The agent wants to update the document index. Allow?"
 }
