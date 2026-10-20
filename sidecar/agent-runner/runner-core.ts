@@ -260,6 +260,7 @@ export class RunnerCore {
           ...(msg.model ? { model: msg.model } : {}),
           ...(msg.resumeNativeId ? { resumeNativeId: msg.resumeNativeId } : {}),
           ...(msg.env ? { env: msg.env } : {}),
+          ...(msg.mcpServers ? { mcpServers: msg.mcpServers } : {}),
           guarded: Boolean(msg.guard),
         },
         {

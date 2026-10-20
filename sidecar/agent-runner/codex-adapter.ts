@@ -47,7 +47,7 @@ export interface CodexLike {
 }
 
 export interface CodexAdapterDeps {
-  createCodex: (options: { codexPathOverride?: string; env?: Record<string, string> }) => CodexLike;
+  createCodex: (options: { codexPathOverride?: string; env?: Record<string, string>; config?: Record<string, unknown> }) => CodexLike;
   resolvePath: () => Promise<string | null>;
   probe: (path: string | null) => Promise<Availability>;
 }
@@ -141,7 +141,7 @@ class CodexSession implements AdapterSession {
 
 export class CodexAdapter implements ProviderAdapter {
   constructor(private readonly deps: CodexAdapterDeps = {
-    createCodex: (options) => new Codex(options) as unknown as CodexLike,
+    createCodex: (options) => new Codex(options as ConstructorParameters<typeof Codex>[0]) as unknown as CodexLike,
     resolvePath: () => resolveCodexPath(),
     probe: (path) => probeCodex(path),
   }) {}
@@ -156,7 +156,15 @@ export class CodexAdapter implements ProviderAdapter {
     const env = options.env
       ? { ...(Object.fromEntries(Object.entries(process.env).filter(([, v]) => v !== undefined)) as Record<string, string>), ...options.env }
       : undefined;
-    const codex = this.deps.createCodex({ codexPathOverride: path, ...(env ? { env } : {}) });
+    // The Codex SDK flattens `config` into `--config key=value` TOML overrides.
+    const config = options.mcpServers
+      ? {
+          mcp_servers: Object.fromEntries(
+            Object.entries(options.mcpServers).map(([name, spec]) => [name, { command: spec.command, args: spec.args, env: spec.env }]),
+          ),
+        }
+      : undefined;
+    const codex = this.deps.createCodex({ codexPathOverride: path, ...(env ? { env } : {}), ...(config ? { config } : {}) });
     const sandboxMode = codexSandbox(options.permission);
     const threadOptions: CodexThreadOptionsLike = {
       workingDirectory: options.workingDirectory,

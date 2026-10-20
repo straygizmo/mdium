@@ -25,6 +25,23 @@ describe("parseInbound", () => {
     expect(parseInbound(JSON.stringify({ type: "close_session", sessionId: "s1" })).type).toBe("close_session");
   });
 
+  it("keeps well-formed mcpServers and drops malformed entries", () => {
+    const parsed = parseInbound(JSON.stringify({
+      ...start,
+      mcpServers: {
+        "mdium-rag": { command: "node", args: ["a.js"], env: { K: "v" } },
+        bad: { args: ["x"] },
+        worse: "nope",
+      },
+    }));
+    expect(parsed).toMatchObject({ mcpServers: { "mdium-rag": { command: "node", args: ["a.js"], env: { K: "v" } } } });
+    expect(Object.keys((parsed as { mcpServers: object }).mcpServers)).toEqual(["mdium-rag"]);
+  });
+
+  it("omits mcpServers when none are valid", () => {
+    expect(parseInbound(JSON.stringify({ ...start, mcpServers: { bad: {} } }))).not.toHaveProperty("mcpServers");
+  });
+
   it.each([
     ["non-JSON", "not json"],
     ["unknown type", JSON.stringify({ type: "explode" })],

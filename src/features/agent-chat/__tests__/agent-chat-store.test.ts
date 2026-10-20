@@ -18,6 +18,8 @@ const client = vi.hoisted(() => {
   };
 });
 vi.mock("../lib/agent-runner-client", () => client);
+const rag = vi.hoisted(() => ({ mdiumRagServerFor: vi.fn(async (): Promise<Record<string, unknown> | undefined> => undefined) }));
+vi.mock("../lib/mdium-rag-mcp", () => ({ mdiumRagPermissionFor: () => "ask", mdiumRagServerFor: rag.mdiumRagServerFor }));
 
 import { chatKey, emptyChat, useAgentChatStore } from "../agent-chat-store";
 import { useRunnerSessionStore } from "@/stores/runner-session-store";
@@ -290,6 +292,8 @@ describe("agent chat store", () => {
     );
     const starting = useAgentChatStore.getState().newSession("C:/w", "codex");
     expect(chat().status).toBe("starting");
+    // newSession awaits the MCP server lookup before calling requestRunner.
+    await vi.waitFor(() => expect(rejectStart).toBeDefined());
 
     client.emit({ type: "error", message: "RUNNER_EXITED" });
     rejectStart?.(new Error("RUNNER_EXITED"));
@@ -298,5 +302,17 @@ describe("agent chat store", () => {
     expect(chat().sessionId).toBeNull();
     const runnerExitedEntries = chat().entries.filter((e) => e.text === "RUNNER_EXITED");
     expect(runnerExitedEntries).toHaveLength(1);
+  });
+
+  it("includes mcpServers in start_session when the mdium-rag server resolves", async () => {
+    const spec = { "mdium-rag": { command: "node", args: ["i.js"], env: { MDIUM_RAG_PERMISSION: "ask" } } };
+    rag.mdiumRagServerFor.mockResolvedValueOnce(spec);
+    await useAgentChatStore.getState().send("C:/w", "codex", "hi");
+    expect(client.requestRunner.mock.calls[0][0]).toMatchObject({ type: "start_session", mcpServers: spec });
+  });
+
+  it("omits mcpServers from start_session when the server is disabled", async () => {
+    await useAgentChatStore.getState().send("C:/w", "codex", "hi");
+    expect(client.requestRunner.mock.calls[0][0]).not.toHaveProperty("mcpServers");
   });
 });

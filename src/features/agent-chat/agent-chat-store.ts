@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { AgentEvent, AgentModelInfo, AgentProvider, AgentSessionSummary, Availability, RunnerOutbound, ToolRequest } from "@/shared/types/agent-runner";
 import { newRunnerId, onRunnerMessage, requestRunner, sendToRunner } from "./lib/agent-runner-client";
+import { mdiumRagPermissionFor, mdiumRagServerFor } from "./lib/mdium-rag-mcp";
 import { useRunnerSessionStore } from "@/stores/runner-session-store";
 
 /** AGENT CHAT tabs: opencode and Claude host their existing panels; the rest are runner providers. */
@@ -188,6 +189,7 @@ export const useAgentChatStore = create<AgentChatState>()((set, get) => {
         return { ...emptyChat, sessionId, status: "starting" };
       });
       try {
+        const mcpServers = await mdiumRagServerFor(provider, mdiumRagPermissionFor(settings.permission));
         await requestRunner(
           {
             type: "start_session",
@@ -198,6 +200,7 @@ export const useAgentChatStore = create<AgentChatState>()((set, get) => {
             permission: settings.permission,
             ...(settings.model ? { model: settings.model } : {}),
             ...(resumeNativeId ? { resumeNativeId } : {}),
+            ...(mcpServers ? { mcpServers } : {}),
           },
           "session_started",
         );

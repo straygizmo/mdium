@@ -25,6 +25,7 @@ interface CopilotSessionConfigLike {
   model?: string;
   /** Required for assistant.message_delta streaming events to be emitted (SDK default is false). */
   streaming?: boolean;
+  mcpServers?: Record<string, { type: "local"; command: string; args: string[]; env: Record<string, string>; tools: string[] }>;
   onPermissionRequest: (request: { kind: string; [k: string]: unknown }) => Promise<PermissionResult>;
 }
 
@@ -263,6 +264,16 @@ export class CopilotAdapter implements ProviderAdapter {
       // never emits assistant.message_delta events.
       streaming: true,
       onPermissionRequest,
+      ...(options.mcpServers
+        ? {
+            mcpServers: Object.fromEntries(
+              Object.entries(options.mcpServers).map(([name, spec]) => [
+                name,
+                { type: "local" as const, command: spec.command, args: spec.args, env: spec.env, tools: ["*"] },
+              ]),
+            ),
+          }
+        : {}),
       ...(options.model ? { model: options.model } : {}),
     };
     try {

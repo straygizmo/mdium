@@ -6,6 +6,7 @@ import type {
   Availability,
   ToolRequest,
 } from "../../src/shared/types/agent-runner";
+import type { StdioMcpServerSpec } from "../../src/shared/types/rag-bridge";
 
 export interface SessionOptions {
   workingDirectory: string;
@@ -13,6 +14,8 @@ export interface SessionOptions {
   model?: string;
   resumeNativeId?: string;
   env?: Record<string, string>;
+  /** Extra stdio MCP servers to attach to the session, keyed by server name. */
+  mcpServers?: Record<string, StdioMcpServerSpec>;
   /** True when start_session enabled the runtime safety guard; the verdict itself comes from checkTool. */
   guarded: boolean;
 }

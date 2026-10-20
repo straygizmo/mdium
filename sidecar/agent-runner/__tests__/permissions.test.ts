@@ -61,6 +61,19 @@ describe("shell requests without command text", () => {
   });
 });
 
+describe("mdium-rag trust", () => {
+  it("marks mdium-rag MCP requests as trusted reads and approves them in every mode", () => {
+    const request = toolRequestFromCopilot({ kind: "mcp", serverName: "mdium-rag", toolName: "rag_search" });
+    expect(request).toEqual({ kind: "read", summary: "mdium-rag/rag_search", rawKind: "mcp", trusted: true });
+    expect(copilotDecision("cli-default", request)).toBe("approve");
+  });
+  it("keeps other MCP servers opaque and asks under cli-default", () => {
+    const request = toolRequestFromCopilot({ kind: "mcp", serverName: "other", toolName: "t" });
+    expect(request.opaque).toBe(true);
+    expect(copilotDecision("cli-default", request)).toBe("ask");
+  });
+});
+
 describe("copilotDecision", () => {
   const read = { kind: "read" as const, summary: "a" };
   const shell = { kind: "shell" as const, summary: "rm -rf x" };
