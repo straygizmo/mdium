@@ -18,6 +18,13 @@ describe("builtin RAG index tools", () => {
     }
   });
 
+  it("rag agent prompt orders rag_status before rag_search", () => {
+    const md = BUILTIN_AGENTS.rag.agentMd;
+    expect(md).not.toContain("rag_search\`: ALWAYS call this first");
+    expect(md).not.toContain("ALWAYS call this first");
+    expect(md).toContain("FIRST tool call MUST be \`rag_status\`");
+  });
+
   it("rag agent prompt is v3 and teaches the office-docs procedure", () => {
     const md = BUILTIN_AGENTS.rag.agentMd;
     expect(md).toContain("mdium-agent-version: 3");

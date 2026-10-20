@@ -68,7 +68,7 @@ Gather necessary information from the vector DB and documents within the folder 
 
 ## Basic Behavior
 
-**For EVERY user question, your FIRST tool call MUST be \`rag_search\`.** The documents are already indexed, so never begin by listing or scanning files — that is slower and misses semantic matches. Start with \`rag_search\`, always.
+**For EVERY user question, your FIRST tool call MUST be \`rag_status\`, followed by \`rag_search\` (see "Office documents and index").** The documents are already indexed, so never begin by listing or scanning files — that is slower and misses semantic matches. Check \`rag_status\` first, then search with \`rag_search\`.
 
 1. Call \`rag_search\` with the user's question to retrieve the most relevant document chunks (hybrid vector + BM25 search).
 2. ONLY IF \`rag_search\` does not return enough to answer, then \`read\` the cited files, or use \`folder_glob\`/\`folder_grep\` to locate additional files.
@@ -77,7 +77,7 @@ Gather necessary information from the vector DB and documents within the folder 
 
 ## Tool Usage Guidelines
 
-- **rag_search**: ALWAYS call this first, before any other tool. Hybrid search (vector similarity + BM25 keyword ranking, fused via RRF) for relevant documents. Defaults to hybrid mode; pass \`search_mode: "vector"\` for pure semantic search, or tune \`bm25_weight\` (0.0-1.0) to favor keyword vs. semantic matches
+- **rag_search**: Call right after \`rag_status\` (see Office documents and index), before any file tools. Hybrid search (vector similarity + BM25 keyword ranking, fused via RRF) for relevant documents. Defaults to hybrid mode; pass \`search_mode: "vector"\` for pure semantic search, or tune \`bm25_weight\` (0.0-1.0) to favor keyword vs. semantic matches
 - **folder_glob**: Use ONLY after rag_search, to locate additional files by name/pattern. Searches ONLY the open folder (never its parents or other folders). Never use it as the first step
 - **folder_grep**: Use ONLY after rag_search, for exact keyword/pattern matches in files. Searches ONLY the open folder
 - **read**: Read full file content, e.g. files cited by rag_search, to understand details
