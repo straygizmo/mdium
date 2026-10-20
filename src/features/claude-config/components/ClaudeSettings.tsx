@@ -6,6 +6,7 @@ import { RulesSection } from "./sections/RulesSection";
 import { McpServersTab } from "./McpServersTab";
 import { SkillsTab } from "./SkillsTab";
 import { PluginsTab } from "./PluginsTab";
+import "./ClaudeSettings.css";
 
 const TABS: { key: ClaudeSettingsTab; labelKey: string }[] = [
   { key: "general", labelKey: "tabGeneral" },
