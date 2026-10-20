@@ -5,6 +5,7 @@ import { useTabStore } from "@/stores/tab-store";
 import { useUiStore } from "@/stores/ui-store";
 import { OpencodeConfigPanel } from "@/features/opencode-config/components/OpencodeConfigPanel";
 import { ClaudePanel } from "@/features/claude-config/components/ClaudePanel";
+import { CodexPanel } from "@/features/codex-config/components/CodexPanel";
 import { useAgentChatStore, type ChatProviderTab } from "../agent-chat-store";
 import { NativeChat } from "./NativeChat";
 import "@/features/opencode-config/components/OpencodeConfigPanel.css";
@@ -96,10 +97,12 @@ export function AgentChatPanel() {
           <OpencodeConfigPanel />
         ) : selectedTab === "claude" ? (
           <ClaudePanel />
-        ) : folder ? (
-          <NativeChat folder={folder} provider={selectedTab} />
-        ) : (
+        ) : !folder ? (
           <div className="agent-chat__empty">{t("noFolder")}</div>
+        ) : selectedTab === "codex" ? (
+          <CodexPanel folder={folder} />
+        ) : (
+          <NativeChat folder={folder} provider={selectedTab} />
         )}
       </div>
     </div>

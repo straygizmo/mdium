@@ -20,6 +20,7 @@ const client = vi.hoisted(() => {
 vi.mock("../lib/agent-runner-client", () => client);
 
 import { chatKey, emptyChat, useAgentChatStore } from "../agent-chat-store";
+import { useCodexSessionStore } from "@/stores/codex-session-store";
 
 const key = chatKey("C:/w", "codex");
 const chat = () => useAgentChatStore.getState().chats[key] ?? emptyChat;
@@ -27,6 +28,7 @@ const chat = () => useAgentChatStore.getState().chats[key] ?? emptyChat;
 describe("agent chat store", () => {
   beforeEach(() => {
     useAgentChatStore.setState({ chats: {}, availability: {}, selectedTab: "opencode" });
+    useCodexSessionStore.setState({ folders: {} });
     client.sendToRunner.mockClear();
     client.requestRunner.mockClear();
   });
@@ -44,6 +46,18 @@ describe("agent chat store", () => {
     expect(client.sendToRunner).toHaveBeenCalledWith({ type: "send", sessionId: start.sessionId, text: "hello" });
     expect(chat().status).toBe("running");
     expect(chat().entries.map((e) => [e.role, e.text])).toEqual([["user", "hello"]]);
+  });
+
+  it("starts Codex sessions with the folder's model and sandbox from the settings tab", async () => {
+    useCodexSessionStore.setState({ folders: { "C:/w": { model: "gpt-test", permission: "read-only" } } });
+    await useAgentChatStore.getState().send("C:/w", "codex", "hello");
+    expect(client.requestRunner.mock.calls[0][0]).toMatchObject({ type: "start_session", provider: "codex", model: "gpt-test", permission: "read-only" });
+    // Other providers never pick up the Codex settings.
+    client.requestRunner.mockClear();
+    await useAgentChatStore.getState().send("C:/w", "copilot", "hi");
+    const start = client.requestRunner.mock.calls[0][0];
+    expect(start).toMatchObject({ provider: "copilot", permission: "cli-default" });
+    expect(start).not.toHaveProperty("model");
   });
 
   it("streams deltas, finalizes the message, and tracks tools", async () => {

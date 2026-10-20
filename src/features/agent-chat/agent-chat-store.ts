@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { AgentEvent, AgentProvider, AgentSessionSummary, Availability, RunnerOutbound, ToolRequest } from "@/shared/types/agent-runner";
 import { newRunnerId, onRunnerMessage, requestRunner, sendToRunner } from "./lib/agent-runner-client";
+import { useCodexSessionStore } from "@/stores/codex-session-store";
 
 /** AGENT CHAT tabs: opencode and Claude host their existing panels; the rest are runner providers. */
 export type ChatProviderTab = "opencode" | "claude" | AgentProvider;
@@ -176,6 +177,8 @@ export const useAgentChatStore = create<AgentChatState>()((set, get) => {
         update(key, (c) => ({ ...c, status: "starting", pendingPermissions: [] }));
         await sendToRunner({ type: "close_session", sessionId: previous }).catch(() => undefined);
       }
+      // Codex sessions carry the per-folder model / sandbox choice from the settings tab.
+      const codex = provider === "codex" ? useCodexSessionStore.getState().getFolderSettings(folder) : null;
       const sessionId = newRunnerId();
       update(key, (c) => {
         // Drop the discarded entries' ids from the streaming set so it
@@ -191,7 +194,8 @@ export const useAgentChatStore = create<AgentChatState>()((set, get) => {
             sessionId,
             provider,
             workingDirectory: folder,
-            permission: "cli-default",
+            permission: codex?.permission ?? "cli-default",
+            ...(codex?.model ? { model: codex.model } : {}),
             ...(resumeNativeId ? { resumeNativeId } : {}),
           },
           "session_started",

@@ -2,6 +2,7 @@ pub mod agent_runner;
 pub mod ai;
 pub mod claude_config;
 pub mod claude_sidecar;
+pub mod codex_config;
 pub mod doc_convert;
 pub mod env;
 pub mod file;

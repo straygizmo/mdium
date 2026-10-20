@@ -194,6 +194,27 @@ export type ClaudeTopTab = "chat" | "settings";
 /** Claude settings sub-tab */
 export type ClaudeSettingsTab = "general" | "rules" | "mcp" | "skills" | "plugins";
 
+/** Codex panel top-level tab */
+export type CodexTopTab = "chat" | "settings";
+
+/** Codex settings sub-tab */
+export type CodexSettingsTab = "general" | "rules" | "mcp" | "skills";
+
+/** MCP server entry in Codex config.toml (`[mcp_servers.<name>]`) */
+export interface CodexMcpServer {
+  name: string;
+  /** Local (stdio) server command */
+  command?: string;
+  args: string[];
+  env: Record<string, string>;
+  /** Remote (streamable HTTP) server URL */
+  url?: string;
+  bearerTokenEnvVar?: string;
+  enabled: boolean;
+  startupTimeoutSec?: number;
+  toolTimeoutSec?: number;
+}
+
 /** Slidev dev server state for a given markdown file */
 export interface SlidevSession {
   /** Temp directory path */
