@@ -1,0 +1,202 @@
+import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { useSettingsStore } from "@/stores/settings-store";
+import { useRagIndexStore } from "../stores/rag-index-store";
+import type {
+  RagBridgeErrorCode,
+  RagIndexState,
+  RagJobInfo,
+  RagStatusPayload,
+  RagUnconvertedDoc,
+} from "@/shared/types/rag-bridge";
+
+export interface EmbeddingApi {
+  load(model: string): Promise<void>;
+  embed(text: string, type: "query" | "passage"): Promise<number[]>;
+}
+
+export class JobRunningError extends Error {
+  code = "job_running" as const;
+  constructor() {
+    super("An index job is already running");
+    this.name = "JobRunningError";
+  }
+}
+
+interface DbCounts {
+  total_chunks: number;
+  total_files: number;
+}
+
+const store = () => useRagIndexStore.getState();
+
+function isJobRunning(): boolean {
+  return store().job?.state === "running";
+}
+
+async function fetchCounts(folder: string): Promise<DbCounts> {
+  const { embeddingModel } = useSettingsStore.getState().ragSettings;
+  try {
+    const r = await invoke<Partial<DbCounts>>("rag_get_status", { folderPath: folder, modelName: embeddingModel });
+    return { total_chunks: r.total_chunks ?? 0, total_files: r.total_files ?? 0 };
+  } catch {
+    return { total_chunks: 0, total_files: 0 };
+  }
+}
+
+function runningStateFor(folder: string): RagIndexState | null {
+  const job = store().job;
+  if (job?.state !== "running" || job.folder !== folder) return null;
+  return job.kind === "update" ? "updating" : "converting";
+}
+
+export async function refreshIndexStatus(folder: string): Promise<void> {
+  const counts = await fetchCounts(folder);
+  const running = runningStateFor(folder);
+  store().patch({
+    folder,
+    state: running ?? (counts.total_chunks > 0 ? "ready" : "empty"),
+    totalChunks: counts.total_chunks,
+    totalFiles: counts.total_files,
+  });
+}
+
+function errorMessage(e: unknown): string {
+  // onnxruntime-web aborts surface as a bare number (a WASM heap address);
+  // tag those so the UI can show actionable guidance.
+  return e instanceof Error ? e.message : typeof e === "number" ? `ENGINE_CRASH:${e}` : String(e);
+}
+
+const fileNameOf = (p: string) => p.split(/[\\/]/).pop() ?? "";
+
+function patchJob(id: string, p: Partial<RagJobInfo>): void {
+  const job = store().job;
+  if (job && job.id === id) store().patch({ job: { ...job, ...p } });
+}
+
+export function startUpdateIndex(folder: string, embedding: EmbeddingApi): RagJobInfo {
+  if (isJobRunning()) throw new JobRunningError();
+  const initial: RagJobInfo = {
+    id: crypto.randomUUID(),
+    kind: "update",
+    folder,
+    state: "running",
+    done: 0,
+    total: 0,
+    current_file: "",
+    errors: [],
+  };
+  store().patch({ folder, state: "updating", error: null, progress: null, job: initial });
+  void runUpdate(initial.id, folder, embedding);
+  return initial;
+}
+
+async function runUpdate(id: string, folder: string, embedding: EmbeddingApi): Promise<void> {
+  const { embeddingModel, fileExtensions, minChunkLength } = useSettingsStore.getState().ragSettings;
+  let unlisten: UnlistenFn | null = null;
+  try {
+    await embedding.load(embeddingModel);
+
+    unlisten = await listen<{ current: number; total: number; file: string }>("rag-scan-progress", (e) => {
+      const { current, total, file } = e.payload;
+      const name = fileNameOf(file);
+      // Once the final file is reached the scan still has to serialize the
+      // chunk array over IPC with no events; show a transitional phase.
+      store().patch({
+        progress:
+          current >= total
+            ? { phase: "preparing", current, total, currentFile: "" }
+            : { phase: "scanning", current, total, currentFile: name },
+      });
+      patchJob(id, { current_file: name });
+    });
+
+    const chunks = await invoke<any[]>("rag_scan_folder", {
+      folderPath: folder,
+      fileExtensions,
+      minChunkLength,
+      modelName: embeddingModel,
+    });
+    unlisten();
+    unlisten = null;
+
+    if (chunks.length > 0) {
+      patchJob(id, { total: chunks.length });
+      const embeddings: number[][] = [];
+      for (let i = 0; i < chunks.length; i++) {
+        const name = fileNameOf(chunks[i].file as string);
+        store().patch({ progress: { phase: "embedding", current: i + 1, total: chunks.length, currentFile: name } });
+        patchJob(id, { current_file: name });
+        embeddings.push(await embedding.embed(chunks[i].text, "passage"));
+        patchJob(id, { done: i + 1 });
+      }
+      store().patch({ progress: { phase: "saving", current: chunks.length, total: chunks.length, currentFile: "" } });
+      const withEmbed = chunks.map((c, i) => ({ ...c, embedding: embeddings[i] }));
+      await invoke<number>("rag_save_chunks", { folderPath: folder, chunks: withEmbed, modelName: embeddingModel });
+    }
+
+    // Mark the job done and publish fresh counts in a single update.
+    const counts = await fetchCounts(folder);
+    const job = store().job;
+    store().patch({
+      progress: null,
+      state: counts.total_chunks > 0 ? "ready" : "empty",
+      totalChunks: counts.total_chunks,
+      totalFiles: counts.total_files,
+      job: job && job.id === id ? { ...job, state: "done", current_file: "" } : job,
+    });
+  } catch (e) {
+    console.error("Build index failed:", e);
+    const message = errorMessage(e);
+    const job = store().job;
+    store().patch({
+      error: message,
+      state: "error",
+      progress: null,
+      job:
+        job && job.id === id
+          ? { ...job, state: "failed", current_file: "", errors: [{ path: folder, message }] }
+          : job,
+    });
+  } finally {
+    if (unlisten) unlisten();
+  }
+}
+
+export async function deleteIndex(folder: string): Promise<void> {
+  if (isJobRunning()) throw new JobRunningError();
+  const { embeddingModel } = useSettingsStore.getState().ragSettings;
+  await invoke("rag_delete_index", { folderPath: folder, modelName: embeddingModel });
+  store().patch({ folder, state: "empty", totalChunks: 0, totalFiles: 0, progress: null, error: null });
+}
+
+export function statusPayloadFor(
+  folder: string,
+  unconverted: RagUnconvertedDoc[],
+  dbCounts: DbCounts,
+): RagStatusPayload {
+  const s = store();
+  const sameFolder = s.folder === folder;
+  const running = runningStateFor(folder);
+  const state: RagIndexState =
+    running ?? (sameFolder && s.error ? "error" : dbCounts.total_chunks > 0 ? "ready" : "empty");
+  const storeError = sameFolder ? s.error : null;
+  return {
+    ok: true,
+    state,
+    total_chunks: dbCounts.total_chunks,
+    total_files: dbCounts.total_files,
+    embedding_model: useSettingsStore.getState().ragSettings.embeddingModel,
+    progress:
+      sameFolder && s.progress
+        ? { phase: s.progress.phase, current: s.progress.current, total: s.progress.total }
+        : null,
+    unconverted_office_docs: unconverted,
+    job: s.job && s.job.folder === folder ? s.job : null,
+    error: storeError === "MODEL_MISSING" ? "model_missing" : storeError,
+  };
+}
+
+export function errorCodeFor(e: unknown): RagBridgeErrorCode {
+  return e instanceof JobRunningError ? "job_running" : "internal";
+}
