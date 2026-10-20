@@ -24,6 +24,8 @@ export function GitPanel() {
   const isRepo = useGitStore((s) => s.isRepo);
   const remoteUrl = useGitStore((s) => s.remoteUrl);
   const commitsAhead = useGitStore((s) => s.commitsAhead);
+  const commitsBehind = useGitStore((s) => s.commitsBehind);
+  const fetchError = useGitStore((s) => s.fetchError);
   const refresh = useGitStore((s) => s.refresh);
   const initRepo = useGitStore((s) => s.initRepo);
   const setRemoteUrlAction = useGitStore((s) => s.setRemoteUrl);
@@ -31,6 +33,7 @@ export function GitPanel() {
   const unstageFiles = useGitStore((s) => s.unstageFiles);
   const commitAction = useGitStore((s) => s.commit);
   const pushAction = useGitStore((s) => s.push);
+  const pullAction = useGitStore((s) => s.pull);
   const discardFiles = useGitStore((s) => s.discardFiles);
   const generateCommitMessage = useGitStore((s) => s.generateCommitMessage);
   const setCommitMessage = useGitStore((s) => s.setCommitMessage);
@@ -122,6 +125,10 @@ export function GitPanel() {
   const handlePush = useCallback(() => {
     if (activeFolderPath) pushAction(activeFolderPath);
   }, [activeFolderPath, pushAction]);
+
+  const handlePull = useCallback(() => {
+    if (activeFolderPath) pullAction(activeFolderPath);
+  }, [activeFolderPath, pullAction]);
 
   const handleGenerate = useCallback(() => {
     if (activeFolderPath) {
@@ -276,6 +283,14 @@ export function GitPanel() {
               {t("commit")}
             </button>
             <button
+              className="git-panel__action-btn git-panel__action-btn--pull"
+              onClick={handlePull}
+              disabled={loading || !remoteUrl}
+              title={t("pull")}
+            >
+              {t("pull")}{commitsBehind > 0 ? ` (${commitsBehind})` : ""}
+            </button>
+            <button
               className="git-panel__action-btn git-panel__action-btn--push"
               onClick={handlePush}
               disabled={loading || commitsAhead === 0}
@@ -288,6 +303,11 @@ export function GitPanel() {
 
         {errorMessage && (
           <div className="git-panel__error">{errorMessage}</div>
+        )}
+        {fetchError && (
+          <div className="git-panel__error git-panel__error--warning">
+            {t("fetchFailed", { message: fetchError })}
+          </div>
         )}
 
         <div className="git-panel__file-lists">

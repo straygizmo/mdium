@@ -124,6 +124,40 @@ pub async fn git_fetch(path: String) -> Result<String, String> {
     off_main(move || run_git(&path, &["fetch", "--all", "--prune"])).await
 }
 
+/// Pull the current branch from its upstream.
+///
+/// Unlike `run_git`, a failure returns stdout as well as stderr: `git pull`
+/// reports merge conflicts ("CONFLICT (content): ...") on stdout, so stderr
+/// alone would leave the user with an empty error. Terminal prompts are
+/// disabled so a missing credential fails fast instead of hanging on a
+/// hidden console.
+#[tauri::command]
+pub async fn git_pull(path: String) -> Result<String, String> {
+    off_main(move || {
+        let mut cmd = Command::new("git");
+        cmd.args(&["-c", "core.quotePath=false", "pull"])
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .current_dir(&path);
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        let output = cmd
+            .output()
+            .map_err(|e| format!("Failed to run git: {}", e))?;
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let msg: Vec<&str> = [stderr.trim(), stdout.trim()]
+                .into_iter()
+                .filter(|s| !s.is_empty())
+                .collect();
+            Err(msg.join("\n"))
+        }
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn git_log_oneline(path: String, count: u32) -> Result<String, String> {
     off_main(move || {
@@ -216,6 +250,25 @@ pub async fn git_commits_ahead(path: String) -> Result<u32, String> {
                     .unwrap_or_else(|_| "0".to_string());
                 Ok(out.trim().parse::<u32>().unwrap_or(0))
             }
+        }
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn git_commits_behind(path: String) -> Result<u32, String> {
+    off_main(move || {
+        // Get the upstream tracking ref for HEAD
+        let upstream = run_git(&path, &["rev-parse", "--abbrev-ref", "@{upstream}"])
+            .map(|s| s.trim().to_string());
+        match upstream {
+            Ok(up) if !up.is_empty() => {
+                let range = format!("HEAD..{}", up);
+                let out = run_git(&path, &["rev-list", "--count", &range])?;
+                out.trim().parse::<u32>().map_err(|e| e.to_string())
+            }
+            // No upstream configured — nothing to pull
+            _ => Ok(0),
         }
     })
     .await

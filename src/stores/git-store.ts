@@ -71,9 +71,12 @@ interface GitState {
   isRepo: boolean;
   remoteUrl: string;
   commitsAhead: number;
+  commitsBehind: number;
   graphCommits: GraphCommit[];
   graphOutgoing: GraphCommit[];
   graphLoading: boolean;
+  /** Last `git fetch` failure (auth, network). Non-blocking: the local graph still loads. */
+  fetchError: string | null;
   graphSkip: number;
   graphHasMore: boolean;
   expandedCommit: string | null;
@@ -87,6 +90,7 @@ interface GitState {
   unstageFiles: (folderPath: string, files: string[]) => Promise<void>;
   commit: (folderPath: string) => Promise<void>;
   push: (folderPath: string) => Promise<void>;
+  pull: (folderPath: string) => Promise<void>;
   switchBranch: (folderPath: string, branch: string) => Promise<void>;
   discardFiles: (folderPath: string, files: string[], untracked: string[]) => Promise<void>;
   generateCommitMessage: (
@@ -114,9 +118,11 @@ export const useGitStore = create<GitState>()((set, get) => ({
   isRepo: false,
   remoteUrl: "",
   commitsAhead: 0,
+  commitsBehind: 0,
   graphCommits: [],
   graphOutgoing: [],
   graphLoading: false,
+  fetchError: null,
   graphSkip: 0,
   graphHasMore: true,
   expandedCommit: null,
@@ -144,6 +150,9 @@ export const useGitStore = create<GitState>()((set, get) => ({
       set({ files, currentBranch: current, branches, isRepo: true });
       // Also fetch remote URL and commits ahead count
       get().getRemoteUrl(folderPath);
+      invoke<number>("git_commits_behind", { path: folderPath })
+        .then((n) => set({ commitsBehind: n }))
+        .catch(() => set({ commitsBehind: 0 }));
       invoke<number>("git_commits_ahead", { path: folderPath })
         .then((n) => {
           set({ commitsAhead: n });
@@ -151,7 +160,7 @@ export const useGitStore = create<GitState>()((set, get) => ({
         })
         .catch(() => set({ commitsAhead: 0 }));
     } catch (e: any) {
-      set({ files: [], currentBranch: "", branches: [], isRepo: false, remoteUrl: "", commitsAhead: 0, graphCommits: [], graphOutgoing: [], graphHasMore: false });
+      set({ files: [], currentBranch: "", branches: [], isRepo: false, remoteUrl: "", commitsAhead: 0, commitsBehind: 0, graphCommits: [], graphOutgoing: [], graphHasMore: false });
     } finally {
       set({ loading: false });
     }
@@ -252,6 +261,21 @@ export const useGitStore = create<GitState>()((set, get) => ({
       }
       await get().refresh(folderPath);
     } catch (e: any) {
+      set({ error: String(e) });
+    } finally {
+      set({ loading: false });
+    }
+  },
+
+  pull: async (folderPath) => {
+    set({ error: null, loading: true });
+    try {
+      await invoke("git_pull", { path: folderPath });
+      await get().refresh(folderPath);
+    } catch (e: any) {
+      // Refresh first so conflicted files show up in the list, then surface
+      // the error (refresh() clears `error` when it starts).
+      await get().refresh(folderPath);
       set({ error: String(e) });
     } finally {
       set({ loading: false });
@@ -362,6 +386,8 @@ export const useGitStore = create<GitState>()((set, get) => ({
       isRepo: false,
       remoteUrl: "",
       commitsAhead: 0,
+      commitsBehind: 0,
+      fetchError: null,
       graphCommits: [],
       graphOutgoing: [],
       graphHasMore: true,
@@ -373,13 +399,20 @@ export const useGitStore = create<GitState>()((set, get) => ({
   refreshGraph: async (folderPath) => {
     set({ graphLoading: true });
     try {
-      // Fetch latest remote refs before loading the graph
-      await invoke<string>("git_fetch", { path: folderPath }).catch(() => {});
-      // Re-query commitsAhead since fetch may have updated tracking refs
-      const commitsAhead = await invoke<number>("git_commits_ahead", {
-        path: folderPath,
-      }).catch(() => 0);
-      set({ commitsAhead });
+      // Fetch latest remote refs before loading the graph. A failure (auth,
+      // network) must not hide the local graph, but the user needs to see it.
+      try {
+        await invoke<string>("git_fetch", { path: folderPath });
+        set({ fetchError: null });
+      } catch (e: any) {
+        set({ fetchError: String(e) });
+      }
+      // Re-query ahead/behind since fetch may have updated tracking refs
+      const [commitsAhead, commitsBehind] = await Promise.all([
+        invoke<number>("git_commits_ahead", { path: folderPath }).catch(() => 0),
+        invoke<number>("git_commits_behind", { path: folderPath }).catch(() => 0),
+      ]);
+      set({ commitsAhead, commitsBehind });
       const logOut = await invoke<string>("git_log_graph", {
         path: folderPath,
         count: 100,
