@@ -35,3 +35,23 @@ describe("builtin RAG index tools", () => {
     }
   });
 });
+
+describe("builtin VBA run tools", () => {
+  for (const name of ["vba_run", "xlsx_read"]) {
+    it(`registers ${name}`, () => {
+      const entry = BUILTIN_CUSTOM_TOOLS[name];
+      expect(entry).toBeDefined();
+      expect(entry.fileName).toBe(`${name}.ts`);
+      expect(entry.content).toContain("mdium-tool-version: 1");
+    });
+  }
+  it("vba_run posts to /vba/run with an abort signal covering approval and run", () => {
+    const src = BUILTIN_CUSTOM_TOOLS.vba_run.content;
+    expect(src).toContain("/vba/run");
+    expect(src).toContain("AbortSignal.timeout(");
+    expect(src).toContain("allow_side_effects");
+  });
+  it("xlsx_read posts to /xlsx/read", () => {
+    expect(BUILTIN_CUSTOM_TOOLS.xlsx_read.content).toContain("/xlsx/read");
+  });
+});
