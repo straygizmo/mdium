@@ -211,12 +211,12 @@ Before outputting VBA code, verify:
   },
   "vba-mdium-flow": {
     name: "vba-mdium-flow",
-    version: 3,
+    version: 4,
     description:
-      "Use when editing VBA macros of an .xlsm/.xlam workbook opened in MDium — pull the modules with vba_pull, edit the .bas/.cls files, write them back with vba_push, and report the result.",
+      "Use when editing VBA macros of an .xlsm/.xlam workbook opened in MDium — pull the modules with vba_pull, edit the .bas/.cls files, verify them with vba_run on a disposable copy when the user asked for verification, then write them back with vba_push.",
     content: `# MDium Macro Editing Flow
 
-MDium exposes three tools that operate on a workbook path: \`vba_list\`, \`vba_pull\`, \`vba_push\`.
+MDium exposes five tools that operate on a workbook path: \`vba_list\`, \`vba_pull\`, \`vba_push\`, \`vba_run\`, \`xlsx_read\`.
 Also read the \`vba-coding-conventions\` skill before writing VBA.
 
 ## Which workbook
@@ -227,13 +227,61 @@ Also read the \`vba-coding-conventions\` skill before writing VBA.
 
 Pass that path as \`xlsm_path\` to every tool call.
 
-## Standard flow
+## Standard flow (edit only)
 
 1. \`vba_list\` — see the modules, whether \`<stem>_assets/macros/\` is already extracted, and whether the workbook is locked.
 2. If \`extracted\` is false, call \`vba_pull\`. If it is true, the folder may hold edits from an earlier session; ask the user before overwriting it with \`vba_pull\` when the workbook might be newer. \`vba_pull\` also deletes \`.bas\` / \`.cls\` files that match no module (reported as \`removedFiles\`), so push new modules before pulling again.
 3. Edit the \`.bas\` / \`.cls\` files in the macros folder with Read / Edit.
 4. **When editing is done, you MUST call \`vba_push\`.** Nothing reaches the workbook until then.
-5. Report \`updated\`, \`added\`, \`removed\`, \`skipped\` and \`backupPath\` to the user, and ask them to verify in Excel. MDium does not run macros. When nothing changed, \`backupPath\` is null and the workbook was left as it was.
+5. Report \`updated\`, \`added\`, \`removed\`, \`skipped\`, \`warnings\` and \`backupPath\` to the user. When nothing changed, \`backupPath\` is null and the workbook was left as it was.
+
+## Run and verify (only when asked)
+
+Run macros only when the user's instruction includes running, checking, verifying or testing (e.g. 実行, 確認, 検証, テスト, 動くか見て, "make sure it works"). If the user asked only for an edit, stop after \`vba_push\` and report.
+
+\`vba_run\` runs macros on a disposable copy of the workbook. It never writes the original. Loop:
+
+1. Decide the target macro(s), the cells that show the result (\`read\` ranges), and the expected values. Derive the expectation from the user's instruction, not from the code.
+2. Baseline: call \`vba_run\` with \`source: "workbook"\` (the original as-is) and the macros that exercise the behavior, with the \`read\` ranges. This records what works today.
+3. Edit the \`.bas\` / \`.cls\` files. Do NOT call \`vba_push\` yet.
+4. Call \`vba_run\` with the default \`source\` (\`macros_dir\`: the original plus your current sources). Put the target macro and the baseline macros in ONE call, in order, and use the same \`read\` ranges, so state carries over and results are comparable.
+5. Compare the results with the expectation and with the baseline. Check \`results[].status\`, \`error\`, \`dialogs\`, \`warnings\` and \`cells\`. Handle regressions (something that worked in the baseline and fails now) first.
+6. If something is wrong, fix the cause and go back to step 4. Do at most 3 fix-and-rerun cycles. After that, report what you tried and stop; the original workbook is untouched.
+7. Stop immediately on \`run_budget_exhausted\` (6 runs per user instruction; the budget resets when the user sends the next message). Report the state and wait. \`runBudget\` in each result shows \`used\` / \`limit\`.
+8. When the results match, call \`vba_push\`. If it fails with \`workbook_locked\`, say the code is verified and wait for the user to close Excel, then push again.
+9. Final report: the changes (\`vba_push\` result), the run results, \`runCopyPath\`, and any remaining \`warnings\`.
+
+### vba_run arguments
+
+- \`macros\`: \`[{ name: "Module.Proc" | "Proc", args?: [...] }]\`, run in order. Supported arg types are numbers, strings and booleans; anything else gives \`invalid_request\`.
+- \`inputs\`: strings consumed by \`InputBox\` calls in order. When exhausted, the \`InputBox\` default is used.
+- \`msgbox_responses\`: \`"ok"\`, \`"cancel"\`, \`"yes"\`, \`"no"\`, \`"retry"\`, \`"ignore"\` or \`"abort"\`, consumed by \`MsgBox\` calls in order. When exhausted, the default button of that \`MsgBox\` style is used.
+- \`read\`: \`[{ sheet, range? }]\`, returned as \`cells\`.
+- \`allow_side_effects\` (default false) and \`timeout_ms\` (default 120000, max 300000).
+- Result statuses: \`ok\`, \`error\`, \`dialog_interrupted\`, \`timeout\`, \`not_run\`. An \`error\` has \`number\`, \`source\`, \`description\` and \`from\` (\`handler\` or \`dialog\`).
+- Other error codes: \`run_in_progress\`, \`macros_dir_not_found\`, \`macro_not_found\`, \`shim_name_conflict\` (a module named \`MdiumShim\`, or a procedure named \`MsgBox\` / \`InputBox\`, exists; rename it), \`excel_not_available\`, \`run_failed\`. With \`source: "macros_dir"\` the \`vba_push\` validation codes (such as \`invalid_module_name\`, \`unencodable_character\`) also apply.
+- Only the last 5 run folders are kept.
+
+## Rules while fixing
+
+- Never adjust the expectation to fit the code. If the expectation looks wrong, ask the user.
+- Do not add \`On Error Resume Next\` to silence errors. When \`vba_run\` or \`vba_push\` returns an \`on_error_resume_next_added\` warning, remove it and handle the error properly.
+- Before adding a helper procedure, grep the macros folder for an existing one. Resolve every \`duplicate_procedure\` warning.
+- Fix causes, not symptoms.
+- Run copies live under \`<stem>_assets/runs/<time>_<macro>/\` with the original file name, so \`ThisWorkbook.Path\` differs from the original's folder. A failure that only happens on the copy because of paths is not a regression.
+- \`side_effects_detected\`: the message lists \`module:line: text\`. Explain to the user what those lines are and what they could do, then call again with \`allow_side_effects: true\`. MDium shows the user an approval dialog.
+- \`approval_denied\`: stop and ask the user how to proceed.
+- \`approval_timeout\`: report and stop. Do not retry.
+- Choose \`inputs\` and \`msgbox_responses\` from the user's instruction and the code. Ask when unsure.
+- A \`dialogs\` entry of kind \`window\` with class \`ThunderDFrame\` means a UserForm. It cannot be verified automatically; ask the user to check it by hand.
+- \`Value2\` dates are serial numbers. Compare them numerically.
+- A run copy is NOT a sandbox for file, mail or process side effects. Code that writes files, sends mail or starts processes really does that.
+
+## Reading values
+
+- \`read\` on \`vba_run\` returns fresh, recalculated values after the macros ran.
+- \`xlsx_read\` (\`{ path, ranges: [{ sheet, range? }] }\`) returns the saved values of any \`.xlsx\` / \`.xlsm\` / \`.xlam\`, including a run copy, without Excel. Values are as of the last save.
+- Both return \`cells\`: numbers, strings, booleans, \`null\` for empty cells, dates as serial numbers, and error values as labels such as \`#N/A\` or \`#DIV/0!\`.
 
 ## Workbook locked by Excel
 

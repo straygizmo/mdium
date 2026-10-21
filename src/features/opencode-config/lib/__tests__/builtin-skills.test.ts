@@ -18,4 +18,14 @@ describe("builtin skills", () => {
     expect(body).not.toContain("active_tab_changed");
     expect(body).not.toContain("import_vba_macros");
   });
+
+  it("vba-mdium-flow v4 teaches the run-and-verify loop", () => {
+    const skill = BUILTIN_SKILLS["vba-mdium-flow"];
+    expect(skill.version).toBe(4);
+    const body = skill.content;
+    for (const needle of ["vba_run", "xlsx_read", "source: \"workbook\"", "run_budget_exhausted", "side_effects_detected", "allow_side_effects", "approval_denied", "approval_timeout", "on_error_resume_next_added", "duplicate_procedure", "ThunderDFrame", "runCopyPath", "3 fix-and-rerun"]) {
+      expect(body).toContain(needle);
+    }
+    expect(body).not.toContain("MDium does not run macros");
+  });
 });
