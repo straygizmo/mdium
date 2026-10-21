@@ -19,6 +19,8 @@ pub mod rag;
 pub mod slidev;
 pub mod speech;
 pub mod vba;
+#[allow(dead_code)] // Win32 dialog watcher used by the run orchestration (Task 7)
+pub mod vba_dialog_watch;
 pub mod vba_lint;
 #[allow(dead_code)] // core for the run orchestration added in Task 7
 pub mod vba_run;

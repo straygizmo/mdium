@@ -2478,6 +2478,7 @@ dependencies = [
  "tokio",
  "toml_edit 0.25.4+spec-1.1.0",
  "trash",
+ "windows-sys 0.61.2",
  "zip 2.4.2",
 ]
 
