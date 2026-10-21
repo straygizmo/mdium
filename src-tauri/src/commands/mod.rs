@@ -26,3 +26,4 @@ pub mod vba_source;
 pub mod vba_streams;
 pub mod video;
 pub mod workflow;
+pub mod xlsx_read;

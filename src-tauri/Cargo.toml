@@ -15,6 +15,7 @@ crate-type = ["lib", "cdylib", "staticlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+calamine = "0.37"
 flow-core = { path = "crates/flow-core" }
 tauri = { version = "2", features = ["image-png", "protocol-asset"] }
 tauri-plugin-dialog = "2"
