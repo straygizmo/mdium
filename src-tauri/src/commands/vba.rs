@@ -498,9 +498,13 @@ pub fn parse_dir_stream(data: &[u8]) -> Result<VbaProject, String> {
 // ---------------------------------------------------------------------------
 
 fn read_vba_project_bin(xlsm_path: &str) -> Result<Vec<u8>, String> {
-    let file = fs::File::open(xlsm_path)
-        .map_err(|e| format!("Failed to open file: {}", e))?;
-    let mut archive = zip::ZipArchive::new(file)
+    let data = fs::read(xlsm_path).map_err(|e| format!("Failed to open file: {}", e))?;
+    vba_project_bin_from_zip(&data)
+}
+
+/// `xl/vbaProject.bin` from in-memory workbook bytes. Errors are plain messages.
+pub fn vba_project_bin_from_zip(xlsm_data: &[u8]) -> Result<Vec<u8>, String> {
+    let mut archive = zip::ZipArchive::new(Cursor::new(xlsm_data))
         .map_err(|e| format!("Failed to read ZIP archive: {}", e))?;
 
     let mut vba_file = archive.by_name("xl/vbaProject.bin").map_err(|_| {
@@ -636,6 +640,7 @@ pub struct PushResult {
     pub added: Vec<String>,
     pub removed: Vec<String>,
     pub skipped: Vec<SkippedModule>,
+    pub warnings: Vec<PushWarning>,
 }
 
 /// One existing module with its kind resolved from the PROJECT stream.
@@ -748,19 +753,86 @@ fn encode_module(source: &str, module_name: &str, code_page: u16) -> Result<Vec<
     })
 }
 
-pub fn push_vba_modules_impl(xlsm_path: &str) -> Result<PushResult, String> {
-    let file_path = require_macro_workbook(xlsm_path)?;
-    let macros_dir = macros_dir_for(file_path)?;
-    if !macros_dir.is_dir() {
-        return Err(vba_error("macros_dir_not_found", format!("Macros directory not found: {} (run vba_pull first)", macros_dir.display())));
-    }
-    if workbook_lock(file_path).locked {
-        return Err(vba_error("workbook_locked", "The workbook is open in Excel. Close it there, then push again."));
-    }
+/// One workbook module as source text (decoded, `VB_Name` fixed, not normalized).
+#[allow(dead_code)] // Used by the VBA run-and-verify loop; drop once it lands.
+#[derive(Debug, Clone)]
+pub struct ModuleSource {
+    pub name: String,
+    pub kind: ModuleKind,
+    pub source: String,
+}
 
+/// A module to write: `source` is already normalized. `private` marks a class
+/// whose `VB_Exposed = False`, which Excel records as MODULEPRIVATE in `dir`.
+#[derive(Debug, Clone)]
+pub struct ModuleEdit {
+    pub name: String,
+    pub kind: ModuleKind,
+    pub source: String,
+    pub private: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ModuleChanges {
+    pub updated: Vec<ModuleEdit>,
+    pub added: Vec<ModuleEdit>,
+    pub removed: Vec<String>,
+}
+
+impl ModuleChanges {
+    pub fn is_empty(&self) -> bool {
+        self.updated.is_empty() && self.added.is_empty() && self.removed.is_empty()
+    }
+}
+
+/// Non-fatal findings about a push, reported alongside its result.
+#[allow(dead_code)] // Used by the VBA run-and-verify loop; drop once it lands.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+#[serde(tag = "code", rename_all = "snake_case")]
+pub enum PushWarning {
+    OnErrorResumeNextAdded { module: String, before: usize, after: usize },
+    DuplicateProcedure { name: String, modules: Vec<String> },
+}
+
+/// What a push would do, computed without writing anything.
+#[allow(dead_code)] // Used by the VBA run-and-verify loop; drop once it lands.
+pub struct PushPlan {
+    pub changes: ModuleChanges,
+    pub unchanged: Vec<String>,
+    pub skipped: Vec<SkippedModule>,
+    pub warnings: Vec<PushWarning>,
+    /// Workbook modules (non-Form) before the plan.
+    pub before: Vec<ModuleSource>,
+    /// Modules as they would be after applying `changes` (normalized sources
+    /// for touched ones).
+    pub after: Vec<ModuleSource>,
+}
+
+/// Case-insensitive key identifying a workbook path (`\` normalized to `/`).
+#[allow(dead_code)] // Used by the VBA run-and-verify loop; drop once it lands.
+pub fn workbook_key(path: &str) -> String {
+    path.replace('\\', "/").to_lowercase()
+}
+
+/// Sources of every non-Form module in the workbook. Errors are plain messages.
+#[allow(dead_code)] // Used by the VBA run-and-verify loop; drop once it lands.
+pub fn project_sources(xlsm_data: &[u8]) -> Result<Vec<ModuleSource>, String> {
+    let mut loaded = load_project(vba_project_bin_from_zip(xlsm_data)?)?;
+    let editable: Vec<ProjectModule> = loaded.modules.iter().filter(|m| m.kind != ModuleKind::Form).cloned().collect();
+    editable
+        .iter()
+        .map(|m| {
+            Ok(ModuleSource { name: m.name.clone(), kind: m.kind, source: fix_vb_name(&module_source(&mut loaded, m)?, &m.name) })
+        })
+        .collect()
+}
+
+/// Compare the macros folder with the workbook and work out the changes a
+/// push would make. Nothing is written.
+pub fn plan_push(xlsm_data: &[u8], macros_dir: &Path) -> Result<PushPlan, String> {
     // Collect .bas/.cls files, keyed by lower-cased name for case-insensitive matching.
     let mut files: HashMap<String, (String, ModuleKind, PathBuf)> = HashMap::new();
-    for entry in fs::read_dir(&macros_dir).map_err(|e| vba_error("push_failed", e.to_string()))? {
+    for entry in fs::read_dir(macros_dir).map_err(|e| vba_error("push_failed", e.to_string()))? {
         let path = entry.map_err(|e| vba_error("push_failed", e.to_string()))?.path();
         let ext = path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase());
         let kind = match ext.as_deref() {
@@ -775,53 +847,61 @@ pub fn push_vba_modules_impl(xlsm_path: &str) -> Result<PushResult, String> {
         }
     }
 
-    let xlsm_data = fs::read(file_path).map_err(|e| vba_error("push_failed", e.to_string()))?;
-    let vba_bin = read_vba_project_bin(xlsm_path).map_err(|e| vba_error("no_vba_project", e))?;
+    let vba_bin = vba_project_bin_from_zip(xlsm_data).map_err(|e| vba_error("no_vba_project", e))?;
     let mut loaded = load_project(vba_bin).map_err(|e| vba_error("push_failed", e))?;
     // Always encode with the project's own code page: Excel decodes every module
     // with PROJECTCODEPAGE, so a .codepage override could only corrupt text.
     // The .codepage file written by pull is informational only.
     let code_page = loaded.code_page;
 
-    // ---- plan (nothing written yet) ----
     let existing_names: Vec<String> = loaded.modules.iter().map(|m| m.name.clone()).collect();
-    let mut updated: Vec<(ProjectModule, Vec<u8>)> = Vec::new();
+    let mut changes = ModuleChanges::default();
     let mut unchanged = Vec::new();
-    // (name, kind, encoded source, private): private marks a class whose
-    // `VB_Exposed = False`, which Excel records as MODULEPRIVATE in `dir`.
-    let mut added: Vec<(String, ModuleKind, Vec<u8>, bool)> = Vec::new();
-    let mut removed: Vec<ProjectModule> = Vec::new();
     let mut skipped = Vec::new();
+    let mut before = Vec::new();
+    let mut after = Vec::new();
     let mut matched_files: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for m in loaded.modules.clone() {
+        // Stored source of every non-Form module: raw (for comparison) and as
+        // pull would write it (for `before` / `after`).
+        let stored = if m.kind == ModuleKind::Form {
+            None
+        } else {
+            let raw = module_source(&mut loaded, &m).map_err(|e| vba_error("push_failed", e))?;
+            let src = ModuleSource { name: m.name.clone(), kind: m.kind, source: fix_vb_name(&raw, &m.name) };
+            before.push(src.clone());
+            Some((raw, src))
+        };
         match files.get(&m.name.to_ascii_lowercase()) {
             Some((_, _, path)) => {
                 matched_files.insert(m.name.to_ascii_lowercase());
-                if m.kind == ModuleKind::Form {
+                let Some((raw_current, current_src)) = stored else {
                     skipped.push(SkippedModule { name: m.name.clone(), reason: "UserForms are not updated by push".into() });
                     continue;
-                }
+                };
                 let raw = fs::read_to_string(path).map_err(|e| vba_error("push_failed", format!("{}: {}", path.display(), e)))?;
                 let normalized = normalize_source(&raw, &m.name, m.kind);
                 // Normalize the stored source the same way, so a file that was
                 // just pulled compares equal even when VBE stored it slightly
                 // differently (missing trailing CRLF, class attributes, ...).
-                let current = normalize_source(
-                    &module_source(&mut loaded, &m).map_err(|e| vba_error("push_failed", e))?,
-                    &m.name,
-                    m.kind,
-                );
-                if current == normalized {
+                if normalize_source(&raw_current, &m.name, m.kind) == normalized {
                     unchanged.push(m.name.clone());
+                    after.push(current_src);
                 } else {
-                    let encoded = encode_module(&normalized, &m.name, code_page)?;
-                    updated.push((m, encoded));
+                    encode_module(&normalized, &m.name, code_page)?;
+                    after.push(ModuleSource { name: m.name.clone(), kind: m.kind, source: normalized.clone() });
+                    changes.updated.push(ModuleEdit { name: m.name.clone(), kind: m.kind, source: normalized, private: false });
                 }
             }
             None => match m.kind {
-                ModuleKind::Standard | ModuleKind::Class => removed.push(m),
-                ModuleKind::Document => skipped.push(SkippedModule { name: m.name.clone(), reason: "document module file is missing; document modules are never removed".into() }),
+                ModuleKind::Standard | ModuleKind::Class => changes.removed.push(m.name.clone()),
+                ModuleKind::Document => {
+                    skipped.push(SkippedModule { name: m.name.clone(), reason: "document module file is missing; document modules are never removed".into() });
+                    if let Some((_, src)) = stored {
+                        after.push(src);
+                    }
+                }
                 ModuleKind::Form => skipped.push(SkippedModule { name: m.name.clone(), reason: "UserForms are never removed by push".into() }),
             },
         }
@@ -842,7 +922,7 @@ pub fn push_vba_modules_impl(xlsm_path: &str) -> Result<PushResult, String> {
         .map(|e| e.name().to_ascii_lowercase())
         .chain(loaded.modules.iter().map(|m| m.stream_name.to_ascii_lowercase()))
         .collect();
-    let mut taken = existing_names.clone();
+    let mut taken = existing_names;
     for (name, kind, path) in new_files {
         if name.eq_ignore_ascii_case("ThisWorkbook")
             || loaded.modules.iter().any(|m| m.kind == ModuleKind::Form && m.name.eq_ignore_ascii_case(name))
@@ -856,59 +936,72 @@ pub fn push_vba_modules_impl(xlsm_path: &str) -> Result<PushResult, String> {
         validate_module_name(name, &taken).map_err(|msg| vba_error("invalid_module_name", msg))?;
         taken.push(name.clone());
         let raw = fs::read_to_string(path).map_err(|e| vba_error("push_failed", format!("{}: {}", path.display(), e)))?;
-        let normalized = normalize_source(&raw, name, *kind);
-        let private = *kind == ModuleKind::Class && !is_exposed(&normalized);
-        let encoded = encode_module(&normalized, name, code_page)?;
-        added.push((name.clone(), *kind, encoded, private));
+        let edit = module_edit(name, *kind, &raw);
+        encode_module(&edit.source, name, code_page)?;
+        after.push(ModuleSource { name: name.clone(), kind: *kind, source: edit.source.clone() });
+        changes.added.push(edit);
     }
 
-    // Nothing to write: leave the workbook and any previous backup untouched.
-    if updated.is_empty() && added.is_empty() && removed.is_empty() {
-        return Ok(PushResult {
-            xlsm_path: xlsm_path.to_string(),
-            backup_path: None,
-            updated: Vec::new(),
-            unchanged,
-            added: Vec::new(),
-            removed: Vec::new(),
-            skipped,
-        });
+    Ok(PushPlan { changes, unchanged, skipped, warnings: Vec::new(), before, after })
+}
+
+/// Normalize a new module's source and decide whether it is private.
+fn module_edit(name: &str, kind: ModuleKind, source: &str) -> ModuleEdit {
+    let normalized = normalize_source(source, name, kind);
+    let private = kind == ModuleKind::Class && !is_exposed(&normalized);
+    ModuleEdit { name: name.to_string(), kind, source: normalized, private }
+}
+
+/// Apply `changes` to the workbook bytes and return the new workbook bytes.
+pub fn apply_changes(xlsm_data: &[u8], changes: &ModuleChanges) -> Result<Vec<u8>, String> {
+    let vba_bin = vba_project_bin_from_zip(xlsm_data).map_err(|e| vba_error("no_vba_project", e))?;
+    let mut loaded = load_project(vba_bin).map_err(|e| vba_error("push_failed", e))?;
+    let code_page = loaded.code_page;
+    let find = |loaded: &LoadedProject, name: &str| -> Result<ProjectModule, String> {
+        loaded
+            .modules
+            .iter()
+            .find(|m| m.name.eq_ignore_ascii_case(name))
+            .cloned()
+            .ok_or_else(|| vba_error("push_failed", format!("Module '{}' does not exist in the workbook", name)))
+    };
+    let updated = changes.updated.iter().map(|e| find(&loaded, &e.name)).collect::<Result<Vec<_>, _>>()?;
+    let removed = changes.removed.iter().map(|n| find(&loaded, n)).collect::<Result<Vec<_>, _>>()?;
+    if let Some(e) = changes.added.iter().find(|e| loaded.modules.iter().any(|m| m.name.eq_ignore_ascii_case(&e.name))) {
+        return Err(vba_error("invalid_module_name", format!("Module '{}' already exists in the workbook", e.name)));
     }
+    let err = |e: String| vba_error("push_failed", e);
 
-    // ---- write ----
-    let backup_path = format!("{}.bak", xlsm_path);
-    fs::copy(xlsm_path, &backup_path).map_err(|e| vba_error("push_failed", format!("Failed to create backup: {}", e)))?;
-
-    let write_err = |e: String| vba_error("push_failed", format!("{} (the original is in {})", e, backup_path));
-
-    for (m, encoded) in &updated {
+    for (m, edit) in updated.iter().zip(&changes.updated) {
+        let encoded = encode_module(&edit.source, &m.name, code_page)?;
         let path = format!("/VBA/{}", m.stream_name);
-        let mut data = read_stream(&mut loaded.comp, &path).map_err(write_err)?;
+        let mut data = read_stream(&mut loaded.comp, &path).map_err(err)?;
         data.truncate(m.text_offset as usize);
-        data.extend_from_slice(&vba_compress(encoded));
-        write_stream(&mut loaded.comp, &path, &data).map_err(write_err)?;
+        data.extend_from_slice(&vba_compress(&encoded));
+        write_stream(&mut loaded.comp, &path, &data).map_err(err)?;
     }
-    for (name, kind, encoded, private) in &added {
-        write_stream(&mut loaded.comp, &format!("/VBA/{}", name), &vba_compress(encoded)).map_err(write_err)?;
-        loaded.dir.append_module(name, name, *kind, 0, *private, loaded.code_page).map_err(write_err)?;
-        loaded.project.add_module(name, *kind);
-        loaded.wm.add(name);
+    for edit in &changes.added {
+        let encoded = encode_module(&edit.source, &edit.name, code_page)?;
+        write_stream(&mut loaded.comp, &format!("/VBA/{}", edit.name), &vba_compress(&encoded)).map_err(err)?;
+        loaded.dir.append_module(&edit.name, &edit.name, edit.kind, 0, edit.private, code_page).map_err(err)?;
+        loaded.project.add_module(&edit.name, edit.kind);
+        loaded.wm.add(&edit.name);
     }
     for m in &removed {
-        loaded.comp.remove_stream(&format!("/VBA/{}", m.stream_name)).map_err(|e| write_err(e.to_string()))?;
+        loaded.comp.remove_stream(&format!("/VBA/{}", m.stream_name)).map_err(|e| err(e.to_string()))?;
         loaded.dir.remove_module(&m.name);
         loaded.project.remove_module(&m.name);
         loaded.wm.remove(&m.name);
     }
-    write_stream(&mut loaded.comp, "/VBA/dir", &vba_compress(&loaded.dir.serialize())).map_err(write_err)?;
-    write_stream(&mut loaded.comp, "/PROJECT", &loaded.project.serialize(loaded.code_page).map_err(write_err)?).map_err(write_err)?;
-    write_stream(&mut loaded.comp, "/PROJECTwm", &loaded.wm.serialize(loaded.code_page).map_err(write_err)?).map_err(write_err)?;
+    write_stream(&mut loaded.comp, "/VBA/dir", &vba_compress(&loaded.dir.serialize())).map_err(err)?;
+    write_stream(&mut loaded.comp, "/PROJECT", &loaded.project.serialize(code_page).map_err(err)?).map_err(err)?;
+    write_stream(&mut loaded.comp, "/PROJECTwm", &loaded.wm.serialize(code_page).map_err(err)?).map_err(err)?;
 
     // Invalidate compiled caches so Excel rebuilds from the sources we wrote
     // (MS-OVBA 2.3.4.1: _VBA_PROJECT must carry no PerformanceCache on write;
     // __SRP_* are undocumented caches readers must ignore).
     const VBA_PROJECT_HEADER: [u8; 7] = [0xCC, 0x61, 0xFF, 0xFF, 0x00, 0x00, 0x00];
-    write_stream(&mut loaded.comp, "/VBA/_VBA_PROJECT", &VBA_PROJECT_HEADER).map_err(write_err)?;
+    write_stream(&mut loaded.comp, "/VBA/_VBA_PROJECT", &VBA_PROJECT_HEADER).map_err(err)?;
     let srp: Vec<std::path::PathBuf> = loaded
         .comp
         .walk()
@@ -916,23 +1009,67 @@ pub fn push_vba_modules_impl(xlsm_path: &str) -> Result<PushResult, String> {
         .map(|e| e.path().to_path_buf())
         .collect();
     for p in srp {
-        loaded.comp.remove_stream(&p).map_err(|e| write_err(e.to_string()))?;
+        loaded.comp.remove_stream(&p).map_err(|e| err(e.to_string()))?;
     }
 
-    loaded.comp.flush().map_err(|e| write_err(e.to_string()))?;
+    loaded.comp.flush().map_err(|e| err(e.to_string()))?;
     let new_bin = loaded.comp.into_inner().into_inner();
-    let new_xlsm = replace_zip_entry(&xlsm_data, "xl/vbaProject.bin", &new_bin).map_err(write_err)?;
-    fs::write(xlsm_path, &new_xlsm).map_err(|e| write_err(e.to_string()))?;
+    replace_zip_entry(xlsm_data, "xl/vbaProject.bin", &new_bin).map_err(err)
+}
 
-    Ok(PushResult {
+/// Add one module to the workbook bytes, normalized like a pushed file.
+#[allow(dead_code)] // Used by the VBA run-and-verify loop; drop once it lands.
+pub fn add_module(xlsm_data: &[u8], name: &str, kind: ModuleKind, source: &str) -> Result<Vec<u8>, String> {
+    let changes = ModuleChanges { added: vec![module_edit(name, kind, source)], ..Default::default() };
+    apply_changes(xlsm_data, &changes)
+}
+
+/// Append a pointer to the backup to a structured error's message.
+fn with_backup_note(err: String, backup_path: &str) -> String {
+    match serde_json::from_str::<serde_json::Value>(&err) {
+        Ok(v) => vba_error(
+            v["error"].as_str().unwrap_or("push_failed"),
+            format!("{} (the original is in {})", v["message"].as_str().unwrap_or(""), backup_path),
+        ),
+        Err(_) => vba_error("push_failed", format!("{} (the original is in {})", err, backup_path)),
+    }
+}
+
+pub fn push_vba_modules_impl(xlsm_path: &str) -> Result<PushResult, String> {
+    let file_path = require_macro_workbook(xlsm_path)?;
+    let macros_dir = macros_dir_for(file_path)?;
+    if !macros_dir.is_dir() {
+        return Err(vba_error("macros_dir_not_found", format!("Macros directory not found: {} (run vba_pull first)", macros_dir.display())));
+    }
+    if workbook_lock(file_path).locked {
+        return Err(vba_error("workbook_locked", "The workbook is open in Excel. Close it there, then push again."));
+    }
+
+    let xlsm_data = fs::read(file_path).map_err(|e| vba_error("push_failed", e.to_string()))?;
+    let plan = plan_push(&xlsm_data, &macros_dir)?;
+    let names = |edits: &[ModuleEdit]| edits.iter().map(|e| e.name.clone()).collect::<Vec<_>>();
+    let result = |backup_path: Option<String>| PushResult {
         xlsm_path: xlsm_path.to_string(),
-        backup_path: Some(backup_path),
-        updated: updated.into_iter().map(|(m, _)| m.name).collect(),
-        unchanged,
-        added: added.into_iter().map(|(n, _, _, _)| n).collect(),
-        removed: removed.into_iter().map(|m| m.name).collect(),
-        skipped,
-    })
+        backup_path,
+        updated: names(&plan.changes.updated),
+        unchanged: plan.unchanged.clone(),
+        added: names(&plan.changes.added),
+        removed: plan.changes.removed.clone(),
+        skipped: plan.skipped.clone(),
+        warnings: plan.warnings.clone(),
+    };
+
+    // Nothing to write: leave the workbook and any previous backup untouched.
+    if plan.changes.is_empty() {
+        return Ok(result(None));
+    }
+
+    let backup_path = format!("{}.bak", xlsm_path);
+    fs::copy(xlsm_path, &backup_path).map_err(|e| vba_error("push_failed", format!("Failed to create backup: {}", e)))?;
+    let new_xlsm = apply_changes(&xlsm_data, &plan.changes).map_err(|e| with_backup_note(e, &backup_path))?;
+    fs::write(xlsm_path, &new_xlsm).map_err(|e| with_backup_note(vba_error("push_failed", e.to_string()), &backup_path))?;
+
+    Ok(result(Some(backup_path)))
 }
 
 #[tauri::command]
@@ -1834,5 +1971,62 @@ mod tests {
         let m1 = fs::read_to_string(macros.join("Module1.bas")).unwrap();
         assert!(m1.contains("Sub Edited()"));
         assert_eq!(fs::read_to_string(macros.join(".codepage")).unwrap(), "1252");
+    }
+
+    #[test]
+    fn plan_push_reports_changes_without_writing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let xlsm = three_module_workbook(tmp.path());
+        pull_vba_modules(xlsm.to_string_lossy().into_owned()).unwrap();
+        let macros = macros_dir_for(&xlsm).unwrap();
+        fs::write(macros.join("Module1.bas"), "Attribute VB_Name = \"Module1\"\r\nSub Hello()\r\nMsgBox 1\r\nEnd Sub\r\n").unwrap();
+        fs::write(macros.join("New1.bas"), "Attribute VB_Name = \"New1\"\r\nSub X()\r\nEnd Sub\r\n").unwrap();
+        let before = fs::read(&xlsm).unwrap();
+        let plan = plan_push(&before, &macros).unwrap();
+        assert_eq!(plan.changes.updated.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), vec!["Module1"]);
+        assert_eq!(plan.changes.added.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), vec!["New1"]);
+        assert!(plan.changes.removed.is_empty());
+        assert_eq!(plan.unchanged, vec!["Class1".to_string(), "ThisWorkbook".to_string()]);
+        assert!(plan.warnings.is_empty());
+        assert!(plan.after.iter().any(|m| m.name == "New1"));
+        assert!(plan.before.iter().all(|m| m.name != "New1"));
+        let m1_after = plan.after.iter().find(|m| m.name == "Module1").unwrap();
+        assert!(m1_after.source.contains("MsgBox 1"));
+        assert_eq!(fs::read(&xlsm).unwrap(), before, "plan_push must not write the workbook");
+    }
+
+    #[test]
+    fn apply_changes_then_project_sources_round_trips() {
+        let tmp = tempfile::tempdir().unwrap();
+        let xlsm = three_module_workbook(tmp.path());
+        let data = fs::read(&xlsm).unwrap();
+        let out = add_module(&data, "Shim1", ModuleKind::Standard, "Attribute VB_Name = \"Shim1\"\r\nPublic Function F() As Long\r\nF = 1\r\nEnd Function\r\n").unwrap();
+        let names: Vec<String> = project_sources(&out).unwrap().into_iter().map(|m| m.name).collect();
+        assert!(names.contains(&"Shim1".to_string()));
+        assert_eq!(fs::read(&xlsm).unwrap(), data);
+    }
+
+    #[test]
+    fn apply_changes_rejects_unknown_module_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let xlsm = three_module_workbook(tmp.path());
+        let data = fs::read(&xlsm).unwrap();
+        let changes = ModuleChanges { removed: vec!["Nope".to_string()], ..Default::default() };
+        assert_eq!(err_code(&apply_changes(&data, &changes).unwrap_err()), "push_failed");
+    }
+
+    #[test]
+    fn push_result_serializes_empty_warnings() {
+        let tmp = tempfile::tempdir().unwrap();
+        let xlsm = three_module_workbook(tmp.path());
+        pull_vba_modules(xlsm.to_string_lossy().into_owned()).unwrap();
+        let r = push_vba_modules_impl(xlsm.to_str().unwrap()).unwrap();
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["warnings"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn workbook_key_lowercases_and_normalizes_separators() {
+        assert_eq!(workbook_key("C:\\Work\\Book.XLSM"), "c:/work/book.xlsm");
     }
 }
