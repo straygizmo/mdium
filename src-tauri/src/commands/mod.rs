@@ -19,6 +19,7 @@ pub mod rag;
 pub mod slidev;
 pub mod speech;
 pub mod vba;
+pub mod vba_lint;
 pub mod vba_source;
 pub mod vba_streams;
 pub mod video;

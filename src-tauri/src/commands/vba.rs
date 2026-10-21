@@ -754,7 +754,6 @@ fn encode_module(source: &str, module_name: &str, code_page: u16) -> Result<Vec<
 }
 
 /// One workbook module as source text (decoded, `VB_Name` fixed, not normalized).
-#[allow(dead_code)] // Used by the VBA run-and-verify loop; drop once it lands.
 #[derive(Debug, Clone)]
 pub struct ModuleSource {
     pub name: String,
@@ -786,7 +785,6 @@ impl ModuleChanges {
 }
 
 /// Non-fatal findings about a push, reported alongside its result.
-#[allow(dead_code)] // Used by the VBA run-and-verify loop; drop once it lands.
 #[derive(Serialize, Debug, Clone, PartialEq)]
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum PushWarning {
@@ -942,7 +940,9 @@ pub fn plan_push(xlsm_data: &[u8], macros_dir: &Path) -> Result<PushPlan, String
         changes.added.push(edit);
     }
 
-    Ok(PushPlan { changes, unchanged, skipped, warnings: Vec::new(), before, after })
+    let touched: Vec<String> = changes.updated.iter().chain(changes.added.iter()).map(|m| m.name.clone()).collect();
+    let warnings = crate::commands::vba_lint::lint_changes(&before, &after, &touched);
+    Ok(PushPlan { changes, unchanged, skipped, warnings, before, after })
 }
 
 /// Normalize a new module's source and decide whether it is private.
@@ -1971,6 +1971,23 @@ mod tests {
         let m1 = fs::read_to_string(macros.join("Module1.bas")).unwrap();
         assert!(m1.contains("Sub Edited()"));
         assert_eq!(fs::read_to_string(macros.join(".codepage")).unwrap(), "1252");
+    }
+
+    #[test]
+    fn push_reports_resume_next_warning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let xlsm = three_module_workbook(tmp.path());
+        let xlsm_s = xlsm.to_string_lossy().to_string();
+        let macros = Path::new(&pull_vba_modules(xlsm_s.clone()).unwrap().macros_dir).to_path_buf();
+        let path = macros.join("Module1.bas");
+        let mut src = fs::read_to_string(&path).unwrap();
+        src.push_str("Sub Risky()
+On Error Resume Next
+End Sub
+");
+        fs::write(&path, src).unwrap();
+        let result = push_vba_modules_impl(&xlsm_s).unwrap();
+        assert_eq!(result.warnings.len(), 1);
     }
 
     #[test]
