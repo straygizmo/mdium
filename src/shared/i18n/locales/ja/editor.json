@@ -218,5 +218,8 @@
   "mediumPublishSuccess": "ドラフトを作成しました",
   "mediumPublishFailed": "投稿に失敗しました",
   "mediumTokenNotSet": "Medium APIトークンが設定されていません",
-  "mediumImageUploadFailed": "画像のアップロードに失敗しました: {{name}}"
+  "mediumImageUploadFailed": "画像のアップロードに失敗しました: {{name}}",
+  "vbaRunApprovalTitle": "マクロの実行を許可しますか？",
+  "vbaRunApprovalBody": "{{fileName}} — マクロ: {{macros}}\nブックの外に影響する可能性のある呼び出しが含まれています。実行はブックのコピー上で行いますが、ファイル操作・外部プロセス・通信やメール送信は実際に行われます。\n\n{{matches}}",
+  "vbaRunApprovalMore": "…他 {{count}} 件"
 }

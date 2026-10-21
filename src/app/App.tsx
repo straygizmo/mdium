@@ -20,6 +20,7 @@ import { useScrollSync } from "@/shared/hooks/useScrollSync";
 import { useDividerDrag } from "@/shared/hooks/useDividerDrag";
 import { useFileWatcher } from "@/shared/hooks/useFileWatcher";
 import { useRagBridge } from "@/features/rag/hooks/useRagBridge";
+import { useVbaRunApproval } from "@/features/preview/hooks/useVbaRunApproval";
 import { jumpEditorToLine } from "@/features/editor/lib/jumpToLine";
 import { getThemeById } from "@/shared/themes";
 import { Toolbar } from "./components/Toolbar";
@@ -59,6 +60,8 @@ export function App() {
   const { t } = useTranslation();
   // Serve RAG search requests from the opencode rag_search tool.
   useRagBridge();
+  // Ask the user before side-effecting macro runs requested via vba_run.
+  useVbaRunApproval();
   // Keep workflow lists and progress in sync with orchestrator events.
   useEffect(() => {
     let disposed = false;
