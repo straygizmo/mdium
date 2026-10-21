@@ -20,6 +20,8 @@ pub mod slidev;
 pub mod speech;
 pub mod vba;
 pub mod vba_lint;
+#[allow(dead_code)] // core for the run orchestration added in Task 7
+pub mod vba_run;
 #[allow(dead_code)] // used by vba_run (Task 5/7)
 pub mod vba_shim;
 pub mod vba_source;
