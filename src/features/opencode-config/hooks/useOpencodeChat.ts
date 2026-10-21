@@ -23,6 +23,7 @@ import { BUILTIN_AGENTS, BUILTIN_CUSTOM_TOOLS } from "../lib/builtin-registry";
 import { TOOL_VERSION_RE, buildSkillMd, builtinVersion, shouldWriteBuiltinFile, shouldWriteBuiltinSkill } from "../lib/builtin-install";
 import { removeLegacyVbaMcpServer } from "../lib/legacy-cleanup";
 import { BUILTIN_SKILLS } from "../lib/builtin-skills";
+import { resetVbaRunBudgetForSession } from "../lib/vba-run-budget";
 import { isAzureRefusal, isAzureProviderActive } from "../lib/provider-detection";
 import { evaluateStall, STALL_TICK_MS } from "./stall-watchdog";
 import { applyForward, applyReverse } from "@/shared/lib/replacement";
@@ -1239,6 +1240,8 @@ export async function doSendMessage(
   options?: SendOptions,
 ) {
   if (!text.trim() && (!images || images.length === 0)) return;
+  // A user message starts a fresh vba_run budget for the bound workbook.
+  await resetVbaRunBudgetForSession(useChatUIStore.getState().currentSessionId);
   await ensureConnectedToActiveFolder();
   if (!_client) return;
 
@@ -1357,6 +1360,8 @@ export async function doAnswerQuestions(answers: string[][]) {
   }
 
   _pendingQuestionRequestId = null;
+  // Replying to a question is a user action: start a fresh vba_run budget.
+  await resetVbaRunBudgetForSession(useChatUIStore.getState().currentSessionId);
   useChatUIStore.setState({
     pendingQuestions: null,
     loading: true,
