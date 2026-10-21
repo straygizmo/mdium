@@ -75,8 +75,10 @@ describe("formatApprovalMessage", () => {
   });
 
   it("handles backslash paths and joins macros with a comma", () => {
-    const msg = formatApprovalMessage({ id: "1", xlsmPath: "C:\w\Book.xlsm", macros: ["A", "B"], matches: [] }, t);
+    const winPath = ["C:", "w", "Book.xlsm"].join(String.fromCharCode(92));
+    const msg = formatApprovalMessage({ id: "1", xlsmPath: winPath, macros: ["A", "B"], matches: [] }, t);
     expect(msg).toContain("Book.xlsm");
+    expect(msg).not.toContain("C:");
     expect(msg).not.toContain("C:\\w");
     expect(msg).toContain("A, B");
   });

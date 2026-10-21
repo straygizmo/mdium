@@ -22,7 +22,9 @@ export function formatApprovalMessage(
   req: VbaRunApprovalRequest,
   t: TFunction<"editor">,
 ): string {
-  const fileName = req.xlsmPath.split(/[\/]/).pop() || req.xlsmPath;
+  // Built with fromCharCode to avoid a backslash escape in source.
+  const fileName =
+    req.xlsmPath.split("/").pop()?.split(String.fromCharCode(92)).pop() || req.xlsmPath;
   const lines = req.matches
     .slice(0, VBA_RUN_APPROVAL_MAX_LINES)
     .map((m) => `${m.module}:${m.line}: ${m.text}`);
