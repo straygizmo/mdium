@@ -20,6 +20,8 @@ pub mod slidev;
 pub mod speech;
 pub mod vba;
 pub mod vba_lint;
+#[allow(dead_code)] // used by vba_run (Task 5/7)
+pub mod vba_shim;
 pub mod vba_source;
 pub mod vba_streams;
 pub mod video;
