@@ -11,7 +11,7 @@ use crate::commands::vba::vba_error;
 /// Upper bound on cells returned for a single range.
 pub const MAX_READ_CELLS: usize = 20_000;
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct RangeSpec {
     pub sheet: String,
     #[serde(default)]

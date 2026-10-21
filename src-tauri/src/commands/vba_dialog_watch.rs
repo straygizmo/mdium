@@ -66,7 +66,10 @@ mod win {
     use crate::commands::vba_run::DialogRecord;
     use windows_sys::core::BOOL;
     use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM};
-    use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+    use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+    };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumChildWindows, EnumWindows, GetClassNameW, GetDlgCtrlID, GetWindowTextW,
         GetWindowThreadProcessId, IsWindowVisible, PostMessageW, SendMessageTimeoutW, BN_CLICKED,
@@ -254,6 +257,20 @@ mod win {
             ok
         }
     }
+
+    pub fn wait_for_exit(pid: u32, timeout_ms: u32) -> bool {
+        // SAFETY: the handle is checked for null before use and closed exactly once.
+        unsafe {
+            let handle = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+            if handle.is_null() {
+                // No such process (already gone) or no access to it.
+                return true;
+            }
+            let exited = WaitForSingleObject(handle, timeout_ms) == WAIT_OBJECT_0;
+            CloseHandle(handle);
+            exited
+        }
+    }
 }
 
 /// Returns the process id owning `hwnd`, or `None` for an invalid window.
@@ -287,6 +304,17 @@ pub fn terminate_process(pid: u32) -> bool {
     {
         let _ = pid;
         false
+    }
+}
+
+/// Waits up to `timeout_ms` for `pid` to exit; `true` when it is gone (always `true` off Windows).
+pub fn wait_for_exit(pid: u32, timeout_ms: u64) -> bool {
+    #[cfg(windows)]
+    return win::wait_for_exit(pid, timeout_ms.min(u32::MAX as u64) as u32);
+    #[cfg(not(windows))]
+    {
+        let _ = (pid, timeout_ms);
+        true
     }
 }
 

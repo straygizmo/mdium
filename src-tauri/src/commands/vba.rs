@@ -88,7 +88,7 @@ fn ensure_safe_module_name(name: &str) -> Result<(), String> {
 }
 
 /// Validate path + extension; returns the structured error used by all commands.
-fn require_macro_workbook(xlsm_path: &str) -> Result<&Path, String> {
+pub(crate) fn require_macro_workbook(xlsm_path: &str) -> Result<&Path, String> {
     let p = Path::new(xlsm_path);
     if !p.exists() {
         return Err(vba_error("invalid_workbook", format!("File not found: {}", xlsm_path)));
@@ -793,27 +793,22 @@ pub enum PushWarning {
 }
 
 /// What a push would do, computed without writing anything.
-#[allow(dead_code)] // Used by the VBA run-and-verify loop; drop once it lands.
 pub struct PushPlan {
     pub changes: ModuleChanges,
     pub unchanged: Vec<String>,
     pub skipped: Vec<SkippedModule>,
     pub warnings: Vec<PushWarning>,
-    /// Workbook modules (non-Form) before the plan.
-    pub before: Vec<ModuleSource>,
     /// Modules as they would be after applying `changes` (normalized sources
     /// for touched ones).
     pub after: Vec<ModuleSource>,
 }
 
 /// Case-insensitive key identifying a workbook path (`\` normalized to `/`).
-#[allow(dead_code)] // Used by the VBA run-and-verify loop; drop once it lands.
 pub fn workbook_key(path: &str) -> String {
     path.replace('\\', "/").to_lowercase()
 }
 
 /// Sources of every non-Form module in the workbook. Errors are plain messages.
-#[allow(dead_code)] // Used by the VBA run-and-verify loop; drop once it lands.
 pub fn project_sources(xlsm_data: &[u8]) -> Result<Vec<ModuleSource>, String> {
     let mut loaded = load_project(vba_project_bin_from_zip(xlsm_data)?)?;
     let editable: Vec<ProjectModule> = loaded.modules.iter().filter(|m| m.kind != ModuleKind::Form).cloned().collect();
@@ -942,7 +937,7 @@ pub fn plan_push(xlsm_data: &[u8], macros_dir: &Path) -> Result<PushPlan, String
 
     let touched: Vec<String> = changes.updated.iter().chain(changes.added.iter()).map(|m| m.name.clone()).collect();
     let warnings = crate::commands::vba_lint::lint_changes(&before, &after, &touched);
-    Ok(PushPlan { changes, unchanged, skipped, warnings, before, after })
+    Ok(PushPlan { changes, unchanged, skipped, warnings, after })
 }
 
 /// Normalize a new module's source and decide whether it is private.
@@ -1018,7 +1013,6 @@ pub fn apply_changes(xlsm_data: &[u8], changes: &ModuleChanges) -> Result<Vec<u8
 }
 
 /// Add one module to the workbook bytes, normalized like a pushed file.
-#[allow(dead_code)] // Used by the VBA run-and-verify loop; drop once it lands.
 pub fn add_module(xlsm_data: &[u8], name: &str, kind: ModuleKind, source: &str) -> Result<Vec<u8>, String> {
     let changes = ModuleChanges { added: vec![module_edit(name, kind, source)], ..Default::default() };
     apply_changes(xlsm_data, &changes)
@@ -1122,7 +1116,7 @@ pub fn list_vba_modules(xlsm_path: String) -> Result<ListResult, String> {
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     // --- Compression/Decompression tests ---
@@ -1317,7 +1311,7 @@ mod tests {
     // --- Dir stream parsing tests ---
 
     /// Helper: build a dir stream record (id: u16, data: &[u8]).
-    fn make_record(id: u16, data: &[u8]) -> Vec<u8> {
+    pub(crate) fn make_record(id: u16, data: &[u8]) -> Vec<u8> {
         let mut rec = Vec::new();
         rec.extend_from_slice(&id.to_le_bytes());
         rec.extend_from_slice(&(data.len() as u32).to_le_bytes());
@@ -1484,15 +1478,15 @@ mod tests {
 
     use crate::commands::vba_streams::{DirStream, ModuleKind, ProjectStream, ProjectWm};
 
-    struct TestModule {
-        name: &'static str,
-        kind: ModuleKind,
-        source: &'static str,
+    pub(crate) struct TestModule {
+        pub(crate) name: &'static str,
+        pub(crate) kind: ModuleKind,
+        pub(crate) source: &'static str,
         /// Fake PerformanceCache bytes placed before the compressed source.
-        cache: &'static [u8],
+        pub(crate) cache: &'static [u8],
     }
 
-    fn build_vba_bin(code_page: u16, modules: &[TestModule]) -> Vec<u8> {
+    pub(crate) fn build_vba_bin(code_page: u16, modules: &[TestModule]) -> Vec<u8> {
         let cursor = Cursor::new(Vec::new());
         let mut comp = cfb::CompoundFile::create(cursor).unwrap();
         comp.create_storage("/VBA").unwrap();
@@ -1526,7 +1520,7 @@ mod tests {
         comp.into_inner().into_inner()
     }
 
-    fn build_workbook(dir: &Path, file_name: &str, vba_bin: &[u8]) -> PathBuf {
+    pub(crate) fn build_workbook(dir: &Path, file_name: &str, vba_bin: &[u8]) -> PathBuf {
         let path = dir.join(file_name);
         let mut zip = zip::ZipWriter::new(fs::File::create(&path).unwrap());
         let opts = zip::write::SimpleFileOptions::default();
@@ -1540,11 +1534,11 @@ mod tests {
         path
     }
 
-    fn std_module(name: &'static str, body: &'static str) -> TestModule {
+    pub(crate) fn std_module(name: &'static str, body: &'static str) -> TestModule {
         TestModule { name, kind: ModuleKind::Standard, source: body, cache: &[] }
     }
 
-    fn three_module_workbook(dir: &Path) -> PathBuf {
+    pub(crate) fn three_module_workbook(dir: &Path) -> PathBuf {
         let bin = build_vba_bin(
             1252,
             &[
@@ -2006,7 +2000,6 @@ End Sub
         assert_eq!(plan.unchanged, vec!["Class1".to_string(), "ThisWorkbook".to_string()]);
         assert!(plan.warnings.is_empty());
         assert!(plan.after.iter().any(|m| m.name == "New1"));
-        assert!(plan.before.iter().all(|m| m.name != "New1"));
         let m1_after = plan.after.iter().find(|m| m.name == "Module1").unwrap();
         assert!(m1_after.source.contains("MsgBox 1"));
         assert_eq!(fs::read(&xlsm).unwrap(), before, "plan_push must not write the workbook");

@@ -86,6 +86,7 @@ pub fn run() {
         .manage(Arc::new(Mutex::new(FolderWatcherState::new())))
         .manage::<HttpBridgeState>(new_http_bridge_state())
         .manage::<RagBridgePending>(new_rag_pending())
+        .manage::<commands::vba_run::VbaRunShared>(commands::vba_run::new_vba_run_state())
         .manage::<ActiveFolderState>(new_active_folder_state())
         .setup(|app| {
             let icon_bytes = include_bytes!("../icons/icon.png");
@@ -346,6 +347,8 @@ pub fn run() {
             commands::vba::push_vba_modules,
             commands::vba::list_vba_modules,
             commands::vba::check_workbook_lock,
+            commands::vba_run::reset_vba_run_budget,
+            commands::vba_run::vba_run_approval_reply,
             http_bridge::get_http_bridge_info,
             // RAG bridge (opencode rag_search tool → webview embedding + search)
             http_bridge::rag_bridge_respond,

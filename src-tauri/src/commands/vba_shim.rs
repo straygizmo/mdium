@@ -1,8 +1,12 @@
 //! Generates the `MdiumShim` VBA module injected into a disposable workbook copy.
 //!
 //! The shim shadows `MsgBox` / `InputBox` (project-level procedures win over the
-//! VBA library), wraps each macro in a `MdiumRunN` function that returns errors
-//! as a string, and records every dialog call into a log.
+//! VBA library), wraps each macro in a `MdiumRunN` Sub that stores its outcome
+//! (errors included) as a string for `MdiumTakeResult`, and records every
+//! dialog call into a log. The wrappers are Subs because an `End` (the
+//! statement, or the End button of a VBE error dialog) that unwinds a Function
+//! called through `Application.Run` crashes Excel, while a Sub just makes the
+//! COM call fail.
 
 use serde::{Deserialize, Serialize};
 
@@ -100,6 +104,7 @@ const HEADER_HEAD: &str = r#"Attribute VB_Name = "MdiumShim"
 Option Explicit
 
 Private mLog As String
+Private mResult As String
 Private mInputIdx As Long
 Private mMsgIdx As Long
 
@@ -177,19 +182,26 @@ Public Function MdiumTakeLog() As String
     MdiumTakeLog = mLog
     mLog = ""
 End Function
+
+' Outcome of the last MdiumRunN; empty when it never reached its end (End resets it).
+Public Function MdiumTakeResult() As String
+    MdiumTakeResult = mResult
+    mResult = ""
+End Function
 "#;
 
 const WRAPPER: &str = r#"
-Public Function MdiumRun@N@() As String
+Public Sub MdiumRun@N@()
     On Error GoTo Fail
     Dim t0 As Single
+    mResult = ""
     t0 = Timer
     Call @CALL@
-    MdiumRun@N@ = "ok" & Chr(31) & CStr(Int((Timer - t0) * 1000)) & Chr(31) & MdiumTakeLog()
-    Exit Function
+    mResult = "ok" & Chr(31) & CStr(Int((Timer - t0) * 1000)) & Chr(31) & MdiumTakeLog()
+    Exit Sub
 Fail:
-    MdiumRun@N@ = "error" & Chr(31) & CStr(Err.Number) & Chr(31) & Err.Source & Chr(31) & Err.Description & Chr(31) & MdiumTakeLog()
-End Function
+    mResult = "error" & Chr(31) & CStr(Err.Number) & Chr(31) & Err.Source & Chr(31) & Err.Description & Chr(31) & MdiumTakeLog()
+End Sub
 "#;
 
 /// Emits `Private Function <name>() As Variant` returning the items, one
@@ -295,8 +307,11 @@ mod tests {
             "Public Function MsgBox(Prompt, Optional Buttons As VbMsgBoxStyle = vbOKOnly",
             "Public Function InputBox(Prompt, Optional Title, Optional Default",
             "Public Function MdiumTakeLog() As String",
-            "Public Function MdiumRun1() As String",
-            "Public Function MdiumRun2() As String",
+            "Public Function MdiumTakeResult() As String",
+            "Public Sub MdiumRun1()",
+            "Public Sub MdiumRun2()",
+            "mResult = \"ok\" & Chr(31)",
+            "mResult = \"error\" & Chr(31)",
             "Call Module1.Main\r\n",
             "Call Module1.Fill(\"Sheet1\", 10)",
             "a(0) = \"42\"",
@@ -309,6 +324,8 @@ mod tests {
             assert!(s.contains(needle), "{needle}");
         }
         assert!(!s.contains("MdiumRun3"));
+        // A wrapper Function that is unwound by `End` crashes Excel, so wrappers are Subs.
+        assert!(!s.contains("Function MdiumRun"));
         assert!(s.matches("\r\n").count() == s.matches('\n').count(), "CRLF only");
     }
 
@@ -344,7 +361,7 @@ assert!(s.contains("Private Function OptStr(Optional ByVal v As Variant) As Stri
         };
         let s = render_shim(&spec);
         assert!(s.contains("Call M.P(\"@N@\")"));
-        assert!(s.contains("Public Function MdiumRun1() As String"));
+        assert!(s.contains("Public Sub MdiumRun1()"));
     }
     #[test]
     fn user_text_is_not_scanned_for_placeholders() {
