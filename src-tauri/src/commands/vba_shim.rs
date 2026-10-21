@@ -96,22 +96,16 @@ pub fn vba_arg_literal(v: &serde_json::Value) -> Result<String, String> {
     }
 }
 
-const HEADER: &str = r#"Attribute VB_Name = "MdiumShim"
+const HEADER_HEAD: &str = r#"Attribute VB_Name = "MdiumShim"
 Option Explicit
 
 Private mLog As String
 Private mInputIdx As Long
 Private mMsgIdx As Long
 
-Private Function Inputs() As Variant
-    Inputs = Array(@INPUTS@)
-End Function
+"#;
 
-Private Function MsgResponses() As Variant
-    MsgResponses = Array(@RESPONSES@)
-End Function
-
-' Appends one record: fields joined by Chr(31), terminated by Chr(30).
+const HEADER_TAIL: &str = r#"' Appends one record: fields joined by Chr(31), terminated by Chr(30).
 Private Sub Append(ParamArray f() As Variant)
     Dim i As Long
     Dim s As String
@@ -121,6 +115,17 @@ Private Sub Append(ParamArray f() As Variant)
     Next i
     mLog = mLog & s & Chr(30)
 End Sub
+
+' Optional Variant to String; omitted (Missing) or Null becomes empty.
+Private Function OptStr(ByVal v As Variant) As String
+    If IsMissing(v) Then
+        OptStr = ""
+    ElseIf IsNull(v) Then
+        OptStr = ""
+    Else
+        OptStr = CStr(v)
+    End If
+End Function
 
 ' Mirrors the button Windows would pick as the default answer.
 Private Function DefaultButton(ByVal Buttons As Long) As Long
@@ -148,7 +153,7 @@ Public Function MsgBox(Prompt, Optional Buttons As VbMsgBoxStyle = vbOKOnly, Opt
         r = DefaultButton(Buttons)
     End If
     mMsgIdx = mMsgIdx + 1
-    Append "msgbox", CStr(Prompt), CStr(Title & ""), CStr(r)
+    Append "msgbox", CStr(Prompt), OptStr(Title), CStr(r)
     MsgBox = r
 End Function
 
@@ -160,11 +165,11 @@ Public Function InputBox(Prompt, Optional Title, Optional Default, Optional XPos
     If mInputIdx <= UBound(inp) Then
         s = CStr(inp(mInputIdx))
     Else
-        s = CStr(Default & "")
+        s = OptStr(Default)
         exhausted = True
     End If
     mInputIdx = mInputIdx + 1
-    Append "inputbox", CStr(Prompt), CStr(Title & ""), s, IIf(exhausted, "exhausted", "")
+    Append "inputbox", CStr(Prompt), OptStr(Title), s, IIf(exhausted, "exhausted", "")
     InputBox = s
 End Function
 
@@ -187,25 +192,40 @@ Fail:
 End Function
 "#;
 
+/// Emits `Private Function <name>() As Variant` returning the items, one
+/// assignment per line to stay under VBA's 1023-character line limit.
+fn array_function(name: &str, items: &[String]) -> String {
+    let mut s = format!("Private Function {name}() As Variant\n");
+    if items.is_empty() {
+        s.push_str(&format!("    {name} = Array()\n"));
+    } else {
+        s.push_str(&format!("    Dim a(0 To {}) As Variant\n", items.len() - 1));
+        for (i, it) in items.iter().enumerate() {
+            s.push_str(&format!("    a({i}) = {it}\n"));
+        }
+        s.push_str(&format!("    {name} = a\n"));
+    }
+    s.push_str("End Function\n");
+    s
+}
+
 /// Renders the complete module text (CRLF line endings).
 /// Macro arguments that cannot be rendered are emitted as `Empty` so the
 /// text stays valid; callers should validate with `vba_arg_literal` first.
 pub fn render_shim(spec: &ShimSpec) -> String {
-    let inputs = spec
-        .inputs
-        .iter()
-        .map(|s| vba_string_literal(s))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let responses = spec
+    let responses: Vec<String> = spec
         .msgbox_responses
         .iter()
         .map(|r| r.vb_value().to_string())
-        .collect::<Vec<_>>()
-        .join(", ");
-    let mut out = HEADER
-        .replace("@INPUTS@", &inputs)
-        .replace("@RESPONSES@", &responses);
+        .collect();
+    let inputs: Vec<String> = spec.inputs.iter().map(|s| vba_string_literal(s)).collect();
+    // Assembled piecewise: user-provided text is never scanned for placeholders.
+    let mut out = String::from(HEADER_HEAD);
+    out.push_str(&array_function("Inputs", &inputs));
+    out.push('\n');
+    out.push_str(&array_function("MsgResponses", &responses));
+    out.push('\n');
+    out.push_str(HEADER_TAIL);
     for (i, m) in spec.macros.iter().enumerate() {
         let mut call = format!("{}.{}", m.module, m.proc);
         if !m.args.is_empty() {
@@ -279,8 +299,9 @@ mod tests {
             "Public Function MdiumRun2() As String",
             "Call Module1.Main\r\n",
             "Call Module1.Fill(\"Sheet1\", 10)",
-            "Array(\"42\", \"東京\")",
-            "Array(6)",
+            "a(0) = \"42\"",
+            "a(1) = \"東京\"",
+            "a(0) = 6",
             "On Error GoTo Fail",
             "Chr(31)",
             "Chr(30)",
@@ -296,8 +317,29 @@ mod tests {
         let s = render_shim(&ShimSpec::default());
         assert!(!s.contains("MdiumRun1"));
         assert!(s.contains("Public Function MdiumTakeLog() As String"));
-        assert!(s.contains("Inputs = Array()"));
-        assert!(s.contains("MsgResponses = Array()"));
+        assert!(s.contains("    Inputs = Array()"));
+        assert!(s.contains("    MsgResponses = Array()"));
+    }
+
+    #[test]
+    fn optional_params_are_guarded_against_missing() {
+        let s = render_shim(&ShimSpec::default());
+        assert!(s.contains("IsMissing("));
+        assert!(!s.contains("& \"\""));
+        assert!(s.contains("OptStr(Title)"));
+        assert!(s.contains("s = OptStr(Default)"));
+    }
+
+    #[test]
+    fn user_text_is_not_scanned_for_placeholders() {
+        let spec = ShimSpec {
+            inputs: vec!["@RESPONSES@".into()],
+            msgbox_responses: vec![MsgBoxResponse::Yes],
+            ..Default::default()
+        };
+        let s = render_shim(&spec);
+        assert!(s.contains("a(0) = \"@RESPONSES@\""));
+        assert!(s.contains("a(0) = 6"));
     }
 
     #[test]
