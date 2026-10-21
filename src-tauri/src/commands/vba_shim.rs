@@ -117,7 +117,7 @@ Private Sub Append(ParamArray f() As Variant)
 End Sub
 
 ' Optional Variant to String; omitted (Missing) or Null becomes empty.
-Private Function OptStr(ByVal v As Variant) As String
+Private Function OptStr(Optional ByVal v As Variant) As String
     If IsMissing(v) Then
         OptStr = ""
     ElseIf IsNull(v) Then
@@ -325,11 +325,27 @@ mod tests {
     fn optional_params_are_guarded_against_missing() {
         let s = render_shim(&ShimSpec::default());
         assert!(s.contains("IsMissing("));
+assert!(s.contains("Private Function OptStr(Optional ByVal v As Variant) As String"));
         assert!(!s.contains("& \"\""));
         assert!(s.contains("OptStr(Title)"));
         assert!(s.contains("s = OptStr(Default)"));
     }
 
+
+    #[test]
+    fn macro_args_are_not_scanned_for_placeholders() {
+        let spec = ShimSpec {
+            macros: vec![MacroCall {
+                module: "M".into(),
+                proc: "P".into(),
+                args: vec![json!("@N@")],
+            }],
+            ..Default::default()
+        };
+        let s = render_shim(&spec);
+        assert!(s.contains("Call M.P(\"@N@\")"));
+        assert!(s.contains("Public Function MdiumRun1() As String"));
+    }
     #[test]
     fn user_text_is_not_scanned_for_placeholders() {
         let spec = ShimSpec {
