@@ -34,6 +34,9 @@ async function callVbaRun(body: Record<string, unknown>, timeoutMs: number | und
       signal: AbortSignal.timeout(120_000 + (timeoutMs ?? 120_000) + 45_000),
     });
   } catch (e: any) {
+    if (e?.name === "TimeoutError") {
+      return "vba_run did not finish within the client timeout; the run may still be executing in mdium — wait, then check run_in_progress / runCopyPath instead of retrying immediately.";
+    }
     return `Failed to reach mdium: ${e?.message ?? e}.`;
   }
   let data: any;

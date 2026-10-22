@@ -80,6 +80,8 @@ pub struct RunnerOutcome {
     pub exit_code: Option<i32>,
     pub stderr: String,
     pub excel_pid: Option<u32>,
+    /// Excel may still be running: no HWND arrived (`excel_pid` is `None`), or
+    /// it could not be terminated (`excel_pid` is `Some`).
     pub excel_left_running: bool,
 }
 
@@ -134,6 +136,12 @@ pub fn spawn_and_watch(copy_path: &Path, macro_count: usize, read: &[RangeSpec],
     use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
     use std::time::Instant;
+    use crate::commands::vba_dialog_watch::{EndOutcome, HeldProcess, EXCEL_IMAGE};
+
+    /// Ends the run's Excel through the held handle; `true` when it is gone.
+    fn end_excel(excel: &HeldProcess, wait_ms: u64) -> bool {
+        matches!(excel.end(wait_ms, EXCEL_IMAGE), EndOutcome::Exited | EndOutcome::Terminated)
+    }
 
     let mut cmd = Command::new("powershell");
     cmd.args(["-NoProfile", "-NonInteractive", "-Command", RUNNER_SCRIPT])
@@ -177,10 +185,19 @@ pub fn spawn_and_watch(copy_path: &Path, macro_count: usize, read: &[RangeSpec],
     let mut open_seen = false;
     let mut finished = 0usize;
     let mut previous_scan: Vec<(usize, DialogRecord)> = Vec::new();
-    let handle_line = |line: &str, outcome: &mut RunnerOutcome, open_seen: &mut bool, finished: &mut usize| {
+    // Opened as soon as the HWND line names the Excel pid and held until the
+    // run ends, so the pid cannot be reused while it is scanned, waited on or
+    // terminated. Dropping it closes the handle.
+    let mut excel: Option<HeldProcess> = None;
+    let handle_line = |line: &str, outcome: &mut RunnerOutcome, open_seen: &mut bool, finished: &mut usize, excel: &mut Option<HeldProcess>| {
         if let Some(ev) = parse_runner_line(line) {
             match &ev {
-                RunnerEvent::Hwnd(h) => outcome.excel_pid = crate::commands::vba_dialog_watch::pid_of_window(*h),
+                RunnerEvent::Hwnd(h) => {
+                    if excel.is_none() {
+                        outcome.excel_pid = crate::commands::vba_dialog_watch::pid_of_window(*h);
+                        *excel = outcome.excel_pid.and_then(HeldProcess::open);
+                    }
+                }
                 RunnerEvent::OpenLog(_) => *open_seen = true,
                 RunnerEvent::Result { .. } | RunnerEvent::RunExc { .. } => *finished += 1,
                 RunnerEvent::Cells { .. } => {}
@@ -192,9 +209,9 @@ pub fn spawn_and_watch(copy_path: &Path, macro_count: usize, read: &[RangeSpec],
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
     loop {
         while let Ok(line) = rx.try_recv() {
-            handle_line(&line, &mut outcome, &mut open_seen, &mut finished);
+            handle_line(&line, &mut outcome, &mut open_seen, &mut finished, &mut excel);
         }
-        if let Some(pid) = outcome.excel_pid {
+        if let Some(pid) = excel.as_ref().map(HeldProcess::pid) {
             let phase = current_phase(open_seen, finished, macro_count);
             let scan = crate::commands::vba_dialog_watch::scan_and_dismiss(pid);
             push_scan(&mut outcome.windows, &mut previous_scan, phase, scan);
@@ -207,6 +224,9 @@ pub fn spawn_and_watch(copy_path: &Path, macro_count: usize, read: &[RangeSpec],
             Ok(None) => {}
             Err(e) => {
                 outcome.stderr = e.to_string();
+                // Without a kill the stdout reader below would wait for a live PowerShell.
+                let _ = child.kill();
+                let _ = child.wait();
                 break;
             }
         }
@@ -218,18 +238,13 @@ pub fn spawn_and_watch(copy_path: &Path, macro_count: usize, read: &[RangeSpec],
             let grace_end = Instant::now() + Duration::from_millis(HWND_GRACE_MS);
             while outcome.excel_pid.is_none() && Instant::now() < grace_end {
                 match rx.recv_timeout(Duration::from_millis(WATCH_INTERVAL_MS)) {
-                    Ok(line) => handle_line(&line, &mut outcome, &mut open_seen, &mut finished),
+                    Ok(line) => handle_line(&line, &mut outcome, &mut open_seen, &mut finished, &mut excel),
                     Err(mpsc::RecvTimeoutError::Timeout) => {}
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 }
             }
-            match outcome.excel_pid {
-                Some(pid) => {
-                    if !crate::commands::vba_dialog_watch::terminate_process(pid) {
-                        outcome.excel_left_running = true;
-                    }
-                }
-                None => outcome.excel_left_running = true,
+            if !excel.as_ref().is_some_and(|p| end_excel(p, 0)) {
+                outcome.excel_left_running = true;
             }
             let _ = child.kill();
             let _ = child.wait();
@@ -241,7 +256,7 @@ pub fn spawn_and_watch(copy_path: &Path, macro_count: usize, read: &[RangeSpec],
     // The pipes close once PowerShell is gone; collect what is left.
     let _ = stdout_thread.join();
     while let Ok(line) = rx.try_recv() {
-        handle_line(&line, &mut outcome, &mut open_seen, &mut finished);
+        handle_line(&line, &mut outcome, &mut open_seen, &mut finished, &mut excel);
     }
     let stderr_text = stderr_thread.join().unwrap_or_default();
     if outcome.stderr.is_empty() {
@@ -249,15 +264,15 @@ pub fn spawn_and_watch(copy_path: &Path, macro_count: usize, read: &[RangeSpec],
     }
 
     // Excel normally exits right after Quit; a lingering hidden instance is useless, so end it.
+    // Without a held handle there is nothing that can safely be waited on or ended.
     if !outcome.timed_out {
-        if let Some(pid) = outcome.excel_pid {
-            if !crate::commands::vba_dialog_watch::wait_for_exit(pid, EXCEL_EXIT_GRACE_MS)
-                && !crate::commands::vba_dialog_watch::terminate_process(pid)
-            {
+        if let Some(p) = &excel {
+            if !end_excel(p, EXCEL_EXIT_GRACE_MS) {
                 outcome.excel_left_running = true;
             }
         }
     }
+    drop(excel);
     Ok(outcome)
 }
 

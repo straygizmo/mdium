@@ -51,6 +51,11 @@ describe("builtin VBA run tools", () => {
     expect(src).toContain("AbortSignal.timeout(");
     expect(src).toContain("allow_side_effects");
   });
+  it("vba_run tells the agent not to retry when its own timeout fires", () => {
+    const src = BUILTIN_CUSTOM_TOOLS.vba_run.content;
+    expect(src).toContain('e?.name === "TimeoutError"');
+    expect(src).toContain("did not finish within the client timeout");
+  });
   it("xlsx_read posts to /xlsx/read", () => {
     expect(BUILTIN_CUSTOM_TOOLS.xlsx_read.content).toContain("/xlsx/read");
   });

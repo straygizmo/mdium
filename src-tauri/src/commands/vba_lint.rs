@@ -37,7 +37,10 @@ fn side_effect_res() -> &'static Vec<Regex> {
             r"^\s*Name\s+\S.*\s+As\s+",
             r"\bOpen\s+.+\s+For\s+(Output|Append|Binary|Random)\b",
             r"FileSystemObject",
-            r"\bShell\s*\(",
+            // Both `Shell(...)` and the statement form `Shell "cmd", vbHide`.
+            // Conservative: any identifier spelled exactly `Shell` (any case)
+            // also hits, e.g. `Dim shell As Object`; `shellCount` does not.
+            r"\bShell\b",
             r"\bCreateObject\s*\(",
             r"\bGetObject\s*\(",
             r"WScript\.Shell",
@@ -46,7 +49,11 @@ fn side_effect_res() -> &'static Vec<Regex> {
             r"Outlook\.Application",
             r"\.SendMail\b",
             r"URLDownloadToFile",
-            r"Workbooks\.Open\b",
+            // Open, OpenText, OpenXML, OpenDatabase.
+            r"Workbooks\.Open\w*\b",
+            r"\bSetAttr\b",
+            r"\bSendKeys\b",
+            r"\bExecuteExcel4Macro\b",
             r"\.SaveAs\b",
             r"\.SaveCopyAs\b",
             r"^\s*(?:Public\s+|Private\s+)?Declare\s+",
@@ -233,6 +240,13 @@ mod tests {
         assert_eq!(hits.iter().map(|h| h.line).collect::<Vec<_>>(), vec![3, 5, 6]);
         assert_eq!(hits[0].text, "Kill \"a.txt\"");
         assert_eq!(hits[0].module, "Module1");
+    }
+
+    #[test]
+    fn scans_statement_shell_and_other_outside_effects() {
+        let src = "Sub A()\r\nShell \"cmd /c del x\", vbHide\r\nx = Shell(\"notepad\")\r\nWorkbooks.OpenText \"a.csv\"\r\nWorkbooks.OpenXML \"a.xml\"\r\nSetAttr \"a.txt\", vbReadOnly\r\nSendKeys \"{ENTER}\"\r\nExecuteExcel4Macro \"x\"\r\nshellCount = 1\r\nEnd Sub\r\n";
+        let hits = scan_side_effects(&[m("Module1", src)]);
+        assert_eq!(hits.iter().map(|h| h.line).collect::<Vec<_>>(), vec![2, 3, 4, 5, 6, 7, 8]);
     }
 
     #[test]

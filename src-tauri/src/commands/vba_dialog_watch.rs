@@ -10,6 +10,28 @@ pub const BUTTON_PREFERENCE: [&str; 7] = ["終了", "End", "キャンセル", "C
 /// Buttons to press on an Excel built-in (`bosa_sdm_XL9`) dialog.
 pub const CANCEL_PREFERENCE: [&str; 2] = ["キャンセル", "Cancel"];
 
+/// Image file name a run's Excel process must have before it is terminated.
+pub const EXCEL_IMAGE: &str = "EXCEL.EXE";
+
+/// How `HeldProcess::end` finished.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EndOutcome {
+    /// The process exited by itself within the wait.
+    Exited,
+    /// The process was terminated.
+    Terminated,
+    /// The image name did not match, so the process was left alone.
+    Refused,
+    /// TerminateProcess (or the image query) failed.
+    Failed,
+}
+
+/// Whether `image_path` names the executable `image` (case-insensitive file-name match).
+pub fn image_matches(image_path: &str, image: &str) -> bool {
+    let name = image_path.rsplit(['\u{5c}', '/']).next().unwrap_or("");
+    name.eq_ignore_ascii_case(image)
+}
+
 /// How a detected window should be dismissed.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Dismiss {
@@ -65,10 +87,12 @@ mod win {
     use super::{dismiss_plan, Dismiss};
     use crate::commands::vba_run::DialogRecord;
     use windows_sys::core::BOOL;
-    use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM};
+    use super::{image_matches, EndOutcome};
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM};
     use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
     use windows_sys::Win32::System::Threading::{
-        OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+        OpenProcess, QueryFullProcessImageNameW, TerminateProcess, WaitForSingleObject, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumChildWindows, EnumWindows, GetClassNameW, GetDlgCtrlID, GetWindowTextW,
@@ -245,33 +269,90 @@ mod win {
         records
     }
 
-    pub fn terminate_process(pid: u32) -> bool {
-        // SAFETY: the handle is checked for null before use and closed exactly once.
-        unsafe {
-            let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
+    /// An open process handle, held for the rest of a run. While it is open
+    /// Windows cannot reuse the pid, so waiting on and terminating through it
+    /// can never reach an unrelated process. Closed exactly once on drop.
+    pub struct HeldProcess {
+        handle: HANDLE,
+        pid: u32,
+    }
+
+    // SAFETY: a process handle is a kernel object reference usable from any thread.
+    unsafe impl Send for HeldProcess {}
+
+    impl HeldProcess {
+        /// Opens `pid` for waiting, terminating and querying its image; `None` when
+        /// the process is gone or inaccessible.
+        pub fn open(pid: u32) -> Option<Self> {
+            // SAFETY: plain API call; the result is checked for null.
+            let handle = unsafe {
+                OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION, 0, pid)
+            };
             if handle.is_null() {
-                return false;
+                None
+            } else {
+                Some(Self { handle, pid })
             }
-            let ok = TerminateProcess(handle, 1) != 0;
-            CloseHandle(handle);
-            ok
+        }
+
+        pub fn pid(&self) -> u32 {
+            self.pid
+        }
+
+        /// Waits up to `timeout_ms` for the process to exit; `true` when it has.
+        pub fn wait_for_exit(&self, timeout_ms: u64) -> bool {
+            let ms = timeout_ms.min(u32::MAX as u64 - 1) as u32;
+            // SAFETY: `self.handle` is a valid process handle until drop.
+            unsafe { WaitForSingleObject(self.handle, ms) == WAIT_OBJECT_0 }
+        }
+
+        /// Full path of the process image, or `None` when it cannot be queried.
+        pub fn image_path(&self) -> Option<String> {
+            let mut buf = vec![0u16; 1024];
+            let mut len = buf.len() as u32;
+            // SAFETY: the buffer holds `len` u16s; the call writes at most that many.
+            let ok = unsafe { QueryFullProcessImageNameW(self.handle, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len) };
+            if ok == 0 {
+                None
+            } else {
+                Some(String::from_utf16_lossy(&buf[..(len as usize).min(buf.len())]))
+            }
+        }
+
+        /// Waits up to `wait_ms` for the process to exit, then terminates it, but
+        /// only when its image file name is `image`.
+        pub fn end(&self, wait_ms: u64, image: &str) -> EndOutcome {
+            if self.wait_for_exit(wait_ms) {
+                return EndOutcome::Exited;
+            }
+            match self.image_path() {
+                None => EndOutcome::Failed,
+                Some(path) if !image_matches(&path, image) => EndOutcome::Refused,
+                Some(_) => {
+                    // SAFETY: `self.handle` is a valid process handle until drop.
+                    if unsafe { TerminateProcess(self.handle, 1) } != 0 {
+                        EndOutcome::Terminated
+                    } else if self.wait_for_exit(0) {
+                        // It exited between the wait and the terminate.
+                        EndOutcome::Exited
+                    } else {
+                        EndOutcome::Failed
+                    }
+                }
+            }
         }
     }
 
-    pub fn wait_for_exit(pid: u32, timeout_ms: u32) -> bool {
-        // SAFETY: the handle is checked for null before use and closed exactly once.
-        unsafe {
-            let handle = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
-            if handle.is_null() {
-                // No such process (already gone) or no access to it.
-                return true;
-            }
-            let exited = WaitForSingleObject(handle, timeout_ms) == WAIT_OBJECT_0;
-            CloseHandle(handle);
-            exited
+    impl Drop for HeldProcess {
+        fn drop(&mut self) {
+            // SAFETY: the handle came from OpenProcess and is closed only here.
+            unsafe { CloseHandle(self.handle) };
         }
     }
 }
+
+#[cfg(windows)]
+pub use win::HeldProcess;
 
 /// Returns the process id owning `hwnd`, or `None` for an invalid window.
 pub fn pid_of_window(hwnd: isize) -> Option<u32> {
@@ -296,27 +377,6 @@ pub fn scan_and_dismiss(pid: u32) -> Vec<DialogRecord> {
     }
 }
 
-/// Force-terminates `pid`; `false` on any failure (always `false` off Windows).
-pub fn terminate_process(pid: u32) -> bool {
-    #[cfg(windows)]
-    return win::terminate_process(pid);
-    #[cfg(not(windows))]
-    {
-        let _ = pid;
-        false
-    }
-}
-
-/// Waits up to `timeout_ms` for `pid` to exit; `true` when it is gone (always `true` off Windows).
-pub fn wait_for_exit(pid: u32, timeout_ms: u64) -> bool {
-    #[cfg(windows)]
-    return win::wait_for_exit(pid, timeout_ms.min(u32::MAX as u64) as u32);
-    #[cfg(not(windows))]
-    {
-        let _ = (pid, timeout_ms);
-        true
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -337,5 +397,55 @@ mod tests {
         assert!(matches!(dismiss_plan("bosa_sdm_XL9", &["OK".into(), "キャンセル".into()]), Dismiss::Click(ref l) if l == "キャンセル"));
         assert!(matches!(dismiss_plan("ThunderDFrame", &["OK".into()]), Dismiss::Close));
         assert!(matches!(dismiss_plan("XLMAIN", &[]), Dismiss::Skip));
+    }
+
+    #[test]
+    fn image_match_compares_the_file_name_only() {
+        assert!(image_matches(r"C:\Program Files\Microsoft Office\root\Office16\EXCEL.EXE", EXCEL_IMAGE));
+        assert!(image_matches(r"C:\x\excel.exe", EXCEL_IMAGE));
+        assert!(!image_matches(r"C:\x\NOTEXCEL.EXE", EXCEL_IMAGE));
+        assert!(!image_matches(r"C:\EXCEL.EXE\cmd.exe", EXCEL_IMAGE));
+        assert!(!image_matches("", EXCEL_IMAGE));
+    }
+
+    #[cfg(windows)]
+    fn spawn_hidden(program: &str, args: &[&str]) -> std::process::Child {
+        use std::os::windows::process::CommandExt;
+        std::process::Command::new(program)
+            .args(args)
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .spawn()
+            .unwrap()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn held_process_reports_exited_for_a_short_lived_child() {
+        let mut child = spawn_hidden("cmd", &["/c", "exit"]);
+        let proc = HeldProcess::open(child.id()).expect("handle to a just-spawned child");
+        assert_eq!(proc.end(10_000, "cmd.exe"), EndOutcome::Exited);
+        let _ = child.wait();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn held_process_terminates_a_long_lived_child_with_the_expected_image() {
+        let mut child = spawn_hidden("powershell", &["-NoProfile", "-Command", "Start-Sleep 30"]);
+        let proc = HeldProcess::open(child.id()).expect("handle to a just-spawned child");
+        assert!(proc.image_path().unwrap().to_ascii_lowercase().ends_with("powershell.exe"));
+        assert_eq!(proc.end(200, "powershell.exe"), EndOutcome::Terminated);
+        assert!(proc.wait_for_exit(5_000));
+        assert_eq!(child.wait().unwrap().code(), Some(1));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn held_process_refuses_to_terminate_another_image() {
+        let mut child = spawn_hidden("powershell", &["-NoProfile", "-Command", "Start-Sleep 30"]);
+        let proc = HeldProcess::open(child.id()).expect("handle to a just-spawned child");
+        assert_eq!(proc.end(0, EXCEL_IMAGE), EndOutcome::Refused);
+        assert!(child.try_wait().unwrap().is_none(), "a non-EXCEL.EXE image must be left alone");
+        child.kill().unwrap();
+        let _ = child.wait();
     }
 }

@@ -15,7 +15,7 @@ use tauri::{AppHandle, Emitter};
 
 use super::vba::{
     add_module, apply_changes, macros_dir_for, plan_push, project_sources, require_macro_workbook, vba_error,
-    vba_project_bin_from_zip, workbook_key, PushWarning,
+    canonical_workbook_key, vba_project_bin_from_zip, PushWarning,
 };
 use super::vba_lint::{has_procedure, resolve_macro, scan_side_effects, side_effects_fingerprint, SideEffectHit};
 use super::vba_shim::{
@@ -153,7 +153,7 @@ pub struct RunResult {
 
 // ---- state (managed by Tauri as VbaRunShared) ----
 
-/// Per-workbook run state, keyed by `vba::workbook_key`.
+/// Per-workbook run state, keyed by `vba::canonical_workbook_key`.
 #[derive(Default)]
 pub struct VbaRunState {
     budget: HashMap<String, u32>,
@@ -266,12 +266,14 @@ pub fn new_run_dir(runs_dir: &Path, base_name: &str) -> Result<PathBuf, String> 
     }
 }
 
-/// Removes all but the newest `keep` run folders (by name) and returns the removed paths.
-pub fn prune_run_dirs(runs_dir: &Path, keep: usize) -> Result<Vec<PathBuf>, String> {
+/// Removes all but the newest `keep` run folders (by name). Best-effort: a
+/// folder that cannot be removed (e.g. a run copy open in Excel) is skipped.
+/// Returns the removed paths and one agent-facing note per failure.
+pub fn prune_run_dirs(runs_dir: &Path, keep: usize) -> (Vec<PathBuf>, Vec<String>) {
     let entries = match fs::read_dir(runs_dir) {
         Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
-        Err(e) => return Err(vba_error("io", format!("Cannot read {}: {}", runs_dir.display(), e))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return (vec![], vec![]),
+        Err(e) => return (vec![], vec![format!("Could not list old run copies in {}: {}", runs_dir.display(), e)]),
     };
     let mut dirs: Vec<PathBuf> = entries
         .filter_map(|e| e.ok())
@@ -280,11 +282,32 @@ pub fn prune_run_dirs(runs_dir: &Path, keep: usize) -> Result<Vec<PathBuf>, Stri
         .collect();
     dirs.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
     let excess = dirs.len().saturating_sub(keep);
-    let removed: Vec<PathBuf> = dirs.into_iter().take(excess).collect();
-    for dir in &removed {
-        fs::remove_dir_all(dir).map_err(|e| vba_error("io", format!("Cannot remove {}: {}", dir.display(), e)))?;
+    let mut removed = Vec::new();
+    let mut failed = Vec::new();
+    for dir in dirs.into_iter().take(excess) {
+        match fs::remove_dir_all(&dir) {
+            Ok(()) => removed.push(dir),
+            Err(e) => failed.push(format!("Could not remove old run copy {}: {}", dir.display(), e)),
+        }
     }
-    Ok(removed)
+    (removed, failed)
+}
+
+/// Prunes old run folders (best-effort), then writes `bytes` as `file_name`
+/// into a new run folder named after `dir_name`. Returns the copy path and
+/// the pruning notes.
+pub(crate) fn write_run_copy(
+    runs_dir: &Path,
+    dir_name: &str,
+    file_name: &std::ffi::OsStr,
+    bytes: &[u8],
+) -> Result<(PathBuf, Vec<String>), String> {
+    // Prune first so the folder created below can never be the one removed.
+    let (_, notes) = prune_run_dirs(runs_dir, RUN_COPY_KEEP - 1);
+    let run_dir = new_run_dir(runs_dir, dir_name)?;
+    let copy_path = run_dir.join(file_name);
+    fs::write(&copy_path, bytes).map_err(|e| vba_error("io", format!("Cannot write {}: {}", copy_path.display(), e)))?;
+    Ok((copy_path, notes))
 }
 
 // ---- runner stdout protocol ----
@@ -519,16 +542,8 @@ pub(crate) struct Prepared {
 }
 
 /// Builds the code to run and performs every static check that needs no Excel.
+/// Check order: source, shim conflict, macro_not_found, invalid_request, side effects.
 pub(crate) fn prepare_run(req: &RunRequest, data: &[u8], macros_dir: &Path) -> Result<Prepared, String> {
-    // render_shim silently renders unsupported arguments as Empty, so refuse them here.
-    for (i, m) in req.macros.iter().enumerate() {
-        for (j, arg) in m.args.iter().enumerate() {
-            if vba_arg_literal(arg).is_err() {
-                return Err(vba_error("invalid_request", format!("macros[{}].args[{}]: unsupported argument type", i, j)));
-            }
-        }
-    }
-
     let (base, modules, warnings) = match req.source {
         RunSource::MacrosDir => {
             if !macros_dir.is_dir() {
@@ -568,6 +583,15 @@ pub(crate) fn prepare_run(req: &RunRequest, data: &[u8], macros_dir: &Path) -> R
         macros.push(MacroCall { module, proc, args: m.args.clone() });
     }
 
+    // render_shim silently renders unsupported arguments as Empty, so refuse them here.
+    for (i, m) in req.macros.iter().enumerate() {
+        for (j, arg) in m.args.iter().enumerate() {
+            if vba_arg_literal(arg).is_err() {
+                return Err(vba_error("invalid_request", format!("macros[{}].args[{}]: unsupported argument type", i, j)));
+            }
+        }
+    }
+
     let side_effects = scan_side_effects(&modules);
     Ok(Prepared { base, warnings, macros, side_effects })
 }
@@ -585,6 +609,11 @@ fn side_effects_message(hits: &[SideEffectHit]) -> String {
 // ---- result assembly ----
 
 pub const NOTE_EXCEL_LEFT_RUNNING: &str = "No Excel window handle was received; an EXCEL.EXE process may still be running.";
+
+/// Note for an Excel whose pid is known but which could not be ended.
+fn excel_not_terminated_note(pid: u32) -> String {
+    format!("Excel (pid {}) could not be terminated; it may still be running.", pid)
+}
 
 fn timeout_note(timeout_ms: u64) -> String {
     format!("Timed out after {} ms; the run copy was not saved.", timeout_ms)
@@ -675,7 +704,10 @@ pub fn assemble_result(
         notes.push(timeout_note(req.effective_timeout_ms()));
     }
     if outcome.excel_left_running {
-        notes.push(NOTE_EXCEL_LEFT_RUNNING.to_string());
+        notes.push(match outcome.excel_pid {
+            Some(pid) => excel_not_terminated_note(pid),
+            None => NOTE_EXCEL_LEFT_RUNNING.to_string(),
+        });
     }
 
     RunResult {
@@ -705,7 +737,8 @@ pub(crate) fn run_vba_macros_with(
     resolved_path: &str,
     emit: &dyn Fn(serde_json::Value) -> Result<(), String>,
 ) -> Result<RunResult, String> {
-    let key = workbook_key(resolved_path);
+    // Canonical so that no spelling of the path gets a budget of its own.
+    let key = canonical_workbook_key(resolved_path);
     {
         let mut s = lock_state(state)?;
         s.check_budget(&key)?;
@@ -741,15 +774,16 @@ pub(crate) fn run_vba_macros_with(
     let copy_bytes = add_module(&prepared.base, SHIM_MODULE_NAME, ModuleKind::Standard, &shim)?;
 
     let runs_dir = runs_dir_for(original)?;
-    // Prune first so the folder created below can never be the one removed.
-    prune_run_dirs(&runs_dir, RUN_COPY_KEEP - 1)?;
     let first = req.macros.first().map(|m| m.name.as_str());
-    let run_dir = new_run_dir(&runs_dir, &run_dir_name(chrono::Local::now().naive_local(), first))?;
     let file_name = original
         .file_name()
         .ok_or_else(|| vba_error("invalid_workbook", "Invalid file name"))?;
-    let copy_path = run_dir.join(file_name);
-    fs::write(&copy_path, &copy_bytes).map_err(|e| vba_error("io", format!("Cannot write {}: {}", copy_path.display(), e)))?;
+    let (copy_path, prune_notes) = write_run_copy(
+        &runs_dir,
+        &run_dir_name(chrono::Local::now().naive_local(), first),
+        file_name,
+        &copy_bytes,
+    )?;
 
     let outcome = spawn_and_watch(&copy_path, prepared.macros.len(), &req.read, req.effective_timeout_ms())?;
     if outcome.exit_code == Some(2) || outcome.stderr.contains("EXCEL_NOT_AVAILABLE") {
@@ -775,6 +809,7 @@ pub(crate) fn run_vba_macros_with(
     if outcome.exit_code == Some(1) {
         result.notes.push(format!("The runner failed after the macros ran: {}", first_stderr_line(&outcome.stderr)));
     }
+    result.notes.extend(prune_notes);
     Ok(result)
 }
 
@@ -789,7 +824,11 @@ pub fn run_vba_macros(app: &AppHandle, state: &VbaRunShared, req: &RunRequest, r
 /// Clears the run budget and side-effect approvals of a workbook (the user sent a new instruction).
 #[tauri::command]
 pub fn reset_vba_run_budget(state: tauri::State<VbaRunShared>, xlsm_path: String) -> Result<(), String> {
-    lock_state(state.inner())?.reset(&workbook_key(&xlsm_path));
+    reset_run_budget_for(state.inner(), &xlsm_path)
+}
+
+pub(crate) fn reset_run_budget_for(state: &VbaRunShared, xlsm_path: &str) -> Result<(), String> {
+    lock_state(state)?.reset(&canonical_workbook_key(xlsm_path));
     Ok(())
 }
 
@@ -922,12 +961,45 @@ mod tests {
         }
         // Plain files are not run copies and are left alone.
         std::fs::write(tmp.path().join("00000000-note.txt"), "x").unwrap();
-        let removed = prune_run_dirs(tmp.path(), RUN_COPY_KEEP).unwrap();
+        let (removed, failed) = prune_run_dirs(tmp.path(), RUN_COPY_KEEP);
         assert_eq!(removed, vec![tmp.path().join("20260101-000001"), tmp.path().join("20260101-000002")]);
+        assert!(failed.is_empty(), "{failed:?}");
         assert!(!tmp.path().join("20260101-000002").exists());
         assert!(tmp.path().join("20260101-000003").is_dir());
         assert!(tmp.path().join("00000000-note.txt").is_file());
-        assert!(prune_run_dirs(&tmp.path().join("missing"), 5).unwrap().is_empty());
+        let (removed, failed) = prune_run_dirs(&tmp.path().join("missing"), 5);
+        assert!(removed.is_empty() && failed.is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_locked_old_run_copy_does_not_stop_a_new_run() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let runs = tmp.path().join("runs");
+        for i in 1..=6 {
+            std::fs::create_dir_all(runs.join(format!("20260101-00000{}", i))).unwrap();
+        }
+        let locked_dir = runs.join("20260101-000001");
+        let locked = locked_dir.join("Book1.xlsm");
+        std::fs::write(&locked, b"old").unwrap();
+        // Share mode 0: like a copy open in Excel, the file cannot be deleted.
+        let _held = std::fs::OpenOptions::new().read(true).share_mode(0).open(&locked).unwrap();
+
+        let (copy, notes) =
+            write_run_copy(&runs, "20260102-000000_Main", std::ffi::OsStr::new("Book1.xlsm"), b"new").unwrap();
+        assert_eq!(copy, runs.join("20260102-000000_Main").join("Book1.xlsm"));
+        assert_eq!(std::fs::read(&copy).unwrap(), b"new");
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(
+            notes[0].starts_with(&format!("Could not remove old run copy {}: ", locked_dir.display())),
+            "{}",
+            notes[0]
+        );
+        // The other excess folder was still removed; the locked one stays.
+        assert!(!runs.join("20260101-000002").exists());
+        assert!(locked.exists());
+        assert!(runs.join("20260101-000003").is_dir());
     }
 
     #[test]
@@ -1364,7 +1436,11 @@ mod tests {
         assert!(outcome.timed_out);
         assert!(!outcome.excel_left_running);
         let pid = outcome.excel_pid.expect("HWND line gives the Excel pid");
-        assert!(crate::commands::vba_dialog_watch::wait_for_exit(pid, 5000), "EXCEL.EXE {pid} is still running");
+        // The runner already waited for termination; a still-open EXCEL.EXE under this pid means it leaked.
+        if let Some(p) = crate::commands::vba_dialog_watch::HeldProcess::open(pid) {
+            let excel = p.image_path().is_some_and(|i| crate::commands::vba_dialog_watch::image_matches(&i, "EXCEL.EXE"));
+            assert!(!excel || p.wait_for_exit(5000), "EXCEL.EXE {pid} is still running");
+        }
     }
 
     // ---- orchestration (Task 7) ----
@@ -1490,6 +1566,23 @@ mod tests {
         );
     }
 
+    #[test]
+    fn assemble_names_the_pid_when_a_received_excel_could_not_be_terminated() {
+        let outcome = RunnerOutcome { timed_out: true, excel_pid: Some(4321), excel_left_running: true, ..Default::default() };
+        let r = assemble_result(&request(Some(5000)), &names(1), &outcome, "p", vec![], budget());
+        assert_eq!(
+            r.notes,
+            vec![
+                "Timed out after 5000 ms; the run copy was not saved.".to_string(),
+                "Excel (pid 4321) could not be terminated; it may still be running.".to_string()
+            ]
+        );
+        // A pid that was ended cleanly adds no note.
+        let outcome = RunnerOutcome { exit_code: Some(0), excel_pid: Some(4321), ..Default::default() };
+        let r = assemble_result(&request(None), &names(1), &outcome, "p", vec![], budget());
+        assert!(r.notes.is_empty(), "{:?}", r.notes);
+    }
+
     fn macro_req(source: RunSource, macros: &[&str]) -> RunRequest {
         let specs: Vec<serde_json::Value> = macros.iter().map(|m| json!({ "name": m })).collect();
         let source = serde_json::to_value(source).unwrap();
@@ -1541,6 +1634,22 @@ mod tests {
         let err = prepare_run(&req, &data, &tmp.path().join("none")).err().unwrap();
         assert_eq!(err_code(&err), "invalid_request");
         assert!(err.contains("macros[1].args[1]: unsupported argument type"), "{err}");
+    }
+
+    #[test]
+    fn earlier_checks_win_over_a_bad_argument() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = std::fs::read(three_module_workbook(tmp.path())).unwrap();
+        let bad = |source: &str, name: &str| -> RunRequest {
+            serde_json::from_value(json!({
+                "xlsm_path": "unused", "source": source, "macros": [{ "name": name, "args": [[1]] }]
+            }))
+            .unwrap()
+        };
+        let none = tmp.path().join("none");
+        assert_eq!(err_code(&prepare_run(&bad("macros_dir", "Hello"), &data, &none).err().unwrap()), "macros_dir_not_found");
+        assert_eq!(err_code(&prepare_run(&bad("workbook", "Nope"), &data, &none).err().unwrap()), "macro_not_found");
+        assert_eq!(err_code(&prepare_run(&bad("workbook", "Hello"), &data, &none).err().unwrap()), "invalid_request");
     }
 
     #[test]
@@ -1628,9 +1737,9 @@ mod tests {
         let msg = serde_json::from_str::<serde_json::Value>(&err).unwrap()["message"].as_str().unwrap().to_string();
         assert!(msg.lines().any(|l| l == "Module1:3: Kill \"c:\\x.txt\""), "{msg}");
         assert!(calls.lock().unwrap().is_empty());
-        assert_eq!(used(&state, &workbook_key(&path)), 0);
+        assert_eq!(used(&state, &canonical_workbook_key(&path)), 0);
         // The in-progress flag was released.
-        state.lock().unwrap().begin(&workbook_key(&path)).unwrap();
+        state.lock().unwrap().begin(&canonical_workbook_key(&path)).unwrap();
     }
 
     #[test]
@@ -1646,7 +1755,7 @@ mod tests {
         assert_eq!(payload["xlsmPath"], json!(path));
         assert_eq!(payload["macros"], json!(["Module1.A"]));
         assert_eq!(payload["matches"][0]["line"], json!(3));
-        let key = workbook_key(&path);
+        let key = canonical_workbook_key(&path);
         assert_eq!(used(&state, &key), 0);
         let s = state.lock().unwrap();
         assert!(s.pending_approvals.is_empty());
@@ -1704,7 +1813,7 @@ mod tests {
     fn exhausted_budget_and_concurrent_runs_are_refused_before_reading_the_workbook() {
         let state = new_vba_run_state();
         let path = "c:/nowhere/Book.xlsm";
-        let key = workbook_key(path);
+        let key = canonical_workbook_key(path);
         state.lock().unwrap().begin(&key).unwrap();
         let none = |_: serde_json::Value| Ok(());
         assert_eq!(err_code(&run_vba_macros_with(&state, &run_req(path, false), path, &none).err().unwrap()), "run_in_progress");
@@ -1717,6 +1826,28 @@ mod tests {
         state.lock().unwrap().reset(&key);
         assert_eq!(err_code(&run_vba_macros_with(&state, &run_req(path, false), path, &none).err().unwrap()), "invalid_workbook");
         state.lock().unwrap().begin(&key).unwrap();
+    }
+
+    #[test]
+    fn budget_is_shared_by_every_spelling_of_one_workbook() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = side_effect_workbook(tmp.path());
+        std::fs::create_dir(tmp.path().join("sub")).unwrap();
+        let dir = tmp.path().to_string_lossy().into_owned();
+        let dotted = format!("{}/./Book1.xlsm", dir);
+        let parent = format!("{}/sub/../Book1.xlsm", dir);
+        let state = new_vba_run_state();
+        for _ in 0..VBA_RUN_BUDGET {
+            state.lock().unwrap().consume(&canonical_workbook_key(&dotted));
+        }
+        assert_eq!(used(&state, &canonical_workbook_key(&parent)), VBA_RUN_BUDGET);
+        let none = |_: serde_json::Value| Ok(());
+        for spelling in [&path, &dotted, &parent] {
+            let err = run_vba_macros_with(&state, &run_req(spelling, false), spelling, &none).err().unwrap();
+            assert_eq!(err_code(&err), "run_budget_exhausted", "{spelling}");
+        }
+        reset_run_budget_for(&state, &parent).unwrap();
+        assert_eq!(used(&state, &canonical_workbook_key(&dotted)), 0);
     }
 
     #[test]

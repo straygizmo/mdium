@@ -808,6 +808,49 @@ pub fn workbook_key(path: &str) -> String {
     path.replace('\\', "/").to_lowercase()
 }
 
+/// Drops a verbatim (`\\?\`) or verbatim UNC (`\\?\UNC\`) prefix that `fs::canonicalize` adds on Windows.
+fn strip_verbatim_prefix(path: &str) -> String {
+    const UNC: &str = "\u{5c}\u{5c}?\u{5c}UNC\u{5c}";
+    const VERBATIM: &str = "\u{5c}\u{5c}?\u{5c}";
+    if let Some(rest) = path.strip_prefix(UNC) {
+        format!("\u{5c}\u{5c}{}", rest)
+    } else if let Some(rest) = path.strip_prefix(VERBATIM) {
+        rest.to_string()
+    } else {
+        path.to_string()
+    }
+}
+
+/// Resolves `.` and `..` components without touching the file system.
+fn normalize_lexically(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in path.components() {
+        match c {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// `workbook_key` of the absolute, normalized path, so every spelling of one
+/// file (`dir/./Book.xlsm`, `dir/sub/../Book.xlsm`, ...) gets the same key.
+/// An existing file is resolved by the file system, a missing one lexically.
+pub fn canonical_workbook_key(path: &str) -> String {
+    let p = Path::new(path);
+    let resolved = match fs::canonicalize(p) {
+        Ok(real) => strip_verbatim_prefix(&real.to_string_lossy()),
+        Err(_) => {
+            let absolute = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
+            normalize_lexically(&absolute).to_string_lossy().into_owned()
+        }
+    };
+    workbook_key(&resolved)
+}
+
 /// Sources of every non-Form module in the workbook. Errors are plain messages.
 pub fn project_sources(xlsm_data: &[u8]) -> Result<Vec<ModuleSource>, String> {
     let mut loaded = load_project(vba_project_bin_from_zip(xlsm_data)?)?;
@@ -2038,5 +2081,25 @@ End Sub
     #[test]
     fn workbook_key_lowercases_and_normalizes_separators() {
         assert_eq!(workbook_key("C:\\Work\\Book.XLSM"), "c:/work/book.xlsm");
+    }
+
+    #[test]
+    fn canonical_workbook_key_agrees_for_every_spelling_of_one_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_string_lossy().into_owned();
+        std::fs::create_dir(tmp.path().join("sub")).unwrap();
+        std::fs::write(tmp.path().join("Book.xlsm"), b"x").unwrap();
+        let plain = canonical_workbook_key(&format!("{}/Book.xlsm", dir));
+        assert_eq!(canonical_workbook_key(&format!("{}/./Book.xlsm", dir)), plain);
+        assert_eq!(canonical_workbook_key(&format!("{}/sub/../Book.xlsm", dir)), plain);
+        assert_eq!(canonical_workbook_key(&format!("{}/SUB/../book.XLSM", dir)), plain);
+        assert!(!plain.contains('?'), "no verbatim prefix: {plain}");
+        assert!(plain.ends_with("/book.xlsm"), "{plain}");
+    }
+
+    #[test]
+    fn canonical_workbook_key_normalizes_missing_files_lexically() {
+        assert_eq!(canonical_workbook_key("C:/nowhere/./x/../Book.XLSM"), "c:/nowhere/book.xlsm");
+        assert_eq!(canonical_workbook_key("c:/nowhere/Book.xlsm"), "c:/nowhere/book.xlsm");
     }
 }
