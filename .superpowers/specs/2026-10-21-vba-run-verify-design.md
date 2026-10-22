@@ -507,3 +507,30 @@ Rust 側で PowerShell 子プロセスを待つ間、250ms ごとに:
 - `plan_push` 分割の具体的な切り方
 - 副作用スキャンの正規表現の正確な一覧(3.6 の表を最低限とする)
 - セッション ID からブックを逆引きする実装場所
+
+### 実装時の判明事項 (2026-10-22)
+
+実装と実機確認で分かったこと、設計から変えたことを記録する。
+
+- **シムのラッパーは `Sub MdiumRunN` + `MdiumTakeResult`。** 当初の「`Function` が結果を返す」形は、`Application.Run` 経由で呼んだ `Function` の中で対象マクロが `End` を実行すると Excel ごと落ちるため採らなかった。`Sub MdiumRunN`(N = 1, 2, ...)が結果をモジュール変数に置き、ランナーは続けて `MdiumTakeResult` を呼んで取り出す
+- **タイムアウトまわりの待ち時間。** タイムアウト後も HWND 行を最大 20 秒待つ(Excel の起動に数秒かかり、短いタイムアウトだと HWND が届く前に期限が切れるため。PID が分からないと Excel を終わらせられない)。正常終了後は `Quit` した Excel の終了を最大 10 秒待ち、残っていれば終了させる
+- **Excel のプロセスハンドルは 1 回の実行につき 1 つを保持する(C1)。** HWND 行から PID を得た時点で `OpenProcess`(`SYNCHRONIZE | TERMINATE | QUERY_LIMITED_INFORMATION`)を 1 度だけ開き、実行の終わりまで持つ。終了待ち(`WaitForSingleObject`)と強制終了(`TerminateProcess`)はこのハンドル経由で行い、最後に 1 度だけ閉じる。ハンドルを開いている間は PID が再利用されないので、無関係なプロセスを待ったり終わらせたりすることはない。終了させる前にイメージ名が `EXCEL.EXE` であることを `QueryFullProcessImageNameW` で確かめ、違えば終了させない。HWND が来なかったときの注記は従来どおり、HWND は来たが終了できなかったときは `Excel (pid N) could not be terminated; it may still be running.` を `notes` に入れる
+- **VBE のエラートラップ設定。** この PC の既定値は「処理されていないエラーで中断」だった。設定によって未処理エラーの出方が変わるため、シムのハンドラ経由(`from: "handler"`)とダイアログ回収(`from: "dialog"`)の両方を実装した。`from: "dialog"` は `Worksheet_Change` イベント内のエラー(シムのハンドラが届かない)で試験している
+- **依存のバージョン。** `calamine` 0.37、`windows-sys` 0.61
+- **ツール側のタイムアウト。** `vba_run.ts` の `AbortSignal.timeout` は 3.7 の `120000 + timeout_ms + 15000` ではなく `120000 + timeout_ms + 45000`(承認待ち + 実行 + HWND 猶予 20 秒 + 終了待ち 10 秒 + 余裕)。期限切れ(`TimeoutError`)のときは「mdium 側でまだ実行中かもしれない。すぐに再実行せず、待ってから `run_in_progress` / `runCopyPath` を確かめる」旨を返す
+- **追加したエラーコード。** 8 章の一覧に加えて `invalid_request`(引数の型が不正など、400)、`no_vba_project`(`source: "workbook"` で VBA プロジェクトが無い)、`read_failed`(`xlsx_read` の読み取り失敗)。`prepare_run` の検査順は ソース → シム名の衝突 → `macro_not_found` → `invalid_request` → 副作用
+- **3.5 の出力に `notes` を追加。** タイムアウト、Excel が残った可能性、マクロ実行後のランナー失敗、古い実行コピーを消せなかったことなど、AI 向けの英語の注記を入れる
+- **副作用スキャンの追加パターン。** `Shell` は関数形だけでなく文形式(`Shell "cmd /c ...", vbHide`)も拾うよう `\bShell\b` にした(`Dim shell As Object` のように同名の識別子も拾う保守的な判定)。`Workbooks.OpenText` / `OpenXML` など `Workbooks.Open*`、`SetAttr`、`SendKeys`、`ExecuteExcel4Macro` を追加
+- **承認ダイアログは改行を保つ。** `showConfirm` に `preformatted` を追加し、承認ダイアログだけ一致箇所を 1 行ずつ表示する(長い場合はスクロール)。他のダイアログの表示は変えない
+- **停滞監視の自動返信は予算をリセットしない。** 「続けてください」の自動送信は利用者の新しい指示ではないため、送信経路のリセットを飛ばす
+- **予算のキーは正規化する(I1)。** 実行予算・承認の記憶・実行中フラグは、絶対パス化して `.` / `..` を解決したパス(存在するファイルは `fs::canonicalize`、`\\?\` 接頭辞は除く)から作る。`dir/./Book.xlsm` や `dir/sub/../Book.xlsm` のように綴りを変えても同じ予算を使う
+- **実行コピーの整理はベストエフォート(I5)。** 古い実行コピーを Excel で開いているなどで消せないフォルダは飛ばし、`Could not remove old run copy {path}: {error}` を `notes` に入れて実行は続ける
+- **未確認。** 300 秒の `timeout_ms` が opencode 経由で届くことの実機確認(計画 Task 8 step 5)はまだ行っていない
+
+利用者向けメモ:
+
+- `vba_run` と `xlsx_read` は opencode のツールとして自動でインストールされる
+- スキル `vba-mdium-flow` は version 4 になる(実行と検証のループを含む)
+- 実行コピーは `<stem>_assets/runs/` に置かれ、最新 5 件を残す
+- 最初の `vba_run` で非表示の EXCEL.EXE が起動する(実行が終われば終了する)
+- 副作用のあるマクロを実行するときは MDium に承認ダイアログが出る。120 秒応答が無ければ自動で閉じ、そのマクロは実行されない
