@@ -179,6 +179,14 @@ describe("MacroChatPane", () => {
     await unmount();
   });
 
+  it("new chat resets the run budget for this workbook", async () => {
+    const { container, unmount } = await render(<MacroChatPane {...props} />);
+    const btn = container.querySelector<HTMLButtonElement>(".macro-chat__new-chat")!;
+    await act(async () => btn.click());
+    expect(invoke).toHaveBeenCalledWith("reset_vba_run_budget", { xlsmPath: props.filePath });
+    await unmount();
+  });
+
   it("shows the lock banner, re-checks every 5 seconds, and hides it when unlocked", async () => {
     let locked = true;
     invoke.mockImplementation(async (cmd: string) => {

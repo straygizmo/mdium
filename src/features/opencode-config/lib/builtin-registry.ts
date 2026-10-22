@@ -19,6 +19,8 @@ import ragUpdateIndexToolSrc from "../../../../.opencode/tools/rag_update_index.
 import vbaListToolSrc from "../../../../.opencode/tools/vba_list.ts?raw";
 import vbaPullToolSrc from "../../../../.opencode/tools/vba_pull.ts?raw";
 import vbaPushToolSrc from "../../../../.opencode/tools/vba_push.ts?raw";
+import vbaRunToolSrc from "../../../../.opencode/tools/vba_run.ts?raw";
+import xlsxReadToolSrc from "../../../../.opencode/tools/xlsx_read.ts?raw";
 
 export interface BuiltinAgentEntry {
   /** Agent description (used by UI badges and dropdown) */
@@ -168,6 +170,16 @@ export const BUILTIN_CUSTOM_TOOLS: Record<string, BuiltinCustomToolEntry> = {
     description: "Write edited .bas/.cls files back into the workbook (add/remove supported) via mdium.",
     fileName: "vba_push.ts",
     content: vbaPushToolSrc,
+  },
+  vba_run: {
+    description: "Run macros of an .xlsm/.xlam on a disposable copy through hidden Excel and return results and cell values via mdium.",
+    fileName: "vba_run.ts",
+    content: vbaRunToolSrc,
+  },
+  xlsx_read: {
+    description: "Read saved cell values of an .xlsx/.xlsm/.xlam without Excel via mdium.",
+    fileName: "xlsx_read.ts",
+    content: xlsxReadToolSrc,
   },
 };
 

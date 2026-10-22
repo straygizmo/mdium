@@ -82,7 +82,7 @@ fn write_bridge_sidecar(port: u16, token: &str) {
 }
 
 /// Generate a 32-character alphanumeric bearer token.
-fn generate_token() -> String {
+pub(crate) fn generate_token() -> String {
     const CHARSET: &[u8] =
         b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     let mut rng = rand::thread_rng();
@@ -364,7 +364,11 @@ pub fn resolve_xlsm_path(raw: &str, active_folder: Option<&str>) -> Result<Strin
 
 pub fn status_for_vba_error(code: &str) -> u16 {
     match code {
-        "workbook_locked" => 409,
+        "workbook_locked" | "run_in_progress" => 409,
+        "run_budget_exhausted" => 429,
+        "approval_denied" => 403,
+        "approval_timeout" => 408,
+        "io" => 500,
         c if c.ends_with("_failed") => 500,
         _ => 400,
     }
@@ -403,6 +407,48 @@ fn handle_vba_route(app: &AppHandle, route: &str, body_str: &str) -> (u16, serde
     match result {
         Ok(v) => (200, v),
         Err(e) => vba_error_response(route, e),
+    }
+}
+
+/// `POST /vba/run`: runs macros on a disposable copy of the workbook.
+/// Blocks this request's thread for the approval wait and the run itself.
+fn handle_vba_run(app: &AppHandle, body_str: &str) -> (u16, serde_json::Value) {
+    let req: crate::commands::vba_run::RunRequest = match serde_json::from_str(body_str) {
+        Ok(r) => r,
+        Err(e) => return (400, json!({ "error": "invalid_json", "message": e.to_string() })),
+    };
+    let folder = app.state::<ActiveFolderState>().lock().ok().and_then(|g| g.clone());
+    let path = match resolve_xlsm_path(&req.xlsm_path, folder.as_deref()) {
+        Ok(p) => p,
+        Err(e) => return vba_error_response("run", e),
+    };
+    let state = app.state::<crate::commands::vba_run::VbaRunShared>();
+    match crate::commands::vba_run::run_vba_macros(app, state.inner(), &req, &path) {
+        Ok(r) => (200, serde_json::to_value(r).unwrap_or_default()),
+        Err(e) => vba_error_response("run", e),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct XlsxReadRequest {
+    path: String,
+    #[serde(default)]
+    ranges: Vec<crate::commands::xlsx_read::RangeSpec>,
+}
+
+fn handle_xlsx_read(app: &AppHandle, body_str: &str) -> (u16, serde_json::Value) {
+    let req: XlsxReadRequest = match serde_json::from_str(body_str) {
+        Ok(r) => r,
+        Err(e) => return (400, json!({ "error": "invalid_json", "message": e.to_string() })),
+    };
+    let folder = app.state::<ActiveFolderState>().lock().ok().and_then(|g| g.clone());
+    let path = match resolve_xlsm_path(&req.path, folder.as_deref()) {
+        Ok(p) => p,
+        Err(e) => return vba_error_response("xlsx_read", e),
+    };
+    match crate::commands::xlsx_read::read_ranges(std::path::Path::new(&path), &req.ranges) {
+        Ok(cells) => (200, json!({ "ok": true, "path": path, "cells": cells })),
+        Err(e) => vba_error_response("xlsx_read", e),
     }
 }
 
@@ -469,6 +515,14 @@ fn handle_request(app: &AppHandle, expected_token: &str, mut request: tiny_http:
         "/vba/list" | "/vba/pull" | "/vba/push" => {
             let route = url.trim_start_matches("/vba/");
             let (status, body) = handle_vba_route(app, route, &body_str);
+            let _ = request.respond(json_response(status, body));
+        }
+        "/vba/run" => {
+            let (status, body) = handle_vba_run(app, &body_str);
+            let _ = request.respond(json_response(status, body));
+        }
+        "/xlsx/read" => {
+            let (status, body) = handle_xlsx_read(app, &body_str);
             let _ = request.respond(json_response(status, body));
         }
         "/rag/search" | "/rag/status" | "/rag/convert" | "/rag/update" => {
@@ -587,6 +641,19 @@ mod tests {
         assert_eq!(status_for_vba_error("list_failed"), 500);
         assert_eq!(status_for_vba_error("invalid_module_name"), 400);
         assert_eq!(status_for_vba_error("no_vba_project"), 400);
+        assert_eq!(status_for_vba_error("invalid_range"), 400);
+    }
+
+    #[test]
+    fn status_codes_for_run_errors() {
+        assert_eq!(status_for_vba_error("run_budget_exhausted"), 429);
+        assert_eq!(status_for_vba_error("run_in_progress"), 409);
+        assert_eq!(status_for_vba_error("approval_denied"), 403);
+        assert_eq!(status_for_vba_error("approval_timeout"), 408);
+        assert_eq!(status_for_vba_error("run_failed"), 500);
+        assert_eq!(status_for_vba_error("io"), 500);
+        assert_eq!(status_for_vba_error("side_effects_detected"), 400);
+        assert_eq!(status_for_vba_error("invalid_request"), 400);
     }
 
     #[test]

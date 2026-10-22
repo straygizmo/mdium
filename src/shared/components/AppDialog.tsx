@@ -105,7 +105,7 @@ function ConfirmContent({
   okLabel,
   cancelLabel,
 }: {
-  entry: { title?: string; text: string; kind?: string };
+  entry: { title?: string; text: string; kind?: string; preformatted?: boolean };
   onConfirm: () => void;
   onCancel: () => void;
   okLabel: string;
@@ -125,7 +125,7 @@ function ConfirmContent({
   return (
     <>
       {entry.title && <div className="app-dialog__title">{entry.title}</div>}
-      <div className="app-dialog__body">
+      <div className={entry.preformatted ? "app-dialog__body app-dialog__body--pre" : "app-dialog__body"}>
         {entry.kind && <span className="app-dialog__icon">{KIND_ICONS[entry.kind]}</span>}
         <span>{entry.text}</span>
       </div>

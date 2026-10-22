@@ -34,6 +34,13 @@
   word-break: break-word;
 }
 
+/* Keeps line breaks of a listing (e.g. code lines to approve) and scrolls it. */
+.app-dialog__body--pre {
+  white-space: pre-wrap;
+  max-height: 40vh;
+  overflow: auto;
+}
+
 .app-dialog__icon {
   flex-shrink: 0;
   font-size: 18px;

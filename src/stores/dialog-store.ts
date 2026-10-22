@@ -15,6 +15,8 @@ interface DialogEntry {
   text: string;
   kind?: DialogKind;
   closeOnOverlayClick?: boolean;
+  /** Keep the text's line breaks and scroll a long body (confirm only). */
+  preformatted?: boolean;
   defaultValue?: string;
   choices?: ChoiceOption[];
   resolve: (value: boolean | string | null) => void;
@@ -63,10 +65,17 @@ export function showMessage(
 /**
  * Show a confirm dialog (OK / Cancel). Resolves to true if confirmed.
  * If `options.signal` aborts while the dialog is open, it is dismissed and resolves false.
+ * `options.preformatted` keeps the text's line breaks (e.g. a list of code lines).
  */
 export function showConfirm(
   text: string,
-  options?: { title?: string; kind?: DialogKind; closeOnOverlayClick?: boolean; signal?: AbortSignal },
+  options?: {
+    title?: string;
+    kind?: DialogKind;
+    closeOnOverlayClick?: boolean;
+    preformatted?: boolean;
+    signal?: AbortSignal;
+  },
 ): Promise<boolean> {
   return new Promise((resolve) => {
     const signal = options?.signal;
@@ -91,6 +100,7 @@ export function showConfirm(
       title: options?.title,
       kind: options?.kind,
       closeOnOverlayClick: options?.closeOnOverlayClick,
+      preformatted: options?.preformatted,
       resolve: (v) => resolve(v as boolean),
     });
   });

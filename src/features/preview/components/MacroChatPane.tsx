@@ -11,6 +11,7 @@ import {
   waitForConnection,
 } from "@/features/opencode-config/hooks/useOpencodeChat";
 import { useMacroChatStore, workbookKey } from "@/stores/macro-chat-store";
+import { resetVbaRunBudget } from "@/features/opencode-config/lib/vba-run-budget";
 import "./MacroChatPane.css";
 
 const LOCK_RECHECK_MS = 5000;
@@ -198,6 +199,7 @@ export function MacroChatPane({ filePath, fileName, folderPath }: MacroChatPaneP
   }, [filePath, refreshModules, checkLock]);
 
   const handleNewChat = useCallback(async () => {
+    await resetVbaRunBudget(filePath);
     useMacroChatStore.getState().setSession(filePath, null);
     await doCreateNewSession();
     // Apply the fresh-session recording rule again after a loaded bind.

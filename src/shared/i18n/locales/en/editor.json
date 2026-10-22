@@ -218,5 +218,8 @@
   "mediumPublishSuccess": "Draft created",
   "mediumPublishFailed": "Publish failed",
   "mediumTokenNotSet": "Medium API token not set",
-  "mediumImageUploadFailed": "Image upload failed: {{name}}"
+  "mediumImageUploadFailed": "Image upload failed: {{name}}",
+  "vbaRunApprovalTitle": "Allow this macro run?",
+  "vbaRunApprovalBody": "{{fileName}} — macros: {{macros}}\nThe code contains calls that can affect things outside the workbook. The run uses a copy of the workbook, but file operations, external processes and network/mail calls really happen.\n\n{{matches}}",
+  "vbaRunApprovalMore": "… and {{count}} more"
 }
