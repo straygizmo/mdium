@@ -231,7 +231,7 @@ Pass that path as \`xlsm_path\` to every tool call.
 
 1. \`vba_list\` — see the modules, whether \`<stem>_assets/macros/\` is already extracted, and whether the workbook is locked.
 2. If \`extracted\` is false, call \`vba_pull\`. If it is true, the folder may hold edits from an earlier session; ask the user before overwriting it with \`vba_pull\` when the workbook might be newer. \`vba_pull\` also deletes \`.bas\` / \`.cls\` files that match no module (reported as \`removedFiles\`), so push new modules before pulling again.
-3. Edit the \`.bas\` / \`.cls\` files in the macros folder with Read / Edit.
+3. Edit the \`.bas\` / \`.cls\` files in the macros folder with Read / Edit. If the user asked to run, check, verify or test, go to **Run and verify** instead of step 4.
 4. **When editing is done, you MUST call \`vba_push\`.** Nothing reaches the workbook until then.
 5. Report \`updated\`, \`added\`, \`removed\`, \`skipped\`, \`warnings\` and \`backupPath\` to the user. When nothing changed, \`backupPath\` is null and the workbook was left as it was.
 
@@ -247,7 +247,7 @@ Run macros only when the user's instruction includes running, checking, verifyin
 4. Call \`vba_run\` with the default \`source\` (\`macros_dir\`: the original plus your current sources). Put the target macro and the baseline macros in ONE call, in order, and use the same \`read\` ranges, so state carries over and results are comparable.
 5. Compare the results with the expectation and with the baseline. Check \`results[].status\`, \`error\`, \`dialogs\`, \`warnings\` and \`cells\`. Handle regressions (something that worked in the baseline and fails now) first.
 6. If something is wrong, fix the cause and go back to step 4. Do at most 3 fix-and-rerun cycles. After that, report what you tried and stop; the original workbook is untouched.
-7. Stop immediately on \`run_budget_exhausted\` (6 runs per user instruction; the budget resets when the user sends the next message). Report the state and wait. \`runBudget\` in each result shows \`used\` / \`limit\`.
+7. Stop immediately on \`run_budget_exhausted\` (6 \`vba_run\` calls per user instruction, whatever the number of macros in each call; the budget resets when the user sends the next message). Report the state and wait. \`runBudget\` in each result shows \`used\` / \`limit\`.
 8. When the results match, call \`vba_push\`. If it fails with \`workbook_locked\`, say the code is verified and wait for the user to close Excel, then push again.
 9. Final report: the changes (\`vba_push\` result), the run results, \`runCopyPath\`, and any remaining \`warnings\`.
 

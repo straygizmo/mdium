@@ -1240,8 +1240,11 @@ export async function doSendMessage(
   options?: SendOptions,
 ) {
   if (!text.trim() && (!images || images.length === 0)) return;
-  // A user message starts a fresh vba_run budget for the bound workbook.
-  await resetVbaRunBudgetForSession(useChatUIStore.getState().currentSessionId);
+  // A user message starts a fresh vba_run budget for the bound workbook. The
+  // stall watchdog's automatic reply is not a new instruction, so it keeps it.
+  if (!options?.isAutoReply) {
+    await resetVbaRunBudgetForSession(useChatUIStore.getState().currentSessionId);
+  }
   await ensureConnectedToActiveFolder();
   if (!_client) return;
 

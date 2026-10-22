@@ -63,6 +63,8 @@ export function useVbaRunApproval(): void {
           granted = await showConfirm(formatApprovalMessage(req, t), {
             title: t("vbaRunApprovalTitle"),
             kind: "warning",
+            // The body lists one side-effect line per row.
+            preformatted: true,
             signal: AbortSignal.timeout(VBA_RUN_APPROVAL_TIMEOUT_MS),
           });
         } catch (e) {

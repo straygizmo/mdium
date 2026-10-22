@@ -46,4 +46,12 @@ describe("doSendMessage", () => {
     await doSendMessage("hi"); // no client connected: returns after the reset
     expect(vi.mocked(invoke)).toHaveBeenCalledWith("reset_vba_run_budget", { xlsmPath: "c:/w/book.xlsm" });
   });
+
+  it("keeps the run budget for the stall watchdog's automatic reply", async () => {
+    useMacroChatStore.getState().setSession("C:/w/Book.xlsm", "ses_1");
+    useChatUIStore.setState({ currentSessionId: "ses_1" });
+    vi.mocked(invoke).mockClear();
+    await doSendMessage("続けてください", undefined, undefined, { isAutoReply: true });
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith("reset_vba_run_budget", expect.anything());
+  });
 });

@@ -23,7 +23,7 @@ describe("builtin skills", () => {
     const skill = BUILTIN_SKILLS["vba-mdium-flow"];
     expect(skill.version).toBe(4);
     const body = skill.content;
-    for (const needle of ["vba_run", "xlsx_read", "source: \"workbook\"", "run_budget_exhausted", "side_effects_detected", "allow_side_effects", "approval_denied", "approval_timeout", "on_error_resume_next_added", "duplicate_procedure", "ThunderDFrame", "runCopyPath", "3 fix-and-rerun"]) {
+    for (const needle of ["vba_run", "xlsx_read", "source: \"workbook\"", "run_budget_exhausted", "side_effects_detected", "allow_side_effects", "approval_denied", "approval_timeout", "on_error_resume_next_added", "duplicate_procedure", "ThunderDFrame", "runCopyPath", "3 fix-and-rerun", "whatever the number of macros", "instead of step 4"]) {
       expect(body).toContain(needle);
     }
     expect(body).not.toContain("MDium does not run macros");

@@ -53,4 +53,20 @@ describe("AppDialog overlay", () => {
     expect(container.querySelector(".app-dialog__overlay")).toBeNull();
     await expect(confirmation).resolves.toBe(false);
   });
+
+  it("keeps line breaks only for a preformatted confirm", async () => {
+    const container = document.createElement("div");
+    root = createRoot(container);
+    void showConfirm("a\nb");
+    await act(async () => { root?.render(<AppDialog />); });
+    expect(container.querySelector(".app-dialog__body--pre")).toBeNull();
+
+    await act(async () => { useDialogStore.setState({ dialogs: [], _nextId: 1 }); });
+    void showConfirm("Module1:3: Kill x\nModule1:4: Shell y", { preformatted: true });
+    await act(async () => { await Promise.resolve(); });
+    const body = container.querySelector(".app-dialog__body--pre");
+    expect(body).not.toBeNull();
+    expect(body?.classList.contains("app-dialog__body")).toBe(true);
+    expect(body?.textContent).toContain("Module1:3: Kill x\nModule1:4: Shell y");
+  });
 });

@@ -71,7 +71,9 @@ describe("formatApprovalMessage", () => {
     expect(msg).toContain("Module1.Main");
     expect(msg).toContain("Module1:20: Kill 19");
     expect(msg).not.toContain("Module1:21:");
-    expect(msg).toContain("3");
+    // The stub nests the more-line inside the body's JSON, so read it back out.
+    const body = JSON.parse(msg.slice(msg.indexOf(" ") + 1)) as { matches: string };
+    expect(body.matches.split("\n").pop()).toBe('vbaRunApprovalMore {"count":3}');
   });
 
   it("handles backslash paths and joins macros with a comma", () => {
@@ -92,7 +94,7 @@ describe("useVbaRunApproval", () => {
     expect(listen).toHaveBeenCalledWith("vba-run-approval-request", expect.any(Function));
     expect(showConfirm).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ kind: "warning", signal: expect.any(AbortSignal) }),
+      expect.objectContaining({ kind: "warning", preformatted: true, signal: expect.any(AbortSignal) }),
     );
     expect(invoke).toHaveBeenCalledWith("vba_run_approval_reply", { id: "req1", granted: true });
   });
