@@ -525,7 +525,8 @@ Rust 側で PowerShell 子プロセスを待つ間、250ms ごとに:
 - **停滞監視の自動返信は予算をリセットしない。** 「続けてください」の自動送信は利用者の新しい指示ではないため、送信経路のリセットを飛ばす
 - **予算のキーは正規化する(I1)。** 実行予算・承認の記憶・実行中フラグは、絶対パス化して `.` / `..` を解決したパス(存在するファイルは `fs::canonicalize`、`\\?\` 接頭辞は除く)から作る。`dir/./Book.xlsm` や `dir/sub/../Book.xlsm` のように綴りを変えても同じ予算を使う
 - **実行コピーの整理はベストエフォート(I5)。** 古い実行コピーを Excel で開いているなどで消せないフォルダは飛ばし、`Could not remove old run copy {path}: {error}` を `notes` に入れて実行は続ける
-- **未確認。** 300 秒の `timeout_ms` が opencode 経由で届くことの実機確認(計画 Task 8 step 5)はまだ行っていない
+- **実機確認済み(2026-10-22、winuse + opencode/gemini-2.5-flash)。** 12 章のスモークを通過: 基準取得(`source: "workbook"`)→ 編集 → `vba_run` で対象と既存マクロを 1 回で実行(B1=15、C1="hello")→ `vba_push`。push 前の原本ハッシュは不変、`.bak` は push 前の原本と一致、`runs/<時刻>_<マクロ>/` が作られ、Excel は残らなかった。`Kill` を含むマクロでは `side_effects_detected` → 説明 → `allow_side_effects: true` → MDium の承認ダイアログ(ブック名・マクロ名・`Module1:16: Kill "…"` が改行付きで表示)→ キャンセルで `approval_denied`、無応答で 120 秒後に `approval_timeout`。どちらも AI は再試行せず報告して止まった。`timeout_ms: 300000` の無限ループは Excel が約 300 秒で終了され、ツールには `status: "timeout"` と notes「Timed out after 300000 ms」が fetch 切断なしで届いた(上限 300 秒は維持)
+- **運用上の注意(スモークで判明)。** 副作用スキャンは macros フォルダの全モジュールが対象なので、副作用のあるマクロがフォルダに残っていると、無関係なマクロの `vba_run` でも承認が必要になる。承認待ちの間、チャットは「思考中」に見える(ダイアログは MDium 本体に出る)
 
 利用者向けメモ:
 
