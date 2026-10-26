@@ -26,7 +26,8 @@ public/*.wasm
 coverage/
 
 # Claude
-.claude
+.claude/*
+!.claude/winuse-gate.json
 
 # MDium: flow and setup run stores are local state; project.yaml and flows/ travel with the repo
 **/.mdium/flow-runs/

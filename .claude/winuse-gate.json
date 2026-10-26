@@ -1,0 +1,5 @@
+{
+  "ui": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.css", "src-tauri/src/**/*.rs", "src/shared/i18n/locales/**/*.json"],
+  "exclude": ["**/*.test.ts", "**/*.test.tsx", "**/__tests__/**"],
+  "launch": "Start the dev app with `npm run tauri dev` from the repository root (TS/CSS changes hot-reload; Rust changes rebuild and restart the app in about a minute). The window title matches ^MDium and its class is 'Tauri Window'. The UI is WebView2: inputs often have no accessible name, so take element rects from get_ui_tree and click by coordinates, or start the built exe with process_run webview_debug=true to use DOM selectors. File tools need WINUSE_ALLOWED_ROOTS to include the user profile."
+}
