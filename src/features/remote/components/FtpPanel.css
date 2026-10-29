@@ -1,0 +1,83 @@
+.ftp-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.ftp-panel__section {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.ftp-panel__section--tree {
+  flex: 1;
+  border-top: 1px solid var(--border);
+}
+
+.ftp-panel__section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-height: 26px;
+  padding: 0 8px 0 12px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.ftp-panel__tree-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ftp-panel__actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.ftp-panel__connections {
+  max-height: 35vh;
+  overflow-y: auto;
+  padding-bottom: 4px;
+}
+
+.ftp-panel__muted {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.ftp-panel__file {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.ftp-panel__note {
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.ftp-panel__hint {
+  border-top: 1px solid var(--border);
+}
+
+.ftp-panel__status {
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--text);
+  border-top: 1px solid var(--border);
+}
+
+.ftp-panel__error {
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--error, #e5534b);
+  white-space: pre-wrap;
+  word-break: break-word;
+}

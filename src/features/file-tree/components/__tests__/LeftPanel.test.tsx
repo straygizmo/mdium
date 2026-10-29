@@ -21,6 +21,9 @@ vi.mock("@/features/workflow/components/WorkflowPanel", () => ({
 vi.mock("@/features/flow/components/FlowPanel", () => ({
   FlowPanel: () => <div data-testid="flow-panel" />,
 }));
+vi.mock("@/features/remote/components/FtpPanel", () => ({
+  FtpPanel: () => <div data-testid="ftp-panel" />,
+}));
 
 import { useTabStore } from "@/stores/tab-store";
 import { useUiStore } from "@/stores/ui-store";
@@ -80,6 +83,7 @@ describe("LeftPanel workflow entry", () => {
           onNewFile={noop}
           onNewFolder={noop}
           previewRef={{ current: null }}
+          onOpenFtpFolder={noop}
         />,
       ),
     );
@@ -95,6 +99,36 @@ describe("LeftPanel workflow entry", () => {
     expect(button!.className).toContain("left-panel__activity-btn--active");
     expect(container.querySelector('[data-testid="workflow-panel"]')).not.toBeNull();
     expect(container.querySelector(".left-panel__section-header-title")?.textContent).toBe(title);
+  });
+});
+
+describe("LeftPanel FTP entry", () => {
+  it("switches to the FTP panel, also with no folder open", async () => {
+    await i18n.changeLanguage("en");
+    useTabStore.setState({ activeFolderPath: null, folderLeftPanel: {} });
+    useUiStore.setState({ leftPanel: "folder" });
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    await act(async () =>
+      root.render(
+        <LeftPanel
+          {...filterProps}
+          onFileSelect={noop}
+          onRefresh={noop}
+          onNewFile={noop}
+          onNewFolder={noop}
+          previewRef={{ current: null }}
+          onOpenFtpFolder={noop}
+        />,
+      ),
+    );
+    const button = container.querySelector<HTMLButtonElement>('button[title="FTP"]');
+    expect(button).not.toBeNull();
+    await act(async () => button!.click());
+    expect(useUiStore.getState().leftPanel).toBe("ftp");
+    expect(container.querySelector('[data-testid="ftp-panel"]')).not.toBeNull();
+    await act(async () => root.unmount());
+    useUiStore.setState({ leftPanel: "folder" });
   });
 });
 
@@ -114,6 +148,7 @@ describe("LeftPanel RAG removal", () => {
           onNewFile={noop}
           onNewFolder={noop}
           previewRef={{ current: null }}
+          onOpenFtpFolder={noop}
         />,
       ),
     );
@@ -137,6 +172,7 @@ describe("LeftPanel flows entry (experimental)", () => {
           onNewFile={noop}
           onNewFolder={noop}
           previewRef={{ current: null }}
+          onOpenFtpFolder={noop}
         />,
       ),
     );

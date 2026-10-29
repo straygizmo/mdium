@@ -2,7 +2,7 @@ import { create } from "zustand";
 import type { OpencodeConfigTab, OpencodeTopTab, ClaudeTopTab, ClaudeSettingsTab, CodexTopTab, CodexSettingsTab, CopilotTopTab, CopilotSettingsTab } from "@/shared/types";
 import type { TerminalKind, TerminalSession } from "@/features/terminal/terminal-session";
 
-export type LeftPanel = "folder" | "outline" | "opencode-config" | "git" | "replacement" | "workflow" | "flow";
+export type LeftPanel = "folder" | "outline" | "opencode-config" | "git" | "replacement" | "workflow" | "flow" | "ftp";
 
 const LEFT_PANELS: readonly LeftPanel[] = [
   "folder",
@@ -12,6 +12,7 @@ const LEFT_PANELS: readonly LeftPanel[] = [
   "replacement",
   "workflow",
   "flow",
+  "ftp",
 ];
 
 /**

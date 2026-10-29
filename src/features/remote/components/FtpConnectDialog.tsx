@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { showConfirm } from "@/stores/dialog-store";
-import { useFtpMirrorStore } from "@/stores/ftp-mirror-store";
+import { useFtpBrowserStore } from "@/stores/ftp-browser-store";
 import "./FtpConnectDialog.css";
 
 interface FtpProfile {
@@ -13,27 +13,31 @@ interface FtpProfile {
   acceptInvalidCerts: boolean;
 }
 
-interface SavedConnection extends FtpProfile {
+export interface SavedConnection extends FtpProfile {
   hasPassword: boolean;
 }
 
 interface FtpConnectDialogProps {
   open: boolean;
   onClose: () => void;
+  /** Saved connection to preselect (`user@host:port`); the first one otherwise. */
+  initialKey?: string | null;
   /**
-   * Called after login and the initial sync with the folder URI
-   * (ftp://user@host:port/path) and the local mirror folder to open.
+   * Called after login with the connection key, the folder URI
+   * (ftp://user@host:port/path) and the remote path it points at.
    */
-  onConnected: (uri: string, root: string) => void;
+  onConnected: (key: string, uri: string, remotePath: string) => void;
+  /** Called after a saved connection was deleted. */
+  onDeleted?: (key: string) => void;
 }
 
 const DEFAULT_PORT = 21;
 
-function connectionKey(c: FtpProfile): string {
+export function connectionKey(c: FtpProfile): string {
   return `${c.user}@${c.host}:${c.port}`;
 }
 
-export function FtpConnectDialog({ open: isOpen, onClose, onConnected }: FtpConnectDialogProps) {
+export function FtpConnectDialog({ open: isOpen, onClose, initialKey, onConnected, onDeleted }: FtpConnectDialogProps) {
   const { t } = useTranslation("remote");
   const [saved, setSaved] = useState<SavedConnection[]>([]);
   const [selectedKey, setSelectedKey] = useState("");
@@ -46,11 +50,6 @@ export function FtpConnectDialog({ open: isOpen, onClose, onConnected }: FtpConn
   const [acceptInvalidCerts, setAcceptInvalidCerts] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Set once logged in, while the folder is being synced locally.
-  const [mirroringUri, setMirroringUri] = useState<string | null>(null);
-  const mirrorProgress = useFtpMirrorStore((s) =>
-    mirroringUri ? Object.values(s.statuses).find((st) => st.uri === mirroringUri)?.progress ?? null : null,
-  );
 
   const selected = saved.find((c) => connectionKey(c) === selectedKey) ?? null;
 
@@ -61,6 +60,7 @@ export function FtpConnectDialog({ open: isOpen, onClose, onConnected }: FtpConn
     setUser(c?.user ?? "");
     setSecure(c?.secure ?? true);
     setAcceptInvalidCerts(c?.acceptInvalidCerts ?? false);
+    setRemotePath((c && useFtpBrowserStore.getState().rootPaths[connectionKey(c)]) || "/");
     setPassword("");
     setError(null);
   };
@@ -70,10 +70,11 @@ export function FtpConnectDialog({ open: isOpen, onClose, onConnected }: FtpConn
     invoke<SavedConnection[]>("ftp_list_connections")
       .then((list) => {
         setSaved(list);
-        if (list.length > 0) applyConnection(list[0]);
+        if (initialKey === null) applyConnection(null);
+        else applyConnection(list.find((c) => connectionKey(c) === initialKey) ?? list[0] ?? null);
       })
       .catch(() => setSaved([]));
-  }, [isOpen]);
+  }, [isOpen, initialKey]);
 
   const resetAndClose = () => {
     if (loading) return;
@@ -115,21 +116,19 @@ export function FtpConnectDialog({ open: isOpen, onClose, onConnected }: FtpConn
         secure,
         acceptInvalidCerts: secure && acceptInvalidCerts,
       };
+      const path = remotePath.trim() || "/";
       const uri = await invoke<string>("ftp_connect", {
         profile,
         password: password === "" ? null : password,
-        remotePath: remotePath.trim() || "/",
+        remotePath: path,
       });
       setPassword("");
-      setMirroringUri(uri);
-      const root = await useFtpMirrorStore.getState().open(uri);
-      onConnected(uri, root);
+      onConnected(connectionKey(profile), uri, path);
       onClose();
     } catch (e) {
       setError(t("connectError", { error: String(e) }));
     } finally {
       setLoading(false);
-      setMirroringUri(null);
     }
   };
 
@@ -139,6 +138,7 @@ export function FtpConnectDialog({ open: isOpen, onClose, onConnected }: FtpConn
     if (!ok) return;
     try {
       await invoke("ftp_delete_connection", { profile: selected });
+      onDeleted?.(selectedKey);
       const rest = saved.filter((c) => connectionKey(c) !== selectedKey);
       setSaved(rest);
       applyConnection(rest[0] ?? null);
@@ -150,8 +150,7 @@ export function FtpConnectDialog({ open: isOpen, onClose, onConnected }: FtpConn
   return (
     <div className="ftp-dialog__overlay" onMouseDown={resetAndClose}>
       <div className="ftp-dialog" onMouseDown={(e) => e.stopPropagation()}>
-        <h2 className="ftp-dialog__title">{t("openFtpFolder")}</h2>
-        <div className="ftp-dialog__note ftp-dialog__intro">{t("mirrorExplain")}</div>
+        <h2 className="ftp-dialog__title">{t("connectTitle")}</h2>
 
         {saved.length > 0 && (
           <div className="ftp-dialog__field">
@@ -261,15 +260,7 @@ export function FtpConnectDialog({ open: isOpen, onClose, onConnected }: FtpConn
           <div className="ftp-dialog__warning">{t("plainWarning")}</div>
         )}
 
-        {loading && (
-          <div className="ftp-dialog__status">
-            {!mirroringUri
-              ? t("connecting")
-              : mirrorProgress
-                ? t("mirroringProgress", { done: mirrorProgress.done, total: mirrorProgress.total })
-                : t("mirroring")}
-          </div>
-        )}
+        {loading && <div className="ftp-dialog__status">{t("connecting")}</div>}
         {error && <div className="ftp-dialog__error">{error}</div>}
 
         <div className="ftp-dialog__actions">
