@@ -6,6 +6,7 @@ import { collectConvertibleFiles, type ConvertibleFile } from "@/features/export
 import { convertFileToMarkdown, type PptxLabels } from "@/features/export/lib/convertFileToMarkdown";
 import type { FileEntry } from "@/shared/types";
 import { useRagIndexStore } from "../stores/rag-index-store";
+import { mirrorUri } from "@/stores/ftp-mirror-store";
 import type {
   RagBridgeErrorCode,
   RagIndexState,
@@ -192,7 +193,13 @@ export async function listUnconvertedOfficeDocs(folder: string): Promise<Convert
     includePdf: true,
     includeEmptyDirs: false,
   });
-  return collectConvertibleFiles(tree).filter((f) => f.type !== "doc" && !f.hasExistingMdSibling);
+  const files = collectConvertibleFiles(tree).filter((f) => f.type !== "doc" && !f.hasExistingMdSibling);
+  // FTP mirrors convert into .mdium/ (kept local), so count those as done too.
+  if (!mirrorUri(folder) || files.length === 0) return files;
+  const inMdium = await invoke<Record<string, boolean>>("check_mdium_md_exists", {
+    paths: files.map((f) => f.path),
+  });
+  return files.filter((f) => !inMdium[f.path]);
 }
 
 export function toUnconvertedDocs(files: ConvertibleFile[]): RagUnconvertedDoc[] {
@@ -273,8 +280,9 @@ async function runConvert(id: string, folder: string, files: ConvertibleFile[]):
     const file = files[i];
     patchJob(id, { current_file: file.name });
     try {
-      // saveToMdium=false: the .md lands next to the source file.
-      await convertFileToMarkdown(file, false, labels);
+      // The .md lands next to the source file, except in FTP mirrors where it
+      // goes to .mdium/ so it is not uploaded to the server.
+      await convertFileToMarkdown(file, mirrorUri(folder) !== null, labels);
     } catch (e) {
       errors.push({ path: file.path, message: errorMessage(e) });
     }

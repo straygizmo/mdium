@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { showConfirm } from "@/stores/dialog-store";
+import { useFtpMirrorStore } from "@/stores/ftp-mirror-store";
 import "./FtpConnectDialog.css";
 
 interface FtpProfile {
@@ -19,8 +20,11 @@ interface SavedConnection extends FtpProfile {
 interface FtpConnectDialogProps {
   open: boolean;
   onClose: () => void;
-  /** Called with the folder URI (ftp://user@host:port/path) after login. */
-  onConnected: (uri: string) => void;
+  /**
+   * Called after login and the initial sync with the folder URI
+   * (ftp://user@host:port/path) and the local mirror folder to open.
+   */
+  onConnected: (uri: string, root: string) => void;
 }
 
 const DEFAULT_PORT = 21;
@@ -42,6 +46,11 @@ export function FtpConnectDialog({ open: isOpen, onClose, onConnected }: FtpConn
   const [acceptInvalidCerts, setAcceptInvalidCerts] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set once logged in, while the folder is being synced locally.
+  const [mirroringUri, setMirroringUri] = useState<string | null>(null);
+  const mirrorProgress = useFtpMirrorStore((s) =>
+    mirroringUri ? Object.values(s.statuses).find((st) => st.uri === mirroringUri)?.progress ?? null : null,
+  );
 
   const selected = saved.find((c) => connectionKey(c) === selectedKey) ?? null;
 
@@ -112,12 +121,15 @@ export function FtpConnectDialog({ open: isOpen, onClose, onConnected }: FtpConn
         remotePath: remotePath.trim() || "/",
       });
       setPassword("");
-      onConnected(uri);
+      setMirroringUri(uri);
+      const root = await useFtpMirrorStore.getState().open(uri);
+      onConnected(uri, root);
       onClose();
     } catch (e) {
       setError(t("connectError", { error: String(e) }));
     } finally {
       setLoading(false);
+      setMirroringUri(null);
     }
   };
 
@@ -139,6 +151,7 @@ export function FtpConnectDialog({ open: isOpen, onClose, onConnected }: FtpConn
     <div className="ftp-dialog__overlay" onMouseDown={resetAndClose}>
       <div className="ftp-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <h2 className="ftp-dialog__title">{t("openFtpFolder")}</h2>
+        <div className="ftp-dialog__note ftp-dialog__intro">{t("mirrorExplain")}</div>
 
         {saved.length > 0 && (
           <div className="ftp-dialog__field">
@@ -248,7 +261,15 @@ export function FtpConnectDialog({ open: isOpen, onClose, onConnected }: FtpConn
           <div className="ftp-dialog__warning">{t("plainWarning")}</div>
         )}
 
-        {loading && <div className="ftp-dialog__status">{t("connecting")}</div>}
+        {loading && (
+          <div className="ftp-dialog__status">
+            {!mirroringUri
+              ? t("connecting")
+              : mirrorProgress
+                ? t("mirroringProgress", { done: mirrorProgress.done, total: mirrorProgress.total })
+                : t("mirroring")}
+          </div>
+        )}
         {error && <div className="ftp-dialog__error">{error}</div>}
 
         <div className="ftp-dialog__actions">

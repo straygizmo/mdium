@@ -45,6 +45,7 @@ import { CodeEditorPanel } from "@/features/code-editor/components/CodeEditorPan
 import { GitDiffViewer } from "@/features/git/components/GitDiffViewer";
 import { CloneDialog } from "@/features/git/components/CloneDialog";
 import { FtpConnectDialog } from "@/features/remote/components/FtpConnectDialog";
+import { useFtpMirrorStore, startFtpMirrorStatusListener } from "@/stores/ftp-mirror-store";
 import { isRemotePath, readFileBytes, writeFileBytes, REMOTE_CHANGED_ERROR } from "@/shared/lib/remote-path";
 import { ExternalChangeDialog } from "@/features/editor/components/ExternalChangeDialog";
 import { AppDialog } from "@/shared/components/AppDialog";
@@ -98,6 +99,13 @@ export function App() {
   }, []);
   // Follow theme and language changes made in other windows (e.g. intake windows).
   useEffect(() => startSettingsSync(), []);
+  // FTP mirrors: known mirror folders and their live sync status.
+  const ftpMirrors = useFtpMirrorStore((s) => s.mirrors);
+  useEffect(() => {
+    useFtpMirrorStore.getState().load().catch(() => {});
+    const unlisten = startFtpMirrorStatusListener();
+    return () => { void unlisten.then((fn) => fn()); };
+  }, []);
   const initializeTheme = useSettingsStore((s) => s.initializeTheme);
   const activeTab = useTabStore((s) => s.getActiveTab());
   const openTab = useTabStore((s) => s.openTab);
@@ -437,13 +445,28 @@ export function App() {
     }
   }, [activeTab?.id]);
 
-  // Sync window title with folder path
+  // Sync window title with folder path (the server URI for FTP mirrors)
   useEffect(() => {
-    const title = activeFolderPath
-      ? `${APP_TITLE} : ${activeFolderPath}`
+    const shown = activeFolderPath ? ftpMirrors[activeFolderPath] ?? activeFolderPath : null;
+    const title = shown
+      ? `${APP_TITLE} : ${shown}`
       : APP_TITLE;
     getCurrentWindow().setTitle(title).catch(() => {});
-  }, [activeFolderPath]);
+  }, [activeFolderPath, ftpMirrors]);
+
+  // Keep FTP mirrors synced while their folder is open.
+  const syncedMirrorsRef = useRef(new Set<string>());
+  useEffect(() => {
+    const { start, stop } = useFtpMirrorStore.getState();
+    const open = new Set(openFolderPaths.filter((p) => ftpMirrors[p]));
+    for (const root of open) {
+      if (!syncedMirrorsRef.current.has(root)) start(root).catch((e) => console.error("FTP sync start failed:", e));
+    }
+    for (const root of syncedMirrorsRef.current) {
+      if (!open.has(root)) stop(root).catch(() => {});
+    }
+    syncedMirrorsRef.current = open;
+  }, [openFolderPaths, ftpMirrors]);
 
   // Sync file store when switching folder tabs
   useEffect(() => {
@@ -485,9 +508,10 @@ export function App() {
   }, [addRecentFolder, openFolder]);
 
   const handleFtpConnected = useCallback(
-    (uri: string) => {
+    (uri: string, root: string) => {
+      // Recents keep the server URI; the local mirror is what gets opened.
       addRecentFolder(uri);
-      openFolder(uri);
+      openFolder(root);
     },
     [addRecentFolder, openFolder],
   );
@@ -502,14 +526,23 @@ export function App() {
 
   const handleOpenRecentFolder = useCallback(
     async (path: string) => {
+      if (isRemotePath(path)) {
+        try {
+          const root = await useFtpMirrorStore.getState().open(path);
+          addRecentFolder(path);
+          openFolder(root);
+        } catch (e) {
+          await showMessage(t("remote:openRecentFailed", { error: String(e) }), { kind: "error" });
+        }
+        return;
+      }
       const exists = await invoke<boolean>("folder_exists", { path });
       if (!exists) {
         await showMessage(
           t("folderNotFound", { path }),
           { title: t("error"), kind: "error" }
         );
-        // An unreachable FTP server is usually temporary: keep the entry.
-        if (!isRemotePath(path)) removeRecentFolder(path);
+        removeRecentFolder(path);
         return;
       }
       addRecentFolder(path);
@@ -879,7 +912,13 @@ export function App() {
   // Refresh file tree
   const handleRefresh = useCallback(() => {
     loadFileTree();
-  }, [loadFileTree]);
+    // For an FTP mirror, also pull server changes now.
+    if (activeFolderPath && ftpMirrors[activeFolderPath]) {
+      useFtpMirrorStore.getState().sync(activeFolderPath)
+        .then(() => loadFileTree())
+        .catch((e) => console.error("FTP sync failed:", e));
+    }
+  }, [loadFileTree, activeFolderPath, ftpMirrors]);
 
   // New folder
   const handleNewFolder = useCallback(async () => {
