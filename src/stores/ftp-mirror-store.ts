@@ -28,6 +28,9 @@ export interface SyncStatus {
 
 export type ResolveAction = "keepLocal" | "useRemote" | "approveDelete" | "restore";
 
+/** Result of checking a file against the server before opening it. */
+export type FileFreshness = "fresh" | "updated" | "conflict" | "deleted" | "offline";
+
 /** Changes in a mirror that have not reached the server yet. */
 export interface MirrorPending {
   uploads: number;
@@ -47,6 +50,8 @@ interface FtpMirrorState {
   stop: (root: string) => Promise<void>;
   sync: (root: string) => Promise<void>;
   resolve: (root: string, path: string, action: ResolveAction) => Promise<void>;
+  /** Bring one file up to date with the server (before opening it). */
+  checkFile: (root: string, path: string) => Promise<FileFreshness>;
   /** Push once more and report what is still not on the server. */
   pending: (root: string) => Promise<MirrorPending>;
   /** Delete the local copy (refused by the backend while changes are pending). */
@@ -88,6 +93,8 @@ export const useFtpMirrorStore = create<FtpMirrorState>()((set, get) => ({
     set((s) => ({ statuses: { ...s.statuses, [root]: status } }));
   },
 
+  checkFile: (root, path) => invoke<FileFreshness>("ftp_mirror_check_file", { root, path }),
+
   pending: (root) => invoke<MirrorPending>("ftp_mirror_pending", { root }),
 
   remove: async (root) => {
@@ -110,6 +117,10 @@ export async function startFtpMirrorStatusListener(): Promise<() => void> {
     }));
   });
 }
+
+/** Default minutes between automatic pulls of open FTP mirrors. */
+export const DEFAULT_FTP_SYNC_INTERVAL_MINUTES = 5;
+export const MAX_FTP_SYNC_INTERVAL_MINUTES = 1440;
 
 /** The ftp:// URI of a mirror folder, or null for an ordinary folder. */
 export function mirrorUri(root: string | null | undefined): string | null {

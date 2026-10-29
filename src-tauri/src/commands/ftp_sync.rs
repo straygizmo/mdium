@@ -19,7 +19,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use suppaftp::NativeTlsFtpStream;
@@ -31,7 +31,9 @@ const EXCLUDED_DIRS: &[&str] = &[".mdium", ".git", "node_modules"];
 const DOWNLOAD_SUFFIX: &str = ".mdium-dl";
 const UPLOAD_SUFFIX: &str = ".mdium-tmp";
 const CONFLICT_MARKER: &str = ".remote-";
-const PULL_INTERVAL: Duration = Duration::from_secs(5 * 60);
+/// Seconds between automatic pulls (settings panel; default 5 minutes).
+static PULL_INTERVAL_SECS: AtomicU64 = AtomicU64::new(5 * 60);
+const MAX_PULL_INTERVAL_MINUTES: u64 = 24 * 60;
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(1500);
 const STATUS_EVENT: &str = "ftp-sync-status";
 const MAX_FILE_ERRORS: usize = 20;
@@ -343,6 +345,17 @@ fn local_path(root: &Path, rel: &str) -> PathBuf {
     rel.split('/').fold(root.to_path_buf(), |p, part| p.join(part))
 }
 
+/// Current state of one local file; hashed only when size or mtime differ
+/// from what was recorded.
+fn local_state(path: &Path, meta: &fs::Metadata, known: Option<&LocalStamp>) -> LocalState {
+    let (mtime_ms, size) = (mtime_ms(meta), meta.len());
+    let same = known.is_some_and(|k| k.size == size && k.mtime_ms == mtime_ms);
+    // Unreadable (e.g. still being written): treated as changed and retried
+    // on the next pass.
+    let hash = if same { None } else { fs::read(path).ok().map(|d| hash_bytes(&d)) };
+    LocalState { mtime_ms, size, hash }
+}
+
 fn scan_local(root: &Path, manifest: &Manifest) -> BTreeMap<String, LocalState> {
     fn walk(root: &Path, dir: &Path, prefix: &str, manifest: &Manifest, out: &mut BTreeMap<String, LocalState>) {
         let Ok(read_dir) = fs::read_dir(dir) else { return };
@@ -362,13 +375,8 @@ fn scan_local(root: &Path, manifest: &Manifest) -> BTreeMap<String, LocalState> 
                 continue;
             }
             let Ok(meta) = item.metadata() else { continue };
-            let (mtime_ms, size) = (mtime_ms(&meta), meta.len());
             let known = manifest.entries.get(&rel).and_then(|e| e.local.as_ref());
-            let same = known.is_some_and(|k| k.size == size && k.mtime_ms == mtime_ms);
-            // Unreadable (e.g. still being written): treated as changed and
-            // retried on the next pass.
-            let hash = if same { None } else { fs::read(&path).ok().map(|d| hash_bytes(&d)) };
-            out.insert(rel, LocalState { mtime_ms, size, hash });
+            out.insert(rel, local_state(&path, &meta, known));
         }
     }
     let mut out = BTreeMap::new();
@@ -601,7 +609,7 @@ fn start_runtime(uri: &str, root: PathBuf) -> Result<Arc<Runtime>, String> {
             if rt.stop.load(Ordering::SeqCst) {
                 return;
             }
-            if last.elapsed() >= PULL_INTERVAL {
+            if last.elapsed() >= Duration::from_secs(PULL_INTERVAL_SECS.load(Ordering::Relaxed)) {
                 let _ = run_job(&rt, Mode::Pull);
                 last = Instant::now();
             }
@@ -793,6 +801,62 @@ fn trash_local(root: &Path, rel: &str) -> Result<(), String> {
         .map_err(|e| format!("{rel}: {e}"))
 }
 
+/// Apply one planned action, updating `manifest`.
+fn execute(
+    rt: &Runtime,
+    manifest: &mut Manifest,
+    action: &Action,
+    local: &BTreeMap<String, LocalState>,
+) -> Result<(), String> {
+    match action {
+        Action::Download(rel) => ftp::with_session(&rt.remote.authority, |s| download(rt, s, rel)).map(
+            |(remote, local)| {
+                let e = manifest.entries.entry(rel.clone()).or_default();
+                e.remote = Some(remote);
+                e.local = Some(local);
+                e.pending_delete = false;
+            },
+        ),
+        Action::Upload(rel) => {
+            let expected = manifest.entries.get(rel).and_then(|e| e.remote.clone());
+            ftp::with_session(&rt.remote.authority, |s| {
+                match upload(rt, s, rel, expected.as_ref(), false)? {
+                    Uploaded::Done(remote, local) => {
+                        let e = manifest.entries.entry(rel.clone()).or_default();
+                        e.remote = Some(remote);
+                        e.local = Some(local);
+                        e.pending_delete = false;
+                        Ok(())
+                    }
+                    Uploaded::Conflict(kind) => record_conflict(rt, s, manifest, rel, kind),
+                }
+            })
+        }
+        Action::Conflict(rel, kind) => {
+            ftp::with_session(&rt.remote.authority, |s| record_conflict(rt, s, manifest, rel, *kind))
+        }
+        Action::TrashLocal(rel) => trash_local(&rt.root, rel).map(|()| {
+            manifest.entries.remove(rel);
+        }),
+        Action::MarkPendingDelete(rel) => {
+            manifest.entries.entry(rel.clone()).or_default().pending_delete = true;
+            Ok(())
+        }
+        Action::Forget(rel) => {
+            manifest.entries.remove(rel);
+            Ok(())
+        }
+        Action::RefreshLocal(rel) => {
+            let e = manifest.entries.entry(rel.clone()).or_default();
+            if let (Some(now), Some(hash)) = (local.get(rel), local.get(rel).and_then(|l| l.hash.clone())) {
+                e.local = Some(LocalStamp { mtime_ms: now.mtime_ms, size: now.size, hash });
+            }
+            e.pending_delete = false;
+            Ok(())
+        }
+}
+}
+
 fn sync_once(rt: &Runtime, mode: Mode) -> Result<(), String> {
     rt.update_status(|s| {
         s.syncing = true;
@@ -818,53 +882,7 @@ fn sync_once(rt: &Runtime, mode: Mode) -> Result<(), String> {
             rt.update_status(|s| s.progress = Some(Progress { done: i, total }));
             last_progress = Instant::now();
         }
-        let result = match &action {
-            Action::Download(rel) => ftp::with_session(&rt.remote.authority, |s| download(rt, s, rel)).map(
-                |(remote, local)| {
-                    let e = manifest.entries.entry(rel.clone()).or_default();
-                    e.remote = Some(remote);
-                    e.local = Some(local);
-                    e.pending_delete = false;
-                },
-            ),
-            Action::Upload(rel) => {
-                let expected = manifest.entries.get(rel).and_then(|e| e.remote.clone());
-                ftp::with_session(&rt.remote.authority, |s| {
-                    match upload(rt, s, rel, expected.as_ref(), false)? {
-                        Uploaded::Done(remote, local) => {
-                            let e = manifest.entries.entry(rel.clone()).or_default();
-                            e.remote = Some(remote);
-                            e.local = Some(local);
-                            e.pending_delete = false;
-                            Ok(())
-                        }
-                        Uploaded::Conflict(kind) => record_conflict(rt, s, &mut manifest, rel, kind),
-                    }
-                })
-            }
-            Action::Conflict(rel, kind) => {
-                ftp::with_session(&rt.remote.authority, |s| record_conflict(rt, s, &mut manifest, rel, *kind))
-            }
-            Action::TrashLocal(rel) => trash_local(&rt.root, rel).map(|()| {
-                manifest.entries.remove(rel);
-            }),
-            Action::MarkPendingDelete(rel) => {
-                manifest.entries.entry(rel.clone()).or_default().pending_delete = true;
-                Ok(())
-            }
-            Action::Forget(rel) => {
-                manifest.entries.remove(rel);
-                Ok(())
-            }
-            Action::RefreshLocal(rel) => {
-                let e = manifest.entries.entry(rel.clone()).or_default();
-                if let (Some(now), Some(hash)) = (local.get(rel), local.get(rel).and_then(|l| l.hash.clone())) {
-                    e.local = Some(LocalStamp { mtime_ms: now.mtime_ms, size: now.size, hash });
-                }
-                e.pending_delete = false;
-                Ok(())
-            }
-        };
+        let result = execute(rt, &mut manifest, &action, &local);
         if let Err(e) = result {
             failures += 1;
             if file_errors.len() < MAX_FILE_ERRORS {
@@ -885,6 +903,84 @@ fn sync_once(rt: &Runtime, mode: Mode) -> Result<(), String> {
         Some(e) => Err(e),
         None => Ok(()),
     }
+}
+
+/// Result of checking one file against the server before opening it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FileFreshness {
+    /// The local copy matches the server.
+    Fresh,
+    /// The server had a newer version; it was downloaded.
+    Updated,
+    /// Changed on both sides (or already conflicting): the local copy is kept.
+    Conflict,
+    /// Deleted on the server; the unchanged local copy was moved to the bin.
+    Deleted,
+    /// The server could not be reached; the local copy may be stale.
+    Offline,
+}
+
+/// Bring one file up to date with the server (used right before opening it,
+/// since shared folders change between automatic pulls).
+fn check_file(rt: &Runtime, rel: &str) -> FileFreshness {
+    if is_excluded(rel) {
+        return FileFreshness::Fresh;
+    }
+    let _guard = rt.job.lock().unwrap_or_else(|e| e.into_inner());
+    let mut manifest = rt.manifest.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let entry = manifest.entries.get(rel).cloned();
+    if entry.as_ref().is_some_and(|e| e.conflict.is_some()) {
+        return FileFreshness::Conflict;
+    }
+    let remote_path = rt.remote_path(rel);
+    let remote = match ftp::with_session(&rt.remote.authority, |s| remote_stat(s, &remote_path)) {
+        Ok(r) => r,
+        Err(e) => {
+            rt.update_status(|s| s.error = Some(e));
+            return FileFreshness::Offline;
+        }
+    };
+    let path = local_path(&rt.root, rel);
+    let local: BTreeMap<String, LocalState> = fs::metadata(&path)
+        .ok()
+        .filter(|m| m.is_file())
+        .map(|meta| {
+            let known = entry.as_ref().and_then(|e| e.local.as_ref());
+            (rel.to_string(), local_state(&path, &meta, known))
+        })
+        .into_iter()
+        .collect();
+    let remote_map: BTreeMap<String, RemoteStamp> =
+        remote.map(|r| (rel.to_string(), r)).into_iter().collect();
+    let single = Manifest { entries: entry.map(|e| (rel.to_string(), e)).into_iter().collect() };
+
+    let mut outcome = FileFreshness::Fresh;
+    for action in plan(&single, Some(&remote_map), &local) {
+        let next = match &action {
+            Action::Download(_) => FileFreshness::Updated,
+            Action::Conflict(..) => FileFreshness::Conflict,
+            Action::TrashLocal(_) => FileFreshness::Deleted,
+            _ => FileFreshness::Fresh,
+        };
+        if let Err(e) = execute(rt, &mut manifest, &action, &local) {
+            rt.update_status(|s| s.error = Some(e));
+            return FileFreshness::Offline;
+        }
+        outcome = next;
+    }
+    if save_manifest(&rt.manifest_path, &manifest).is_ok() {
+        *rt.manifest.lock().unwrap_or_else(|e| e.into_inner()) = manifest;
+    }
+    rt.sync_lists();
+    outcome
+}
+
+/// Relative path (with `/`) of `path` inside the mirror `root`.
+fn relative_to(root: &Path, path: &str) -> Option<String> {
+    let rel = Path::new(path).strip_prefix(root).ok()?;
+    let rel = rel.to_string_lossy().replace('\\', "/");
+    (!rel.is_empty()).then_some(rel)
 }
 
 /// User decision on a conflict or a pending deletion.
@@ -1124,6 +1220,25 @@ pub async fn ftp_mirror_pending(root: String) -> Result<MirrorPending, String> {
         Ok(pending_counts(&root_path, &manifest))
     })
     .await
+}
+
+/// Check `path` (a file inside the mirror `root`) against the server and
+/// download it first if the server has a newer version.
+#[tauri::command]
+pub async fn ftp_mirror_check_file(root: String, path: String) -> Result<FileFreshness, String> {
+    ftp::run(move || {
+        let rt = runtime_for(&root)?;
+        let rel = relative_to(&rt.root, &path).ok_or_else(|| format!("{path} is not inside {root}"))?;
+        Ok(check_file(&rt, &rel))
+    })
+    .await
+}
+
+/// Set the automatic pull interval (minutes, clamped to 1..=1440).
+#[tauri::command]
+pub fn ftp_mirror_set_interval(minutes: u64) {
+    let minutes = minutes.clamp(1, MAX_PULL_INTERVAL_MINUTES);
+    PULL_INTERVAL_SECS.store(minutes * 60, Ordering::Relaxed);
 }
 
 /// Delete the local copy of a mirror (see [`remove_mirror`]).
@@ -1393,6 +1508,13 @@ mod tests {
         run_job(&rt, Mode::Pull).unwrap();
         assert_eq!(read("sub/b.md"), "b v2 on server");
 
+        // Opening a file checks it against the server first (no pull needed).
+        std::thread::sleep(Duration::from_millis(1100));
+        fs::write(server.join("sub/b.md"), "b v3 on server, checked on open").unwrap();
+        assert_eq!(check_file(&rt, "sub/b.md"), FileFreshness::Updated);
+        assert_eq!(read("sub/b.md"), "b v3 on server, checked on open");
+        assert_eq!(check_file(&rt, "sub/b.md"), FileFreshness::Fresh);
+
         // Edits on both sides conflict; the server copy is kept beside it.
         let _watch_pause = rt.job.lock().unwrap();
         std::thread::sleep(Duration::from_millis(1100));
@@ -1425,6 +1547,13 @@ mod tests {
         fs::remove_file(server.join("c.md")).unwrap();
         run_job(&rt, Mode::Pull).unwrap();
         assert!(!mirror.join("c.md").exists());
+
+        // ... also when only detected on open.
+        fs::write(server.join("d.md"), "d").unwrap();
+        run_job(&rt, Mode::Pull).unwrap();
+        fs::remove_file(server.join("d.md")).unwrap();
+        assert_eq!(check_file(&rt, "d.md"), FileFreshness::Deleted);
+        assert!(!mirror.join("d.md").exists());
 
         let status = rt.status();
         assert!(status.error.is_none() && status.file_errors.is_empty(), "{status:?}");
@@ -1472,6 +1601,14 @@ mod tests {
         fs::remove_file(root.join("new.md")).unwrap();
         let clean = manifest(vec![("synced.md", synced(rs(1, 4), synced_local))]);
         assert_eq!(pending_counts(root, &clean), MirrorPending::default());
+    }
+
+    #[test]
+    fn relative_paths_inside_the_mirror() {
+        let root = Path::new(r"C:\mirror\site");
+        assert_eq!(relative_to(root, r"C:\mirror\site\docs\a.md").as_deref(), Some("docs/a.md"));
+        assert_eq!(relative_to(root, r"C:\mirror\site"), None);
+        assert_eq!(relative_to(root, r"C:\other\a.md"), None);
     }
 
     #[test]

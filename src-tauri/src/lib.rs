@@ -242,6 +242,8 @@ pub fn run() {
             commands::ftp_sync::ftp_mirror_resolve,
             commands::ftp_sync::ftp_mirror_pending,
             commands::ftp_sync::ftp_mirror_remove,
+            commands::ftp_sync::ftp_mirror_check_file,
+            commands::ftp_sync::ftp_mirror_set_interval,
             // File watcher
             file_watcher::watch_file,
             file_watcher::unwatch_file,

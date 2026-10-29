@@ -12,6 +12,8 @@
   "autoSaveDescription": "変更を自動的に保存します",
   "restoreLastFolders": "前回のフォルダを復元",
   "restoreLastFoldersDescription": "起動時に前回開いていたフォルダを自動的に開きます",
+  "ftpSyncInterval": "FTP フォルダの自動同期の間隔（分）",
+  "ftpSyncIntervalDescription": "開いている FTP フォルダで、サーバー側の変更を取り込む間隔です（1〜{{max}} 分、既定 5 分）。ファイルを開くときは、この間隔とは別に毎回サーバーと照合します。",
   "scrollSync": "スクロール同期",
   "scrollSyncDescription": "エディタとプレビューのスクロールを同期します",
   "ai": "AI設定",

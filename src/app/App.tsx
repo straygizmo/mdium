@@ -101,6 +101,10 @@ export function App() {
   useEffect(() => startSettingsSync(), []);
   // FTP mirrors: known mirror folders and their live sync status.
   const ftpMirrors = useFtpMirrorStore((s) => s.mirrors);
+  const ftpSyncIntervalMinutes = useSettingsStore((s) => s.ftpSyncIntervalMinutes);
+  useEffect(() => {
+    invoke("ftp_mirror_set_interval", { minutes: ftpSyncIntervalMinutes }).catch(() => {});
+  }, [ftpSyncIntervalMinutes]);
   useEffect(() => {
     useFtpMirrorStore.getState().load().catch(() => {});
     const unlisten = startFtpMirrorStatusListener();
@@ -556,6 +560,24 @@ export function App() {
     async (filePath: string) => {
       try {
         const fileName = filePath.split(/[\\/]/).pop() ?? "untitled";
+
+        // FTP mirror: the server copy may have changed since the last pull
+        // (shared folders), so check this file before opening it.
+        const mirrorRoot = activeFolderPath && ftpMirrors[activeFolderPath]
+          && filePath.startsWith(activeFolderPath + "\\") ? activeFolderPath : null;
+        if (mirrorRoot) {
+          const freshness = await useFtpMirrorStore.getState().checkFile(mirrorRoot, filePath)
+            .catch(() => "offline" as const);
+          if (freshness === "deleted") {
+            await showMessage(t("remote:fileDeletedOnServer", { name: fileName }), { kind: "info" });
+            loadFileTree();
+            return;
+          }
+          if (freshness === "conflict") {
+            await showMessage(t("remote:fileConflictOnOpen", { name: fileName }), { kind: "warning" });
+          }
+          // "offline": open the local copy; the sync badge shows the error.
+        }
         const officeExt = getOfficeExt(filePath);
         const mindmapExt = getMindmapExt(filePath);
         const kmImportExt = getKityMinderImportExt(filePath);
@@ -705,7 +727,7 @@ export function App() {
         console.error("Failed to open file:", e);
       }
     },
-    [openTab, activeFolderPath, setActiveFile, addRecentFile, loadFileTree, t]
+    [openTab, activeFolderPath, setActiveFile, addRecentFile, loadFileTree, t, ftpMirrors]
   );
 
   // Mindmap save callback

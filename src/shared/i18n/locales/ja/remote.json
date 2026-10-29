@@ -57,5 +57,7 @@
   "deleteMirrorConfirm": "{{uri}} のローカルコピーを削除しますか？\n変更はすべてサーバーに反映済みです。次に開くときはもう一度ダウンロードします。",
   "keepMirrorUnsynced": "{{uri}} にはサーバーに反映していない変更があるため、ローカルコピーを残しました（未アップロード {{uploads}} 件、削除待ち {{deletes}} 件、競合 {{conflicts}} 件）。もう一度開いて同期してから閉じると削除できます。",
   "keepMirrorUnknown": "{{uri}} の同期状態を確認できなかったため、ローカルコピーを残しました: {{error}}",
-  "deleteMirrorFailed": "ローカルコピーを削除できませんでした: {{error}}"
+  "deleteMirrorFailed": "ローカルコピーを削除できませんでした: {{error}}",
+  "fileDeletedOnServer": "{{name}} はサーバー上で削除されていたため、ローカルのコピーをごみ箱に移しました。",
+  "fileConflictOnOpen": "{{name}} はローカルとサーバーの両方で変更されています。ローカルの内容で開きます。サーバー版との比較と選択は FTP 同期ダイアログから行えます。"
 }
