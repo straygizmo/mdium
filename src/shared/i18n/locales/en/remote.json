@@ -74,5 +74,8 @@
   "loading": "Loading…",
   "emptyFolder": "(empty folder)",
   "listError": "Could not list the folder: {{error}}",
-  "ftpFolderTab": "FTP folder: {{uri}}"
+  "ftpFolderTab": "FTP folder: {{uri}}",
+  "currentPath": "Path",
+  "copyPath": "Copy path",
+  "pathCopied": "Copied"
 }

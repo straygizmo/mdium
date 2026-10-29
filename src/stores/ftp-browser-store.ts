@@ -20,6 +20,8 @@ interface FtpBrowserState {
   expanded: Record<string, boolean>;
   loading: Record<string, boolean>;
   errors: Record<string, string>;
+  /** URI of the last clicked file or folder (the tree root after connecting). */
+  selected: string | null;
   /** Start browsing `uri` (returned by `ftp_connect`) for connection `key`. */
   setConnected: (key: string, uri: string, remotePath: string) => void;
   disconnect: () => void;
@@ -27,6 +29,7 @@ interface FtpBrowserState {
   forget: (key: string) => void;
   loadDir: (uri: string) => Promise<void>;
   toggle: (uri: string) => void;
+  select: (uri: string) => void;
   /** Reload every directory loaded so far. */
   refresh: () => Promise<void>;
 }
@@ -43,6 +46,7 @@ export const useFtpBrowserStore = create<FtpBrowserState>()(
       expanded: {},
       loading: {},
       errors: {},
+      selected: null,
 
       setConnected: (key, uri, remotePath) => {
         set((s) => ({
@@ -53,11 +57,12 @@ export const useFtpBrowserStore = create<FtpBrowserState>()(
           expanded: { [uri]: true },
           loading: {},
           errors: {},
+          selected: uri,
         }));
         get().loadDir(uri);
       },
 
-      disconnect: () => set({ connection: null, children: {}, expanded: {}, loading: {}, errors: {} }),
+      disconnect: () => set({ connection: null, children: {}, expanded: {}, loading: {}, errors: {}, selected: null }),
 
       forget: (key) => {
         set((s) => {
@@ -95,6 +100,8 @@ export const useFtpBrowserStore = create<FtpBrowserState>()(
         set((s) => ({ expanded: { ...s.expanded, [uri]: open } }));
         if (open && !get().children[uri] && !get().loading[uri]) get().loadDir(uri);
       },
+
+      select: (uri) => set({ selected: uri }),
 
       refresh: async () => {
         const { connection, children } = get();

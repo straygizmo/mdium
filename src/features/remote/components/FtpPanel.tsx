@@ -228,6 +228,7 @@ export function FtpPanel({ onOpenWorkingFolder }: FtpPanelProps) {
             </span>
           )}
         </div>
+        {connection && <PathBar />}
         {connection ? (
           <div className="file-tree__list">
             <RemoteNode
@@ -321,12 +322,21 @@ function RemoteNode({ entry, depth, onDirContextMenu }: RemoteNodeProps) {
   const loading = useFtpBrowserStore((s) => !!s.loading[entry.path]);
   const error = useFtpBrowserStore((s) => s.errors[entry.path]);
   const toggle = useFtpBrowserStore((s) => s.toggle);
+  const selected = useFtpBrowserStore((s) => s.selected === entry.path);
+  const select = useFtpBrowserStore((s) => s.select);
+  const nodeClass = `file-tree__node ${selected ? "file-tree__node--active" : ""}`;
   const indent = { paddingLeft: `${depth * 16 + 8}px` };
   const childIndent = { paddingLeft: `${(depth + 1) * 16 + 8}px` };
 
   if (!entry.is_dir) {
     return (
-      <div className="file-tree__node ftp-panel__file" style={indent} data-path={entry.path} title={entry.name}>
+      <div
+        className={`${nodeClass} ftp-panel__file`}
+        style={indent}
+        data-path={entry.path}
+        onClick={() => select(entry.path)}
+        title={entry.name}
+      >
         <span className="file-tree__icon">📄</span>
         <span className="file-tree__name">{entry.name}</span>
       </div>
@@ -336,11 +346,11 @@ function RemoteNode({ entry, depth, onDirContextMenu }: RemoteNodeProps) {
   return (
     <>
       <div
-        className="file-tree__node"
+        className={nodeClass}
         style={indent}
         data-path={entry.path}
-        onClick={() => toggle(entry.path)}
-        onContextMenu={(e) => onDirContextMenu(e, entry.path)}
+        onClick={() => { select(entry.path); toggle(entry.path); }}
+        onContextMenu={(e) => { select(entry.path); onDirContextMenu(e, entry.path); }}
         title={entry.name}
       >
         <span className="file-tree__icon">{expanded ? "📂" : "📁"}</span>
@@ -363,5 +373,53 @@ function RemoteNode({ entry, depth, onDirContextMenu }: RemoteNodeProps) {
         </div>
       )}
     </>
+  );
+}
+
+/** Full URI of the selected file or folder, selectable and copyable. */
+function PathBar() {
+  const { t } = useTranslation("remote");
+  const path = useFtpBrowserStore((s) => s.selected ?? s.connection?.uri ?? "");
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => setCopied(false), [path]);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(path);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  return (
+    <div className="ftp-panel__path">
+      <input
+        className="ftp-panel__path-input"
+        readOnly
+        value={path}
+        title={path}
+        aria-label={t("currentPath")}
+        onFocus={(e) => e.currentTarget.select()}
+      />
+      <button
+        className="left-panel__header-action"
+        onClick={copy}
+        title={copied ? t("pathCopied") : t("copyPath")}
+        aria-label={t("copyPath")}
+      >
+        {copied ? (
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+        ) : (
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="9" y="9" width="13" height="13" rx="2" />
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+          </svg>
+        )}
+      </button>
+    </div>
   );
 }
