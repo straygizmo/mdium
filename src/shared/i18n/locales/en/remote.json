@@ -53,5 +53,9 @@
   "fileErrorsTitle": "Files that could not be synced",
   "nothingToReview": "Nothing to review.",
   "resolveFailed": "Failed: {{error}}",
-  "close": "Close"
+  "close": "Close",
+  "deleteMirrorConfirm": "Delete the local copy of {{uri}}?\nAll changes are on the server. It will be downloaded again the next time you open it.",
+  "keepMirrorUnsynced": "The local copy of {{uri}} was kept because it has changes that are not on the server ({{uploads}} not uploaded, {{deletes}} deletions pending, {{conflicts}} conflicts). Open it again and sync, then close it to delete the copy.",
+  "keepMirrorUnknown": "The local copy of {{uri}} was kept because its sync state could not be checked: {{error}}",
+  "deleteMirrorFailed": "Could not delete the local copy: {{error}}"
 }

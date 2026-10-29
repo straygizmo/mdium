@@ -286,14 +286,18 @@ fn register_mirror(uri: &str) -> Result<PathBuf, String> {
     let root = new_mirror_root(uri)?;
     with_registry(|m| {
         m.insert(uri.to_string(), root.to_string_lossy().to_string());
-        let path = registry_path();
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        let json = serde_json::to_string_pretty(m).map_err(|e| e.to_string())?;
-        fs::write(path, json).map_err(|e| format!("Failed to save FTP mirrors: {e}"))
+        save_registry(m)
     })?;
     Ok(root)
+}
+
+fn save_registry(map: &BTreeMap<String, String>) -> Result<(), String> {
+    let path = registry_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let json = serde_json::to_string_pretty(map).map_err(|e| e.to_string())?;
+    fs::write(path, json).map_err(|e| format!("Failed to save FTP mirrors: {e}"))
 }
 
 fn uri_for_root(root: &str) -> Option<String> {
@@ -1029,6 +1033,105 @@ pub async fn ftp_mirror_resolve(root: String, path: String, action: String) -> R
     .await
 }
 
+/// Changes in a mirror that have not reached the server yet.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MirrorPending {
+    /// New or changed local files not uploaded.
+    pub uploads: usize,
+    /// Local deletions not applied on the server (pending or not yet noticed).
+    pub deletes: usize,
+    pub conflicts: usize,
+}
+
+impl MirrorPending {
+    fn total(&self) -> usize {
+        self.uploads + self.deletes + self.conflicts
+    }
+}
+
+fn pending_counts(root: &Path, manifest: &Manifest) -> MirrorPending {
+    let local = scan_local(root, manifest);
+    let mut pending = MirrorPending {
+        deletes: manifest.entries.values().filter(|e| e.pending_delete).count(),
+        conflicts: manifest.entries.values().filter(|e| e.conflict.is_some()).count(),
+        ..Default::default()
+    };
+    for action in plan(manifest, None, &local) {
+        match action {
+            Action::Upload(_) => pending.uploads += 1,
+            Action::MarkPendingDelete(_) => pending.deletes += 1,
+            Action::Conflict(..) => pending.conflicts += 1,
+            _ => {}
+        }
+    }
+    pending
+}
+
+/// Delete a mirror (its folder, manifest and registry entry). Refused while
+/// it still holds changes that have not reached the server.
+fn remove_mirror(root: &str) -> Result<(), String> {
+    let uri = uri_for_root(root).ok_or_else(|| format!("Not an FTP mirror: {root}"))?;
+    let root_path = PathBuf::from(root);
+    let base = root_path.parent().map(Path::to_path_buf).unwrap_or_default();
+    // Only ever delete a per-mirror folder under our own base directory.
+    let mirrors = mirrors_base();
+    if !base.starts_with(&mirrors) || base == mirrors {
+        return Err(format!("Refusing to delete {}", base.display()));
+    }
+    let runtime = runtimes().lock().unwrap_or_else(|e| e.into_inner()).remove(root);
+    let _guard;
+    let manifest = match &runtime {
+        Some(rt) => {
+            rt.stop.store(true, Ordering::SeqCst);
+            rt.watcher.lock().unwrap_or_else(|e| e.into_inner()).take();
+            // Wait for a running sync and keep others out while deleting.
+            _guard = rt.job.lock().unwrap_or_else(|e| e.into_inner());
+            rt.manifest.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        }
+        None => load_manifest(&manifest_path(&root_path)),
+    };
+    let pending = pending_counts(&root_path, &manifest);
+    if pending.total() > 0 {
+        return Err(format!("The mirror has unsynced changes: {pending:?}"));
+    }
+    if base.exists() {
+        fs::remove_dir_all(&base)
+            .map_err(|e| format!("Failed to delete the local copy (is a file or terminal still using it?): {e}"))?;
+    }
+    with_registry(|m| {
+        m.remove(&uri);
+        save_registry(m)
+    })
+}
+
+/// Push pending local changes once more, then report what is still not on
+/// the server. Used before offering to delete a mirror whose tab closes.
+#[tauri::command]
+pub async fn ftp_mirror_pending(root: String) -> Result<MirrorPending, String> {
+    ftp::run(move || {
+        uri_for_root(&root).ok_or_else(|| format!("Not an FTP mirror: {root}"))?;
+        let root_path = PathBuf::from(&root);
+        let runtime = runtimes().lock().unwrap_or_else(|e| e.into_inner()).get(&root).cloned();
+        let manifest = match runtime {
+            Some(rt) => {
+                let _ = run_job(&rt, Mode::Push);
+                let manifest = rt.manifest.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                manifest
+            }
+            None => load_manifest(&manifest_path(&root_path)),
+        };
+        Ok(pending_counts(&root_path, &manifest))
+    })
+    .await
+}
+
+/// Delete the local copy of a mirror (see [`remove_mirror`]).
+#[tauri::command]
+pub async fn ftp_mirror_remove(root: String) -> Result<(), String> {
+    ftp::run(move || remove_mirror(&root)).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1339,6 +1442,36 @@ mod tests {
         assert_eq!(status.last_sync, synced_at);
         stop_runtime(&rt.root_key());
         let _ = fs::remove_dir_all(&server);
+    }
+
+    #[test]
+    fn pending_counts_cover_uploads_deletions_and_conflicts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        fs::write(root.join("synced.md"), "same").unwrap();
+        fs::write(root.join("new.md"), "new").unwrap();
+        fs::create_dir_all(root.join(".mdium")).unwrap();
+        fs::write(root.join(".mdium/index.db"), "local only").unwrap();
+        let meta = fs::metadata(root.join("synced.md")).unwrap();
+        let synced_local = LocalStamp { mtime_ms: mtime_ms(&meta), size: meta.len(), hash: hash_bytes(b"same") };
+        let mut conflicted = synced(rs(1, 1), ls(1, 1, "x"));
+        conflicted.conflict = Some(ConflictKind::BothChanged);
+        let mut pending_delete = synced(rs(1, 1), ls(1, 1, "y"));
+        pending_delete.pending_delete = true;
+        let m = manifest(vec![
+            ("synced.md", synced(rs(1, 4), synced_local.clone())),
+            ("deleted-unnoticed.md", synced(rs(1, 1), ls(1, 1, "z"))),
+            ("pending.md", pending_delete),
+            ("conflict.md", conflicted),
+        ]);
+        assert_eq!(
+            pending_counts(root, &m),
+            MirrorPending { uploads: 1, deletes: 2, conflicts: 1 }
+        );
+        // Fully synced: nothing pending (local-only .mdium does not count).
+        fs::remove_file(root.join("new.md")).unwrap();
+        let clean = manifest(vec![("synced.md", synced(rs(1, 4), synced_local))]);
+        assert_eq!(pending_counts(root, &clean), MirrorPending::default());
     }
 
     #[test]

@@ -28,6 +28,13 @@ export interface SyncStatus {
 
 export type ResolveAction = "keepLocal" | "useRemote" | "approveDelete" | "restore";
 
+/** Changes in a mirror that have not reached the server yet. */
+export interface MirrorPending {
+  uploads: number;
+  deletes: number;
+  conflicts: number;
+}
+
 interface FtpMirrorState {
   /** Local mirror folder -> ftp:// URI */
   mirrors: Record<string, string>;
@@ -40,6 +47,10 @@ interface FtpMirrorState {
   stop: (root: string) => Promise<void>;
   sync: (root: string) => Promise<void>;
   resolve: (root: string, path: string, action: ResolveAction) => Promise<void>;
+  /** Push once more and report what is still not on the server. */
+  pending: (root: string) => Promise<MirrorPending>;
+  /** Delete the local copy (refused by the backend while changes are pending). */
+  remove: (root: string) => Promise<void>;
 }
 
 export const useFtpMirrorStore = create<FtpMirrorState>()((set, get) => ({
@@ -75,6 +86,17 @@ export const useFtpMirrorStore = create<FtpMirrorState>()((set, get) => ({
   resolve: async (root, path, action) => {
     const status = await invoke<SyncStatus>("ftp_mirror_resolve", { root, path, action });
     set((s) => ({ statuses: { ...s.statuses, [root]: status } }));
+  },
+
+  pending: (root) => invoke<MirrorPending>("ftp_mirror_pending", { root }),
+
+  remove: async (root) => {
+    await invoke("ftp_mirror_remove", { root });
+    set((s) => {
+      const { [root]: _uri, ...mirrors } = s.mirrors;
+      const { [root]: _status, ...statuses } = s.statuses;
+      return { mirrors, statuses };
+    });
   },
 }));
 
