@@ -72,7 +72,8 @@ pub fn spawn_pty(
     } else {
         CommandBuilder::new_default_prog()
     };
-    if !cwd.is_empty() {
+    // An FTP folder has no local directory; the shell starts in the default one.
+    if !cwd.is_empty() && !crate::commands::ftp::is_remote(&cwd) {
         cmd.cwd(&cwd);
     }
 

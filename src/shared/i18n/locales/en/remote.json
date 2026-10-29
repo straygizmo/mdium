@@ -1,0 +1,23 @@
+{
+  "openFtpFolder": "Open FTP Folder",
+  "savedConnection": "Connection",
+  "newConnection": "New connection",
+  "host": "Host",
+  "port": "Port",
+  "user": "User name",
+  "password": "Password",
+  "passwordSavedPlaceholder": "Saved (enter only to change it)",
+  "passwordNote": "The password is stored in the OS credential store (Windows Credential Manager).",
+  "remotePath": "Remote folder",
+  "secure": "Use FTPS (TLS encryption)",
+  "acceptInvalidCerts": "Do not verify the certificate (for self-signed servers)",
+  "plainWarning": "Plain FTP sends the password and file contents unencrypted.",
+  "connect": "Connect and Open",
+  "connecting": "Connecting…",
+  "cancel": "Cancel",
+  "deleteConnection": "Delete this connection",
+  "deleteConfirm": "Delete the connection settings and saved password for {{name}}?",
+  "connectError": "Could not connect: {{error}}",
+  "remoteChanged": "{{name}} was changed on the server after you opened it. Overwrite it?",
+  "saveFailed": "Failed to save to the server: {{error}}"
+}

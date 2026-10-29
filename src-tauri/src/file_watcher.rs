@@ -42,6 +42,10 @@ pub async fn watch_file(
     state: State<'_, Arc<Mutex<FileWatcherState>>>,
     file_path: String,
 ) -> Result<(), String> {
+    // FTP folders cannot be watched; the tree refreshes on demand instead.
+    if crate::commands::ftp::is_remote(&file_path) {
+        return Ok(());
+    }
     let state = state.inner().clone();
     tokio::task::spawn_blocking(move || {
         let path = PathBuf::from(&file_path);
@@ -114,6 +118,10 @@ pub async fn watch_folder(
     state: State<'_, Arc<Mutex<FolderWatcherState>>>,
     folder_path: String,
 ) -> Result<(), String> {
+    // FTP folders cannot be watched; the tree refreshes on demand instead.
+    if crate::commands::ftp::is_remote(&folder_path) {
+        return Ok(());
+    }
     let state = state.inner().clone();
     tokio::task::spawn_blocking(move || {
         let path = PathBuf::from(&folder_path);

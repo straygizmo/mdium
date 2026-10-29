@@ -44,6 +44,8 @@ import { ImageCanvas } from "@/features/image/components/ImageCanvas";
 import { CodeEditorPanel } from "@/features/code-editor/components/CodeEditorPanel";
 import { GitDiffViewer } from "@/features/git/components/GitDiffViewer";
 import { CloneDialog } from "@/features/git/components/CloneDialog";
+import { FtpConnectDialog } from "@/features/remote/components/FtpConnectDialog";
+import { isRemotePath, readFileBytes, writeFileBytes, REMOTE_CHANGED_ERROR } from "@/shared/lib/remote-path";
 import { ExternalChangeDialog } from "@/features/editor/components/ExternalChangeDialog";
 import { AppDialog } from "@/shared/components/AppDialog";
 import { showMessage, showConfirm, showPrompt } from "@/stores/dialog-store";
@@ -163,6 +165,10 @@ export function App() {
     externalContent: string;
   } | null>(null);
   const [showCloneDialog, setShowCloneDialog] = useState(false);
+  const [showFtpDialog, setShowFtpDialog] = useState(false);
+  // Remote files whose overwrite the user declined; auto-save skips them so
+  // the conflict prompt does not come back every 30 seconds.
+  const declinedRemoteOverwriteRef = useRef(new Set<string>());
 
   useScrollSync(editorRef, previewRef, editorVisible, activeTab?.id ?? "");
   const handleEditorDividerMouseDown = useDividerDrag(editorAreaRef, editorRatio, setEditorRatio);
@@ -327,6 +333,7 @@ export function App() {
     showDocxBtn, showXlsBtn, showPptxBtn, showKmBtn, showImagesBtn, showPdfBtn,
     handleSaveFilterVisibility,
     refreshFileTree: loadFileTree,
+    loadRemoteDir,
   } = useFileFilters(activeFolderPath, setFileTree, isZennMode);
 
   // Auto-save timer
@@ -477,6 +484,14 @@ export function App() {
     }
   }, [addRecentFolder, openFolder]);
 
+  const handleFtpConnected = useCallback(
+    (uri: string) => {
+      addRecentFolder(uri);
+      openFolder(uri);
+    },
+    [addRecentFolder, openFolder],
+  );
+
   const handleCloned = useCallback(
     (clonedPath: string) => {
       addRecentFolder(clonedPath);
@@ -493,7 +508,8 @@ export function App() {
           t("folderNotFound", { path }),
           { title: t("error"), kind: "error" }
         );
-        removeRecentFolder(path);
+        // An unreachable FTP server is usually temporary: keep the entry.
+        if (!isRemotePath(path)) removeRecentFolder(path);
         return;
       }
       addRecentFolder(path);
@@ -575,11 +591,15 @@ export function App() {
             const xmindBytes = await serializeToXmind(json);
             const xmindPath = filePath.replace(/\.km$/i, ".xmind");
             const xmindName = xmindPath.split(/[\\/]/).pop() ?? "untitled";
-            const { writeFile, remove } = await import("@tauri-apps/plugin-fs");
-            await writeFile(xmindPath, xmindBytes);
+            await writeFileBytes(xmindPath, xmindBytes);
             // The .km is a transient intermediate; remove it now that the .xmind exists.
             if (xmindPath !== filePath) {
-              await remove(filePath);
+              if (isRemotePath(filePath)) {
+                await invoke("delete_file", { path: filePath });
+              } else {
+                const { remove } = await import("@tauri-apps/plugin-fs");
+                await remove(filePath);
+              }
             }
             loadFileTree();
             openTab({
@@ -604,8 +624,7 @@ export function App() {
           return;
         } else if (imageExt) {
           // Read image file as binary and create blob URL
-          const { readFile } = await import("@tauri-apps/plugin-fs");
-          const bytes = await readFile(filePath);
+          const bytes = await readFileBytes(filePath);
           const mimeMap: Record<string, string> = {
             ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
             ".gif": "image/gif", ".bmp": "image/bmp", ".svg": "image/svg+xml", ".webp": "image/webp",
@@ -661,8 +680,7 @@ export function App() {
     if (!activeTab?.filePath) return;
     try {
       const bytes = await serializeToXmind(json);
-      const { writeFile } = await import("@tauri-apps/plugin-fs");
-      await writeFile(activeTab.filePath, bytes);
+      await writeFileBytes(activeTab.filePath, bytes);
       markClean(activeTab.id);
     } catch (e) {
       console.error("Failed to save mindmap:", e);
@@ -738,14 +756,15 @@ export function App() {
     if (activeTab.binaryData && !activeTab.imageFileType && !activeTab.mindmapFileType) {
       return;
     }
-    try {
+    const filePath = activeTab.filePath;
+    // `force` overwrites a remote file even if it changed on the server.
+    const writeTab = async (force: boolean) => {
       // For mindmaps, save via MindmapEditor
       if (activeTab.mindmapFileType) {
         const json = mindmapEditorRef.current?.getJson();
         if (json) {
           const bytes = await serializeToXmind(json);
-          const { writeFile } = await import("@tauri-apps/plugin-fs");
-          await writeFile(activeTab.filePath, bytes);
+          await writeFileBytes(filePath, bytes, force);
         }
       } else if (activeTab.imageFileType) {
         // Image tab: save canvas as PNG to file
@@ -757,21 +776,45 @@ export function App() {
           for (let i = 0; i < binary.length; i++) {
             bytes[i] = binary.charCodeAt(i);
           }
-          const { writeFile } = await import("@tauri-apps/plugin-fs");
-          await writeFile(activeTab.filePath, bytes);
+          await writeFileBytes(filePath, bytes, force);
         }
       } else {
         await invoke("write_text_file", {
-          path: activeTab.filePath,
+          path: filePath,
           content: activeTab.content,
+          force,
         });
       }
+    };
+    try {
+      try {
+        await writeTab(false);
+      } catch (e) {
+        if (!isRemotePath(filePath)) throw e;
+        if (!String(e).includes(REMOTE_CHANGED_ERROR)) {
+          await showMessage(t("remote:saveFailed", { error: String(e) }), { kind: "error" });
+          return;
+        }
+        const overwrite = await showConfirm(
+          t("remote:remoteChanged", { name: activeTab.fileName }),
+          { kind: "warning" },
+        );
+        if (!overwrite) {
+          declinedRemoteOverwriteRef.current.add(filePath);
+          return;
+        }
+        await writeTab(true);
+      }
+      declinedRemoteOverwriteRef.current.delete(filePath);
       markClean(activeTab.id);
       loadFileTree();
     } catch (e) {
       console.error("Failed to save:", e);
+      if (isRemotePath(filePath)) {
+        await showMessage(t("remote:saveFailed", { error: String(e) }), { kind: "error" });
+      }
     }
-  }, [activeTab, markClean, handleSaveAs, loadFileTree]);
+  }, [activeTab, markClean, handleSaveAs, loadFileTree, t]);
 
   // New file
   const handleNewFile = useCallback(() => {
@@ -1073,7 +1116,10 @@ export function App() {
         // Skip untitled or unchanged tabs. Also skip tabs with a pending
         // destructive image edit (crop/resize): those require an explicit save
         // so the original file is not silently overwritten.
-        if (tab && tab.filePath && tab.dirty && !tab.imageDestructiveEditPending) {
+        if (
+          tab && tab.filePath && tab.dirty && !tab.imageDestructiveEditPending &&
+          !declinedRemoteOverwriteRef.current.has(tab.filePath)
+        ) {
           handleSave();
         }
       }, 30000);
@@ -1183,6 +1229,7 @@ export function App() {
         onSave={handleSave}
         onSaveAs={handleSaveAs}
         onOpenFolder={handleOpenFolder}
+        onOpenFtpFolder={() => setShowFtpDialog(true)}
         onOpenFile={handleFileSelect}
         onUndo={handleUndo}
         onRedo={handleRedo}
@@ -1200,6 +1247,7 @@ export function App() {
             onRefresh={handleRefresh}
             onNewFile={handleNewFile}
             onNewFolder={handleNewFolder}
+            onLoadRemoteDir={loadRemoteDir}
             previewRef={previewRef}
             onImageDragStart={handleImageDragStart}
             showAll={showAll}
@@ -1487,6 +1535,11 @@ export function App() {
         open={showCloneDialog}
         onClose={() => setShowCloneDialog(false)}
         onCloned={handleCloned}
+      />
+      <FtpConnectDialog
+        open={showFtpDialog}
+        onClose={() => setShowFtpDialog(false)}
+        onConnected={handleFtpConnected}
       />
       <AppDialog />
     </div>

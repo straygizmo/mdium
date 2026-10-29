@@ -1,3 +1,4 @@
+use crate::commands::ftp;
 use crate::markdown_parser::{parse_markdown, rebuild_document, MarkdownTable, ParsedDocument};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -23,6 +24,13 @@ pub struct FileEntry {
 
 #[tauri::command]
 pub async fn read_text_file(path: String) -> Result<String, String> {
+    if ftp::is_remote(&path) {
+        return ftp::run(move || {
+            String::from_utf8(ftp::read_bytes(&path)?)
+                .map_err(|e| format!("Failed to read file: {}", e))
+        })
+        .await;
+    }
     tokio::task::spawn_blocking(move || {
         fs::read_to_string(&path).map_err(|e| format!("Failed to read file: {}", e))
     })
@@ -40,6 +48,9 @@ pub async fn read_text_file(path: String) -> Result<String, String> {
 /// be written back as UTF-8.
 #[tauri::command]
 pub async fn read_text_file_auto_encoding(path: String) -> Result<String, String> {
+    if ftp::is_remote(&path) {
+        return ftp::run(move || decode_text_auto(&ftp::read_bytes(&path)?)).await;
+    }
     tokio::task::spawn_blocking(move || read_text_file_auto_encoding_blocking(&path))
         .await
         .map_err(|e| format!("file read task failed: {e}"))?
@@ -47,6 +58,10 @@ pub async fn read_text_file_auto_encoding(path: String) -> Result<String, String
 
 fn read_text_file_auto_encoding_blocking(path: &str) -> Result<String, String> {
     let bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
+    decode_text_auto(&bytes)
+}
+
+fn decode_text_auto(bytes: &[u8]) -> Result<String, String> {
 
     // UTF-8 BOM
     if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
@@ -69,11 +84,11 @@ fn read_text_file_auto_encoding_blocking(path: &str) -> Result<String, String> {
         }
     }
     // Strict UTF-8
-    if let Ok(s) = std::str::from_utf8(&bytes) {
+    if let Ok(s) = std::str::from_utf8(bytes) {
         return Ok(s.to_string());
     }
     // Fallback: Shift-JIS (CP932)
-    let (cow, _, had_errors) = encoding_rs::SHIFT_JIS.decode(&bytes);
+    let (cow, _, had_errors) = encoding_rs::SHIFT_JIS.decode(bytes);
     if had_errors {
         return Err(
             "Failed to decode file: tried UTF-8 and Shift-JIS, both produced invalid characters"
@@ -85,6 +100,9 @@ fn read_text_file_auto_encoding_blocking(path: &str) -> Result<String, String> {
 
 #[tauri::command]
 pub async fn read_binary_file(path: String) -> Result<Vec<u8>, String> {
+    if ftp::is_remote(&path) {
+        return ftp::run(move || ftp::read_bytes(&path)).await;
+    }
     tokio::task::spawn_blocking(move || {
         fs::read(&path).map_err(|e| format!("Failed to read binary file: {}", e))
     })
@@ -93,12 +111,42 @@ pub async fn read_binary_file(path: String) -> Result<Vec<u8>, String> {
 }
 
 #[tauri::command]
-pub fn write_text_file(path: String, content: String) -> Result<(), String> {
+pub async fn write_text_file(
+    path: String,
+    content: String,
+    force: Option<bool>,
+) -> Result<(), String> {
+    if ftp::is_remote(&path) {
+        let force = force.unwrap_or(false);
+        return ftp::run(move || ftp::write_bytes(&path, content.as_bytes(), force)).await;
+    }
     fs::write(&path, &content).map_err(|e| format!("Failed to write file: {}", e))
 }
 
+/// Write binary data (images, mindmaps) to a local or remote path.
+/// `force` only matters for remote files (see `ftp::write_bytes`).
 #[tauri::command]
-pub fn write_text_file_with_dirs(path: String, content: String) -> Result<(), String> {
+pub async fn write_binary_file(
+    path: String,
+    data: Vec<u8>,
+    force: Option<bool>,
+) -> Result<(), String> {
+    if ftp::is_remote(&path) {
+        let force = force.unwrap_or(false);
+        return ftp::run(move || ftp::write_bytes(&path, &data, force)).await;
+    }
+    tokio::task::spawn_blocking(move || {
+        fs::write(&path, &data).map_err(|e| format!("Failed to write file: {}", e))
+    })
+    .await
+    .map_err(|e| format!("file write task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn write_text_file_with_dirs(path: String, content: String) -> Result<(), String> {
+    if ftp::is_remote(&path) {
+        return ftp::run(move || ftp::write_bytes(&path, content.as_bytes(), false)).await;
+    }
     let p = Path::new(&path);
     if let Some(parent) = p.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("Failed to create directories: {}", e))?;
@@ -107,7 +155,7 @@ pub fn write_text_file_with_dirs(path: String, content: String) -> Result<(), St
 }
 
 /// Check if a file is a target file
-fn is_target_file(
+pub(crate) fn is_target_file(
     name: &str,
     include_docx: bool,
     include_xls: bool,
@@ -297,7 +345,23 @@ pub async fn get_file_tree(
     include_images: Option<bool>,
     include_pdf: Option<bool>,
     include_empty_dirs: Option<bool>,
+    expanded_dirs: Option<Vec<String>>,
 ) -> Result<Vec<FileEntry>, String> {
+    if ftp::is_remote(&path) {
+        // Remote trees load lazily: one level plus the directories the user
+        // has expanded, since every directory costs a round trip.
+        let filter = ftp::TreeFilter {
+            show_all: show_all.unwrap_or(false),
+            include_docx: include_docx.unwrap_or(false),
+            include_xls: include_xls.unwrap_or(false),
+            include_pptx: include_pptx.unwrap_or(false),
+            include_km: include_km.unwrap_or(false),
+            include_images: include_images.unwrap_or(false),
+            include_pdf: include_pdf.unwrap_or(false),
+        };
+        let expanded = expanded_dirs.unwrap_or_default();
+        return ftp::run(move || ftp::list_tree(&path, filter, &expanded)).await;
+    }
     // Run the recursive filesystem scan off the main thread. A synchronous
     // Tauri command executes on the main thread, so scanning a folder with
     // many files would block the WebView event loop and freeze the UI.
@@ -471,7 +535,10 @@ pub fn save_markdown_file(
 
 /// Rename a file or folder
 #[tauri::command]
-pub fn rename_file(old_path: String, new_path: String) -> Result<(), String> {
+pub async fn rename_file(old_path: String, new_path: String) -> Result<(), String> {
+    if ftp::is_remote(&old_path) || ftp::is_remote(&new_path) {
+        return remote_move(old_path, new_path).await;
+    }
     let src = Path::new(&old_path);
     let dst = Path::new(&new_path);
     if !src.exists() {
@@ -485,7 +552,10 @@ pub fn rename_file(old_path: String, new_path: String) -> Result<(), String> {
 
 /// Delete a file or folder (folders are deleted recursively)
 #[tauri::command]
-pub fn delete_file(path: String) -> Result<(), String> {
+pub async fn delete_file(path: String) -> Result<(), String> {
+    if ftp::is_remote(&path) {
+        return ftp::run(move || ftp::remove(&path)).await;
+    }
     let p = Path::new(&path);
     if !p.exists() {
         return Err("Path does not exist".to_string());
@@ -498,7 +568,10 @@ pub fn delete_file(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn create_folder(path: String) -> Result<(), String> {
+pub async fn create_folder(path: String) -> Result<(), String> {
+    if ftp::is_remote(&path) {
+        return ftp::run(move || ftp::create_dir(&path)).await;
+    }
     let p = Path::new(&path);
     if p.exists() {
         return Err("Path already exists".to_string());
@@ -508,7 +581,10 @@ pub fn create_folder(path: String) -> Result<(), String> {
 
 /// Copy a file or folder (folders are copied recursively)
 #[tauri::command]
-pub fn copy_file(src: String, dest: String) -> Result<(), String> {
+pub async fn copy_file(src: String, dest: String) -> Result<(), String> {
+    if ftp::is_remote(&src) || ftp::is_remote(&dest) {
+        return Err("Copying files on an FTP folder is not supported yet".to_string());
+    }
     let s = Path::new(&src);
     let d = Path::new(&dest);
     if !s.exists() {
@@ -548,7 +624,10 @@ fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<(), String> {
 
 /// Move a file or folder
 #[tauri::command]
-pub fn move_file(src: String, dest: String) -> Result<(), String> {
+pub async fn move_file(src: String, dest: String) -> Result<(), String> {
+    if ftp::is_remote(&src) || ftp::is_remote(&dest) {
+        return remote_move(src, dest).await;
+    }
     let s = Path::new(&src);
     let d = Path::new(&dest);
     if !s.exists() {
@@ -568,9 +647,28 @@ pub fn move_file(src: String, dest: String) -> Result<(), String> {
     })
 }
 
+/// Rename / move within one FTP server; local <-> remote moves are refused.
+async fn remote_move(src: String, dest: String) -> Result<(), String> {
+    if !(ftp::is_remote(&src) && ftp::is_remote(&dest)) {
+        return Err("Moving between local and FTP folders is not supported yet".to_string());
+    }
+    ftp::run(move || ftp::rename(&src, &dest)).await
+}
+
 /// Open a file with the OS default application
 #[tauri::command]
-pub fn open_in_default_app(path: String) -> Result<(), String> {
+pub async fn open_in_default_app(path: String) -> Result<(), String> {
+    // Remote files are downloaded to the temp cache and opened from there
+    // (changes made in the other app are not uploaded back).
+    let path = if ftp::is_remote(&path) {
+        let uri = path;
+        ftp::run(move || ftp::download_to_cache(&uri))
+            .await?
+            .to_string_lossy()
+            .to_string()
+    } else {
+        path
+    };
     let p = Path::new(&path);
     if !p.exists() {
         return Err("Path does not exist".to_string());
@@ -697,6 +795,11 @@ pub fn open_external_url(url: String) -> Result<(), String> {
 /// Check if a folder exists
 #[tauri::command]
 pub async fn folder_exists(path: String) -> bool {
+    if ftp::is_remote(&path) {
+        return tokio::task::spawn_blocking(move || ftp::dir_exists(&path))
+            .await
+            .unwrap_or(false);
+    }
     // Off the main thread: `is_dir()` on a slow/unreachable UNC path can block
     // until the network timeout, which would freeze the UI.
     tokio::task::spawn_blocking(move || Path::new(&path).is_dir())

@@ -2,6 +2,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useState } from "react";
 import type { FileEntry } from "@/shared/types";
 import { useFolderWatcher } from "./useFolderWatcher";
+import { useFileStore } from "@/stores/file-store";
+import { expandedDirPaths, isRemotePath } from "@/shared/lib/remote-path";
+
+/** Directories to load along with a remote folder's first level. */
+function remoteExpandedDirs(folderPath: string): string[] | undefined {
+  if (!isRemotePath(folderPath)) return undefined;
+  return expandedDirPaths(useFileStore.getState().expandedDirs[folderPath]);
+}
 
 export function useFileFilters(folderPath: string | null, setFileTree: (folderPath: string, entries: FileEntry[]) => void, isZennMode = false) {
   const migrateOld = localStorage.getItem("md-office-viewer") === "true";
@@ -167,6 +175,7 @@ export function useFileFilters(folderPath: string | null, setFileTree: (folderPa
           includeImages: isZennMode ? true : filterImages,
           includePdf: isZennMode ? false : filterPdf,
           includeEmptyDirs: true,
+          expandedDirs: remoteExpandedDirs(fp),
         });
         if (!cancelled) setFileTree(fp, entries);
       } catch { /* ignore */ }
@@ -187,10 +196,33 @@ export function useFileFilters(folderPath: string | null, setFileTree: (folderPa
         includeImages: isZennMode ? true : filterImages,
         includePdf: isZennMode ? false : filterPdf,
         includeEmptyDirs: true,
+        expandedDirs: remoteExpandedDirs(folderPath),
       });
       setFileTree(folderPath, entries);
     } catch { /* ignore */ }
   }, [folderPath, showAll, filterDocx, filterXls, filterPptx, filterKm, filterImages, filterPdf, setFileTree, isZennMode]);
+
+  // Load one directory of a remote folder when it is first expanded.
+  const loadRemoteDir = useCallback(async (dirPath: string) => {
+    if (!folderPath || !isRemotePath(dirPath)) return;
+    try {
+      const entries: FileEntry[] = await invoke("get_file_tree", {
+        path: dirPath,
+        showAll: isZennMode ? false : showAll,
+        includeDocx: isZennMode ? false : filterDocx,
+        includeXls: isZennMode ? false : filterXls,
+        includePptx: isZennMode ? false : filterPptx,
+        includeKm: isZennMode ? false : filterKm,
+        includeImages: isZennMode ? true : filterImages,
+        includePdf: isZennMode ? false : filterPdf,
+        includeEmptyDirs: true,
+        expandedDirs: [],
+      });
+      useFileStore.getState().setDirChildren(folderPath, dirPath, entries);
+    } catch (e) {
+      console.error("Failed to list remote folder:", e);
+    }
+  }, [folderPath, showAll, filterDocx, filterXls, filterPptx, filterKm, filterImages, filterPdf, isZennMode]);
 
   // Auto-refresh file tree when folder contents change on disk
   useFolderWatcher(folderPath, refreshFileTree);
@@ -202,5 +234,6 @@ export function useFileFilters(folderPath: string | null, setFileTree: (folderPa
     showDocxBtn, showXlsBtn, showPptxBtn, showKmBtn, showImagesBtn, showPdfBtn,
     handleSaveFilterVisibility,
     refreshFileTree,
+    loadRemoteDir,
   } as const;
 }

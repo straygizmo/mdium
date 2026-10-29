@@ -1,0 +1,23 @@
+{
+  "openFtpFolder": "FTP フォルダを開く",
+  "savedConnection": "接続先",
+  "newConnection": "新しい接続",
+  "host": "ホスト",
+  "port": "ポート",
+  "user": "ユーザー名",
+  "password": "パスワード",
+  "passwordSavedPlaceholder": "保存済み（変更するときだけ入力）",
+  "passwordNote": "パスワードは OS の資格情報（Windows 資格情報マネージャー）に保存されます。",
+  "remotePath": "リモートフォルダ",
+  "secure": "FTPS（TLS で暗号化）を使う",
+  "acceptInvalidCerts": "証明書を検証しない（自己署名証明書のサーバー用）",
+  "plainWarning": "暗号化なしの FTP では、パスワードとファイルの内容が平文で送られます。",
+  "connect": "接続して開く",
+  "connecting": "接続中…",
+  "cancel": "キャンセル",
+  "deleteConnection": "この接続を削除",
+  "deleteConfirm": "{{name}} の接続設定と保存済みパスワードを削除しますか？",
+  "connectError": "接続できませんでした: {{error}}",
+  "remoteChanged": "{{name}} は開いた後にサーバー上で変更されています。上書きしますか？",
+  "saveFailed": "サーバーへの保存に失敗しました: {{error}}"
+}

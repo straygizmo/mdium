@@ -47,6 +47,9 @@ import enWorkflow from "./locales/en/workflow.json";
 import jaFlow from "./locales/ja/flow.json";
 import enFlow from "./locales/en/flow.json";
 
+import jaRemote from "./locales/ja/remote.json";
+import enRemote from "./locales/en/remote.json";
+
 const savedLanguage = localStorage.getItem("mdium-lang") ?? "ja";
 
 i18n.use(initReactI18next).init({
@@ -69,6 +72,7 @@ i18n.use(initReactI18next).init({
       "agent-chat": jaAgentChat,
       workflow: jaWorkflow,
       flow: jaFlow,
+      remote: jaRemote,
     },
     en: {
       common: enCommon,
@@ -88,6 +92,7 @@ i18n.use(initReactI18next).init({
       "agent-chat": enAgentChat,
       workflow: enWorkflow,
       flow: enFlow,
+      remote: enRemote,
     },
   },
   lng: savedLanguage,
