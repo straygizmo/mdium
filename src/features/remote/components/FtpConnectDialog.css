@@ -80,10 +80,6 @@
   color: var(--text-muted);
 }
 
-.ftp-dialog__intro {
-  margin: -8px 0 12px;
-}
-
 .ftp-dialog__check {
   display: flex;
   align-items: center;

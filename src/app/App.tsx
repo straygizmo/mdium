@@ -44,7 +44,6 @@ import { ImageCanvas } from "@/features/image/components/ImageCanvas";
 import { CodeEditorPanel } from "@/features/code-editor/components/CodeEditorPanel";
 import { GitDiffViewer } from "@/features/git/components/GitDiffViewer";
 import { CloneDialog } from "@/features/git/components/CloneDialog";
-import { FtpConnectDialog } from "@/features/remote/components/FtpConnectDialog";
 import { useFtpMirrorStore, startFtpMirrorStatusListener } from "@/stores/ftp-mirror-store";
 import { isRemotePath, readFileBytes, writeFileBytes, REMOTE_CHANGED_ERROR } from "@/shared/lib/remote-path";
 import { ExternalChangeDialog } from "@/features/editor/components/ExternalChangeDialog";
@@ -177,7 +176,6 @@ export function App() {
     externalContent: string;
   } | null>(null);
   const [showCloneDialog, setShowCloneDialog] = useState(false);
-  const [showFtpDialog, setShowFtpDialog] = useState(false);
   // Remote files whose overwrite the user declined; auto-save skips them so
   // the conflict prompt does not come back every 30 seconds.
   const declinedRemoteOverwriteRef = useRef(new Set<string>());
@@ -516,9 +514,18 @@ export function App() {
       // Recents keep the server URI; the local mirror is what gets opened.
       addRecentFolder(uri);
       openFolder(root);
+      // Opened from the FTP panel: show the new tab's files.
+      useUiStore.getState().setLeftPanel("folder");
+      useTabStore.getState().setFolderLeftPanel("folder");
     },
     [addRecentFolder, openFolder],
   );
+
+  // FTP folders are browsed and opened from the FTP panel.
+  const handleShowFtpPanel = useCallback(() => {
+    useUiStore.getState().setLeftPanel("ftp");
+    useTabStore.getState().setFolderLeftPanel("ftp");
+  }, []);
 
   const handleCloned = useCallback(
     (clonedPath: string) => {
@@ -1290,7 +1297,7 @@ export function App() {
         onSave={handleSave}
         onSaveAs={handleSaveAs}
         onOpenFolder={handleOpenFolder}
-        onOpenFtpFolder={() => setShowFtpDialog(true)}
+        onOpenFtpFolder={handleShowFtpPanel}
         onOpenFile={handleFileSelect}
         onUndo={handleUndo}
         onRedo={handleRedo}
@@ -1309,6 +1316,7 @@ export function App() {
             onNewFile={handleNewFile}
             onNewFolder={handleNewFolder}
             onLoadRemoteDir={loadRemoteDir}
+            onOpenFtpFolder={handleFtpConnected}
             previewRef={previewRef}
             onImageDragStart={handleImageDragStart}
             showAll={showAll}
@@ -1596,11 +1604,6 @@ export function App() {
         open={showCloneDialog}
         onClose={() => setShowCloneDialog(false)}
         onCloned={handleCloned}
-      />
-      <FtpConnectDialog
-        open={showFtpDialog}
-        onClose={() => setShowFtpDialog(false)}
-        onConnected={handleFtpConnected}
       />
       <AppDialog />
     </div>

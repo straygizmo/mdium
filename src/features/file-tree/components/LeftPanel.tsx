@@ -19,6 +19,7 @@ import { useAgentChatStore } from "@/features/agent-chat/agent-chat-store";
 import { collectConvertibleFiles, buildConvertibleTree } from "@/features/export/lib/collectConvertibleFiles";
 import { BatchConvertModal } from "@/features/export/components/BatchConvertModal";
 import { FtpSyncBadge } from "@/features/remote/components/FtpSyncStatus";
+import { FtpPanel } from "@/features/remote/components/FtpPanel";
 import { useFtpMirrorStore } from "@/stores/ftp-mirror-store";
 import "./LeftPanel.css";
 
@@ -52,10 +53,12 @@ interface LeftPanelProps extends FileFilterProps {
   previewRef: React.RefObject<HTMLDivElement | null>;
   onImageDragStart?: (path: string) => void;
   onLoadRemoteDir?: (path: string) => void;
+  /** Open a mirrored FTP folder (`uri` mirrored at `root`) in a tab. */
+  onOpenFtpFolder: (uri: string, root: string) => void;
 }
 
 export function LeftPanel({
-  onFileSelect, onRefresh, onNewFile, onNewFolder, previewRef, onImageDragStart, onLoadRemoteDir,
+  onFileSelect, onRefresh, onNewFile, onNewFolder, previewRef, onImageDragStart, onLoadRemoteDir, onOpenFtpFolder,
   showAll, activateShowAll,
   filterDocx, filterXls, filterPptx, filterKm, filterImages, filterPdf,
   toggleFilterDocx, toggleFilterXls, toggleFilterPptx, toggleFilterKm, toggleFilterImages, toggleFilterPdf,
@@ -177,6 +180,19 @@ export function LeftPanel({
               <rect x="3" y="17" width="18" height="4" rx="1" />
             </svg>
           </button>
+          <button
+            className={`left-panel__activity-btn ${leftPanel === "ftp" ? "left-panel__activity-btn--active" : ""}`}
+            onClick={() => { setLeftPanel("ftp"); setFolderLeftPanel("ftp"); }}
+            title={t("panelTitle", { ns: "remote" })}
+            aria-label={t("panelTitle", { ns: "remote" })}
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2" y="3" width="20" height="7" rx="2" />
+              <rect x="2" y="14" width="20" height="7" rx="2" />
+              <line x1="6" y1="6.5" x2="6.01" y2="6.5" />
+              <line x1="6" y1="17.5" x2="6.01" y2="17.5" />
+            </svg>
+          </button>
           {experimentalFlows && (
             <button
               className={`left-panel__activity-btn ${leftPanel === "flow" ? "left-panel__activity-btn--active" : ""}`}
@@ -251,6 +267,7 @@ export function LeftPanel({
             {leftPanel === "replacement" && t("title", { ns: "replacement" }).toUpperCase()}
             {leftPanel === "workflow" && t("title", { ns: "workflow" })}
             {leftPanel === "flow" && t("title", { ns: "flow" })}
+            {leftPanel === "ftp" && t("panelTitle", { ns: "remote" })}
           </span>
           {leftPanel === "folder" && !!activeFolderPath && (
             <div className="left-panel__section-header-actions">
@@ -406,6 +423,7 @@ export function LeftPanel({
         {leftPanel === "replacement" && <ReplacementPanel />}
         {leftPanel === "workflow" && <WorkflowPanel />}
         {leftPanel === "flow" && experimentalFlows && <FlowPanel />}
+        {leftPanel === "ftp" && <FtpPanel onOpenWorkingFolder={onOpenFtpFolder} />}
       </div>
       {showBatchConvert && (
         <BatchConvertModal
