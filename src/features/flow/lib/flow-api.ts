@@ -78,6 +78,11 @@ export const flowApi = {
    */
   copyTemplate: (projectRoot: string, template: string, fileName: string) =>
     call<string[]>("flow_template_copy", { projectRoot, template, fileName }),
+  /**
+   * The UI language: templates with a translation are copied and resolved
+   * in it (`resources/flow-templates/<name>/locales/<language>/`).
+   */
+  setTemplateLanguage: (language: string) => call<void>("flow_template_language", { language }),
 };
 
 /** Subscribes to setup progress; resolves to the unsubscribe function. */

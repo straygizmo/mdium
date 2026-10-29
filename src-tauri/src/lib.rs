@@ -448,6 +448,7 @@ pub fn run() {
             commands::flow_run::flow_gitignore_status,
             commands::flow_run::flow_template_list,
             commands::flow_run::flow_template_copy,
+            commands::flow_run::flow_template_language,
         ])
         .on_window_event(|window, event| {
             // Intake windows do not outlive the main window: closing it

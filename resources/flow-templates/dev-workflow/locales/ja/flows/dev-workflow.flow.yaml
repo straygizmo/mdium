@@ -1,0 +1,154 @@
+schemaVersion: 1
+id: dev-workflow
+name: 標準開発ワークフロー
+description: 選別 -> worktree -> (セットアップ) -> 設計 -> 計画 -> 承認 -> 実装 -> (テスト) -> レビュー -> マージゲート -> マージまたは破棄（push も PR もしない）。
+params:
+  title: { type: string, required: true }
+  requirement: { type: string, required: true }
+  issue: { type: string, default: "" }
+  designDocPath: { type: string, default: "" }
+  requiresApproval: { type: bool, default: true }
+  mergeGate: { type: bool, default: true }
+  provider: { type: string, default: codex }
+  # 設計の前に、worktree でプロジェクトのセットアップ（project.yaml）を実行する。
+  setup: { type: bool, default: false }
+limits: { maxConcurrentNodes: 1 }
+nodes:
+  - { id: screen, kind: action, uses: mdium/screen-input, with: { text: "${{ params.requirement }}" } }
+  - { id: worktree, kind: action, uses: mdium/git-worktree-create, with: { title: "${{ params.title }}" } }
+  - id: setup
+    kind: action
+    uses: mdium/project-setup
+    when: { ref: params.setup, op: "==", value: true }
+    with: { projectRoot: "${{ nodes.worktree.outputs.path }}" }
+  - id: design
+    kind: agent
+    provider: "${{ params.provider }}"
+    permission: read-only
+    promptRef: builtin:design
+    outputContract: outcome
+    workingDir: "${{ nodes.worktree.outputs.path }}"
+    with: { title: "${{ params.title }}", requirement: "${{ params.requirement }}", reviewFindings: "${{ nodes.review.outputs.body }}" }
+    timeout: 60m
+  - id: design_doc
+    kind: action
+    uses: mdium/design-doc-commit
+    when: { ref: params.designDocPath, op: "!=", value: "" }
+    with: { worktree: "${{ nodes.worktree.outputs }}", docPath: "${{ params.designDocPath }}", title: "${{ params.title }}", body: "${{ nodes.design.outputs.body }}" }
+  - id: issue_design
+    kind: action
+    uses: mdium/issue-entry
+    when: { ref: params.issue, op: "!=", value: "" }
+    with: { issue: "${{ params.issue }}", entry: design, body: "${{ nodes.design.outputs.body }}" }
+  - id: plan
+    kind: agent
+    provider: "${{ params.provider }}"
+    permission: read-only
+    promptRef: builtin:implement-plan
+    outputContract: outcome
+    workingDir: "${{ nodes.worktree.outputs.path }}"
+    when: { ref: params.requiresApproval, op: "==", value: true }
+    with: { title: "${{ params.title }}", requirement: "${{ params.requirement }}", design: "${{ nodes.design.outputs.body }}", revision: "${{ nodes.approve_plan.outputs.comment }}" }
+    timeout: 60m
+  - id: approve_plan
+    kind: approval
+    message: 実装計画を確認してください。
+    show: [nodes.plan.outputs.body]
+    options: [approve, { name: revise, commentRequired: true }]
+    when: { ref: params.requiresApproval, op: "==", value: true }
+  - id: implement
+    kind: agent
+    provider: "${{ params.provider }}"
+    permission: full-access
+    promptRef: builtin:implement
+    outputContract: outcome
+    workingDir: "${{ nodes.worktree.outputs.path }}"
+    with: { title: "${{ params.title }}", requirement: "${{ params.requirement }}", design: "${{ nodes.design.outputs.body }}", plan: "${{ nodes.plan.outputs.body }}" }
+    timeout: 120m
+  # プロジェクトの `test` 手順（project.yaml）を worktree で実行する。失敗はレビューが読む結果
+  # （ok、終了コード、出力の末尾、ログのディレクトリ）であり、ワークフローの終わりではない。
+  - id: test
+    kind: action
+    uses: mdium/project-test
+    with: { projectRoot: "${{ nodes.worktree.outputs.path }}" }
+    timeout: 60m
+  - id: issue_impl
+    kind: action
+    uses: mdium/issue-entry
+    when: { ref: params.issue, op: "!=", value: "" }
+    with: { issue: "${{ params.issue }}", entry: implement, body: "${{ nodes.implement.outputs.body }}", worktree: "${{ nodes.worktree.outputs }}" }
+  - id: review
+    kind: agent
+    provider: "${{ params.provider }}"
+    permission: read-only
+    promptRef: builtin:review
+    outputContract: outcome
+    workingDir: "${{ nodes.worktree.outputs.path }}"
+    with:
+      title: "${{ params.title }}"
+      requirement: "${{ params.requirement }}"
+      design: "${{ nodes.design.outputs.body }}"
+      summary: "${{ nodes.implement.outputs.body }}"
+      branch: "${{ nodes.worktree.outputs.branch }}"
+      baseBranch: "${{ nodes.worktree.outputs.baseBranch }}"
+      testRan: "${{ nodes.test.outputs.ran }}"
+      testOk: "${{ nodes.test.outputs.ok }}"
+      testExitCode: "${{ nodes.test.outputs.exitCode }}"
+      testTail: "${{ nodes.test.outputs.tail }}"
+      testLogDir: "${{ nodes.test.outputs.logDir }}"
+    timeout: 60m
+  - id: issue_review
+    kind: action
+    uses: mdium/issue-entry
+    when: { ref: params.issue, op: "!=", value: "" }
+    with: { issue: "${{ params.issue }}", entry: review, body: "${{ nodes.review.outputs.body }}" }
+  # 差し戻し用の記録はレビュー -> 設計の戻り辺を担うので `when` を持たない
+  # （`when` で飛ばされたノードは戻り辺をたどらない）。`issue` が空なら
+  # このアクションは何も投稿せず（`posted: false`）、ループはそのまま回る。
+  - id: issue_review_return
+    kind: action
+    uses: mdium/issue-entry
+    with: { issue: "${{ params.issue }}", entry: review, body: "${{ nodes.review.outputs.body }}", returned: true }
+  - id: gate_switch
+    kind: branch
+    cases:
+      - { when: { ref: params.mergeGate, op: "==", value: false }, port: keep }
+    default: gate
+  - id: merge_gate
+    kind: approval
+    message: ブランチをベースブランチにローカルでマージしますか？ それとも worktree を破棄しますか？
+    show: [nodes.worktree.outputs.branch, nodes.review.outputs.body]
+    options: [merge, discard]
+  - { id: merge, kind: action, uses: mdium/git-merge-local, with: { worktree: "${{ nodes.worktree.outputs }}" } }
+  - id: close_issue
+    kind: action
+    uses: mdium/issue-close
+    when: { ref: params.issue, op: "!=", value: "" }
+    with: { issue: "${{ params.issue }}" }
+  - { id: discard, kind: action, uses: mdium/git-worktree-discard, with: { worktree: "${{ nodes.worktree.outputs }}" } }
+edges:
+  - { from: screen, to: worktree }
+  - { from: worktree, to: setup }
+  - { from: setup, to: design }
+  - { from: design, to: design_doc }
+  - { from: design_doc, to: issue_design }
+  - { from: issue_design, to: plan }
+  - { from: plan, to: approve_plan }
+  - { from: approve_plan, to: implement, port: approve }
+  - { from: approve_plan, to: plan, port: revise, maxTraversals: 10 }
+  - { from: implement, to: issue_impl }
+  - { from: issue_impl, to: test }
+  - { from: test, to: review }
+  - { from: review, to: issue_review }
+  - { from: review, to: issue_review_return, port: attention }
+  - { from: issue_review_return, to: design, maxTraversals: 5 }
+  - { from: issue_review, to: gate_switch }
+  - { from: gate_switch, to: merge_gate, port: gate }
+  - { from: merge_gate, to: merge, port: merge }
+  - { from: merge, to: close_issue }
+  - { from: merge_gate, to: discard, port: discard }
+outputs:
+  worktree: "${{ nodes.worktree.outputs }}"
+  worktreePath: "${{ nodes.worktree.outputs.path }}"
+  branch: "${{ nodes.worktree.outputs.branch }}"
+  reviewOutcome: "${{ nodes.review.outputs.reason }}"

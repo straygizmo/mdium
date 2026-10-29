@@ -443,6 +443,16 @@ pub async fn flow_template_list(
     with_service(state, move |s| s.template_list(&project_root)).await
 }
 
+/// The UI language: the built-in templates are copied and resolved in it
+/// when they carry a translation.
+#[tauri::command]
+pub async fn flow_template_language(
+    state: tauri::State<'_, FlowServiceState>,
+    language: String,
+) -> Result<(), FlowCommandError> {
+    with_service(state, move |s| s.template_language(&language)).await
+}
+
 #[tauri::command]
 pub async fn flow_template_copy(
     state: tauri::State<'_, FlowServiceState>,

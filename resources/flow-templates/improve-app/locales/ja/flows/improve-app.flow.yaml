@@ -1,0 +1,64 @@
+schemaVersion: 1
+id: improve-app
+name: 改善ループ
+description: 提案（基準 -> 分析 -> 承認）-> 開発（dev-workflow、マージなし）-> 検証（セットアップ -> worktree で主フロー -> 比較）-> 採用ゲート -> マージまたは破棄、そして次の反復へ。
+params:
+  goal: { type: string, required: true }
+  provider: { type: string, default: claude }
+  requiresApproval: { type: bool, default: true }
+limits: { maxConcurrentNodes: 1, budgetUsd: 50 }
+nodes:
+  - id: propose
+    kind: subflow
+    flow: lib/improve-app/improve-propose.flow.yaml
+    params:
+      goal: "${{ params.goal }}"
+      provider: "${{ params.provider }}"
+      # 初回は空。次の反復では前回の試みが見える。
+      previousProposal: "${{ nodes.propose.outputs.proposal }}"
+      previousReport: "${{ nodes.verify.outputs.report }}"
+    timeout: 2h
+  - id: proceed
+    kind: branch
+    cases:
+      - { when: { ref: nodes.propose.outputs.choice, op: "==", value: stop }, port: stopped }
+    default: go
+  - id: develop
+    kind: subflow
+    flow: mdium:dev-workflow
+    params:
+      title: "${{ params.goal }}"
+      requirement: "${{ nodes.propose.outputs.proposal }}"
+      mergeGate: false
+      provider: "${{ params.provider }}"
+      requiresApproval: "${{ params.requiresApproval }}"
+    timeout: 6h
+  - id: verify
+    kind: subflow
+    flow: lib/improve-app/improve-verify.flow.yaml
+    params:
+      worktreePath: "${{ nodes.develop.outputs.worktreePath }}"
+      baselineOutputs: "${{ nodes.propose.outputs.baselineOutputs }}"
+      baselineCostUsd: "${{ nodes.propose.outputs.baselineCostUsd }}"
+      baselineParams: "${{ nodes.propose.outputs.baselineParams }}"
+    timeout: 24h
+  - id: adopt_gate
+    kind: approval
+    message: この変更を採用しますか？ レポートは、主フローの最新の完了実行と、worktree での検証実行（基準実行の引数から始めます）を比べたものです。まだ異なる引数はレポートの先頭に並びます。マージ後は、次の提案が新しい基準から始まるように、次の反復の前に主フローをもう一度実行してください。
+    show: [nodes.verify.outputs.report, nodes.verify.outputs.improved, nodes.develop.outputs.branch]
+    options: [merge, discard]
+  - { id: merge, kind: action, uses: mdium/git-merge-local, with: { worktree: "${{ nodes.develop.outputs.worktree }}" } }
+  - { id: discard, kind: action, uses: mdium/git-worktree-discard, with: { worktree: "${{ nodes.develop.outputs.worktree }}" } }
+edges:
+  - { from: propose, to: proceed }
+  - { from: proceed, to: develop, port: go }
+  - { from: develop, to: verify }
+  - { from: verify, to: adopt_gate }
+  # 検証が失敗しても、判断は人に委ねる。
+  - { from: verify, to: adopt_gate, port: failure }
+  - { from: adopt_gate, to: merge, port: merge }
+  - { from: adopt_gate, to: discard, port: discard }
+  # 次の反復で再び提案する（マージ後は、基準がマージ後のコードになるよう先に主フローを実行する。
+  # 検証実行は子スコープなので基準にはならない）。
+  - { from: merge, to: propose, maxTraversals: 3 }
+  - { from: discard, to: propose, maxTraversals: 3 }

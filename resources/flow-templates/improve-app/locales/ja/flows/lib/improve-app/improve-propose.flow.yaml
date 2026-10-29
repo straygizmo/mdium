@@ -1,0 +1,40 @@
+schemaVersion: 1
+id: improve-propose
+name: 改善の提案
+description: 基準（主フローの最新の完了実行）-> 分析（読み取り専用エージェント）-> approve_proposal（承認 / 修正 / 停止）。
+params:
+  goal: { type: string, required: true }
+  provider: { type: string, default: claude }
+  previousProposal: { type: string, default: "" }
+  previousReport: { type: string, default: "" }
+nodes:
+  - { id: baseline, kind: action, uses: mdium/flow-run-latest, with: { flow: "project:main" } }
+  - id: analyze
+    kind: agent
+    provider: "${{ params.provider }}"
+    permission: read-only
+    promptRef: builtin:improve-analyze
+    outputContract: outcome
+    with:
+      goal: "${{ params.goal }}"
+      metrics: "${{ project.metrics }}"
+      baseline: "${{ nodes.baseline.outputs }}"
+      revision: "${{ nodes.approve_proposal.outputs.comment }}"
+      previousProposal: "${{ params.previousProposal }}"
+      previousReport: "${{ params.previousReport }}"
+    timeout: 30m
+  - id: approve_proposal
+    kind: approval
+    message: 改善の提案を確認してください。承認すると実装に進みます。コメントを添えて修正を求めるか、ループを停止することもできます。
+    show: [nodes.analyze.outputs.body]
+    options: [approve, { name: revise, commentRequired: true }, stop]
+edges:
+  - { from: baseline, to: analyze }
+  - { from: analyze, to: approve_proposal }
+  - { from: approve_proposal, to: analyze, port: revise, maxTraversals: 5 }
+outputs:
+  proposal: "${{ nodes.analyze.outputs.body }}"
+  choice: "${{ nodes.approve_proposal.outputs.choice }}"
+  baselineOutputs: "${{ nodes.baseline.outputs.outputs }}"
+  baselineCostUsd: "${{ nodes.baseline.outputs.costUsd }}"
+  baselineParams: "${{ nodes.baseline.outputs.params }}"
