@@ -807,6 +807,7 @@ fn sync_once(rt: &Runtime, mode: Mode) -> Result<(), String> {
 
     let total = actions.len();
     let mut file_errors = Vec::new();
+    let mut failures = 0usize;
     let mut last_progress = Instant::now();
     for (i, action) in actions.into_iter().enumerate() {
         if last_progress.elapsed() > Duration::from_millis(200) {
@@ -861,6 +862,7 @@ fn sync_once(rt: &Runtime, mode: Mode) -> Result<(), String> {
             }
         };
         if let Err(e) = result {
+            failures += 1;
             if file_errors.len() < MAX_FILE_ERRORS {
                 file_errors.push(e);
             }
@@ -871,8 +873,14 @@ fn sync_once(rt: &Runtime, mode: Mode) -> Result<(), String> {
     }
     save_manifest(&rt.manifest_path, &manifest)?;
     *rt.manifest.lock().unwrap_or_else(|e| e.into_inner()) = manifest;
+    // Nothing went through (typically offline): report it as a failed sync
+    // instead of a successful one with per-file errors.
+    let first_error = (failures == total).then(|| file_errors.first().cloned()).flatten();
     rt.update_status(|s| s.file_errors = file_errors);
-    Ok(())
+    match first_error {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
 }
 
 /// User decision on a conflict or a pending deletion.
@@ -938,9 +946,16 @@ fn runtime_for(root: &str) -> Result<Arc<Runtime>, String> {
 pub async fn ftp_mirror_open(app: AppHandle, uri: String) -> Result<String, String> {
     let _ = app_handle().set(app);
     ftp::run(move || {
+        let known = with_registry(|m| m.contains_key(&uri));
         let root = register_mirror(&uri)?;
         let rt = start_runtime(&uri, root)?;
-        run_job(&rt, Mode::Pull)?;
+        // An existing mirror still opens offline: its files are local, the
+        // badge shows the error and the next edit or timer retries.
+        if let Err(e) = run_job(&rt, Mode::Pull) {
+            if !known {
+                return Err(e);
+            }
+        }
         Ok(rt.root_key())
     })
     .await
@@ -1195,8 +1210,9 @@ mod tests {
     }
 
     /// End-to-end sync against a real server. Run with
-    /// `MDIUM_FTP_TEST=host:port:secure:/server/root/on/disk cargo test -- --ignored ftp_mirror`
-    /// (user `tester` / `secret`). Uses `<server root>/mirror-test` and a
+    /// `MDIUM_FTP_TEST=host:port:secure:/server/root/on/disk cargo test -- --ignored --test-threads=1 ftp_`
+    /// (user `tester` / `secret`; one thread, since the FTP tests share the
+    /// connection profile). Uses `<server root>/mirror-test` and a
     /// temporary local mirror; stores and then deletes a connection profile.
     #[test]
     #[ignore]
@@ -1309,8 +1325,19 @@ mod tests {
 
         let status = rt.status();
         assert!(status.error.is_none() && status.file_errors.is_empty(), "{status:?}");
-        stop_runtime(&rt.root_key());
+
+        // When nothing can be uploaded (here: the password is gone, as when
+        // the server is unreachable) the sync is reported as failed.
         tauri::async_runtime::block_on(ftp::ftp_delete_connection(profile)).unwrap();
+        let synced_at = rt.status().last_sync;
+        let _pause = rt.job.lock().unwrap();
+        fs::write(mirror.join("offline.md"), "written offline").unwrap();
+        drop(_pause);
+        let _ = run_job(&rt, Mode::Push);
+        let status = rt.status();
+        assert!(status.error.is_some(), "{status:?}");
+        assert_eq!(status.last_sync, synced_at);
+        stop_runtime(&rt.root_key());
         let _ = fs::remove_dir_all(&server);
     }
 

@@ -30,6 +30,7 @@
   "synced": "Synced {{time}}",
   "notSynced": "Not synced",
   "syncError": "Sync error",
+  "syncErrorCount": "Sync errors {{count}}",
   "needsAttention": "Review {{count}}",
   "syncNow": "Sync Now",
   "lastSync": "Last sync: {{time}}",

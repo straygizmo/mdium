@@ -30,6 +30,7 @@
   "synced": "同期済み {{time}}",
   "notSynced": "未同期",
   "syncError": "同期エラー",
+  "syncErrorCount": "同期エラー {{count}}",
   "needsAttention": "要確認 {{count}}",
   "syncNow": "今すぐ同期",
   "lastSync": "最終同期: {{time}}",

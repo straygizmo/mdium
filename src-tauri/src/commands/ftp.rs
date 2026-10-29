@@ -810,7 +810,7 @@ mod tests {
     }
 
     /// End-to-end check against a real server. Run with
-    /// `MDIUM_FTP_TEST=host:port:secure:/server/root/on/disk cargo test -- --ignored ftp_server`
+    /// `MDIUM_FTP_TEST=host:port:secure:/server/root/on/disk cargo test -- --ignored --test-threads=1 ftp_`
     /// (user `tester` / `secret`, write permission required). It stores and
     /// then deletes a connection profile and a credential-store entry.
     #[test]

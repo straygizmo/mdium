@@ -17,6 +17,7 @@ function badgeText(status: SyncStatus | undefined, t: (key: string, opts?: Recor
   }
   const attention = status.conflicts.length + status.pendingDeletes.length;
   if (status.error) return `⚠ ${t("syncError")}`;
+  if (status.fileErrors.length > 0) return `⚠ ${t("syncErrorCount", { count: status.fileErrors.length })}`;
   if (attention > 0) return `⚠ ${t("needsAttention", { count: attention })}`;
   return status.lastSync ? t("synced", { time: formatTime(status.lastSync) }) : t("notSynced");
 }
@@ -27,7 +28,8 @@ export function FtpSyncBadge({ root }: { root: string }) {
   const status = useFtpMirrorStore((s) => s.statuses[root]);
   const [open, setOpen] = useState(false);
   const warn = !!status && !status.syncing &&
-    (!!status.error || status.conflicts.length + status.pendingDeletes.length > 0);
+    (!!status.error || status.fileErrors.length > 0 ||
+      status.conflicts.length + status.pendingDeletes.length > 0);
 
   return (
     <>
