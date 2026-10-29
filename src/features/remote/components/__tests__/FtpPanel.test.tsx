@@ -59,6 +59,7 @@ describe("FtpPanel", () => {
       expanded: {},
       loading: {},
       errors: {},
+      selected: null,
     });
     useFtpMirrorStore.setState({ mirrors: {}, statuses: {} });
     container = document.createElement("div");
@@ -135,5 +136,28 @@ describe("FtpPanel", () => {
       nodeNamed("README.md")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
     });
     expect(container.querySelector(".context-menu")).toBeNull();
+  });
+
+  it("shows the full path of the clicked item and copies it", async () => {
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    useFtpBrowserStore.getState().setConnected("me@ftp.example.com:21", ROOT, "/");
+    await act(async () => root.render(<FtpPanel onOpenWorkingFolder={vi.fn()} />));
+    await flush();
+
+    const pathInput = () => container.querySelector<HTMLInputElement>(".ftp-panel__path-input")!;
+    expect(pathInput().value).toBe(ROOT);
+
+    await act(async () => nodeNamed("public_html")!.click());
+    await flush();
+    await act(async () => nodeNamed("docs")!.click());
+    expect(pathInput().value).toBe(`${ROOT}/public_html/docs`);
+    expect(nodeNamed("docs")!.classList.contains("file-tree__node--active")).toBe(true);
+
+    await act(async () => nodeNamed("README.md")!.click());
+    expect(pathInput().value).toBe(`${ROOT}/README.md`);
+
+    await act(async () => container.querySelector<HTMLButtonElement>('.ftp-panel__path button[aria-label="Copy path"]')!.click());
+    expect(writeText).toHaveBeenCalledWith(`${ROOT}/README.md`);
   });
 });

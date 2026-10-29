@@ -74,5 +74,8 @@
   "loading": "読み込み中…",
   "emptyFolder": "（空のフォルダ）",
   "listError": "一覧を取得できませんでした: {{error}}",
-  "ftpFolderTab": "FTP フォルダ: {{uri}}"
+  "ftpFolderTab": "FTP フォルダ: {{uri}}",
+  "currentPath": "パス",
+  "copyPath": "パスをコピー",
+  "pathCopied": "コピーしました"
 }

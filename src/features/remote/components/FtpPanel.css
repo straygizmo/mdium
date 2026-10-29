@@ -40,6 +40,25 @@
   flex-shrink: 0;
 }
 
+.ftp-panel__path {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px 4px 12px;
+}
+
+.ftp-panel__path-input {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-base);
+  color: var(--text);
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+}
+
 .ftp-panel__connections {
   max-height: 35vh;
   overflow-y: auto;
