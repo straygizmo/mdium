@@ -1,0 +1,33 @@
+/* Covers the window during the initial FTP download (below AppDialog). */
+.ftp-download-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1050;
+  cursor: wait;
+}
+
+.ftp-download-overlay * {
+  cursor: wait;
+}
+
+.ftp-download-overlay__box {
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px var(--shadow-strong);
+  max-width: 420px;
+  padding: 16px 20px;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.ftp-download-overlay__uri {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  word-break: break-all;
+}

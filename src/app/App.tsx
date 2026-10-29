@@ -48,6 +48,7 @@ import { useFtpMirrorStore, startFtpMirrorStatusListener } from "@/stores/ftp-mi
 import { isRemotePath, readFileBytes, writeFileBytes, REMOTE_CHANGED_ERROR } from "@/shared/lib/remote-path";
 import { ExternalChangeDialog } from "@/features/editor/components/ExternalChangeDialog";
 import { AppDialog } from "@/shared/components/AppDialog";
+import { FtpDownloadOverlay } from "@/features/remote/components/FtpDownloadOverlay";
 import { showMessage, showConfirm, showPrompt } from "@/stores/dialog-store";
 import type { ImageCanvasHandle } from "@/features/image/components/ImageCanvas";
 import type { MindmapEditorHandle } from "@/features/mindmap/components/MindmapEditor";
@@ -1605,6 +1606,7 @@ export function App() {
         onClose={() => setShowCloneDialog(false)}
         onCloned={handleCloned}
       />
+      <FtpDownloadOverlay />
       <AppDialog />
     </div>
   );

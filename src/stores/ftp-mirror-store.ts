@@ -43,6 +43,8 @@ interface FtpMirrorState {
   mirrors: Record<string, string>;
   /** Latest status per mirror folder */
   statuses: Record<string, SyncStatus>;
+  /** ftp:// URI being mirrored by `open` (initial download), or null */
+  opening: string | null;
   load: () => Promise<void>;
   /** Mirror `uri` locally (initial sync included) and return the local folder. */
   open: (uri: string) => Promise<string>;
@@ -61,6 +63,7 @@ interface FtpMirrorState {
 export const useFtpMirrorStore = create<FtpMirrorState>()((set, get) => ({
   mirrors: {},
   statuses: {},
+  opening: null,
 
   load: async () => {
     const list = await invoke<MirrorInfo[]>("ftp_mirror_list");
@@ -68,9 +71,14 @@ export const useFtpMirrorStore = create<FtpMirrorState>()((set, get) => ({
   },
 
   open: async (uri) => {
-    const root = await invoke<string>("ftp_mirror_open", { uri });
-    set((s) => ({ mirrors: { ...s.mirrors, [root]: uri } }));
-    return root;
+    set({ opening: uri });
+    try {
+      const root = await invoke<string>("ftp_mirror_open", { uri });
+      set((s) => ({ mirrors: { ...s.mirrors, [root]: uri } }));
+      return root;
+    } finally {
+      set({ opening: null });
+    }
   },
 
   start: async (root) => {
