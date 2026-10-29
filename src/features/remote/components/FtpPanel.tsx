@@ -337,7 +337,7 @@ function RemoteNode({ entry, depth, onDirContextMenu }: RemoteNodeProps) {
 
   if (!entry.is_dir) {
     return (
-      <div className="file-tree__node ftp-panel__file" style={indent} title={entry.name}>
+      <div className="file-tree__node ftp-panel__file" style={indent} data-path={entry.path} title={entry.name}>
         <span className="file-tree__icon">📄</span>
         <span className="file-tree__name">{entry.name}</span>
       </div>
