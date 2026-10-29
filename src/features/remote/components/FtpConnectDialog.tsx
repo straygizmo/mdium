@@ -148,8 +148,8 @@ export function FtpConnectDialog({ open: isOpen, onClose, initialKey, onConnecte
   };
 
   return (
-    <div className="ftp-dialog__overlay" onMouseDown={resetAndClose}>
-      <div className="ftp-dialog" onMouseDown={(e) => e.stopPropagation()}>
+    <div className="ftp-dialog__overlay">
+      <div className="ftp-dialog">
         <h2 className="ftp-dialog__title">{t("connectTitle")}</h2>
 
         {saved.length > 0 && (
