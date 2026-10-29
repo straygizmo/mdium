@@ -73,5 +73,6 @@
   "disconnect": "Disconnect",
   "loading": "Loading…",
   "emptyFolder": "(empty folder)",
-  "listError": "Could not list the folder: {{error}}"
+  "listError": "Could not list the folder: {{error}}",
+  "ftpFolderTab": "FTP folder: {{uri}}"
 }
