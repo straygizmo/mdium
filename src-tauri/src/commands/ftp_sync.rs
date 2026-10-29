@@ -1446,6 +1446,7 @@ mod tests {
             ("a.md", "a v1"),
             ("sub/b.md", "b v1"),
             ("c.md", "c v1"),
+            ("日本語/メモ.md", "メモ v1"),
             (".htaccess", "deny"),
             (".mdium/local-only.md", "x"),
             ("node_modules/pkg/index.js", "x"),
@@ -1485,6 +1486,7 @@ mod tests {
         run_job(&rt, Mode::Pull).unwrap();
         assert_eq!(read("a.md"), "a v1");
         assert_eq!(read("sub/b.md"), "b v1");
+        assert_eq!(read("日本語/メモ.md"), "メモ v1");
         assert_eq!(read(".htaccess"), "deny");
         assert!(!mirror.join(".mdium").exists() && !mirror.join("node_modules").exists());
         assert!(rt.status().error.is_none(), "{:?}", rt.status());
@@ -1492,6 +1494,8 @@ mod tests {
         // A local edit (e.g. by an agent) is uploaded by the watcher.
         fs::write(mirror.join("a.md"), "a v2 from agent").unwrap();
         wait_until("watcher upload", &|| server_read("a.md") == "a v2 from agent");
+        fs::write(local_path(&mirror, "日本語/メモ.md"), "メモ v2").unwrap();
+        wait_until("non-ASCII upload", &|| server_read("日本語/メモ.md") == "メモ v2");
         // New files in new folders too; local-only folders stay local.
         fs::create_dir_all(mirror.join("new/deep")).unwrap();
         fs::write(mirror.join("new/deep/n.md"), "new").unwrap();

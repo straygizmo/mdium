@@ -19,11 +19,12 @@ use std::fs;
 use std::io::Cursor;
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use suppaftp::list::{File as FtpFile, ListParser};
 use suppaftp::types::FileType;
-use suppaftp::{NativeTlsConnector, NativeTlsFtpStream};
+use suppaftp::{Encoding, NativeTlsConnector, NativeTlsFtpStream, Status};
 
 pub const SCHEME: &str = "ftp://";
 const KEYRING_SERVICE: &str = "mdium-ftp";
@@ -164,6 +165,8 @@ struct FtpState {
     versions: Mutex<HashMap<String, RemoteVersion>>,
     /// Last failed connect per authority: when it happened and the error.
     connect_failures: Mutex<HashMap<String, (Instant, String)>>,
+    /// Per authority: whether the server turned out to use Shift_JIS names.
+    shift_jis: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
 fn state() -> &'static FtpState {
@@ -173,6 +176,7 @@ fn state() -> &'static FtpState {
         sessions: Mutex::new(HashMap::new()),
         versions: Mutex::new(HashMap::new()),
         connect_failures: Mutex::new(HashMap::new()),
+        shift_jis: Mutex::new(HashMap::new()),
     })
 }
 
@@ -219,6 +223,53 @@ fn load_password(profile: &FtpProfile) -> Result<String, String> {
 }
 
 // ---------------------------------------------------------------------------
+// File name encoding
+// ---------------------------------------------------------------------------
+
+/// File name encoding that follows the server: UTF-8 until a listing contains
+/// bytes that are not valid UTF-8, then Shift_JIS (older Japanese servers and
+/// NAS devices) for decoding and for every command sent afterwards. The flag
+/// is shared per server, so a re-opened session keeps addressing files with
+/// the names it listed earlier.
+#[derive(Debug, Clone)]
+struct AutoEncoding {
+    shift_jis: Arc<AtomicBool>,
+}
+
+impl AutoEncoding {
+    fn for_authority(authority: &str) -> Self {
+        let mut map = state().shift_jis.lock().unwrap_or_else(|e| e.into_inner());
+        Self { shift_jis: map.entry(authority.to_string()).or_default().clone() }
+    }
+}
+
+impl Encoding for AutoEncoding {
+    fn decode(&self, bytes: &[u8]) -> String {
+        if !self.shift_jis.load(Ordering::Relaxed) {
+            if let Ok(text) = std::str::from_utf8(bytes) {
+                return text.to_string();
+            }
+            self.shift_jis.store(true, Ordering::Relaxed);
+        }
+        encoding_rs::SHIFT_JIS.decode_without_bom_handling(bytes).0.into_owned()
+    }
+
+    fn encode(&self, text: &str) -> std::io::Result<Vec<u8>> {
+        if !self.shift_jis.load(Ordering::Relaxed) {
+            return Ok(text.as_bytes().to_vec());
+        }
+        let (bytes, _, had_errors) = encoding_rs::SHIFT_JIS.encode(text);
+        if had_errors {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("{text} cannot be represented in Shift_JIS"),
+            ));
+        }
+        Ok(bytes.into_owned())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Sessions
 // ---------------------------------------------------------------------------
 
@@ -245,6 +296,10 @@ fn open_stream(profile: &FtpProfile, password: &str) -> Result<NativeTlsFtpStrea
     stream
         .login(profile.user.as_str(), password)
         .map_err(|e| format!("FTP login failed: {e}"))?;
+    // Some servers (e.g. IIS, FileZilla Server) send UTF-8 names only after
+    // this; servers that do not know it keep their own encoding.
+    let _ = stream.custom_command("OPTS UTF8 ON", &[Status::CommandOk]);
+    stream.set_encoding(AutoEncoding::for_authority(&profile.authority()));
     stream
         .transfer_type(FileType::Binary)
         .map_err(|e| e.to_string())?;
@@ -343,24 +398,149 @@ pub(crate) struct ListedEntry {
     pub modified: Option<i64>,
 }
 
-fn parse_listing(lines: &[String], mlsd: bool) -> Vec<FtpFile> {
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ItemKind {
+    File,
+    Dir,
+    Link,
+}
+
+/// One parsed listing line.
+#[derive(Debug, Clone, PartialEq)]
+struct ParsedItem {
+    name: String,
+    kind: ItemKind,
+    size: u64,
+    modified: Option<i64>,
+}
+
+impl From<FtpFile> for ParsedItem {
+    fn from(f: FtpFile) -> Self {
+        let kind = if f.is_symlink() {
+            ItemKind::Link
+        } else if f.is_directory() {
+            ItemKind::Dir
+        } else {
+            ItemKind::File
+        };
+        let modified = f
+            .modified()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_secs() as i64);
+        Self { name: f.name().to_string(), kind, size: f.size() as u64, modified }
+    }
+}
+
+/// Parse listing lines with suppaftp's parsers, falling back to a lenient
+/// parser for lines they reject (unknown MLSD types such as
+/// `OS.unix=slink:...`, odd timestamps, localized dates like `10月`, ...), so
+/// such entries are not silently dropped from the tree and the mirror.
+fn parse_listing(lines: &[String], mlsd: bool) -> Vec<ParsedItem> {
     lines
         .iter()
         .filter_map(|line| {
-            if mlsd {
+            let strict = if mlsd {
                 ListParser::parse_mlsd(line).ok()
             } else {
-                line.parse::<FtpFile>().ok()
+                // A line it cannot split comes back as one file named after
+                // the whole line; treat that as a failure too.
+                line.parse::<FtpFile>().ok().filter(|f| f.name().trim() != line.trim())
+            };
+            let item = strict
+                .map(ParsedItem::from)
+                .or_else(|| if mlsd { lenient_mlsd(line) } else { lenient_list(line) });
+            if item.is_none() {
+                eprintln!("[ftp] could not parse listing line: {line}");
             }
+            item
         })
         .collect()
+}
+
+/// `facts; name` with any fact allowed to be unknown or malformed.
+fn lenient_mlsd(line: &str) -> Option<ParsedItem> {
+    let (facts, name) = match line.strip_prefix(' ') {
+        Some(name) => ("", name),
+        None => line.split_once("; ")?,
+    };
+    let mut kind = ItemKind::File;
+    let mut size = 0;
+    let mut modified = None;
+    for fact in facts.split(';') {
+        let Some((key, value)) = fact.split_once('=') else { continue };
+        match key.to_ascii_lowercase().as_str() {
+            "type" => {
+                kind = match value.to_ascii_lowercase().as_str() {
+                    // The current / parent directory entries.
+                    "cdir" | "pdir" => return None,
+                    "dir" => ItemKind::Dir,
+                    v if v.contains("link") => ItemKind::Link,
+                    _ => ItemKind::File,
+                }
+            }
+            "size" | "sizd" => size = value.parse().unwrap_or(0),
+            "modify" => modified = parse_mlsd_time(value),
+            _ => {}
+        }
+    }
+    (!name.is_empty()).then(|| ParsedItem { name: name.to_string(), kind, size, modified })
+}
+
+/// `YYYYMMDDHHMMSS[.sss]` (UTC) to Unix seconds.
+fn parse_mlsd_time(value: &str) -> Option<i64> {
+    let digits = value.split('.').next()?;
+    chrono::NaiveDateTime::parse_from_str(digits, "%Y%m%d%H%M%S")
+        .ok()
+        .map(|t| t.and_utc().timestamp())
+}
+
+/// The first `n` whitespace-separated fields of `line` and the rest of it
+/// (with its inner spaces kept, since file names may contain them).
+fn split_fields(line: &str, n: usize) -> Option<(Vec<&str>, &str)> {
+    let mut fields = Vec::with_capacity(n);
+    let mut rest = line.trim_start();
+    for _ in 0..n {
+        let end = rest.find(char::is_whitespace)?;
+        fields.push(&rest[..end]);
+        rest = rest[end..].trim_start();
+    }
+    (!rest.is_empty()).then_some((fields, rest))
+}
+
+/// Unix-style (`drwxr-xr-x 2 owner group size <3 date fields> name`) or
+/// DOS-style (`10-29-26 01:00PM <DIR> name`) LIST lines.
+fn lenient_list(line: &str) -> Option<ParsedItem> {
+    let first = line.trim_start().chars().next()?;
+    if matches!(first, 'd' | '-' | 'l') {
+        let (fields, rest) = split_fields(line, 8)?;
+        let kind = match first {
+            'd' => ItemKind::Dir,
+            'l' => ItemKind::Link,
+            _ => ItemKind::File,
+        };
+        let name = match kind {
+            ItemKind::Link => rest.split(" -> ").next().unwrap_or(rest),
+            _ => rest,
+        };
+        let size = fields[4].parse().unwrap_or(0);
+        return Some(ParsedItem { name: name.to_string(), kind, size, modified: None });
+    }
+    if first.is_ascii_digit() {
+        let (fields, name) = split_fields(line, 3)?;
+        let is_dir = fields[2].eq_ignore_ascii_case("<DIR>");
+        let size = if is_dir { 0 } else { fields[2].replace(',', "").parse().ok()? };
+        let kind = if is_dir { ItemKind::Dir } else { ItemKind::File };
+        return Some(ParsedItem { name: name.to_string(), kind, size, modified: None });
+    }
+    None
 }
 
 pub(crate) fn list_raw(
     stream: &mut NativeTlsFtpStream,
     path: &str,
 ) -> Result<Vec<ListedEntry>, String> {
-    let files = match stream.mlsd(Some(path)) {
+    let items = match stream.mlsd(Some(path)) {
         Ok(lines) => parse_listing(&lines, true),
         Err(_) => {
             let lines = stream
@@ -370,26 +550,22 @@ pub(crate) fn list_raw(
         }
     };
     let mut out = Vec::new();
-    for f in files {
-        let name = f.name().to_string();
+    for item in items {
+        let name = item.name;
         if name == "." || name == ".." || name.is_empty() {
             continue;
         }
-        let is_dir = if f.is_symlink() {
-            // A symlink may point to a directory (common for `public_html`).
-            let target = join_remote(path, &name);
-            let is_dir = stream.cwd(&target).is_ok();
-            let _ = stream.cwd("/");
-            is_dir
-        } else {
-            f.is_directory()
+        let is_dir = match item.kind {
+            ItemKind::Link => {
+                // A symlink may point to a directory (common for `public_html`).
+                let target = join_remote(path, &name);
+                let is_dir = stream.cwd(&target).is_ok();
+                let _ = stream.cwd("/");
+                is_dir
+            }
+            kind => kind == ItemKind::Dir,
         };
-        let modified = f
-            .modified()
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()
-            .map(|d| d.as_secs() as i64);
-        out.push(ListedEntry { name, is_dir, size: f.size() as u64, modified });
+        out.push(ListedEntry { name, is_dir, size: item.size, modified: item.modified });
     }
     Ok(out)
 }
@@ -909,6 +1085,20 @@ mod tests {
     }
 
     #[test]
+    fn auto_encoding_switches_to_shift_jis() {
+        let enc = AutoEncoding { shift_jis: Arc::default() };
+        assert_eq!(enc.decode("日本語.md".as_bytes()), "日本語.md");
+        assert_eq!(enc.encode("日本語.md").unwrap(), "日本語.md".as_bytes());
+
+        let (sjis, _, _) = encoding_rs::SHIFT_JIS.encode("日本語フォルダ");
+        assert_eq!(enc.decode(&sjis), "日本語フォルダ");
+        // From now on names are sent back in Shift_JIS, ASCII unchanged.
+        assert_eq!(enc.encode("/日本語フォルダ").unwrap()[1..], sjis[..]);
+        assert_eq!(enc.encode("LIST /docs").unwrap(), b"LIST /docs");
+        assert!(enc.encode("emoji 😀").is_err());
+    }
+
+    #[test]
     fn parses_unix_and_mlsd_listings() {
         let unix = vec![
             "drwxr-xr-x    2 1000     1000         4096 Oct 01 12:00 docs".to_string(),
@@ -916,12 +1106,39 @@ mod tests {
         ];
         let files = parse_listing(&unix, false);
         assert_eq!(files.len(), 2);
-        assert!(files[0].is_directory());
-        assert_eq!(files[1].name(), "README.md");
+        assert_eq!(files[0].kind, ItemKind::Dir);
+        assert_eq!(files[1].name, "README.md");
 
         let mlsd = vec!["type=file;size=12;modify=20261001120000; a b.md".to_string()];
         let files = parse_listing(&mlsd, true);
-        assert_eq!(files[0].name(), "a b.md");
-        assert!(files[0].is_file());
+        assert_eq!(files[0].name, "a b.md");
+        assert_eq!(files[0].kind, ItemKind::File);
+    }
+
+    #[test]
+    fn keeps_lines_the_strict_parsers_reject() {
+        let mlsd = vec![
+            "type=OS.unix=slink:/var/www;modify=20261001120000; www".to_string(),
+            "type=file;size=12;modify=2026100112; odd time.md".to_string(),
+        ];
+        let files = parse_listing(&mlsd, true);
+        assert_eq!(files.len(), 2, "{files:?}");
+        assert_eq!((files[0].name.as_str(), files[0].kind), ("www", ItemKind::Link));
+        assert_eq!((files[1].name.as_str(), files[1].kind, files[1].size), ("odd time.md", ItemKind::File, 12));
+
+        let list = vec![
+            "-rw-r--r--   1 user  group  1234 10月 29 13:00 メモ 1.md".to_string(),
+            "drwxr-xr-x   2 user  group  4096 10月 29 13:00 資料".to_string(),
+            "10-29-26  01:00PM       <DIR>          docs".to_string(),
+            "10-29-26  01:00PM              1,234 a b.md".to_string(),
+        ];
+        let files = parse_listing(&list, false);
+        let got: Vec<(&str, ItemKind, u64)> = files.iter().map(|f| (f.name.as_str(), f.kind, f.size)).collect();
+        assert_eq!(got, vec![
+            ("メモ 1.md", ItemKind::File, 1234),
+            ("資料", ItemKind::Dir, 4096),
+            ("docs", ItemKind::Dir, 0),
+            ("a b.md", ItemKind::File, 1234),
+        ]);
     }
 }
