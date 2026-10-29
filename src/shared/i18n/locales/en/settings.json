@@ -75,5 +75,5 @@
   "mediumConnectionFailed": "Connection failed",
   "experimentalSection": "Experimental features",
   "experimentalFlows": "Flows (generic flow engine)",
-  "experimentalFlowsDescription": "Shows the Flows view, a read-only viewer for *.flow.yaml files in .mdium/flows/. Still under development."
+  "experimentalFlowsDescription": "Shows the Flows view for viewing, editing and running *.flow.yaml files in .mdium/flows/. Still under development."
 }
