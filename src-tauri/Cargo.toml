@@ -46,6 +46,9 @@ regex = "1"
 serde_yaml_ng = "0.10"
 toml_edit = "0.25"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+suppaftp = { version = "12.2", features = ["native-tls"] }
+native-tls = "0.2"
+keyring = "4.2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading"] }

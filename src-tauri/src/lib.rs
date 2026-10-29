@@ -212,6 +212,7 @@ pub fn run() {
             commands::doc_convert::convert_doc_to_docx,
             commands::file::write_text_file,
             commands::file::write_text_file_with_dirs,
+            commands::file::write_binary_file,
             commands::file::get_file_tree,
             commands::file::read_markdown_file,
             commands::file::save_markdown_file,
@@ -228,6 +229,10 @@ pub fn run() {
             commands::file::open_in_default_app,
             commands::file::check_mdium_md_exists,
             commands::file::delete_generated_md,
+            // FTP remote folders
+            commands::ftp::ftp_list_connections,
+            commands::ftp::ftp_connect,
+            commands::ftp::ftp_delete_connection,
             // File watcher
             file_watcher::watch_file,
             file_watcher::unwatch_file,

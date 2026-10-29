@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { FileEntry } from "@/shared/types";
+import { replaceDirChildren } from "@/shared/lib/remote-path";
 
 interface ClipboardEntry {
   path: string;
@@ -29,6 +30,8 @@ interface FileState {
   setActiveFile: (path: string | null) => void;
   /** Set file tree for a specific folder */
   setFileTree: (folderPath: string, tree: FileEntry[]) => void;
+  /** Fill the children of a lazily loaded (remote) directory */
+  setDirChildren: (folderPath: string, dirPath: string, children: FileEntry[]) => void;
   /** Remove cache for a specific folder */
   removeFileTree: (folderPath: string) => void;
   /** Get file tree for the current folder */
@@ -65,6 +68,14 @@ export const useFileStore = create<FileState>()(
     set((s) => ({
       fileTrees: { ...s.fileTrees, [folderPath]: tree },
     })),
+  setDirChildren: (folderPath, dirPath, children) =>
+    set((s) => {
+      const tree = s.fileTrees[folderPath];
+      if (!tree) return {};
+      return {
+        fileTrees: { ...s.fileTrees, [folderPath]: replaceDirChildren(tree, dirPath, children) },
+      };
+    }),
   removeFileTree: (folderPath) =>
     set((s) => {
       const { [folderPath]: _, ...restTrees } = s.fileTrees;

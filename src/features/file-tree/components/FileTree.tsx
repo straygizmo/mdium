@@ -5,6 +5,7 @@ import { showConfirm } from "@/stores/dialog-store";
 import type { FileEntry } from "@/shared/types";
 import { useFileStore } from "@/stores/file-store";
 import { useTabStore } from "@/stores/tab-store";
+import { isRemotePath } from "@/shared/lib/remote-path";
 import "./FileTree.css";
 import "../../table/components/ContextMenu.css";
 
@@ -34,6 +35,8 @@ interface FileTreeProps {
   onRefresh?: () => void;
   hasFolderOpen?: boolean;
   onImageDragStart?: (path: string) => void;
+  /** Load the children of a remote directory that has not been listed yet */
+  onLoadDir?: (path: string) => void;
 }
 
 interface TreeNodeProps {
@@ -54,6 +57,7 @@ interface TreeNodeProps {
   onTreeDragStart?: (entry: FileEntry, startX: number, startY: number) => void;
   dragSourcePath: string | null;
   dragOverPath: string | null;
+  onLoadDir?: (path: string) => void;
 }
 
 interface ContextMenuInfo {
@@ -79,7 +83,7 @@ export function getFileIcon(name: string): string {
 function TreeNode({
   entry, depth, defaultExpanded, selectedPath, onFileSelect, onNodePointerDown, onContextMenu,
   renamingPath, renameValue, onRenameChange, onRenameSubmit, onRenameCancel,
-  onImageDragStart, onRefresh, onTreeDragStart, dragSourcePath, dragOverPath,
+  onImageDragStart, onRefresh, onTreeDragStart, dragSourcePath, dragOverPath, onLoadDir,
 }: TreeNodeProps) {
   const expanded = useFileStore((s) => s.isDirExpanded(entry.path, defaultExpanded));
   const toggleDir = useFileStore((s) => s.toggleDir);
@@ -88,11 +92,15 @@ function TreeNode({
   const handleClick = useCallback(() => {
     if (renamingPath === entry.path) return;
     if (entry.is_dir) {
+      // Remote directories are listed on first expansion (children == null).
+      if (!expanded && entry.children == null && onLoadDir) {
+        onLoadDir(entry.path);
+      }
       toggleDir(entry.path, defaultExpanded);
     } else {
       onFileSelect(entry.path);
     }
-  }, [entry, onFileSelect, toggleDir, defaultExpanded, renamingPath]);
+  }, [entry, onFileSelect, toggleDir, defaultExpanded, renamingPath, expanded, onLoadDir]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -194,6 +202,7 @@ function TreeNode({
               onTreeDragStart={onTreeDragStart}
               dragSourcePath={dragSourcePath}
               dragOverPath={dragOverPath}
+              onLoadDir={onLoadDir}
             />
           ))}
         </div>
@@ -203,7 +212,7 @@ function TreeNode({
 }
 
 export function FileTree({
-  tree, activeFile, onFileSelect, onRefresh, hasFolderOpen, onImageDragStart,
+  tree, activeFile, onFileSelect, onRefresh, hasFolderOpen, onImageDragStart, onLoadDir,
 }: FileTreeProps) {
   const { t } = useTranslation("fileTree");
   const [contextMenu, setContextMenu] = useState<ContextMenuInfo | null>(null);
@@ -213,9 +222,11 @@ export function FileTree({
   const menuRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(activeFile);
+  // Remote (FTP) trees are loaded lazily, so their directories start collapsed.
+  const isRemoteTree = tree.length > 0 && isRemotePath(tree[0].path);
   const defaultExpanded = useMemo(
-    () => countEntries(tree) <= AUTO_COLLAPSE_THRESHOLD,
-    [tree]
+    () => !isRemoteTree && countEntries(tree) <= AUTO_COLLAPSE_THRESHOLD,
+    [tree, isRemoteTree]
   );
 
   useEffect(() => {
@@ -663,6 +674,7 @@ export function FileTree({
             onTreeDragStart={handleTreeDragStart}
             dragSourcePath={dragSourcePath}
             dragOverPath={dragOverPath}
+            onLoadDir={isRemoteTree ? onLoadDir : undefined}
           />
         ))}
       </div>

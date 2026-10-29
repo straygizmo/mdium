@@ -49,10 +49,11 @@ interface LeftPanelProps extends FileFilterProps {
   onNewFolder: () => void;
   previewRef: React.RefObject<HTMLDivElement | null>;
   onImageDragStart?: (path: string) => void;
+  onLoadRemoteDir?: (path: string) => void;
 }
 
 export function LeftPanel({
-  onFileSelect, onRefresh, onNewFile, onNewFolder, previewRef, onImageDragStart,
+  onFileSelect, onRefresh, onNewFile, onNewFolder, previewRef, onImageDragStart, onLoadRemoteDir,
   showAll, activateShowAll,
   filterDocx, filterXls, filterPptx, filterKm, filterImages, filterPdf,
   toggleFilterDocx, toggleFilterXls, toggleFilterPptx, toggleFilterKm, toggleFilterImages, toggleFilterPdf,
@@ -383,6 +384,7 @@ export function LeftPanel({
             onRefresh={onRefresh}
             hasFolderOpen={!!activeFolderPath}
             onImageDragStart={onImageDragStart}
+            onLoadDir={onLoadRemoteDir}
           />
         )}
         {leftPanel === "outline" && (
