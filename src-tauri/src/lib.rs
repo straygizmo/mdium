@@ -233,6 +233,13 @@ pub fn run() {
             commands::ftp::ftp_list_connections,
             commands::ftp::ftp_connect,
             commands::ftp::ftp_delete_connection,
+            commands::ftp_sync::ftp_mirror_open,
+            commands::ftp_sync::ftp_mirror_list,
+            commands::ftp_sync::ftp_mirror_start,
+            commands::ftp_sync::ftp_mirror_stop,
+            commands::ftp_sync::ftp_mirror_sync,
+            commands::ftp_sync::ftp_mirror_status,
+            commands::ftp_sync::ftp_mirror_resolve,
             // File watcher
             file_watcher::watch_file,
             file_watcher::unwatch_file,
