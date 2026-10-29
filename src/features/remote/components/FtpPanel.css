@@ -67,13 +67,6 @@
   border-top: 1px solid var(--border);
 }
 
-.ftp-panel__status {
-  padding: 6px 12px;
-  font-size: 12px;
-  color: var(--text);
-  border-top: 1px solid var(--border);
-}
-
 .ftp-panel__error {
   padding: 4px 12px;
   font-size: 12px;

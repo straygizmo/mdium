@@ -53,10 +53,6 @@ export function FtpPanel({ onOpenWorkingFolder }: FtpPanelProps) {
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  const mirrorProgress = useFtpMirrorStore((s) =>
-    openingUri ? Object.values(s.statuses).find((st) => st.uri === openingUri)?.progress ?? null : null,
-  );
-
   const loadSaved = useCallback(() => {
     invoke<SavedConnection[]>("ftp_list_connections")
       .then(setSaved)
@@ -246,13 +242,6 @@ export function FtpPanel({ onOpenWorkingFolder }: FtpPanelProps) {
         {connection && <div className="ftp-panel__note ftp-panel__hint">{t("treeHint")}</div>}
       </div>
 
-      {openingUri && (
-        <div className="ftp-panel__status">
-          {mirrorProgress
-            ? t("mirroringProgress", { done: mirrorProgress.done, total: mirrorProgress.total })
-            : t("mirroring")}
-        </div>
-      )}
       {error && <div className="ftp-panel__error">{error}</div>}
 
       {menu && (
