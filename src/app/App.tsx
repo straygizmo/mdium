@@ -28,6 +28,7 @@ import { FolderTabBar, TabBar } from "./components/TabBar";
 import { StatusBar } from "./components/StatusBar";
 import { MainArea } from "./components/MainArea";
 import { hasUnsavedFlowEdits, isFlowEditorShortcut } from "@/features/flow/lib/app-guards";
+import { startTemplateLanguageSync } from "@/features/flow/lib/template-language";
 import { startWorkflowEventBridge } from "@/features/workflow/workflow-store";
 import { startWorkflowFolderSync, startWorkflowOpenTaskListener } from "@/features/workflow/folder-sync";
 import { startSettingsSync } from "@/shared/lib/settings-sync";
@@ -99,6 +100,8 @@ export function App() {
   }, []);
   // Follow theme and language changes made in other windows (e.g. intake windows).
   useEffect(() => startSettingsSync(), []);
+  // The built-in flow templates follow the UI language (copies and `mdium:` references).
+  useEffect(() => startTemplateLanguageSync(), []);
   // FTP mirrors: known mirror folders and their live sync status.
   const ftpMirrors = useFtpMirrorStore((s) => s.mirrors);
   const ftpSyncIntervalMinutes = useSettingsStore((s) => s.ftpSyncIntervalMinutes);

@@ -1,0 +1,37 @@
+schemaVersion: 1
+id: improve-verify
+name: 改善の検証
+description: セットアップ（worktree でプロジェクトのセットアップ）-> 検証（worktree 内でプロジェクトの主フローを実行）-> 比較（基準との指標比較）。
+params:
+  worktreePath: { type: string, required: true }
+  baselineOutputs: { type: object, required: true }
+  baselineCostUsd: { type: number, required: true }
+  # 基準実行の引数。検証はここから始める（`paramsFrom` を参照）。
+  baselineParams: { type: object, default: {} }
+nodes:
+  - { id: setup, kind: action, uses: mdium/project-setup, with: { projectRoot: "${{ params.worktreePath }}" } }
+  - id: verify
+    kind: subflow
+    flow: project:main
+    projectRoot: "${{ params.worktreePath }}"
+    # 2 つの実行を同じ条件で比べるための基準の引数。`params` が上書きする。
+    paramsFrom: "${{ params.baselineParams }}"
+    # プロジェクト側のコピーではここで規模を絞る（例: 1 話だけ、1 章だけ、レビューなし）。
+    params: {}
+    timeout: 24h
+  - id: compare
+    kind: action
+    uses: mdium/metrics-compare
+    with:
+      baseline: { outputs: "${{ params.baselineOutputs }}", costUsd: "${{ params.baselineCostUsd }}" }
+      candidate: { outputs: "${{ nodes.verify.outputs }}", costUsd: "${{ nodes.verify.costUsd }}" }
+      # まだ異なる引数はレポートの先頭に並ぶ。
+      baselineParams: "${{ params.baselineParams }}"
+      candidateParams: "${{ nodes.verify.params }}"
+edges:
+  - { from: setup, to: verify }
+  - { from: verify, to: compare }
+outputs:
+  improved: "${{ nodes.compare.outputs.improved }}"
+  report: "${{ nodes.compare.outputs.report }}"
+  candidate: "${{ nodes.verify.outputs }}"

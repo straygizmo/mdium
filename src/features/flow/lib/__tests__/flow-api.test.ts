@@ -44,6 +44,7 @@ describe("flowApi", () => {
       "flow_template_copy",
       { projectRoot: ROOT, template: "dev-workflow", fileName: "develop" },
     ],
+    ["setTemplateLanguage", () => flowApi.setTemplateLanguage("ja"), "flow_template_language", { language: "ja" }],
   ] as const)("%s invokes %s", async (_name, call, command, args) => {
     invoke.mockResolvedValueOnce("ok");
     await expect(call()).resolves.toBe("ok");

@@ -590,6 +590,13 @@ impl FlowService {
         Ok(templates::list())
     }
 
+    /// Sets the language of the built-in templates (the UI language): copies
+    /// and `mdium:` references use the template's translation when it has one.
+    pub fn template_language(&self, language: &str) -> Result<(), FlowCommandError> {
+        templates::set_language(language);
+        Ok(())
+    }
+
     /// Copies a template's flow files into the project's flows folder as
     /// `<fileName>.flow.yaml` (and its parts); returns the written paths.
     pub fn template_copy(
@@ -617,7 +624,7 @@ impl FlowService {
 
 /// Every command the service dispatches by name (the Tauri command names;
 /// the HTTP server uses the same names, spec 2026-10-10, 10.2).
-pub const COMMAND_NAMES: [&str; 24] = [
+pub const COMMAND_NAMES: [&str; 25] = [
     "flow_list",
     "flow_load",
     "flow_validate",
@@ -642,6 +649,7 @@ pub const COMMAND_NAMES: [&str; 24] = [
     "flow_gitignore_status",
     "flow_template_list",
     "flow_template_copy",
+    "flow_template_language",
 ];
 
 // `call` is deliberately stricter than Tauri's `invoke`: unknown keys are rejected with
@@ -762,6 +770,12 @@ struct TemplateCopyArgs {
     project_root: String,
     template: String,
     file_name: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TemplateLanguageArgs {
+    language: String,
 }
 
 fn args<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, FlowCommandError> {
@@ -897,6 +911,10 @@ impl FlowService {
             "flow_template_copy" => {
                 let a: TemplateCopyArgs = args(value)?;
                 reply(self.template_copy(&a.project_root, &a.template, &a.file_name)?)
+            }
+            "flow_template_language" => {
+                let a: TemplateLanguageArgs = args(value)?;
+                reply(self.template_language(&a.language)?)
             }
             other => Err(FlowCommandError::new(FLOW_UNKNOWN_COMMAND, other)),
         }
@@ -1444,6 +1462,22 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(bad.code, crate::issues::FLOW_INVALID_ID);
+    }
+
+    #[test]
+    fn the_template_language_is_set_through_call() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = service(tmp.path());
+        // The default language, so the parallel tests keep their fixture.
+        let reply = svc
+            .call("flow_template_language", serde_json::json!({ "language": "en" }))
+            .unwrap();
+        assert_eq!(reply, serde_json::Value::Null);
+        assert_eq!(crate::templates::language(), "en");
+        let bad = svc
+            .call("flow_template_language", serde_json::json!({ "lang": "ja" }))
+            .unwrap_err();
+        assert_eq!(bad.code, FLOW_BAD_ARGS);
     }
 
     #[test]

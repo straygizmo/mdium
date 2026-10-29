@@ -7,6 +7,13 @@
 //! `<main dir>/lib/<name>/` and are referenced from the main flow as
 //! `lib/<name>/...`, so a copy into a project keeps the references working.
 //!
+//! A template may carry translations: `<dir>/<name>/locales/<language>/`
+//! mirrors the flow files (the main flow and its parts) with the texts the
+//! user sees (`name`, `description`, approval messages, comments) in that
+//! language; the structure is identical. The process-wide language (the UI
+//! language, set by the app) picks the mirror when one exists, else the
+//! default (English) files are used, for resolution and for copies alike.
+//!
 //! The templates directory is process-wide: the app sets it at startup from
 //! its resource directory; until then no template resolves.
 
@@ -23,7 +30,13 @@ pub const TEMPLATE_PREFIX: &str = "mdium:";
 /// The manifest file of a template directory.
 pub const TEMPLATE_MANIFEST: &str = "project.yaml";
 
+/// The directory of a template's translations (`<template>/locales/<language>/`).
+pub const LOCALES_DIR: &str = "locales";
+/// The language of the default template files.
+pub const DEFAULT_LANGUAGE: &str = "en";
+
 static DIR: RwLock<Option<PathBuf>> = RwLock::new(None);
+static LANGUAGE: RwLock<String> = RwLock::new(String::new());
 
 /// Process-wide templates directory (`resources/flow-templates`); `None` until the app sets it.
 pub fn set_dir(dir: PathBuf) {
@@ -32,6 +45,38 @@ pub fn set_dir(dir: PathBuf) {
 
 pub fn dir() -> Option<PathBuf> {
     DIR.read().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Process-wide language of the templates (the UI language); the default
+/// files serve a language without a mirror.
+pub fn set_language(language: &str) {
+    *LANGUAGE.write().unwrap_or_else(|e| e.into_inner()) = language.trim().to_string();
+}
+
+/// The current language (`DEFAULT_LANGUAGE` until the app sets one).
+pub fn language() -> String {
+    let current = LANGUAGE.read().unwrap_or_else(|e| e.into_inner());
+    if current.is_empty() {
+        DEFAULT_LANGUAGE.to_string()
+    } else {
+        current.clone()
+    }
+}
+
+/// The translations directory of `root` for `language`, when one exists.
+/// Only a plain tag (letters, digits and `-`, like `ja` or `pt-br`) is looked up.
+fn locale_dir(root: &Path, language: &str) -> Option<PathBuf> {
+    let tag = language.trim();
+    let well_formed = !tag.is_empty()
+        && tag
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        && !tag.starts_with('-');
+    if !well_formed || tag == DEFAULT_LANGUAGE {
+        return None;
+    }
+    let dir = root.join(LOCALES_DIR).join(tag);
+    dir.is_dir().then_some(dir)
 }
 
 /// A resolved template reference.
@@ -101,8 +146,15 @@ fn read_manifest(name: &str, root: &Path) -> Result<crate::project::ProjectDef, 
     }
 }
 
-/// Resolves `mdium:<name>` to the template's directory and main flow file.
+/// Resolves `mdium:<name>` to the template's directory and main flow file
+/// in the process-wide language.
 pub fn resolve(reference: &str) -> Result<TemplateRef, FlowIssue> {
+    resolve_localized(reference, &language())
+}
+
+/// Resolves `mdium:<name>` with the files of `language`: the main flow of
+/// its `locales/<language>/` mirror when the mirror has one, else the default.
+pub fn resolve_localized(reference: &str, language: &str) -> Result<TemplateRef, FlowIssue> {
     let name = reference.strip_prefix(TEMPLATE_PREFIX).unwrap_or(reference);
     if !is_template_ref(reference) || !is_template_name(name) {
         return Err(unknown(name, "bad-name"));
@@ -119,6 +171,11 @@ pub fn resolve(reference: &str) -> Result<TemplateRef, FlowIssue> {
         .ok_or_else(|| unknown(name, "no-main-flow"))?;
     let main = resolve_in_project(&root, &root, main_rel)
         .map_err(|_| unknown(name, "main-flow-missing"))?;
+    // A mirror without the main flow serves the default file.
+    let main = locale_dir(&root, language)
+        .and_then(|dir| resolve_in_project(&root, &dir, main_rel).ok())
+        .filter(|file| file.is_file())
+        .unwrap_or(main);
     Ok(TemplateRef {
         name: name.to_string(),
         root,
@@ -188,14 +245,25 @@ fn exists_issue(path: &str) -> FlowIssue {
         .with("path", path)
 }
 
-/// Copies the template's flow files into `<project>/.mdium/flows/`: the main flow as
-/// `<file_name>.flow.yaml`, parts under `lib/<template>/...`. Refuses to overwrite.
-/// Returns the written project-relative paths, the main flow first.
+/// Copies the template's flow files (in the process-wide language) into
+/// `<project>/.mdium/flows/`: the main flow as `<file_name>.flow.yaml`, parts
+/// under `lib/<template>/...`. Refuses to overwrite. Returns the written
+/// project-relative paths, the main flow first.
 pub fn copy_into(project_root: &Path, name: &str, file_name: &str) -> Result<Vec<String>, FlowIssue> {
+    copy_into_localized(project_root, name, file_name, &language())
+}
+
+/// [`copy_into`] with the files of `language` (see [`resolve_localized`]).
+pub fn copy_into_localized(
+    project_root: &Path,
+    name: &str,
+    file_name: &str,
+    language: &str,
+) -> Result<Vec<String>, FlowIssue> {
     if !is_template_name(file_name) {
         return Err(FlowIssue::new(FLOW_INVALID_ID, "fileName").with("name", file_name));
     }
-    let template = resolve(&format!("{TEMPLATE_PREFIX}{name}"))?;
+    let template = resolve_localized(&format!("{TEMPLATE_PREFIX}{name}"), language)?;
     let main_dir = template.main.parent().unwrap_or(&template.root).to_path_buf();
     // (source, project-relative destination)
     let mut plan = vec![(
@@ -381,6 +449,128 @@ mod tests {
         let report = crate::load::check_content(tmp.path(), &tmp.path().join(".mdium/flows/improve.flow.yaml"), &copied);
         assert!(report.errors.is_empty(), "{:?}", report.errors);
         assert_eq!(report.flow.unwrap().id, "improve");
+    }
+
+    #[test]
+    fn the_language_picks_the_localized_template_files() {
+        test_templates();
+        let en = resolve_localized("mdium:dev-workflow", "en").unwrap();
+        assert!(en.main.ends_with("dev-workflow/flows/dev-workflow.flow.yaml"), "{}", en.main.display());
+        let ja = resolve_localized("mdium:dev-workflow", "ja").unwrap();
+        assert!(
+            ja.main.ends_with("dev-workflow/locales/ja/flows/dev-workflow.flow.yaml"),
+            "{}",
+            ja.main.display()
+        );
+        assert_eq!(ja.root, en.root);
+        assert_eq!(ja.display, "mdium:dev-workflow");
+        // A language without a mirror, or an ill-formed tag, falls back to the default files.
+        for lang in ["xx", "", "../ja", "ja/..", "JA_JP"] {
+            assert_eq!(resolve_localized("mdium:dev-workflow", lang).unwrap().main, en.main, "{lang:?}");
+        }
+        // The process-wide language (English until the app sets it) drives
+        // `resolve` and `copy_into`; tests never switch it, since they run in
+        // parallel and the bundled files are their fixture.
+        assert_eq!(language(), "en");
+        assert_eq!(resolve("mdium:dev-workflow").unwrap().main, en.main);
+    }
+
+    /// Removes the user-facing texts (`name`, `description`, approval `message`)
+    /// so the two language versions of a flow can be compared structurally.
+    fn structure(flow: &FlowDef) -> serde_json::Value {
+        fn strip(value: &mut serde_json::Value) {
+            match value {
+                serde_json::Value::Object(map) => {
+                    map.remove("message");
+                    for child in map.values_mut() {
+                        strip(child);
+                    }
+                }
+                serde_json::Value::Array(items) => items.iter_mut().for_each(strip),
+                _ => {}
+            }
+        }
+        let mut value = serde_json::to_value(flow).unwrap();
+        let map = value.as_object_mut().unwrap();
+        map.remove("name");
+        map.remove("description");
+        strip(&mut value);
+        value
+    }
+
+    #[test]
+    fn every_template_has_a_japanese_mirror_with_the_same_structure() {
+        test_templates();
+        let templates = list();
+        assert!(!templates.is_empty());
+        for info in templates {
+            let reference = format!("{TEMPLATE_PREFIX}{}", info.name);
+            let en = resolve_localized(&reference, "en").unwrap();
+            let ja = resolve_localized(&reference, "ja").unwrap();
+            assert_ne!(en.main, ja.main, "{}: no ja mirror", info.name);
+            let en_dir = en.main.parent().unwrap();
+            let ja_dir = ja.main.parent().unwrap();
+            let mut en_files = vec![en.main.clone()];
+            collect_flow_files(&en_dir.join("lib").join(&info.name), &mut en_files);
+            let mut ja_files = vec![ja.main.clone()];
+            collect_flow_files(&ja_dir.join("lib").join(&info.name), &mut ja_files);
+            assert_eq!(en_files.len(), ja_files.len(), "{}: the mirror has extra files", info.name);
+            for en_file in en_files {
+                let rel = crate::load::relative_display(en_dir, &en_file);
+                let ja_file = ja_dir.join(&rel);
+                assert!(ja_file.is_file(), "{}: {rel} has no ja mirror", info.name);
+                let parse = |file: &Path| {
+                    let text = std::fs::read_to_string(file).unwrap();
+                    let (flow, issues) = crate::load::check_text(&text, FlowFormat::Yaml);
+                    assert!(issues.errors.is_empty(), "{}: {:?}", file.display(), issues.errors);
+                    flow.unwrap()
+                };
+                let en_flow = parse(&en_file);
+                let ja_flow = parse(&ja_file);
+                assert!(check_template_flow(&ja_flow).is_empty(), "{rel}");
+                assert_eq!(structure(&en_flow), structure(&ja_flow), "{}: {rel} differs beyond its texts", info.name);
+                // The texts the user sees are translated, not copied.
+                assert_ne!(en_flow.name, ja_flow.name, "{rel}");
+                assert_ne!(en_flow.description, ja_flow.description, "{rel}");
+                for (en_node, ja_node) in en_flow.nodes.iter().zip(&ja_flow.nodes) {
+                    if let (NodeKind::Approval(en_ap), NodeKind::Approval(ja_ap)) = (&en_node.kind, &ja_node.kind) {
+                        assert_ne!(en_ap.message, ja_ap.message, "{rel}: {}", en_node.id);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn copy_uses_the_localized_files() {
+        test_templates();
+        let tmp = tempfile::tempdir().unwrap();
+        let written = copy_into_localized(tmp.path(), "improve-app", "improve", "ja").unwrap();
+        assert_eq!(
+            written,
+            vec![
+                ".mdium/flows/improve.flow.yaml".to_string(),
+                ".mdium/flows/lib/improve-app/improve-propose.flow.yaml".to_string(),
+                ".mdium/flows/lib/improve-app/improve-verify.flow.yaml".to_string(),
+            ]
+        );
+        let ja = resolve_localized("mdium:improve-app", "ja").unwrap();
+        let copied = std::fs::read_to_string(tmp.path().join(".mdium/flows/improve.flow.yaml")).unwrap();
+        let original = std::fs::read_to_string(&ja.main).unwrap();
+        assert_eq!(copied.replacen("id: improve", "id: improve-app", 1), original);
+        assert_eq!(copied.lines().nth(1), Some("id: improve"));
+        let ja_dir = ja.main.parent().unwrap();
+        for part in ["improve-propose.flow.yaml", "improve-verify.flow.yaml"] {
+            let copied = std::fs::read(tmp.path().join(".mdium/flows/lib/improve-app").join(part)).unwrap();
+            let original = std::fs::read(ja_dir.join("lib/improve-app").join(part)).unwrap();
+            assert_eq!(copied, original, "{part}");
+        }
+        // The copy (its parts and its `mdium:dev-workflow` reference) checks clean.
+        std::fs::write(tmp.path().join(".mdium/flows/main.flow.yaml"), "schemaVersion: 1\nid: main\nname: Main\nnodes:\n  - { id: ok, kind: approval }\n").unwrap();
+        std::fs::write(tmp.path().join(".mdium/project.yaml"), "schemaVersion: 1\nid: p\nname: P\nflows:\n  main: flows/main.flow.yaml\n").unwrap();
+        let report = crate::load::check_content(tmp.path(), &tmp.path().join(".mdium/flows/improve.flow.yaml"), &copied);
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        assert_eq!(report.flow.unwrap().name, "改善ループ");
     }
 
     #[test]
