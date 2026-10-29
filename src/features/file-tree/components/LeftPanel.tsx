@@ -20,6 +20,7 @@ import { collectConvertibleFiles, buildConvertibleTree } from "@/features/export
 import { BatchConvertModal } from "@/features/export/components/BatchConvertModal";
 import { FtpSyncBadge } from "@/features/remote/components/FtpSyncStatus";
 import { FtpPanel } from "@/features/remote/components/FtpPanel";
+import { FtpIcon } from "@/features/remote/components/FtpIcon";
 import { useFtpMirrorStore } from "@/stores/ftp-mirror-store";
 import "./LeftPanel.css";
 
@@ -186,12 +187,7 @@ export function LeftPanel({
             title={t("panelTitle", { ns: "remote" })}
             aria-label={t("panelTitle", { ns: "remote" })}
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="2" y="3" width="20" height="7" rx="2" />
-              <rect x="2" y="14" width="20" height="7" rx="2" />
-              <line x1="6" y1="6.5" x2="6.01" y2="6.5" />
-              <line x1="6" y1="17.5" x2="6.01" y2="17.5" />
-            </svg>
+            <FtpIcon />
           </button>
           {experimentalFlows && (
             <button

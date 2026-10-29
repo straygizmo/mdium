@@ -82,6 +82,18 @@
   flex-shrink: 0;
 }
 
+/* Marks a folder tab that mirrors an FTP folder (follows the tab's text color) */
+.tab-bar__ftp-badge {
+  flex-shrink: 0;
+  padding: 0 3px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 13px;
+  letter-spacing: 0.3px;
+}
+
 .tab-bar__name {
   display: flex;
   align-items: center;

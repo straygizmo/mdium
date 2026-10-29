@@ -15,6 +15,7 @@ export function FolderTabBar() {
   const switchFolder = useTabStore((s) => s.switchFolder);
   const closeFolder = useTabStore((s) => s.closeFolder);
   const removeFileTree = useFileStore((s) => s.removeFileTree);
+  const mirrors = useFtpMirrorStore((s) => s.mirrors);
 
   const handleCloseFolder = async (folder: string) => {
     // Read tabs from store directly to avoid subscribing to all tab changes
@@ -77,9 +78,13 @@ export function FolderTabBar() {
           key={folder}
           className={`tab-bar__tab tab-bar__tab--folder ${folder === activeFolderPath ? "tab-bar__tab--active" : ""}`}
           onClick={() => switchFolder(folder)}
-          title={folder}
+          title={mirrors[folder] ? `${t("remote:ftpFolderTab", { uri: mirrors[folder] })}\n${folder}` : folder}
         >
-          <span className="tab-bar__folder-icon">📁</span>
+          {mirrors[folder] ? (
+            <span className="tab-bar__ftp-badge" aria-label={t("remote:panelTitle")}>FTP</span>
+          ) : (
+            <span className="tab-bar__folder-icon">📁</span>
+          )}
           <span className="tab-bar__name">{getFolderName(folder)}</span>
           <button
             className="tab-bar__close"
