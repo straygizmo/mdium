@@ -198,7 +198,7 @@
   "macroChatModuleTypeStandard": "Standard",
   "macroChatModuleTypeClass": "Class",
   "macroChatModuleTypeDocument": "Document",
-  "macroChatPlaceholder": "Describe the change you want in this workbook's macros",
+  "macroChatPlaceholder": "Describe the change you want in this workbook's macros (edits are written back to the workbook automatically with a .bak backup; close it in Excel first)",
   "macroChatNeedsFolder": "Open a folder to use the macro chat",
   "macroChatNoMacros": "This workbook has no macros",
   "workbookLocked": "This workbook is open in Excel. Close it before editing",

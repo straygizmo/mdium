@@ -198,7 +198,7 @@
   "macroChatModuleTypeStandard": "標準",
   "macroChatModuleTypeClass": "クラス",
   "macroChatModuleTypeDocument": "ドキュメント",
-  "macroChatPlaceholder": "このブックのマクロへの変更内容を書いてください",
+  "macroChatPlaceholder": "このブックのマクロへの変更内容を書いてください（編集後は自動でブックに取り込まれ、.bak が作られます。Excel で開いている間は取り込めません）",
   "macroChatNeedsFolder": "フォルダを開くとマクロチャットを使えます",
   "macroChatNoMacros": "このブックにはマクロがありません",
   "workbookLocked": "Excel で開かれています。閉じてから編集してください",

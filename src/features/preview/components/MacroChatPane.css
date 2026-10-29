@@ -44,6 +44,14 @@
   white-space: nowrap;
 }
 
+/* Icon-only, sized like .oc-chat__toolbar-btn. */
+.macro-chat__new-chat {
+  padding: 3px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .macro-chat__new-chat:hover,
 .macro-chat__lock button:hover {
   background: var(--bg-overlay);
