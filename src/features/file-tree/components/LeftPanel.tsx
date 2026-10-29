@@ -18,6 +18,8 @@ import { useChatUIStore } from "@/features/opencode-config/hooks/useOpencodeChat
 import { useAgentChatStore } from "@/features/agent-chat/agent-chat-store";
 import { collectConvertibleFiles, buildConvertibleTree } from "@/features/export/lib/collectConvertibleFiles";
 import { BatchConvertModal } from "@/features/export/components/BatchConvertModal";
+import { FtpSyncBadge } from "@/features/remote/components/FtpSyncStatus";
+import { useFtpMirrorStore } from "@/stores/ftp-mirror-store";
 import "./LeftPanel.css";
 
 export interface FileFilterProps {
@@ -64,6 +66,7 @@ export function LeftPanel({
   const setLeftPanel = useUiStore((s) => s.setLeftPanel);
   const setFolderLeftPanel = useTabStore((s) => s.setFolderLeftPanel);
   const activeFolderPath = useTabStore((s) => s.activeFolderPath);
+  const isFtpMirror = useFtpMirrorStore((s) => !!activeFolderPath && !!s.mirrors[activeFolderPath]);
   const fileTree = useFileStore((s) =>
     activeFolderPath ? s.fileTrees[activeFolderPath] : undefined
   ) ?? [];
@@ -251,6 +254,7 @@ export function LeftPanel({
           </span>
           {leftPanel === "folder" && !!activeFolderPath && (
             <div className="left-panel__section-header-actions">
+              {isFtpMirror && <FtpSyncBadge root={activeFolderPath} />}
               <button className="left-panel__header-action" onClick={onNewFile} title={t("newFile", { ns: "fileTree" })}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
@@ -409,6 +413,7 @@ export function LeftPanel({
           tree={convertibleTree}
           onClose={() => setShowBatchConvert(false)}
           onComplete={onRefresh}
+          defaultSaveToMdium={isFtpMirror}
         />
       )}
     </div>

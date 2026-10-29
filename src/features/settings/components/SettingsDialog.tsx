@@ -12,6 +12,7 @@ import { ThemeSelector } from "./ThemeSelector";
 import { LanguageSelector } from "./LanguageSelector";
 
 import "./SettingsDialog.css";
+import { MAX_FTP_SYNC_INTERVAL_MINUTES } from "@/stores/ftp-mirror-store";
 
 const PROVIDERS = [
   { id: "anthropic", label: "Claude / Anthropic",     format: "anthropic" as const, baseUrl: "https://api.anthropic.com/v1",                             model: "claude-haiku-4-5" },
@@ -59,6 +60,7 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
     showSettings, setShowSettings,
     autoSave, setAutoSave,
     restoreLastFolders, setRestoreLastFolders,
+    ftpSyncIntervalMinutes, setFtpSyncIntervalMinutes,
     aiSettings, setAiSettings,
     addVerifiedModel,
     speechEnabled, setSpeechEnabled,
@@ -72,6 +74,7 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
   // --- Local state (deferred until Save) ---
   const [localAutoSave, setLocalAutoSave] = useState(autoSave);
   const [localRestoreLastFolders, setLocalRestoreLastFolders] = useState(restoreLastFolders);
+  const [localFtpInterval, setLocalFtpInterval] = useState(String(ftpSyncIntervalMinutes));
   const [localSpeechEnabled, setLocalSpeechEnabled] = useState(speechEnabled);
   const [localSpeechModel, setLocalSpeechModel] = useState<SpeechModel>(speechModel);
   const [localExperimentalFlows, setLocalExperimentalFlows] = useState(experimentalFlows);
@@ -110,6 +113,7 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
     if (showSettings) {
       setLocalAutoSave(autoSave);
       setLocalRestoreLastFolders(restoreLastFolders);
+      setLocalFtpInterval(String(ftpSyncIntervalMinutes));
       setLocalSpeechEnabled(speechEnabled);
       setLocalSpeechModel(speechModel);
       setLocalExperimentalFlows(experimentalFlows);
@@ -232,6 +236,10 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
   const handleSave = async () => {
     setAutoSave(localAutoSave);
     setRestoreLastFolders(localRestoreLastFolders);
+    const interval = Math.round(Number(localFtpInterval));
+    if (Number.isFinite(interval) && interval >= 1) {
+      setFtpSyncIntervalMinutes(Math.min(interval, MAX_FTP_SYNC_INTERVAL_MINUTES));
+    }
     setSpeechEnabled(localSpeechEnabled);
     setSpeechModel(localSpeechModel);
     setExperimentalFlows(localExperimentalFlows);
@@ -415,6 +423,25 @@ export function SettingsDialog({ filterVisibility, onSaveFilterVisibility }: Set
                 </label>
                 <span className="settings-dialog__description">
                   {t("restoreLastFoldersDescription")}
+                </span>
+              </div>
+              <div className="settings-dialog__divider" />
+              <div className="settings-dialog__field">
+                <label className="settings-dialog__label" htmlFor="settings-ftp-sync-interval">
+                  {t("ftpSyncInterval")}
+                </label>
+                <input
+                  id="settings-ftp-sync-interval"
+                  className="settings-dialog__input settings-dialog__input--narrow"
+                  type="number"
+                  min={1}
+                  max={MAX_FTP_SYNC_INTERVAL_MINUTES}
+                  step={1}
+                  value={localFtpInterval}
+                  onChange={(e) => setLocalFtpInterval(e.target.value)}
+                />
+                <span className="settings-dialog__description">
+                  {t("ftpSyncIntervalDescription", { max: MAX_FTP_SYNC_INTERVAL_MINUTES })}
                 </span>
               </div>
               <div className="settings-dialog__divider" />

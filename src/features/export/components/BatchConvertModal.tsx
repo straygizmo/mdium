@@ -25,6 +25,11 @@ interface BatchConvertModalProps {
   tree: ConvertibleTreeNode[];
   onClose: () => void;
   onComplete: () => void;
+  /**
+   * Initial "save to .mdium" choice. On for FTP mirrors so converted files
+   * stay local instead of being uploaded to the server.
+   */
+  defaultSaveToMdium?: boolean;
 }
 
 function patchTreeWithMdiumFlags(
@@ -47,7 +52,7 @@ function patchTreeWithMdiumFlags(
   });
 }
 
-export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, onComplete }: BatchConvertModalProps) {
+export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, onComplete, defaultSaveToMdium = false }: BatchConvertModalProps) {
   const { t } = useTranslation("common");
   const { isConverting, progress, summary, convert, reset } = useBatchConvert();
   const {
@@ -63,7 +68,7 @@ export function BatchConvertModal({ files: propFiles, tree: propTree, onClose, o
   const [mode, setMode] = useState<BatchMode>("convert");
   const [filter, setFilter] = useState<FilterTab>("all");
   const [skipExisting, setSkipExisting] = useState(true);
-  const [saveToMdium, setSaveToMdium] = useState(false);
+  const [saveToMdium, setSaveToMdium] = useState(defaultSaveToMdium);
   const [convertDocViaWord, setConvertDocViaWord] = useState(false);
   const [deleteInMdium, setDeleteInMdium] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);

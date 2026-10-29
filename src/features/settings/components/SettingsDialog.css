@@ -176,6 +176,10 @@
   transition: border-color 0.15s;
 }
 
+.settings-dialog__input--narrow {
+  width: 120px;
+}
+
 .settings-dialog__input:focus {
   border-color: var(--accent);
 }

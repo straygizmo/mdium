@@ -254,7 +254,7 @@ fn open_stream(profile: &FtpProfile, password: &str) -> Result<NativeTlsFtpStrea
 /// Run `op` on the session for `authority`, opening it if needed. When the
 /// operation fails and the connection turns out to be dead (idle timeout,
 /// network change), the session is re-opened and the operation retried once.
-fn with_session<R>(
+pub(crate) fn with_session<R>(
     authority: &str,
     mut op: impl FnMut(&mut NativeTlsFtpStream) -> Result<R, String>,
 ) -> Result<R, String> {
@@ -335,9 +335,12 @@ fn recorded_version(uri: &str) -> Option<RemoteVersion> {
 // Directory listing
 // ---------------------------------------------------------------------------
 
-struct ListedEntry {
-    name: String,
-    is_dir: bool,
+pub(crate) struct ListedEntry {
+    pub name: String,
+    pub is_dir: bool,
+    pub size: u64,
+    /// Modification time in Unix seconds, when the listing provides one.
+    pub modified: Option<i64>,
 }
 
 fn parse_listing(lines: &[String], mlsd: bool) -> Vec<FtpFile> {
@@ -353,7 +356,10 @@ fn parse_listing(lines: &[String], mlsd: bool) -> Vec<FtpFile> {
         .collect()
 }
 
-fn list_raw(stream: &mut NativeTlsFtpStream, path: &str) -> Result<Vec<ListedEntry>, String> {
+pub(crate) fn list_raw(
+    stream: &mut NativeTlsFtpStream,
+    path: &str,
+) -> Result<Vec<ListedEntry>, String> {
     let files = match stream.mlsd(Some(path)) {
         Ok(lines) => parse_listing(&lines, true),
         Err(_) => {
@@ -378,12 +384,17 @@ fn list_raw(stream: &mut NativeTlsFtpStream, path: &str) -> Result<Vec<ListedEnt
         } else {
             f.is_directory()
         };
-        out.push(ListedEntry { name, is_dir });
+        let modified = f
+            .modified()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_secs() as i64);
+        out.push(ListedEntry { name, is_dir, size: f.size() as u64, modified });
     }
     Ok(out)
 }
 
-fn join_remote(dir: &str, name: &str) -> String {
+pub(crate) fn join_remote(dir: &str, name: &str) -> String {
     if dir == "/" {
         format!("/{name}")
     } else {
@@ -502,21 +513,43 @@ pub fn write_bytes(uri: &str, data: &[u8], force: bool) -> Result<(), String> {
                 }
             }
         }
-        let tmp = rp.parent().join(&format!(".{}.mdium-tmp", rp.name()));
-        s.put_file(&tmp.path, &mut Cursor::new(data))
-            .map_err(|e| format!("Failed to upload {}: {e}", rp.path))?;
-        if s.rename(&tmp.path, &rp.path).is_err() {
-            // Some servers (e.g. IIS) refuse to rename over an existing file.
-            let _ = s.rm(&rp.path);
-            s.rename(&tmp.path, &rp.path).map_err(|e| {
-                let _ = s.rm(&tmp.path);
-                format!("Failed to replace {}: {e}", rp.path)
-            })?;
-        }
+        put_atomic(s, &rp, data)?;
         let version = current_version(s, &rp.path);
         record_version(uri, version);
         Ok(())
     })
+}
+
+/// Upload to a temporary name next to the target, then rename it over the
+/// target, so a dropped connection never leaves a truncated file behind.
+pub(crate) fn put_atomic(s: &mut NativeTlsFtpStream, rp: &RemotePath, data: &[u8]) -> Result<(), String> {
+    let tmp = rp.parent().join(&format!(".{}.mdium-tmp", rp.name()));
+    s.put_file(&tmp.path, &mut Cursor::new(data))
+        .map_err(|e| format!("Failed to upload {}: {e}", rp.path))?;
+    if s.rename(&tmp.path, &rp.path).is_err() {
+        // Some servers (e.g. IIS) refuse to rename over an existing file.
+        let _ = s.rm(&rp.path);
+        s.rename(&tmp.path, &rp.path).map_err(|e| {
+            let _ = s.rm(&tmp.path);
+            format!("Failed to replace {}: {e}", rp.path)
+        })?;
+    }
+    Ok(())
+}
+
+/// Create `dir` and its missing parents on the server.
+pub(crate) fn ensure_remote_dir(s: &mut NativeTlsFtpStream, dir: &str) -> Result<(), String> {
+    let mut current = String::new();
+    for part in dir.split('/').filter(|p| !p.is_empty()) {
+        current.push('/');
+        current.push_str(part);
+        if s.cwd(&current).is_err() {
+            s.mkdir(&current)
+                .map_err(|e| format!("Failed to create folder {current}: {e}"))?;
+        }
+    }
+    let _ = s.cwd("/");
+    Ok(())
 }
 
 pub fn dir_exists(uri: &str) -> bool {
@@ -556,7 +589,7 @@ pub fn rename(from: &str, to: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn remove_recursive(s: &mut NativeTlsFtpStream, path: &str) -> Result<(), String> {
+pub(crate) fn remove_recursive(s: &mut NativeTlsFtpStream, path: &str) -> Result<(), String> {
     if s.rm(path).is_ok() {
         return Ok(());
     }
@@ -777,7 +810,7 @@ mod tests {
     }
 
     /// End-to-end check against a real server. Run with
-    /// `MDIUM_FTP_TEST=host:port:secure:/server/root/on/disk cargo test -- --ignored ftp_server`
+    /// `MDIUM_FTP_TEST=host:port:secure:/server/root/on/disk cargo test -- --ignored --test-threads=1 ftp_`
     /// (user `tester` / `secret`, write permission required). It stores and
     /// then deletes a connection profile and a credential-store entry.
     #[test]

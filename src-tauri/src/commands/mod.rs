@@ -9,6 +9,7 @@ pub mod file;
 pub mod flow;
 pub mod flow_run;
 pub mod ftp;
+pub mod ftp_sync;
 pub mod fs_search;
 pub mod git;
 pub mod image_gen;

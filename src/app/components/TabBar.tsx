@@ -3,7 +3,8 @@ import { useTranslation } from "react-i18next";
 import { useTabStore } from "@/stores/tab-store";
 import { useFileStore } from "@/stores/file-store";
 import { getFileIcon } from "@/features/file-tree/components/FileTree";
-import { showConfirm } from "@/stores/dialog-store";
+import { showConfirm, showMessage } from "@/stores/dialog-store";
+import { useFtpMirrorStore, type MirrorPending } from "@/stores/ftp-mirror-store";
 import "./TabBar.css";
 
 /** Folder tabs (displayed at full width) */
@@ -20,8 +21,47 @@ export function FolderTabBar() {
     const folderTabs = useTabStore.getState().tabs.filter((tab) => tab.folderPath === folder);
     const hasDirty = folderTabs.some((tab) => tab.dirty);
     if (hasDirty && !(await showConfirm(t("unsavedChanges"), { kind: "warning" }))) return;
+
+    // FTP mirror: check what has not reached the server while it still syncs.
+    const mirrors = useFtpMirrorStore.getState();
+    const uri = mirrors.mirrors[folder];
+    let pending: MirrorPending | null = null;
+    let pendingError: string | null = null;
+    if (uri) {
+      try {
+        pending = await mirrors.pending(folder);
+      } catch (e) {
+        pendingError = String(e);
+      }
+    }
+
     closeFolder(folder);
     removeFileTree(folder);
+
+    if (uri) await offerMirrorDeletion(folder, uri, pending, pendingError);
+  };
+
+  /** Offer to delete a closed mirror's local copy, unless changes are unsynced. */
+  const offerMirrorDeletion = async (
+    folder: string,
+    uri: string,
+    pending: MirrorPending | null,
+    pendingError: string | null,
+  ) => {
+    if (!pending) {
+      await showMessage(t("remote:keepMirrorUnknown", { uri, error: pendingError ?? "" }), { kind: "warning" });
+      return;
+    }
+    if (pending.uploads + pending.deletes + pending.conflicts > 0) {
+      await showMessage(t("remote:keepMirrorUnsynced", { uri, ...pending }), { kind: "warning" });
+      return;
+    }
+    if (!(await showConfirm(t("remote:deleteMirrorConfirm", { uri }), { kind: "info" }))) return;
+    try {
+      await useFtpMirrorStore.getState().remove(folder);
+    } catch (e) {
+      await showMessage(t("remote:deleteMirrorFailed", { error: String(e) }), { kind: "error" });
+    }
   };
 
   const getFolderName = (path: string) => {

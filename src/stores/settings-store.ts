@@ -6,6 +6,7 @@ import { getThemeById, DEFAULT_THEME_ID } from "@/shared/themes";
 import { syncProviderToOpencode } from "@/shared/lib/opencode-auth-sync";
 import { getDefaultRagSettings, normalizeRagSettings } from "@/features/rag/lib/rag-settings";
 import type { AiSettings, MediumSettings, RagSettings, ReplacementSettings } from "@/shared/types";
+import { DEFAULT_FTP_SYNC_INTERVAL_MINUTES } from "@/stores/ftp-mirror-store";
 
 export type Language = "ja" | "en";
 
@@ -49,11 +50,14 @@ interface SettingsState {
   experimentalFlows: boolean;
   /** Per-provider toggle for exposing the mdium-rag MCP tools to agent chats. */
   mdiumRagTools: Record<MdiumRagProvider, boolean>;
+  /** Minutes between automatic pulls of open FTP folders. */
+  ftpSyncIntervalMinutes: number;
 
   setThemeId: (id: string) => void;
   setLanguage: (lang: Language) => void;
   setAutoSave: (enabled: boolean) => void;
   setRestoreLastFolders: (enabled: boolean) => void;
+  setFtpSyncIntervalMinutes: (minutes: number) => void;
   setScrollSync: (enabled: boolean) => void;
   setFontFamily: (font: string) => void;
   setFontSize: (size: number) => void;
@@ -100,6 +104,7 @@ export const useSettingsStore = create<SettingsState>()(
       replacement: DEFAULT_REPLACEMENT_SETTINGS,
       experimentalFlows: false,
       mdiumRagTools: { ...DEFAULT_MDIUM_RAG_TOOLS },
+      ftpSyncIntervalMinutes: DEFAULT_FTP_SYNC_INTERVAL_MINUTES,
 
       setThemeId: (id) => {
         const theme = getThemeById(id);
@@ -115,6 +120,7 @@ export const useSettingsStore = create<SettingsState>()(
 
       setAutoSave: (enabled) => set({ autoSave: enabled }),
       setRestoreLastFolders: (enabled) => set({ restoreLastFolders: enabled }),
+      setFtpSyncIntervalMinutes: (minutes) => set({ ftpSyncIntervalMinutes: minutes }),
       setScrollSync: (enabled) => set({ scrollSync: enabled }),
       setFontFamily: (font) => set({ fontFamily: font }),
       setFontSize: (size) => set({ fontSize: size }),
@@ -169,6 +175,7 @@ export const useSettingsStore = create<SettingsState>()(
         replacement: state.replacement,
         experimentalFlows: state.experimentalFlows,
         mdiumRagTools: state.mdiumRagTools,
+        ftpSyncIntervalMinutes: state.ftpSyncIntervalMinutes,
       }),
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<SettingsState>;
