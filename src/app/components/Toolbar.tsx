@@ -5,6 +5,7 @@ import { showConfirm } from "@/stores/dialog-store";
 
 import { useTabStore } from "@/stores/tab-store";
 import { useUiStore } from "@/stores/ui-store";
+import { useFtpMirrorStore } from "@/stores/ftp-mirror-store";
 import type { RecentFile, RecentFolder } from "@/shared/types";
 import "./Toolbar.css";
 
@@ -43,6 +44,10 @@ export function Toolbar({
   const bottomTerminalVisible = useUiStore((s) => s.bottomTerminalVisible);
   const setBottomTerminalVisible = useUiStore((s) => s.setBottomTerminalVisible);
 
+  // FTP mirrors show their server URI instead of the local mirror folder.
+  const shownFolderPath = useFtpMirrorStore((s) =>
+    activeFolderPath ? s.mirrors[activeFolderPath] ?? activeFolderPath : null,
+  );
   const [showRecentFiles, setShowRecentFiles] = useState(false);
   const [showRecentFolders, setShowRecentFolders] = useState(false);
 
@@ -165,10 +170,10 @@ export function Toolbar({
             <line x1="21" y1="21" x2="16.65" y2="16.65" />
           </svg>
         </button>
-        {activeFolderPath && (
+        {shownFolderPath && (
           <>
             <span className="toolbar__separator" />
-            <span className="toolbar__folder-path">{activeFolderPath}</span>
+            <span className="toolbar__folder-path" title={activeFolderPath ?? undefined}>{shownFolderPath}</span>
           </>
         )}
       </div>
