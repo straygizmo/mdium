@@ -329,7 +329,7 @@ MDium is built on the shoulders of many outstanding open-source projects. Specia
 
 | Project | Description |
 | ------- | ----------- |
-| [opencode](https://github.com/nicepkg/opencode) | AI coding tool that powers MDium's chat, MCP server, and agentic RAG capabilities |
+| [opencode](https://github.com/anomalyco/opencode) | AI coding tool that powers MDium's chat, MCP server, and agentic RAG capabilities |
 | [Slidev](https://github.com/slidevjs/slidev) | Presentation slides engine used for Markdown-to-PPTX export |
 | [open-motion](https://github.com/jsongo/open-motion) | Programmatic video engine enabling Markdown-to-video generation |
 | [Tauri](https://github.com/tauri-apps/tauri) | Desktop application framework providing the native shell |

@@ -75,5 +75,5 @@
   "mediumConnectionFailed": "接続に失敗しました",
   "experimentalSection": "試験的な機能",
   "experimentalFlows": "フロー（汎用フローエンジン）",
-  "experimentalFlowsDescription": ".mdium/flows/ の *.flow.yaml を表示する「フロー」ビュー（読み取り専用）を表示します。開発中の機能です。"
+  "experimentalFlowsDescription": ".mdium/flows/ の *.flow.yaml を表示・編集・実行する「フロー」ビューを表示します。開発中の機能です。"
 }
