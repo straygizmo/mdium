@@ -143,7 +143,10 @@ pub async fn write_binary_file(
 }
 
 #[tauri::command]
-pub fn write_text_file_with_dirs(path: String, content: String) -> Result<(), String> {
+pub async fn write_text_file_with_dirs(path: String, content: String) -> Result<(), String> {
+    if ftp::is_remote(&path) {
+        return ftp::run(move || ftp::write_bytes(&path, content.as_bytes(), false)).await;
+    }
     let p = Path::new(&path);
     if let Some(parent) = p.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("Failed to create directories: {}", e))?;

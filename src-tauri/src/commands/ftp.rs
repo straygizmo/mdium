@@ -20,7 +20,7 @@ use std::io::Cursor;
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use suppaftp::list::{File as FtpFile, ListParser};
 use suppaftp::types::FileType;
 use suppaftp::{NativeTlsConnector, NativeTlsFtpStream};
@@ -28,6 +28,9 @@ use suppaftp::{NativeTlsConnector, NativeTlsFtpStream};
 pub const SCHEME: &str = "ftp://";
 const KEYRING_SERVICE: &str = "mdium-ftp";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// After a failed connect, calls fail fast for this long instead of each
+/// waiting for the timeout (e.g. many restored tabs while offline).
+const RETRY_AFTER_FAILURE: Duration = Duration::from_secs(10);
 /// Prefix of the error returned when the remote file changed after it was read.
 pub const REMOTE_CHANGED: &str = "FTP_REMOTE_CHANGED";
 
@@ -159,6 +162,8 @@ struct FtpState {
     profiles: Mutex<Option<HashMap<String, FtpProfile>>>,
     sessions: Mutex<HashMap<String, Session>>,
     versions: Mutex<HashMap<String, RemoteVersion>>,
+    /// Last failed connect per authority: when it happened and the error.
+    connect_failures: Mutex<HashMap<String, (Instant, String)>>,
 }
 
 fn state() -> &'static FtpState {
@@ -167,6 +172,7 @@ fn state() -> &'static FtpState {
         profiles: Mutex::new(None),
         sessions: Mutex::new(HashMap::new()),
         versions: Mutex::new(HashMap::new()),
+        connect_failures: Mutex::new(HashMap::new()),
     })
 }
 
@@ -259,9 +265,7 @@ fn with_session<R>(
     let mut guard = session.lock().unwrap_or_else(|e| e.into_inner());
     for attempt in 0..2 {
         if guard.is_none() {
-            let profile = profile_for(authority)?;
-            let password = load_password(&profile)?;
-            *guard = Some(open_stream(&profile, &password)?);
+            *guard = Some(connect_session(authority)?);
         }
         let stream = guard.as_mut().expect("session was just opened");
         match op(stream) {
@@ -276,6 +280,31 @@ fn with_session<R>(
         }
     }
     unreachable!("the retry loop always returns")
+}
+
+/// Open a session from the saved profile, failing fast while a recent
+/// connect attempt to the same server is known to have failed.
+fn connect_session(authority: &str) -> Result<NativeTlsFtpStream, String> {
+    let mut failures = state().connect_failures.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, err)) = failures.get(authority) {
+        if at.elapsed() < RETRY_AFTER_FAILURE {
+            return Err(err.clone());
+        }
+    }
+    drop(failures);
+    let result = profile_for(authority)
+        .and_then(|profile| load_password(&profile).map(|pw| (profile, pw)))
+        .and_then(|(profile, pw)| open_stream(&profile, &pw));
+    failures = state().connect_failures.lock().unwrap_or_else(|e| e.into_inner());
+    match &result {
+        Ok(_) => {
+            failures.remove(authority);
+        }
+        Err(e) => {
+            failures.insert(authority.to_string(), (Instant::now(), e.clone()));
+        }
+    }
+    result
 }
 
 fn current_version(stream: &mut NativeTlsFtpStream, path: &str) -> RemoteVersion {
@@ -648,6 +677,11 @@ pub async fn ftp_connect(
         })?;
 
         // Replace any stale session with the freshly authenticated one.
+        state()
+            .connect_failures
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&authority);
         let session: Session = Arc::new(Mutex::new(Some(stream)));
         state()
             .sessions
