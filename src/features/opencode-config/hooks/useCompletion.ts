@@ -261,7 +261,9 @@ async function searchFiles(query: string, directory?: string): Promise<Completio
 
   try {
     const res = await client.find.files({
-      query: { query, dirs: "true", ...(directory ? { directory } : {}) },
+      query,
+      dirs: "true",
+      ...(directory ? { directory } : {}),
     });
     const paths = (res.data as any) ?? [];
     if (!Array.isArray(paths)) return [];

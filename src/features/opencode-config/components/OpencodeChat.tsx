@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { showConfirm } from "@/stores/dialog-store";
 import { useOpencodeChat, useChatUIStore } from "../hooks/useOpencodeChat";
 import type { OpencodeSessionInfo, ImageAttachment } from "../hooks/useOpencodeChat";
-import type { Part } from "@opencode-ai/sdk/client";
+import type { Part } from "@opencode-ai/sdk/v2/client";
 import { useTabStore } from "@/stores/tab-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import { applyReverse } from "@/shared/lib/replacement";

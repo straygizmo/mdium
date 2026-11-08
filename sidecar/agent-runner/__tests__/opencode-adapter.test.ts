@@ -58,12 +58,15 @@ function fakeClient(paths = { directory: "C:/work", worktree: "C:/work" }) {
       abort: vi.fn(async (_options: unknown) => ({ data: true })),
     },
     event: {
-      subscribe: vi.fn(async (options: { signal: AbortSignal }) => {
+      subscribe: vi.fn(async (_parameters: unknown, options: { signal: AbortSignal }) => {
         subscribeSignals.push(options.signal);
         return { stream: queue.stream(options.signal) };
       }),
     },
-    postSessionIdPermissionsPermissionId: vi.fn(async (_options: unknown) => ({ data: true })),
+    permission: {
+      reply: vi.fn(async (_parameters: unknown) => ({ data: true })),
+      respond: vi.fn(async (_parameters: unknown) => ({ data: true })),
+    },
   };
   return { client, queue, subscribeSignals };
 }
@@ -107,7 +110,7 @@ async function prompted(fake: ReturnType<typeof fakeClient>) {
 
 type PromptBody = { agent: string; model?: { providerID: string; modelID: string }; parts: Array<{ type: string; text?: string }> };
 const promptBody = (fake: ReturnType<typeof fakeClient>, call = 0) =>
-  (fake.client.session.promptAsync.mock.calls[call][0] as { body: PromptBody }).body;
+  fake.client.session.promptAsync.mock.calls[call][0] as unknown as PromptBody;
 
 describe("OpencodeAdapter", () => {
   it("streams text and tool events and resolves with the assistant text on idle", async () => {
@@ -115,11 +118,13 @@ describe("OpencodeAdapter", () => {
     const events: AgentEvent[] = [];
     const session = await adapter.startSession({ ...baseOptions, model: "anthropic/claude-x" }, callbacks(events));
     expect(createClient).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: "http://127.0.0.1:1", directory: "C:/work" }));
-    expect(fake.client.session.create).toHaveBeenCalledWith(expect.objectContaining({ body: { title: "MDium workflow" } }));
+    expect(fake.client.session.create).toHaveBeenCalledWith({ title: "MDium workflow", directory: "C:/work" });
     expect(session.nativeSessionId()).toBe("ses_1");
 
     const turn = session.runTurn("hi", new AbortController().signal);
     await prompted(fake);
+    expect(fake.client.event.subscribe).toHaveBeenCalledWith({ directory: "C:/work" }, expect.objectContaining({ sseMaxRetryAttempts: 1 }));
+    expect(fake.client.session.promptAsync).toHaveBeenCalledWith(expect.objectContaining({ sessionID: "ses_1", directory: "C:/work" }));
     const body = promptBody(fake);
     expect(body.agent).toMatch(/^mdium-open-[0-9a-f]+$/);
     expect(body.model).toEqual({ providerID: "anthropic", modelID: "claude-x" });
@@ -217,9 +222,9 @@ describe("OpencodeAdapter", () => {
         tool: { messageID: "msg_a", callID: "call_1" },
       }),
     );
-    await vi.waitFor(() => expect(fake.client.postSessionIdPermissionsPermissionId).toHaveBeenCalled());
-    expect(fake.client.postSessionIdPermissionsPermissionId).toHaveBeenCalledWith(
-      expect.objectContaining({ path: { id: "ses_1", permissionID: "per_1" }, body: { response: "reject" } }),
+    await vi.waitFor(() => expect(fake.client.permission.reply).toHaveBeenCalled());
+    expect(fake.client.permission.reply).toHaveBeenCalledWith(
+      { requestID: "per_1", reply: "reject", directory: "C:/work" },
     );
     expect(checked).toEqual([{ kind: "shell", summary: "git push origin main", rawKind: "bash", shell: "posix" }]);
     expect(requestPermission).not.toHaveBeenCalled();
@@ -237,9 +242,9 @@ describe("OpencodeAdapter", () => {
     const turn = session.runTurn("patch", new AbortController().signal);
     await prompted(fake);
     fake.queue.push(ev("permission.asked", { id: "per_1", sessionID: "ses_1", permission: "edit", patterns: ["a.ts", "../outside.ts"], metadata: { filepath: "a.ts, ../outside.ts" }, always: ["*"] }));
-    await vi.waitFor(() => expect(fake.client.postSessionIdPermissionsPermissionId).toHaveBeenCalled());
+    await vi.waitFor(() => expect(fake.client.permission.reply).toHaveBeenCalled());
     expect(checked).toEqual([path.win32.resolve("C:/work", "a.ts"), path.win32.resolve("C:/work", "../outside.ts")]);
-    expect((fake.client.postSessionIdPermissionsPermissionId.mock.calls[0][0] as { body: unknown }).body).toEqual({ response: "reject" });
+    expect((fake.client.permission.reply.mock.calls[0][0] as { reply: unknown }).reply).toEqual("reject");
     fake.queue.push(message("msg_a", "assistant"), idle());
     await turn;
   });
@@ -252,8 +257,9 @@ describe("OpencodeAdapter", () => {
     await prompted(fake);
     // v1 permission.updated shape.
     fake.queue.push(ev("permission.updated", { id: "per_1", sessionID: "ses_1", type: "edit", pattern: ["a.ts"], title: "Edit a.ts", metadata: { filePath: "C:/work/a.ts" } }));
-    await vi.waitFor(() => expect(fake.client.postSessionIdPermissionsPermissionId).toHaveBeenCalled());
-    expect((fake.client.postSessionIdPermissionsPermissionId.mock.calls[0][0] as { body: unknown }).body).toEqual({ response: "reject" });
+    await vi.waitFor(() => expect(fake.client.permission.respond).toHaveBeenCalled());
+    expect(fake.client.permission.respond).toHaveBeenCalledWith({ sessionID: "ses_1", permissionID: "per_1", response: "reject", directory: "C:/work" });
+    expect(fake.client.permission.reply).not.toHaveBeenCalled();
     expect(requestPermission).not.toHaveBeenCalled();
     fake.queue.push(message("msg_a", "assistant"), idle());
     await turn;
@@ -266,9 +272,9 @@ describe("OpencodeAdapter", () => {
     const turn = session.runTurn("test", new AbortController().signal);
     await prompted(fake);
     fake.queue.push(ev("permission.asked", { id: "per_1", sessionID: "ses_1", permission: "bash", patterns: ["npm test"], metadata: { command: "npm test" }, always: [] }));
-    await vi.waitFor(() => expect(fake.client.postSessionIdPermissionsPermissionId).toHaveBeenCalled());
+    await vi.waitFor(() => expect(fake.client.permission.reply).toHaveBeenCalled());
     expect(requestPermission).toHaveBeenCalledWith({ kind: "shell", summary: "npm test", rawKind: "bash", shell: "posix" });
-    expect((fake.client.postSessionIdPermissionsPermissionId.mock.calls[0][0] as { body: unknown }).body).toEqual({ response: "once" });
+    expect((fake.client.permission.reply.mock.calls[0][0] as { reply: unknown }).reply).toEqual("once");
     fake.queue.push(message("msg_a", "assistant"), idle());
     await turn;
   });
@@ -287,9 +293,9 @@ describe("OpencodeAdapter", () => {
       toolPart("call_c", "running", "ses_child"),
       ev("permission.asked", { id: "per_c", sessionID: "ses_child", permission: "bash", patterns: ["ls"], metadata: { command: "ls" }, always: [] }),
     );
-    await vi.waitFor(() => expect(fake.client.postSessionIdPermissionsPermissionId).toHaveBeenCalled());
-    expect(fake.client.postSessionIdPermissionsPermissionId).toHaveBeenCalledWith(
-      expect.objectContaining({ path: { id: "ses_child", permissionID: "per_c" }, body: { response: "once" } }),
+    await vi.waitFor(() => expect(fake.client.permission.reply).toHaveBeenCalled());
+    expect(fake.client.permission.reply).toHaveBeenCalledWith(
+      { requestID: "per_c", reply: "once", directory: "C:/work" },
     );
     fake.queue.push(ev("session.idle", { sessionID: "ses_child" }), textPart("prt_1", "msg_a", "parent"), idle());
     await expect(turn).resolves.toBe("parent");
@@ -315,7 +321,7 @@ describe("OpencodeAdapter", () => {
     );
     await expect(turn).resolves.toBe("mine");
     expect(events).toEqual([{ type: "assistant_message", text: "mine" }]);
-    expect(fake.client.postSessionIdPermissionsPermissionId).not.toHaveBeenCalled();
+    expect(fake.client.permission.reply).not.toHaveBeenCalled();
   });
 
   it("rejects on session.error with the error name and message", async () => {
@@ -344,7 +350,7 @@ describe("OpencodeAdapter", () => {
     await prompted(fake);
     controller.abort();
     await expect(turn).rejects.toMatchObject({ name: "AbortError" });
-    expect(fake.client.session.abort).toHaveBeenCalledWith(expect.objectContaining({ path: { id: "ses_1" } }));
+    expect(fake.client.session.abort).toHaveBeenCalledWith({ sessionID: "ses_1", directory: "C:/work" });
     expect(fake.subscribeSignals[0].aborted).toBe(true);
   });
 
@@ -455,13 +461,13 @@ describe("OpencodeAdapter hardening", () => {
       { ...baseOptions, workingDirectory: "C:/repo/docs", guarded: true },
       callbacks([], { checkTool: (r) => (checked.push(r), checkToolRequest(r, ctx).ok) }),
     );
-    expect(fake.client.path.get).toHaveBeenCalledWith(expect.objectContaining({ query: { directory: "C:/repo/docs" } }));
+    expect(fake.client.path.get).toHaveBeenCalledWith({ directory: "C:/repo/docs" });
     const turn = session.runTurn("patch", new AbortController().signal);
     await prompted(fake);
     fake.queue.push(ev("permission.asked", { id: "per_1", sessionID: "ses_1", permission: "edit", patterns: ["src/a.ts"], metadata: { filepath: "src/a.ts" }, always: ["*"] }));
-    await vi.waitFor(() => expect(fake.client.postSessionIdPermissionsPermissionId).toHaveBeenCalled());
+    await vi.waitFor(() => expect(fake.client.permission.reply).toHaveBeenCalled());
     expect(checked.map((r) => r.summary)).toEqual([path.win32.resolve("C:/repo", "src/a.ts")]);
-    expect((fake.client.postSessionIdPermissionsPermissionId.mock.calls[0][0] as { body: unknown }).body).toEqual({ response: "reject" });
+    expect((fake.client.permission.reply.mock.calls[0][0] as { reply: unknown }).reply).toEqual("reject");
     fake.queue.push(message("msg_a", "assistant"), idle());
     await turn;
   });

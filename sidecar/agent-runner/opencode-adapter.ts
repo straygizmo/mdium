@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
-import { createOpencodeClient } from "@opencode-ai/sdk/client";
+import { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
 import type { AgentEvent, AgentPermission, Availability } from "../../src/shared/types/agent-runner";
 import type { AdapterSession, ProviderAdapter, SessionCallbacks, SessionOptions } from "./adapter";
 import { runCommand, type CommandRunner } from "./availability";
@@ -49,9 +49,10 @@ type OpencodePromptPart = { type: "text"; text: string } | { type: "file"; mime:
  *   list, edit/write/apply_patch, bash, webfetch, websearch, external_directory, lsp).
  * - Formatters and language servers (which run project-installed programs outside the
  *   permission flow) are disabled server-wide with `formatter: false` / `lsp: false`.
- * - The server emits `permission.asked` (1.18) rather than the SDK v1 `permission.updated`;
- *   both are handled. The v1 reply route POST /session/{id}/permissions/{permissionID} is
- *   still served (deprecated). Text deltas arrive as `message.part.delta`.
+ * - The server emits `permission.asked` (1.18), answered through POST /permission/{id}/reply
+ *   (SDK v2 `permission.reply`). Older servers emit `permission.updated`, which is answered
+ *   through the deprecated POST /session/{id}/permissions/{permissionID} (`permission.respond`).
+ *   Text deltas arrive as `message.part.delta`.
  * - read/edit/apply_patch paths are relative to the git worktree root, glob/grep paths to
  *   the session directory; GET /path reports both, and the worktree is "/" outside git.
  * - OPENCODE_SERVER_PASSWORD makes the server require HTTP Basic auth (user `opencode`), so
@@ -73,29 +74,36 @@ type OpencodePromptPart = { type: "text"; text: string } | { type: "file"; mime:
  */
 
 type OpencodeResult<T = unknown> = { data?: T; error?: unknown };
-type DirectoryQuery = { query?: { directory?: string } };
+/** Directory scope of a request (sent as the `directory` query parameter). */
+type Scope = { directory?: string };
+type PermissionReply = "once" | "always" | "reject";
 
-/** Structural subset of the SDK v1 client used by the adapter. */
+/** Structural subset of the SDK v2 client used by the adapter. */
 export interface OpencodeClientLike {
   path: {
-    get(options: DirectoryQuery): Promise<OpencodeResult<{ directory: string; worktree: string }>>;
+    get(parameters: Scope): Promise<OpencodeResult<{ directory: string; worktree: string }>>;
   };
   session: {
-    create(options: { body: { title: string } } & DirectoryQuery): Promise<OpencodeResult<{ id: string }>>;
+    create(parameters: { title: string } & Scope): Promise<OpencodeResult<{ id: string }>>;
     promptAsync(
-      options: {
-        path: { id: string };
-        body: { agent: string; model?: { providerID: string; modelID: string }; parts: OpencodePromptPart[] };
-      } & DirectoryQuery,
+      parameters: {
+        sessionID: string;
+        agent: string;
+        model?: { providerID: string; modelID: string };
+        parts: OpencodePromptPart[];
+      } & Scope,
     ): Promise<OpencodeResult>;
-    abort(options: { path: { id: string } } & DirectoryQuery): Promise<OpencodeResult>;
+    abort(parameters: { sessionID: string } & Scope): Promise<OpencodeResult>;
   };
   event: {
-    subscribe(options: { signal: AbortSignal; sseMaxRetryAttempts?: number } & DirectoryQuery): Promise<{ stream: AsyncIterable<unknown> }>;
+    subscribe(parameters: Scope, options: { signal: AbortSignal; sseMaxRetryAttempts?: number }): Promise<{ stream: AsyncIterable<unknown> }>;
   };
-  postSessionIdPermissionsPermissionId(
-    options: { path: { id: string; permissionID: string }; body: { response: "once" | "always" | "reject" } } & DirectoryQuery,
-  ): Promise<OpencodeResult>;
+  permission: {
+    /** Reply to a `permission.asked` request (POST /permission/{requestID}/reply). */
+    reply(parameters: { requestID: string; reply: PermissionReply } & Scope): Promise<OpencodeResult>;
+    /** Deprecated route for the `permission.updated` requests of older servers. */
+    respond(parameters: { sessionID: string; permissionID: string; response: PermissionReply } & Scope): Promise<OpencodeResult>;
+  };
 }
 
 export interface OpencodeServerHandle {
@@ -234,7 +242,7 @@ interface TurnContext {
   paths: OpencodePaths;
   permission: AgentPermission;
   callbacks: SessionCallbacks;
-  query: { directory: string };
+  scope: { directory: string };
 }
 
 /**
@@ -360,8 +368,9 @@ class OpencodeTurn {
       case "permission.asked": {
         const permission = p as RawPermission;
         if (!permission.id || !permission.sessionID || !this.sessions.has(permission.sessionID)) break;
-        void this.answerPermission(permission.id, permission.sessionID, normalizePermission(permission)).catch((error: unknown) => {
-          void this.ctx.client.session.abort({ path: { id: root }, query: this.ctx.query }).catch(() => undefined);
+        const legacy = event.type === "permission.updated";
+        void this.answerPermission(permission.id, permission.sessionID, normalizePermission(permission), legacy).catch((error: unknown) => {
+          void this.ctx.client.session.abort({ sessionID: root, ...this.ctx.scope }).catch(() => undefined);
           this.fail(new Error(`OPENCODE_PERMISSION_REPLY_FAILED: ${errorText(error)}`));
         });
         break;
@@ -398,7 +407,12 @@ class OpencodeTurn {
   }
 
   /** Guard check, mode decision, and reply for one permission request. */
-  private async answerPermission(permissionID: string, sessionID: string, permission: OpencodePermissionLike): Promise<void> {
+  private async answerPermission(
+    permissionID: string,
+    sessionID: string,
+    permission: OpencodePermissionLike,
+    legacy: boolean,
+  ): Promise<void> {
     const { callbacks, paths } = this.ctx;
     const request = toolRequestFromOpencode(permission, paths);
     // The safety guard wins over every permission mode; a block also aborts the turn.
@@ -410,11 +424,10 @@ class OpencodeTurn {
     }
     // A settled turn already aborted the session, which rejects its pending permissions.
     if (this.settled && response === "once") return;
-    const result = await this.ctx.client.postSessionIdPermissionsPermissionId({
-      path: { id: sessionID, permissionID },
-      body: { response },
-      query: this.ctx.query,
-    });
+    const { client, scope } = this.ctx;
+    const result = legacy
+      ? await client.permission.respond({ sessionID, permissionID, response, ...scope })
+      : await client.permission.reply({ requestID: permissionID, reply: response, ...scope });
     if (result?.error && !this.settled) throw new Error(errorText(result.error));
   }
 }
@@ -436,7 +449,7 @@ class OpencodeSession implements AdapterSession {
     return this.id;
   }
 
-  private get query() {
+  private get scope() {
     return { directory: this.options.workingDirectory };
   }
 
@@ -461,7 +474,7 @@ class OpencodeSession implements AdapterSession {
       const subscription = new AbortController();
       const onAbort = () => {
         if (turn.isSettled) return;
-        void this.client.session.abort({ path: { id: this.id }, query: this.query }).catch(() => undefined);
+        void this.client.session.abort({ sessionID: this.id, ...this.scope }).catch(() => undefined);
         turn.fail(abortError());
       };
       const turn = new OpencodeTurn(
@@ -471,7 +484,7 @@ class OpencodeSession implements AdapterSession {
           paths: this.paths,
           permission: this.options.permission,
           callbacks: this.callbacks,
-          query: this.query,
+          scope: this.scope,
         },
         (outcome) => {
           clearTimeout(connectTimer);
@@ -496,11 +509,7 @@ class OpencodeSession implements AdapterSession {
       const sendPrompt = () => {
         turn.markPrompted();
         this.client.session
-          .promptAsync({
-            path: { id: this.id },
-            query: this.query,
-            body: { agent: this.agent, ...(model ? { model } : {}), parts },
-          })
+          .promptAsync({ sessionID: this.id, ...this.scope, agent: this.agent, ...(model ? { model } : {}), parts })
           .then((result) => {
             if (result?.error) turn.fail(new Error(`OPENCODE_FAILED: ${errorText(result.error)}`));
           })
@@ -521,7 +530,7 @@ class OpencodeSession implements AdapterSession {
   /** Consume the SSE stream until it ends or the turn settles (which aborts `signal`). */
   private async consume(signal: AbortSignal, onEvent: (event: RawEvent) => void): Promise<void> {
     // One retry only: a local server that drops the stream has most likely exited.
-    const { stream } = await this.client.event.subscribe({ signal, query: this.query, sseMaxRetryAttempts: 1 });
+    const { stream } = await this.client.event.subscribe(this.scope, { signal, sseMaxRetryAttempts: 1 });
     for await (const raw of stream) {
       if (signal.aborted) return;
       if (raw && typeof raw === "object") onEvent(raw as RawEvent);
@@ -559,7 +568,7 @@ export class OpencodeAdapter implements ProviderAdapter {
     this.agents = { readOnly: `mdium-read-only-${suffix}`, guarded: `mdium-guarded-${suffix}`, open: `mdium-open-${suffix}` };
     const config = opencodeServerConfig(this.agents);
     this.startServer = deps.startServer ?? (() => startDedicatedServer(config));
-    this.createClient = deps.createClient ?? ((options) => createOpencodeClient(options) as unknown as OpencodeClientLike);
+    this.createClient = deps.createClient ?? ((options) => createOpencodeClient(options) satisfies OpencodeClientLike);
     this.run = deps.run ?? runCommand;
     this.checkHealth = deps.checkHealth ?? serverAnswers;
   }
@@ -613,7 +622,7 @@ export class OpencodeAdapter implements ProviderAdapter {
       directory: options.workingDirectory,
       headers: { Authorization: basicAuth(password) },
     });
-    const query = { directory: options.workingDirectory };
+    const scope = { directory: options.workingDirectory };
     // A thrown request means the server is unreachable (e.g. it crashed); an `error`
     // result is an HTTP-level failure of a live server.
     const request = async <T>(call: () => Promise<OpencodeResult<T>>): Promise<T | undefined> => {
@@ -627,10 +636,10 @@ export class OpencodeAdapter implements ProviderAdapter {
       if (result.error) throw new Error(`OPENCODE_FAILED: ${errorText(result.error)}`);
       return result.data;
     };
-    const paths = sessionPaths(options.workingDirectory, await request(() => client.path.get({ query })));
+    const paths = sessionPaths(options.workingDirectory, await request(() => client.path.get(scope)));
     let id = options.resumeNativeId;
     if (!id) {
-      const created = await request(() => client.session.create({ body: { title: "MDium workflow" }, query }));
+      const created = await request(() => client.session.create({ title: "MDium workflow", ...scope }));
       if (!created?.id) throw new Error("OPENCODE_FAILED: no session");
       id = created.id;
     }

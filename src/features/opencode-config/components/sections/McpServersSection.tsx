@@ -82,7 +82,7 @@ async function syncMcpToServer(name: string, server: OpencodeMcpServer) {
 
   try {
     if (server.enabled === false) {
-      await client.mcp.disconnect({ path: { name } });
+      await client.mcp.disconnect({ name });
     } else {
       const config = server.type === "remote"
         ? {
@@ -97,7 +97,7 @@ async function syncMcpToServer(name: string, server: OpencodeMcpServer) {
             environment: await resolveEnvPatterns(server.environment),
             enabled: server.enabled,
           };
-      await client.mcp.add({ body: { name, config } });
+      await client.mcp.add({ name, config });
     }
   } catch (e) {
     console.warn("[mcp-sync] failed to sync:", e);
@@ -109,7 +109,7 @@ async function removeMcpFromServer(name: string) {
   if (!client) return;
 
   try {
-    await client.mcp.disconnect({ path: { name } });
+    await client.mcp.disconnect({ name });
   } catch (e) {
     console.warn("[mcp-sync] failed to disconnect:", e);
   }

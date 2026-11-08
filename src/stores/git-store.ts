@@ -21,23 +21,21 @@ async function generateViaOpencode(prompt: string): Promise<string | null> {
 
   try {
     // Create ephemeral session (not stored in chat UI)
-    const createRes = await client.session.create({
-      body: { title: "commit-msg" },
-    });
+    const createRes = await client.session.create({ title: "commit-msg" });
     const sessionData = createRes.data as any;
     const sessionId = sessionData?.id;
     if (!sessionId) return null;
 
     // Send prompt asynchronously
     await client.session.promptAsync({
-      path: { id: sessionId },
-      body: { parts: [{ type: "text", text: prompt }] },
+      sessionID: sessionId,
+      parts: [{ type: "text", text: prompt }],
     });
 
     // Poll session.messages until assistant response appears (max 30s)
     for (let i = 0; i < 30; i++) {
       await new Promise((r) => setTimeout(r, 1000));
-      const msgRes = await client.session.messages({ path: { id: sessionId } });
+      const msgRes = await client.session.messages({ sessionID: sessionId });
       const msgs = msgRes.data as any;
       const msgArray = Array.isArray(msgs) ? msgs : [];
       // Find the last assistant message
