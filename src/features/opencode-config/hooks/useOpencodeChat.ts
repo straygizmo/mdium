@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef } from "react";
 import { create } from "zustand";
-import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/client";
+import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2/client";
 import type {
   Message,
   Part,
   Event as OcEvent,
   TextPartInput,
   FilePartInput,
-} from "@opencode-ai/sdk/client";
+} from "@opencode-ai/sdk/v2/client";
 import { invoke } from "@tauri-apps/api/core";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { marked } from "marked";
@@ -135,7 +135,6 @@ export function setPendingVideoOutput(path: string | null) {
 
 // ─── Module-level connection state (persists across mount/unmount) ───
 let _client: OpencodeClient | null = null;
-let _baseUrl: string | null = null;
 let _abort: AbortController | null = null;
 let _connectedFolder: string | undefined;
 // Active opencode `question.asked` request id awaiting a /reply (null when the
@@ -393,7 +392,7 @@ async function triggerStallGiveup() {
   const generation = _watchdogGeneration;
   if (_client && _currentSessionId) {
     try {
-      await _client.session.abort({ path: { id: _currentSessionId } });
+      await _client.session.abort({ sessionID: _currentSessionId });
     } catch (e: any) {
       console.error("[opencode] stall give-up abort failed:", e);
     }
@@ -711,8 +710,8 @@ function processSSEStream(stream: AsyncIterable<unknown>) {
           // opencode (>=1.2.x) asks interactive questions via a dedicated
           // `question.asked` bus event carrying a QuestionRequest:
           //   { id, sessionID, questions: QuestionInfo[], tool? }
-          // The v1 SDK client we use doesn't type this event, so it arrives as
-          // raw JSON and must be cast. Without this branch the UI would stay on
+          // Older servers may send question payloads that differ from the SDK
+          // types, so the properties are read defensively. Without this branch the UI would stay on
           // "Thinking..." forever (no part/idle event ever clears `loading`).
           const props = (ev as any).properties ?? {};
           if (props.sessionID && props.sessionID !== _currentSessionId) continue;
@@ -864,7 +863,9 @@ function processSSEStream(stream: AsyncIterable<unknown>) {
  * directly. connectTimeout also guarantees we surface an error instead of
  * hanging if the local server is unreachable.
  */
-function opencodeFetch(req: Request): Promise<Response> {
+function opencodeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  // The SDK always passes a Request; other inputs are wrapped for the fetch signature.
+  const req = input instanceof Request ? input : new Request(input, init);
   return tauriFetch(req, { connectTimeout: 15000 });
 }
 
@@ -960,7 +961,6 @@ function doDisconnect() {
     _abort = null;
   }
   _client = null;
-  _baseUrl = null;
   _connectedFolder = undefined;
   _currentSessionId = null;
   _connectLock = false;
@@ -1087,7 +1087,6 @@ export async function doConnect(folderPath?: string) {
     const baseUrl = await ensureOpencodeServer(folderPath);
     const client = createOpencodeClient({ baseUrl, fetch: opencodeFetch });
     _client = client;
-    _baseUrl = baseUrl;
     _connectedFolder = folderPath;
 
     const testRes = await client.session.list();
@@ -1125,7 +1124,7 @@ export async function doConnect(folderPath?: string) {
     // Subscribe to SSE events (await ensures connection is ready before returning)
     const ac = new AbortController();
     _abort = ac;
-    const sseResult = await client.event.subscribe({ signal: ac.signal });
+    const sseResult = await client.event.subscribe(undefined, { signal: ac.signal });
     processSSEStream(sseResult.stream);
   } catch (e: any) {
     console.error("[opencode] connect failed:", e);
@@ -1176,9 +1175,7 @@ async function ensureSessionId(title: string): Promise<string | null> {
   try {
     // Mask before it leaves the app: the title is persisted server-side by opencode.
     const maskedTitle = applyForward(title.slice(0, 50), replacementSettings());
-    const res = await _client.session.create({
-      body: { title: maskedTitle },
-    });
+    const res = await _client.session.create({ title: maskedTitle });
     console.log("[opencode] session.create res:", res.data, res.error);
     const data = res.data as any;
     let sessionId: string | null = null;
@@ -1300,11 +1297,9 @@ export async function doSendMessage(
     }
 
     const res = await _client.session.promptAsync({
-      path: { id: sessionId },
-      body: {
-        ...(agent ? { agent } : {}),
-        parts,
-      },
+      sessionID: sessionId,
+      ...(agent ? { agent } : {}),
+      parts,
     });
     console.log("[opencode] promptAsync res:", res.data, res.error);
     if (res.error) {
@@ -1329,7 +1324,7 @@ export async function doAbortSession() {
   // (which may fire before the await resolves) won't trigger a "Done" toast.
   useChatUIStore.setState({ aborted: true });
   try {
-    await _client.session.abort({ path: { id: _currentSessionId } });
+    await _client.session.abort({ sessionID: _currentSessionId });
   } catch (e: any) {
     console.error("[opencode] abort failed:", e);
   } finally {
@@ -1344,13 +1339,13 @@ export async function doAbortSession() {
  *
  * `answers[i]` holds the selected option labels (or a single free-text entry)
  * for question `i`, in order. When the questions came from a `question.asked`
- * event we POST to `/question/{id}/reply`; otherwise (legacy question tool or
+ * event we reply through `question.reply` (POST /question/{id}/reply); otherwise (legacy question tool or
  * inline-JSON questions) we fall back to sending the answer as a normal prompt.
  */
 export async function doAnswerQuestions(answers: string[][]) {
   const reqId = _pendingQuestionRequestId;
 
-  if (!reqId || !_baseUrl) {
+  if (!reqId || !_client) {
     // Legacy fallback: no question request to reply to — send as a prompt.
     const flat = answers.map((a) => a.join(", ")).filter(Boolean);
     const text =
@@ -1373,19 +1368,14 @@ export async function doAnswerQuestions(answers: string[][]) {
   });
   startWatchdog();
   try {
-    const res = await opencodeFetch(
-      new Request(`${_baseUrl}/question/${encodeURIComponent(reqId)}/reply`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          answers: answers.map((group) =>
-            group.map((a) => applyForward(a, replacementSettings())),
-          ),
-        }),
-      }),
-    );
-    if (!res.ok) {
-      throw new Error(`question reply failed: ${res.status}`);
+    const res = await _client.question.reply({
+      requestID: reqId,
+      answers: answers.map((group) =>
+        group.map((a) => applyForward(a, replacementSettings())),
+      ),
+    });
+    if (res.error) {
+      throw new Error(`question reply failed: ${res.response?.status ?? JSON.stringify(res.error)}`);
     }
   } catch (e: any) {
     console.error("[opencode] question reply failed:", e);
@@ -1396,7 +1386,7 @@ export async function doAnswerQuestions(answers: string[][]) {
 
 /**
  * Dismiss a pending opencode question without answering. For `question.asked`
- * requests this POSTs to `/question/{id}/reject`; legacy questions are simply
+ * requests this calls `question.reject` (POST /question/{id}/reject); legacy questions are simply
  * cleared from the UI.
  */
 export async function doRejectQuestions() {
@@ -1404,18 +1394,14 @@ export async function doRejectQuestions() {
   _pendingQuestionRequestId = null;
   useChatUIStore.setState({ pendingQuestions: null });
 
-  if (!reqId || !_baseUrl) return;
+  if (!reqId || !_client) return;
 
   useChatUIStore.setState({ loading: true, aborted: false, stallNotice: false });
   startWatchdog();
   try {
-    const res = await opencodeFetch(
-      new Request(`${_baseUrl}/question/${encodeURIComponent(reqId)}/reject`, {
-        method: "POST",
-      }),
-    );
-    if (!res.ok) {
-      throw new Error(`question reject failed: ${res.status}`);
+    const res = await _client.question.reject({ requestID: reqId });
+    if (res.error) {
+      throw new Error(`question reject failed: ${res.response?.status ?? JSON.stringify(res.error)}`);
     }
   } catch (e: any) {
     console.error("[opencode] question reject failed:", e);
@@ -1463,11 +1449,9 @@ export async function doExecuteCommand(commandName: string, args?: string) {
 
   try {
     const res = await _client.session.command({
-      path: { id: sessionId },
-      body: {
-        command: commandName,
-        arguments: args ? applyForward(args, replacementSettings()) : "",
-      },
+      sessionID: sessionId,
+      command: commandName,
+      arguments: args ? applyForward(args, replacementSettings()) : "",
     });
     console.log("[opencode] session.command res:", res.data, res.error);
     if (res.error) {
@@ -1509,7 +1493,7 @@ export async function doLoadSession(sessionId: string) {
   if (!_client) return;
   useChatUIStore.setState({ error: null, loading: true });
   try {
-    const res = await _client.session.messages({ path: { id: sessionId } });
+    const res = await _client.session.messages({ sessionID: sessionId });
     console.log("[opencode] session.messages res:", res.data);
     if (res.data) {
       const raw = res.data as any;
@@ -1579,7 +1563,7 @@ export async function doLoadSession(sessionId: string) {
 async function doDeleteSession(sessionId: string) {
   if (!_client) return;
   try {
-    await _client.session.delete({ path: { id: sessionId } });
+    await _client.session.delete({ sessionID: sessionId });
     useChatUIStore.setState((s) => ({
       sessions: s.sessions.filter((ss) => ss.id !== sessionId),
     }));

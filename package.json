@@ -1,7 +1,7 @@
 {
   "name": "mdium",
   "private": true,
-  "version": "0.4.1",
+  "version": "0.4.2",
   "type": "module",
   "scripts": {
     "predev": "npm run build:sidecar",
@@ -23,7 +23,7 @@
     "@open-motion/components": "file:packages/open-motion/components",
     "@open-motion/core": "file:packages/open-motion/core",
     "@openai/codex-sdk": "^0.152.1",
-    "@opencode-ai/sdk": "^1.17.13",
+    "@opencode-ai/sdk": "^1.19.5",
     "@tanstack/react-virtual": "^3.13.24",
     "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/plugin-dialog": "^2.6.0",
