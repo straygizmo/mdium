@@ -5,7 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn().mockResolvedValue(null) }));
 vi.mock("@tauri-apps/plugin-http", () => ({ fetch: vi.fn() }));
 
-import { doCreateNewSession, doSendMessage, useChatUIStore, waitForConnection } from "./useOpencodeChat";
+import { describeRequestError, doCreateNewSession, doSendMessage, useChatUIStore, waitForConnection } from "./useOpencodeChat";
 import { useMacroChatStore } from "@/stores/macro-chat-store";
 
 describe("doCreateNewSession", () => {
@@ -53,5 +53,29 @@ describe("doSendMessage", () => {
     vi.mocked(invoke).mockClear();
     await doSendMessage("続けてください", undefined, undefined, { isAutoReply: true });
     expect(vi.mocked(invoke)).not.toHaveBeenCalledWith("reset_vba_run_budget", expect.anything());
+  });
+});
+
+describe("describeRequestError", () => {
+  it("shows the status and the server's message", () => {
+    expect(
+      describeRequestError({
+        error: { name: "UnknownError", data: { message: "Unexpected server error. Check server logs for details." } },
+        response: { status: 500 },
+      }),
+    ).toBe("HTTP 500: Unexpected server error. Check server logs for details.");
+    expect(describeRequestError({ error: { _tag: "SessionNotFound", message: "Session not found" }, response: { status: 404 } })).toBe(
+      "HTTP 404: Session not found",
+    );
+  });
+
+  it("shows network failures that the SDK returns instead of throwing", () => {
+    expect(describeRequestError({ error: new TypeError("error sending request") })).toBe("error sending request");
+  });
+
+  it("falls back to the raw error or a generic text", () => {
+    expect(describeRequestError({ error: { code: 7 }, response: { status: 400 } })).toBe('HTTP 400: {"code":7}');
+    expect(describeRequestError({ error: {} })).toBe("{}");
+    expect(describeRequestError({})).toBe("no response");
   });
 });

@@ -262,6 +262,29 @@ function tryParseQuestions(text: string): PendingQuestion[] | null {
  *   - MessageAbortedError
  *   - UnknownError
  */
+/**
+ * Describe a failed SDK request (`{ error, response }`) for the UI: the HTTP
+ * status plus the server's message. With the SDK v2 client, network failures
+ * also come back as `error` instead of throwing.
+ */
+export function describeRequestError(res: { error?: unknown; response?: { status?: number } }): string {
+  const err = res.error as any;
+  let message = "";
+  if (err instanceof Error) message = err.message;
+  else if (typeof err === "string") message = err;
+  else if (err && typeof err === "object") {
+    message =
+      (typeof err.data?.message === "string" && err.data.message) ||
+      (typeof err.message === "string" && err.message) ||
+      (typeof err.name === "string" && err.name) ||
+      (typeof err._tag === "string" && err._tag) ||
+      JSON.stringify(err);
+  }
+  const status = res.response?.status;
+  const parts = [status ? `HTTP ${status}` : "", message].filter(Boolean);
+  return parts.length > 0 ? parts.join(": ") : "no response";
+}
+
 function formatSessionError(err: unknown): string {
   if (!err || typeof err !== "object") {
     return i18n.t("ocChatErrorUnknown", { ns: "opencode-config" });
@@ -1090,7 +1113,11 @@ export async function doConnect(folderPath?: string) {
     _connectedFolder = folderPath;
 
     const testRes = await client.session.list();
-    console.log("[opencode] session.list test:", testRes.data);
+    console.log("[opencode] session.list test:", testRes.data, testRes.error);
+    if (testRes.error) {
+      // A server that answers with errors is not usable; do not show "connected".
+      throw new Error(`opencode server error: ${describeRequestError(testRes)}`);
+    }
     useChatUIStore.setState({ connected: true });
 
     // Fetch available agents
@@ -1177,6 +1204,10 @@ async function ensureSessionId(title: string): Promise<string | null> {
     const maskedTitle = applyForward(title.slice(0, 50), replacementSettings());
     const res = await _client.session.create({ title: maskedTitle });
     console.log("[opencode] session.create res:", res.data, res.error);
+    if (res.error) {
+      useChatUIStore.setState({ error: `Failed to create session: ${describeRequestError(res)}` });
+      return null;
+    }
     const data = res.data as any;
     let sessionId: string | null = null;
     if (data?.id) {
