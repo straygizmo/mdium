@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isAtLeast, probeCodex, runCommand, type CommandRunner } from "../availability";
+import { hasCodexByok, isAtLeast, probeCodex, runCommand, type CommandRunner } from "../availability";
 
 function runner(map: Record<string, { status: number | null; stdout?: string; stderr?: string; error?: NodeJS.ErrnoException }>): CommandRunner {
   return async (_cmd, args) => {
@@ -55,11 +55,18 @@ describe("probeCodex", () => {
       .toEqual({ kind: "too_old", detail: "0.152.0", detectedVersion: "0.100.0" });
   });
 
-  it("reports unauthenticated when login status fails", async () => {
+  it("reports unauthenticated when login status fails and no own key is set up", async () => {
     expect(await probeCodex("codex.exe", runner({
       "--version": { status: 0, stdout: "codex-cli 0.152.1" },
       "login status": { status: 1 },
-    }))).toEqual({ kind: "unauthenticated", detail: "codex login", detectedVersion: "0.152.1" });
+    }), () => false)).toEqual({ kind: "unauthenticated", detail: "codex login", detectedVersion: "0.152.1" });
+  });
+
+  it("reports available without a login when Codex uses the user's own key (BYOK)", async () => {
+    expect(await probeCodex("codex.exe", runner({
+      "--version": { status: 0, stdout: "codex-cli 0.152.1" },
+      "login status": { status: 1, stdout: "Not logged in" },
+    }), () => true)).toEqual({ kind: "available", version: "0.152.1" });
   });
 
   it("reports available", async () => {
@@ -67,5 +74,53 @@ describe("probeCodex", () => {
       "--version": { status: 0, stdout: "codex-cli 0.152.1" },
       "login status": { status: 0, stdout: "Logged in" },
     }))).toEqual({ kind: "available", version: "0.152.1" });
+  });
+});
+
+describe("hasCodexByok", () => {
+  const byok = (env: Record<string, string>, config?: string) => hasCodexByok({ env, readConfig: () => config });
+
+  it("is true when an API key variable is set", () => {
+    expect(byok({ OPENAI_API_KEY: "sk-test" })).toBe(true);
+    expect(byok({ CODEX_API_KEY: "sk-test" })).toBe(true);
+    expect(byok({ OPENAI_API_KEY: "  " })).toBe(false);
+  });
+
+  it("is false without a key or config, or with the default openai provider", () => {
+    expect(byok({})).toBe(false);
+    expect(byok({}, 'model = "gpt-5"\n')).toBe(false);
+    expect(byok({}, 'model_provider = "openai"\n')).toBe(false);
+  });
+
+  it("is true for a custom top-level model provider", () => {
+    const config = [
+      'model = "gpt-5"',
+      'model_provider = "azure" # BYOK',
+      "",
+      "[model_providers.azure]",
+      'name = "Azure"',
+      'base_url = "https://example.openai.azure.com/openai"',
+      'env_key = "AZURE_OPENAI_API_KEY"',
+    ].join("\n");
+    expect(byok({}, config)).toBe(true);
+  });
+
+  it("follows the selected profile", () => {
+    const config = [
+      'profile = "work"',
+      "",
+      "[profiles.work]",
+      'model_provider = "ollama"',
+      "",
+      "[profiles.home]",
+      'model_provider = "openai"',
+    ].join("\n");
+    expect(byok({}, config)).toBe(true);
+    expect(byok({}, config.replace('profile = "work"', 'profile = "home"'))).toBe(false);
+  });
+
+  it("is false when the custom provider still requires OpenAI auth", () => {
+    const config = ['model_provider = "proxy"', "", "[model_providers.proxy]", "requires_openai_auth = true"].join("\n");
+    expect(byok({}, config)).toBe(false);
   });
 });
